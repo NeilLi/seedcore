@@ -29,6 +29,7 @@ from .cognitive_registry import (
     cognitive_validator,
     CognitiveRegistry
 )
+from .advisory import CognitiveAdvisoryContractBuilder
 
 # Create a standalone function for easier importing
 def for_env() -> DSpyCognitiveClient:
@@ -45,5 +46,6 @@ __all__ = [
     'cognitive_signature',
     'cognitive_handler',
     'cognitive_validator',
-    'CognitiveRegistry'
+    'CognitiveRegistry',
+    'CognitiveAdvisoryContractBuilder',
 ]

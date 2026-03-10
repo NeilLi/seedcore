@@ -7,6 +7,7 @@ from . import plan
 from . import execute
 from . import plan_executor
 from . import condition_registry
+from . import advisory
 
 __all__ = [
     "utils",
@@ -16,4 +17,5 @@ __all__ = [
     "execute",
     "plan_executor",
     "condition_registry",
+    "advisory",
 ]

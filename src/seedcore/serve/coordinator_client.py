@@ -93,6 +93,20 @@ class CoordinatorServiceClient(BaseServiceClient):
             task = task.dict()
         
         return await self.post("/route-and-execute", json=task)
+
+    async def advisory(self, task: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
+        """
+        Request a stateless reasoning advisory contract.
+
+        Returns:
+            Dict containing `advisory` payload (`advisory_plan` or `risk_summary`)
+            and contract metadata.
+        """
+        if hasattr(task, "model_dump"):
+            task = task.model_dump()
+        elif hasattr(task, "dict"):
+            task = task.dict()
+        return await self.post("/advisory", json=task)
     
     async def submit_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """

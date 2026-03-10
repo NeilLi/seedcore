@@ -40,6 +40,7 @@ from ..models.result_schema import (
     make_envelope,
     normalize_envelope,
 )
+from ..models.advisory import AmbiguityAssessment
 from ..coordinator.models import (
     AnomalyTriageRequest,
     AnomalyTriageResponse,
@@ -57,6 +58,7 @@ from ..coordinator.core.execute import (
     RouteConfig,
     ExecutionConfig,
 )
+from ..coordinator.core.advisory import CoordinatorAdvisoryCore
 from ..coordinator.core.routing import (
     static_route_fallback,
 )
@@ -711,6 +713,13 @@ class Coordinator:
             summary="Unified Entrypoint for Routing, Triage, and Execution",
             tags=["Execution"],
         )
+        self.app.add_api_route(
+            f"{router_prefix}/advisory",
+            self.generate_advisory,
+            methods=["POST"],
+            summary="Stateless reasoning advisory (AdvisoryPlan | RiskSummary)",
+            tags=["Execution"],
+        )
         # Background task storage for async processing
         self._async_processing_tasks: Dict[str, asyncio.Task] = {}
 
@@ -912,6 +921,110 @@ class Coordinator:
                 decision_kind=DecisionKind.ERROR.value,
                 path="coordinator",
             )
+
+    @staticmethod
+    def _extract_eventizer_tags(eventizer_data: Dict[str, Any]) -> list[str]:
+        return CoordinatorAdvisoryCore.extract_eventizer_tags(eventizer_data)
+
+    @staticmethod
+    def _clean_numeric_signals(signals: Dict[str, Any]) -> Dict[str, float]:
+        return CoordinatorAdvisoryCore.clean_numeric_signals(signals)
+
+    def _estimate_ambiguity(
+        self,
+        task_dict: Dict[str, Any],
+        eventizer_data: Dict[str, Any],
+    ) -> AmbiguityAssessment:
+        return CoordinatorAdvisoryCore.estimate_ambiguity(task_dict, eventizer_data)
+
+    @staticmethod
+    def _risk_profile(
+        task_dict: Dict[str, Any],
+        ambiguity: AmbiguityAssessment,
+    ) -> tuple[float, str, list[str]]:
+        return CoordinatorAdvisoryCore.risk_profile(task_dict, ambiguity)
+
+    async def generate_advisory(
+        self, payload: Dict[str, Any] = Body(...)
+    ) -> Dict[str, Any]:
+        """
+        Stateless reasoning endpoint:
+        - ambiguity reduction from noisy inputs
+        - proto-plan proposal (PKG + cognitive advisory)
+        - returns AdvisoryPlan or RiskSummary for Agent accountability flow
+        """
+        try:
+            task_data = payload.get("payload") or payload.get("task") or payload
+            task_obj, task_dict = coerce_task_payload(task_data)
+            task_id = task_dict.get("task_id") or task_obj.task_id
+
+            eventizer_data = await self._run_eventizer(task_dict)
+            tags = CoordinatorAdvisoryCore.extract_eventizer_tags(eventizer_data)
+            signals = CoordinatorAdvisoryCore.clean_numeric_signals(
+                eventizer_data.get("signals") or {}
+            )
+
+            route_cfg = self._build_route_config()
+            proto_plan: Dict[str, Any] = {}
+            if route_cfg.evaluate_pkg_func:
+                try:
+                    proto_plan = await route_cfg.evaluate_pkg_func(
+                        tags=tags,
+                        signals=signals,
+                        context={
+                            "domain": task_dict.get("domain"),
+                            "type": task_dict.get("type"),
+                            "task_id": task_id,
+                            "description": task_dict.get("description") or "",
+                            "params": task_dict.get("params") or {},
+                            "raw_task": {
+                                "task_id": task_id,
+                                "type": task_dict.get("type"),
+                                "description": task_dict.get("description") or "",
+                                "domain": task_dict.get("domain"),
+                                "params": task_dict.get("params") or {},
+                            },
+                        },
+                        timeout_s=int(route_cfg.pkg_timeout_s or 2),
+                        embedding=None,
+                    )
+                except Exception as pkg_err:
+                    logger.debug("[Coordinator] Advisory PKG evaluation failed: %s", pkg_err)
+                    proto_plan = {}
+
+            advisory_payload = CoordinatorAdvisoryCore.build_cognitive_advisory_payload(
+                task_payload=task_obj.model_dump(),
+                proto_plan=proto_plan,
+            )
+
+            cognitive_res = await self.cognitive_client.post(
+                "/advisory",
+                json=advisory_payload,
+                timeout=float(max(5, self.timeout_s)),
+            )
+
+            if not isinstance(cognitive_res, dict):
+                raise RuntimeError("Cognitive advisory response must be a JSON object")
+            return CoordinatorAdvisoryCore.build_coordinator_response(
+                cognitive_res=cognitive_res,
+                task_id=task_id,
+                eventizer_data=eventizer_data,
+                proto_plan=proto_plan,
+            )
+
+        except Exception as e:
+            logger.exception("[Coordinator] Advisory generation failed: %s", e)
+            task_data = payload.get("payload") or payload.get("task") or payload
+            fallback_task: Dict[str, Any] = {}
+            try:
+                _, fallback_task = coerce_task_payload(task_data)
+            except Exception:
+                fallback_task = task_data if isinstance(task_data, dict) else {}
+            response = CoordinatorAdvisoryCore.build_fallback_contract(
+                task_dict=fallback_task,
+                error=str(e),
+            )
+            return response.model_dump()
 
     # Configuration loading is now handled by CoordinatorConfig
 

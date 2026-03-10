@@ -129,12 +129,14 @@ from openai import OpenAI  # pyright: ignore[reportMissingImports]
 # 3) SeedCore internals (no heavy side effects)
 from ..coordinator.utils import normalize_task_payloads
 from ..cognitive.cognitive_core import CognitiveCore, Fact
+from ..cognitive.advisory import CognitiveAdvisoryContractBuilder
 from ..models.cognitive import (
     CognitiveContext, 
     CognitiveType, 
     DecisionKind, 
     LLMProfile
 )
+from ..models.advisory import AdvisoryContractResponse, AmbiguityAssessment
 from ..models.task_payload import TaskPayload
 try:
     from seedcore.utils.ray_utils import ML
@@ -1105,6 +1107,15 @@ class CognitiveResponse(BaseModel):
     error: Optional[str] = None
     metadata: Dict[str, Any]
 
+
+class AdvisoryResponse(BaseModel):
+    """Structured advisory contract for stateless reasoning output."""
+
+    success: bool
+    advisory: Dict[str, Any]
+    error: Optional[str] = None
+    metadata: Dict[str, Any]
+
 # FastAPI app for ingress
 app = FastAPI(title="SeedCore Cognitive Service", version="2.0.0")
 
@@ -1155,6 +1166,38 @@ class CognitiveService:
                 "max_ongoing_requests": 32,
             },
         }
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return CognitiveAdvisoryContractBuilder.clamp01(value)
+
+    def _estimate_ambiguity(
+        self,
+        request: TaskPayload,
+        cognitive_result: Dict[str, Any],
+    ) -> AmbiguityAssessment:
+        return CognitiveAdvisoryContractBuilder.estimate_ambiguity(
+            request, cognitive_result
+        )
+
+    def _derive_risk(
+        self,
+        request: TaskPayload,
+        ambiguity: AmbiguityAssessment,
+    ) -> tuple[float, str, List[str]]:
+        return CognitiveAdvisoryContractBuilder.derive_risk(request, ambiguity)
+
+    def _build_advisory_contract(
+        self,
+        request: TaskPayload,
+        cognitive_result: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> AdvisoryContractResponse:
+        return CognitiveAdvisoryContractBuilder.build_contract(
+            request=request,
+            cognitive_result=cognitive_result,
+            metadata=metadata,
+        )
 
     @app.post("/execute", response_model=CognitiveResponse)
     async def execute_cognitive_task(self, request: TaskPayload = Body(...)):
@@ -1280,6 +1323,57 @@ class CognitiveService:
             result=result_dict.get("result", {}),
             error=result_dict.get("error"),
             metadata=result_dict.get("metadata", {}),
+        )
+
+    @app.post("/advisory", response_model=AdvisoryResponse)
+    async def execute_advisory_task(self, request: TaskPayload = Body(...)):
+        """
+        Stateless advisory endpoint:
+        - Runs ambiguity reduction + proto-planning on baseline cognitive core
+        - Returns `AdvisoryPlan` or `RiskSummary`
+        - Never authorizes execution
+        """
+        params = dict(request.params or {})
+        cognitive = dict(params.get("cognitive") or {})
+        interaction = params.get("interaction", {})
+
+        assigned_agent_id = None
+        if isinstance(interaction, dict):
+            assigned_agent_id = interaction.get("assigned_agent_id")
+
+        cognitive["agent_id"] = (
+            cognitive.get("agent_id") or assigned_agent_id or "coordinator_service"
+        )
+        cognitive["cog_type"] = cognitive.get(
+            "cog_type", CognitiveType.TASK_PLANNING.value
+        )
+        cognitive["decision_kind"] = cognitive.get(
+            "decision_kind", DecisionKind.COGNITIVE.value
+        )
+        cognitive["disable_memory_write"] = True
+        cognitive["advisory_mode"] = True
+        params["cognitive"] = cognitive
+
+        advisory_request = request.model_copy(update={"params": params})
+        base_response = await self.execute_cognitive_task(advisory_request)
+
+        if not base_response.success:
+            contract = CognitiveAdvisoryContractBuilder.build_execution_failure_contract(
+                request=advisory_request,
+                error=base_response.error,
+            )
+        else:
+            contract = self._build_advisory_contract(
+                advisory_request,
+                base_response.result or {},
+                base_response.metadata or {},
+            )
+        advisory_payload = contract.advisory.model_dump() if contract.advisory else {}
+        return AdvisoryResponse(
+            success=contract.success,
+            advisory=advisory_payload,
+            error=contract.error,
+            metadata=contract.metadata,
         )
 
 

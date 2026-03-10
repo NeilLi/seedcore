@@ -1334,12 +1334,27 @@ class CognitiveCore(dspy.Module):
         # Memory Bridge writes episodic memory (Mw), creates MemoryEvent, and promotes to HolonFabric
         # Only run for personal/agent requests (not global/coordinator)
         is_personal = bool(context.agent_id)
+        cognitive_cfg = (
+            (context.input_data or {}).get("params", {}).get("cognitive", {})
+            if isinstance((context.input_data or {}).get("params"), dict)
+            else {}
+        )
+        advisory_mode = bool(cognitive_cfg.get("advisory_mode"))
+        disable_memory_write = bool(cognitive_cfg.get("disable_memory_write"))
+        stateless_mode = advisory_mode or disable_memory_write
+
         if is_personal:
             memory_bridge = self._get_memory_bridge(context.agent_id)
         else:
             memory_bridge = None
 
-        if memory_bridge:
+        if stateless_mode:
+            payload.setdefault("meta", {})["stateless_mode"] = True
+            logger.debug(
+                "Skipping post-execution memory consolidation (stateless mode) "
+                f"for task_id={context.input_data.get('task_id') if context.input_data else 'n/a'}"
+            )
+        elif memory_bridge:
             try:
                 # Extract ocps from context input_data
                 ocps = context.input_data.get("ocps") if context.input_data else None
@@ -1429,14 +1444,24 @@ class CognitiveCore(dspy.Module):
             if hasattr(out.payload, "cog_type")
             else context.cog_type.value,
         }
-
-        self._cache_result(
-            cache_key,
-            out_dict,
-            context.cog_type,
-            agent_id=context.agent_id,
-            task_id=task_id,
+        cognitive_cfg = (
+            (context.input_data or {}).get("params", {}).get("cognitive", {})
+            if isinstance((context.input_data or {}).get("params"), dict)
+            else {}
         )
+        stateless_mode = bool(cognitive_cfg.get("advisory_mode")) or bool(
+            cognitive_cfg.get("disable_memory_write")
+        )
+        if not stateless_mode:
+            self._cache_result(
+                cache_key,
+                out_dict,
+                context.cog_type,
+                agent_id=context.agent_id,
+                task_id=task_id,
+            )
+        else:
+            out_dict.setdefault("metadata", {})["stateless_mode"] = True
 
         self._assert_no_routing_awareness(out_dict)
 
