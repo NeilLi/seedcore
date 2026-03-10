@@ -24,6 +24,7 @@ Still supports:
 import os
 import re
 import json
+import shlex
 import requests  # pyright: ignore[reportMissingModuleSource]
 import difflib
 import argparse
@@ -43,6 +44,8 @@ except ImportError:
 
 API_BASE = os.getenv("SEEDCORE_API", "http://127.0.0.1:8002")
 API_V1_BASE = f"{API_BASE}/api/v1"
+API_TIMEOUT = float(os.getenv("SEEDCORE_API_TIMEOUT", "30"))
+TASK_FETCH_LIMIT = int(os.getenv("SEEDCORE_TASK_FETCH_LIMIT", "500"))
 
 # ------------------- Helpers -------------------
 def _format_datetime(iso_string):
@@ -122,7 +125,16 @@ def _parse_quoted_string(args: list[str]) -> tuple[str, list[str]]:
         parsed = " ".join(parts)
         return parsed, args[len(parts):]
     
-    # No quote, return first arg as-is
+    # No quote: consume all tokens until first key=value token.
+    # This allows unquoted multi-word text like:
+    # voice turn off lights media_uri=s3://...
+    parts = []
+    i = 0
+    while i < len(args) and "=" not in args[i]:
+        parts.append(args[i])
+        i += 1
+    if parts:
+        return " ".join(parts), args[i:]
     return args[0], args[1:]
 
 def _parse_task_args(argv):
@@ -140,14 +152,28 @@ def _parse_task_args(argv):
         # argparse will exit on invalid args, but we want to handle this gracefully
         return None
 
-def _fetch_tasks(snapshot_id=None):
+def _fetch_tasks(snapshot_id=None, limit=TASK_FETCH_LIMIT, offset=0):
     params = {}
     if snapshot_id is not None:
         params["snapshot_id"] = snapshot_id
-    r = requests.get(f"{API_V1_BASE}/tasks", params=params)
+    if limit is not None:
+        params["limit"] = limit
+    if offset:
+        params["offset"] = offset
+    r = requests.get(f"{API_V1_BASE}/tasks", params=params, timeout=API_TIMEOUT)
     r.raise_for_status()
     data = r.json()
     return data.get("items", []), data.get("total", len(data))
+
+
+def _fetch_task(task_id_or_prefix: str):
+    r = requests.get(f"{API_V1_BASE}/tasks/{task_id_or_prefix}", timeout=API_TIMEOUT)
+    if r.status_code == 409:
+        raise ValueError(f"Ambiguous task ID prefix '{task_id_or_prefix}'. Use a longer prefix.")
+    if r.status_code == 404:
+        raise ValueError(f"No task found with ID starting with {task_id_or_prefix}")
+    r.raise_for_status()
+    return r.json()
 
 def _status_matches(task_status: str, want: str) -> bool:
     if not want:
@@ -196,7 +222,7 @@ def _task_str_result(task) -> str:
 def check_health():
     """Check API health status."""
     try:
-        r = requests.get(f"{API_BASE}/health")
+        r = requests.get(f"{API_BASE}/health", timeout=API_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         print(f"🏥 Health: {data.get('status', 'unknown')}")
@@ -208,7 +234,7 @@ def check_health():
 def check_readiness():
     """Check API readiness (including database connectivity)."""
     try:
-        r = requests.get(f"{API_BASE}/readyz")
+        r = requests.get(f"{API_BASE}/readyz", timeout=API_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         print(f"✅ Readiness: {data.get('status', 'unknown')}")
@@ -222,7 +248,7 @@ def check_readiness():
 # ------------------- FACTS -------------------
 def list_facts():
     try:
-        r = requests.get(f"{API_V1_BASE}/facts")
+        r = requests.get(f"{API_V1_BASE}/facts", timeout=API_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         items = data.get("items", [])
@@ -237,13 +263,13 @@ def list_facts():
 
 def gen_fact(text: str):
     payload = {"text": text, "metadata": {"source": "cli"}}
-    r = requests.post(f"{API_V1_BASE}/facts", json=payload)
+    r = requests.post(f"{API_V1_BASE}/facts", json=payload, timeout=API_TIMEOUT)
     r.raise_for_status()
     f = r.json()
     print(f"✨ Created fact {f['id'][:8]}: {f['text']}")
 
 def del_fact(fid: str):
-    r = requests.delete(f"{API_V1_BASE}/facts/{fid}")
+    r = requests.delete(f"{API_V1_BASE}/facts/{fid}", timeout=API_TIMEOUT)
     if r.status_code == 404:
         print(f"❌ No fact with ID starting with {fid}")
     else:
@@ -271,7 +297,7 @@ def create_task(task_type: str, description: str, params: dict | None = None, do
         payload["domain"] = domain
     
     try:
-        r = requests.post(f"{API_V1_BASE}/tasks", json=payload)
+        r = requests.post(f"{API_V1_BASE}/tasks", json=payload, timeout=API_TIMEOUT)
         r.raise_for_status()
         t = r.json()
         print(f"🚀 Task {t['id'][:8]} [{t['type']}] created with status '{t['status']}'")
@@ -283,14 +309,22 @@ def query_command(args):
     """query <description> - Create a QUERY task (reasoning, analysis, planning)"""
     if not args:
         print("Usage: query <description>")
-        print("Example: query 'analyze yesterday's energy usage'")
+        print('Example: query "analyze yesterday\'s energy usage"')
         return
     
     description = " ".join(args)
     create_task(
         task_type="query",
         description=description,
-        params={"task_description": description},
+        params={
+            "task_description": description,  # Backward compatibility
+            "query": {"problem_statement": description},
+            "interaction": {"mode": "one_shot"},
+            "cognitive": {
+                "cog_type": "problem_solving",
+                "decision_kind": "fast",
+            },
+        },
     )
 
 
@@ -330,6 +364,7 @@ def device_command(args):
             "domain": "device",
             "action": action,
             "device": device_type,
+            "interaction": {"mode": "coordinator_routed"},
             **kv,
         },
     )
@@ -370,6 +405,7 @@ def robot_command(args):
             "domain": "robot",
             "action": action,
             "task": task,
+            "interaction": {"mode": "coordinator_routed"},
             **kv,
         },
     )
@@ -388,7 +424,11 @@ def graph_command(args):
     create_task(
         task_type="graph",
         description=description,
-        params={"operation": args[0], "args": args[1:]},
+        params={
+            "operation": args[0],
+            "args": args[1:],
+            "interaction": {"mode": "one_shot"},
+        },
     )
 
 
@@ -406,7 +446,11 @@ def maintenance_command(args):
     create_task(
         task_type="maintenance",
         description=description,
-        params={"operation": args[0], "args": args[1:]},
+        params={
+            "operation": args[0],
+            "args": args[1:],
+            "interaction": {"mode": "one_shot"},
+        },
     )
 
 
@@ -475,7 +519,12 @@ def voice_command(args):
         "multimodal": multimodal,
         "chat": {
             "message": transcription
-        }
+        },
+        "interaction": {"mode": "agent_tunnel"},
+        "cognitive": {
+            "cog_type": "chat",
+            "decision_kind": "fast",
+        },
     }
     
     # Add any remaining kv pairs to params (for extensibility)
@@ -559,7 +608,8 @@ def vision_command(args):
     
     # Build params with multimodal envelope
     params = {
-        "multimodal": multimodal
+        "multimodal": multimodal,
+        "interaction": {"mode": "coordinator_routed"},
     }
     
     # Add any remaining kv pairs to params (for extensibility)
@@ -632,22 +682,7 @@ def list_tasks_with_filters(args):
 
 def task_status(tid: str):
     try:
-        items, _ = _fetch_tasks()
-        matches = [t for t in items if t["id"].startswith(tid)]
-        if not matches:
-            print(f"❌ No task found with ID starting with {tid}")
-            return
-        if len(matches) > 1:
-            print(f"⚠️ Multiple tasks match prefix {tid}:")
-            for t in matches:
-                print(f"   - {t['id']} [{t.get('type','N/A')}] {t.get('status','N/A')}")
-            print("Use a longer prefix to disambiguate.")
-            return
-
-        full_id = matches[0]["id"]
-        r = requests.get(f"{API_V1_BASE}/tasks/{full_id}")
-        r.raise_for_status()
-        t = r.json()
+        t = _fetch_task(tid)
 
         status = (t.get('status') or 'N/A').upper()
         updated = _format_datetime(t.get('updated_at'))
@@ -661,6 +696,8 @@ def task_status(tid: str):
             print(f"   🔴 Error: {t['error']}")
         if t.get("result"):
             print(f"   ✅ Result: {t['result']}")
+    except ValueError as e:
+        print(f"❌ {e}")
     except requests.RequestException as e:
         print(f"❌ Could not connect to API to get task status: {e}")
 
@@ -727,20 +764,7 @@ def search_tasks(query: str, args=None):
 
 def quick_status(tid: str):
     try:
-        items, _ = _fetch_tasks()
-        matches = [t for t in items if t["id"].startswith(tid)]
-        if not matches:
-            print(f"❌ No task found with ID starting with {tid}")
-            return
-        if len(matches) > 1:
-            print(f"⚠️ Multiple tasks match prefix {tid}:")
-            for t in matches[:3]:
-                print(f"   - {t['id']} [{t.get('type','N/A')}] {t.get('status','N/A')}")
-            if len(matches) > 3:
-                print(f"   ... and {len(matches)-3} more")
-            print(f"Use 'taskstatus {tid}' for details or 'search {tid}'.")
-            return
-        t = matches[0]
+        t = _fetch_task(tid)
         status = (t.get('status') or 'N/A').upper()
         desc = t.get('description', '')[:40]
         updated = _format_datetime(t.get('updated_at'))
@@ -752,6 +776,8 @@ def quick_status(tid: str):
             print(f"   🔴 Error: {t['error']}")
         elif t.get("result"):
             print("   ✅ Has result")
+    except ValueError as e:
+        print(f"❌ {e}")
     except requests.RequestException as e:
         print(f"❌ Could not connect to API: {e}")
 
@@ -794,7 +820,7 @@ def show_help():
     print("  exit / quit               - Exit")
     print("=" * 70)
     print("Examples:")
-    print("  query analyze yesterday's energy usage")
+    print('  query "analyze yesterday\'s energy usage"')
     print("  device on light room=1203")
     print("  device off hvac room=1203 brightness=0")
     print("  robot dispatch cleaning room=1203")
@@ -857,7 +883,11 @@ def main():
         if cmd in {"exit", "quit"}:
             break
 
-        parts = cmd.split()
+        try:
+            parts = shlex.split(cmd)
+        except ValueError as e:
+            print(f"❌ Invalid command syntax: {e}")
+            continue
         op, rest = parts[0], parts[1:]
 
         try:
