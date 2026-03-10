@@ -48,6 +48,7 @@ except ImportError:
 from seedcore.logging_setup import ensure_serve_logger
 from seedcore.models.task import TaskType
 from seedcore.models.cognitive import DecisionKind, CognitiveType
+from .cognitive_reasoning import CoordinatorCognitiveReasoner
 
 logger = ensure_serve_logger("seedcore.coordinator.core.enrichment")
 
@@ -580,7 +581,154 @@ class TaskEnricher:
         )
         self.routing_policy = RoutingPolicy(self.config)
         self.cognitive_policy = CognitivePolicy(self.config)
-    
+
+    @staticmethod
+    def _advisory_confidence(advisory: Dict[str, Any]) -> float:
+        """Derive a bounded confidence value from an advisory contract."""
+        confidence = advisory.get("confidence")
+        if isinstance(confidence, (int, float)):
+            return max(0.0, min(1.0, float(confidence)))
+
+        ambiguity = advisory.get("ambiguity") or {}
+        if isinstance(ambiguity, dict) and isinstance(ambiguity.get("score"), (int, float)):
+            return max(0.0, min(1.0, 1.0 - float(ambiguity["score"])))
+
+        return 0.5
+
+    @staticmethod
+    def _merge_routing_tags(
+        existing_tags: Any,
+        *candidates: Optional[str],
+    ) -> Optional[List[str]]:
+        """Merge advisory-derived routing tags into a stable list."""
+        merged: List[str] = []
+        if isinstance(existing_tags, list):
+            for tag in existing_tags:
+                if isinstance(tag, str) and tag.strip() and tag.strip() not in merged:
+                    merged.append(tag.strip())
+
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            normalized = candidate.strip()
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+
+        return merged or None
+
+    def _enrich_from_advisory(
+        self,
+        task_payload: Dict[str, Any],
+        task_context: Any,
+    ) -> Optional[EnrichmentResult]:
+        """Use cognitive advisory contract as the primary enrichment source."""
+        advisory = CoordinatorCognitiveReasoner.extract_advisory_payload(task_payload)
+        if not advisory:
+            return None
+
+        params = task_payload.get("params", {}) if isinstance(task_payload, dict) else {}
+        if not isinstance(params, dict):
+            params = {}
+
+        existing_routing = params.get("routing", {})
+        if not isinstance(existing_routing, dict):
+            existing_routing = {}
+
+        existing_multimodal = params.get("multimodal", {})
+        if not isinstance(existing_multimodal, dict):
+            existing_multimodal = {}
+
+        interpretation = advisory.get("structured_interpretation") or {}
+        if not isinstance(interpretation, dict):
+            interpretation = {}
+
+        advisory_multimodal = interpretation.get("multimodal") or {}
+        if not isinstance(advisory_multimodal, dict):
+            advisory_multimodal = {}
+
+        decision_hints = CoordinatorCognitiveReasoner.derive_decision_hints(task_payload)
+        routing_intent = CoordinatorCognitiveReasoner.advisory_to_routing_intent(task_payload)
+        confidence = self._advisory_confidence(advisory)
+
+        current_type = task_payload.get("type", TaskType.CHAT.value)
+        new_task_type = interpretation.get("task_type")
+        valid_task_types = {member.value for member in TaskType}
+        if not isinstance(new_task_type, str) or new_task_type not in valid_task_types:
+            new_task_type = current_type
+        if (
+            new_task_type == TaskType.CHAT.value
+            and advisory.get("kind") == "advisory_plan"
+            and (routing_intent or decision_hints["has_multiple_actions"])
+        ):
+            new_task_type = TaskType.ACTION.value
+
+        routing_enrichments: Dict[str, Any] = {}
+        if routing_intent:
+            routing_enrichments.update(routing_intent.to_routing_params())
+
+        routing_tags = self._merge_routing_tags(
+            existing_routing.get("routing_tags"),
+            interpretation.get("domain") or task_payload.get("domain"),
+            routing_intent.specialization if routing_intent else None,
+            advisory.get("kind"),
+        )
+        if routing_tags and routing_tags != existing_routing.get("routing_tags"):
+            routing_enrichments["routing_tags"] = routing_tags
+
+        cognitive_enrichments: Dict[str, Any] = {}
+        needs_clarification = bool(
+            isinstance(advisory.get("ambiguity"), dict)
+            and advisory["ambiguity"].get("needs_clarification")
+        )
+        if (
+            decision_hints["force_cognitive"]
+            or decision_hints["requires_planning"]
+            or needs_clarification
+            or advisory.get("kind") == "risk_summary"
+        ):
+            cognitive_enrichments["cog_type"] = CognitiveType.TASK_PLANNING.value
+            cognitive_enrichments["decision_kind"] = DecisionKind.COGNITIVE.value
+            cognitive_enrichments["force_deep_reasoning"] = True
+        elif routing_intent and confidence >= 0.75:
+            cognitive_enrichments["cog_type"] = CognitiveType.CHAT.value
+            cognitive_enrichments["decision_kind"] = DecisionKind.FAST_PATH.value
+            cognitive_enrichments["skip_retrieval"] = True
+        else:
+            cognitive_enrichments["cog_type"] = CognitiveType.CHAT.value
+
+        location_context = (
+            advisory_multimodal.get("location_context")
+            or existing_multimodal.get("location_context")
+        )
+        multimodal_enrichments = self._enrich_multimodal(
+            existing_multimodal=existing_multimodal,
+            location_context=location_context,
+            intent_class={"confidence": confidence},
+        )
+
+        reasoning_parts = [
+            f"source=cognitive_advisory (authority={AuthorityLevel.HIGH.value})",
+            f"kind={advisory.get('kind', 'unknown')}",
+        ]
+        if routing_intent and routing_intent.specialization:
+            reasoning_parts.append(
+                f"routing via advisory specialization={routing_intent.specialization}"
+            )
+        if cognitive_enrichments.get("decision_kind") == DecisionKind.COGNITIVE.value:
+            reasoning_parts.append("forcing cognitive path from advisory risk/planning signals")
+        elif cognitive_enrichments.get("decision_kind") == DecisionKind.FAST_PATH.value:
+            reasoning_parts.append("using FAST path from advisory routing confidence")
+
+        return EnrichmentResult(
+            task_type=new_task_type,
+            routing_enrichments=routing_enrichments,
+            cognitive_enrichments=cognitive_enrichments,
+            multimodal_enrichments=multimodal_enrichments,
+            tool_calls=[],
+            confidence=confidence,
+            reasoning=". ".join(reasoning_parts),
+        )
+
     def enrich_task(
         self,
         task_payload: Dict[str, Any],
@@ -596,6 +744,10 @@ class TaskEnricher:
         Returns:
             EnrichmentResult with all enrichment decisions
         """
+        advisory_result = self._enrich_from_advisory(task_payload, task_context)
+        if advisory_result is not None:
+            return advisory_result
+
         description = task_context.description or task_payload.get("description", "")
         task_type = task_payload.get("type", "chat")
         params = task_payload.get("params", {})

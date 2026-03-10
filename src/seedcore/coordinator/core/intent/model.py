@@ -10,6 +10,7 @@ class IntentSource(str, Enum):
     PKG_TOP_LEVEL = "pkg.top_level"
     PKG_STEP_EMBEDDED = "pkg.step[0]"
     PKG_AGGREGATED = "pkg.aggregated"
+    COGNITIVE_ADVISORY = "cognitive.advisory"
     COORDINATOR_BASELINE = "coordinator.baseline"  # NEW: Perception-based fallback
     LEGACY_RESOLVER = "legacy.resolver"
     FALLBACK_NEUTRAL = "fallback.neutral"

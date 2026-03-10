@@ -52,6 +52,7 @@ from seedcore.coordinator.core.intent import (
     IntentInsight,
 )
 from seedcore.coordinator.core.enrichment import enrich_task_payload
+from seedcore.coordinator.core.cognitive_reasoning import CoordinatorCognitiveReasoner
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.models.cognitive import CognitiveType, DecisionKind
 from seedcore.models.task import TaskType
@@ -378,6 +379,63 @@ def _minimal_fallback_intent(ctx: TaskContext) -> RoutingIntent:
     )
 
 
+async def _apply_cognitive_advisory_enrichment(
+    task: TaskPayload,
+    ctx: TaskContext,
+    exec_cfg: ExecutionConfig,
+) -> Optional[Dict[str, Any]]:
+    """
+    Ask the cognitive service for stateless advisory enrichment before falling
+    back to deterministic coordinator heuristics.
+    """
+    if not exec_cfg.cognitive_client:
+        return None
+
+    client_timeout = getattr(exec_cfg.cognitive_client, "timeout", 15.0)
+    try:
+        advisory_timeout = min(max(float(client_timeout), 5.0), 15.0)
+    except Exception:
+        advisory_timeout = 15.0
+
+    try:
+        if hasattr(exec_cfg.cognitive_client, "advisory_async"):
+            advisory_res = await exec_cfg.cognitive_client.advisory_async(
+                task=task,
+                timeout=advisory_timeout,
+            )
+        else:
+            advisory_res = await exec_cfg.cognitive_client.post(
+                "/advisory",
+                json=task.model_dump(),
+                timeout=advisory_timeout,
+            )
+
+        if not isinstance(advisory_res, dict) or not isinstance(
+            advisory_res.get("advisory"), dict
+        ):
+            return None
+
+        advisory = advisory_res.get("advisory") or {}
+        logger.info(
+            "[Coordinator] Applied cognitive advisory enrichment for task %s "
+            "(kind=%s, success=%s)",
+            ctx.task_id,
+            advisory.get("kind"),
+            advisory_res.get("success"),
+        )
+        return CoordinatorCognitiveReasoner.merge_advisory_into_task(
+            task.model_dump(),
+            advisory_res,
+        )
+    except Exception as e:
+        logger.warning(
+            "[Coordinator] Cognitive advisory enrichment failed for task %s: %s",
+            ctx.task_id,
+            e,
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Proto-plan extraction
 # ---------------------------------------------------------------------------
@@ -440,27 +498,29 @@ async def execute_task(
     )
     ctx = TaskContext.from_dict(task_context_dict)
 
-    # 1.5. TASK ENRICHMENT (Deterministic Coordinator Enrichment)
-    # Enrich task with missing operational intent before PKG evaluation.
-    # This implements the architectural principle:
-    #   API captures reality
-    #   Coordinator adds meaning
-    #   Cognitive executes intent
-    # Enrichment happens after Eventizer processing but before PKG evaluation,
-    # ensuring tasks have complete operational intent before routing decisions.
+    # 1.5. TASK ENRICHMENT (AI-first, deterministic fallback)
+    # Primary path: Ask the cognitive advisory contract to interpret noisy inputs
+    # and propose routing / proto-planning hints.
     #
-    # Operator control: deterministic task enrichment can be disabled via env.
-    # This is useful if you want Coordinator to rely solely on PKG + routing inbox
-    # + intent enrichers, without bootstrap heuristics.
+    # Fallback path: If advisory is unavailable, retain deterministic enrichment
+    # for resilience.
     #
-    # EXCEPTION: Even when enrichment is enabled, skip enrichment for action tasks
-    # with required_specialization. These tasks already have accurate routing
-    # information (hard constraint) and should not be mutated by heuristics.
+    # EXCEPTION: Skip enrichment for action tasks with required_specialization.
+    # Those tasks already carry a caller-provided hard constraint and must not
+    # be mutated by coordinator inference.
     task_dict = task.model_dump()
     routing = task_dict.get("params", {}).get("routing", {}) if task_dict.get("params") else {}
     has_required_specialization = bool(routing.get("required_specialization"))
     is_action_task = task_dict.get("type") == "action"
 
+    cognitive_enrichment_enabled = os.getenv(
+        "COORDINATOR_COGNITIVE_ENRICHMENT_ENABLED", "1"
+    ).strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
     enrichment_enabled = os.getenv("COORDINATOR_TASK_ENRICHMENT_ENABLED", "1").strip().lower() not in (
         "0",
         "false",
@@ -483,7 +543,16 @@ async def execute_task(
         # Skip enrichment - task already has accurate routing information
         enriched_task_dict = task_dict
     else:
-        enriched_task_dict = enrich_task_payload(task_dict, ctx)
+        enriched_task_dict = None
+        if cognitive_enrichment_enabled and execution_config.cognitive_client:
+            enriched_task_dict = await _apply_cognitive_advisory_enrichment(
+                task=task,
+                ctx=ctx,
+                exec_cfg=execution_config,
+            )
+
+        if enriched_task_dict is None:
+            enriched_task_dict = enrich_task_payload(task_dict, ctx)
     
     # Update task object with enriched data (for downstream use)
     task = TaskPayload.model_validate(enriched_task_dict)
@@ -1963,6 +2032,7 @@ def _aggregate_execution_results(
 
 def _convert_eventizer_signals_to_surprise_signals(
     ctx: TaskContext,
+    task: TaskPayload,
     drift_state: Any,
     raw_drift: float,
     ocps_valve: Any,
@@ -2047,6 +2117,34 @@ def _convert_eventizer_signals_to_surprise_signals(
         "event_tags": event_tags,  # For semantic urgency (x6)
     }
     
+    advisory_overrides = CoordinatorCognitiveReasoner.derive_policy_signal_overrides(task)
+    if advisory_overrides:
+        surprise_signals.update(
+            {
+                "advisory_available": True,
+                "advisory_ambiguity": advisory_overrides.get("ambiguity_score", 0.0),
+                "advisory_risk": advisory_overrides.get("risk_score", 0.0),
+                "advisory_step_count": advisory_overrides.get("step_count", 0),
+                "advisory_has_conditional_logic": advisory_overrides.get(
+                    "has_conditional_logic", False
+                ),
+                "advisory_has_multiple_actions": advisory_overrides.get(
+                    "has_multiple_actions", False
+                ),
+                "advisory_requires_planning": advisory_overrides.get(
+                    "requires_planning", False
+                ),
+                "advisory_force_cognitive": advisory_overrides.get(
+                    "force_cognitive", False
+                ),
+                # Let AI-derived risk directly influence x6 criticality.
+                "criticality": max(
+                    surprise_signals.get("criticality") or 0.0,
+                    advisory_overrides.get("risk_score", 0.0),
+                ),
+            }
+        )
+
     return surprise_signals
 
 
@@ -2125,6 +2223,10 @@ def _has_conditional_trigger(description: str, params: Dict[str, Any]) -> bool:
     Returns:
         True if task has conditional triggers, False otherwise
     """
+    advisory_hints = CoordinatorCognitiveReasoner.derive_decision_hints({"params": params})
+    if advisory_hints.get("has_conditional_logic"):
+        return True
+
     if not description:
         return False
     
@@ -2186,6 +2288,10 @@ def _has_multiple_actions(description: str, params: Dict[str, Any]) -> bool:
     Returns:
         True if task has multiple actions, False otherwise
     """
+    advisory_hints = CoordinatorCognitiveReasoner.derive_decision_hints({"params": params})
+    if advisory_hints.get("has_multiple_actions"):
+        return True
+
     if not description:
         return False
     
@@ -2243,6 +2349,10 @@ def _requires_planning(description: str, params: Dict[str, Any]) -> bool:
     Returns:
         True if task requires planning, False if single-action
     """
+    advisory_hints = CoordinatorCognitiveReasoner.derive_decision_hints({"params": params})
+    if advisory_hints.get("requires_planning"):
+        return True
+
     if not description:
         return False
     
@@ -2433,7 +2543,15 @@ async def _process_drift_signals(
     Returns:
         Tuple of (raw_drift, drift_state)
     """
-    if is_simple:
+    advisory_drift = CoordinatorCognitiveReasoner.derive_drift_score(task)
+    if advisory_drift is not None:
+        raw_drift = advisory_drift
+        logger.debug(
+            "[Coordinator] Using cognitive advisory drift=%s for task %s",
+            raw_drift,
+            ctx.task_id,
+        )
+    elif is_simple:
         raw_drift = 0.0
         desc_preview = ctx.description[:20] if ctx.description else ""
         logger.debug(
@@ -2474,6 +2592,7 @@ async def _evaluate_surprise_signals(
     auth = _get_intent_authority(task)
     signals = _convert_eventizer_signals_to_surprise_signals(
         ctx=ctx,
+        task=task,
         drift_state=drift_state,
         raw_drift=raw_drift,
         ocps_valve=route_cfg.ocps_valve,
@@ -2745,7 +2864,8 @@ def _resolve_routing_intent(
     Coordinator's job: Extract routing hints, bind routing envelopes, enforce deny-by-default.
     Coordinator does NOT: Decide intent, infer conditions, count verbs, parse semantics.
     
-    Priority: proto_plan > enrichment routing (FAST only) > config resolver > minimal fallback (FAST only)
+    Priority: proto_plan > cognitive advisory > enrichment routing (FAST only)
+    > config resolver > minimal fallback (FAST only)
     """
     intent: Optional[RoutingIntent] = None
 
@@ -2811,8 +2931,21 @@ def _resolve_routing_intent(
                     "using enrichment intent (expected behavior)"
                 )
                 intent = None
-    
-    # Second: Extract from enrichment routing (ONLY for FAST path - forbidden after System-2)
+
+    # Second: Use cognitive advisory routing hints before coordinator heuristics.
+    if not intent:
+        advisory_intent = CoordinatorCognitiveReasoner.advisory_to_routing_intent(task)
+        if advisory_intent:
+            logger.info(
+                "[Coordinator] Using cognitive advisory routing intent for task %s: "
+                "%s (confidence=%s)",
+                ctx.task_id,
+                advisory_intent.specialization,
+                advisory_intent.confidence.value,
+            )
+            intent = advisory_intent
+
+    # Third: Extract from enrichment routing (ONLY for FAST path - forbidden after System-2)
     if not intent and not is_cognitive_path:
         existing_routing = task.params.get("routing", {}) if task.params else {}
         enrichment_specialization = (
@@ -2831,8 +2964,8 @@ def _resolve_routing_intent(
                 f"[Coordinator] Using enrichment routing intent for task {ctx.task_id}: "
                 f"{intent.specialization} (source=enrichment, confidence={intent.confidence.value})"
             )
-    
-    # Third: Use config-driven resolver if provided (LEGACY - deprecated, FAST path only)
+
+    # Fourth: Use config-driven resolver if provided (LEGACY - deprecated, FAST path only)
     if not intent and not is_cognitive_path and route_cfg.intent_resolver:
         logger.warning(
             f"[Coordinator] Using deprecated intent_resolver for task {ctx.task_id}. "
@@ -2844,8 +2977,8 @@ def _resolve_routing_intent(
             legacy_intent.source = IntentSource.LEGACY_RESOLVER
             legacy_intent.confidence = IntentConfidence.LOW
         intent = legacy_intent
-    
-    # Fourth: Coordinator baseline synthesis (ONLY for FAST path - forbidden after System-2)
+
+    # Fifth: Coordinator baseline synthesis (ONLY for FAST path - forbidden after System-2)
     if not intent and not is_cognitive_path:
         intent = IntentEnricher.synthesize_baseline(ctx)
         logger.info(
@@ -3013,7 +3146,10 @@ async def _compute_routing_decision(
     
     # 1. Preliminary Assessment
     is_simple = _is_extremely_simple_query_precheck(ctx)
-    requires_planning = _requires_planning(ctx.description, task.params)
+    advisory_hints = CoordinatorCognitiveReasoner.derive_decision_hints(task)
+    requires_planning = advisory_hints["requires_planning"] or _requires_planning(
+        ctx.description, task.params
+    )
     pkg_mandatory = _is_pkg_mandatory_action(task)
     if pkg_mandatory:
         logger.info(
@@ -3023,8 +3159,19 @@ async def _compute_routing_decision(
     
     # ARCHITECTURAL FIX: Hard cognitive gate for conditional OR multi-action tasks
     # Enrichment (System-1) cannot override System-2 requirements
-    has_conditions = _has_conditional_trigger(ctx.description, task.params)
-    has_multiple_actions = _has_multiple_actions(ctx.description, task.params)
+    has_conditions = advisory_hints["has_conditional_logic"] or _has_conditional_trigger(
+        ctx.description, task.params
+    )
+    has_multiple_actions = advisory_hints["has_multiple_actions"] or _has_multiple_actions(
+        ctx.description, task.params
+    )
+
+    if advisory_hints["force_cognitive"] and not requires_planning:
+        requires_planning = True
+        logger.info(
+            "[Coordinator] Cognitive advisory forced System-2 planning for task %s.",
+            ctx.task_id,
+        )
     
     # Log hard gate detection for observability
     if has_conditions or has_multiple_actions:
@@ -3110,6 +3257,8 @@ async def _compute_routing_decision(
             escalation_reasons.append("hard_gate(conditional_trigger)")
         if has_multiple_actions:
             escalation_reasons.append("hard_gate(multiple_actions)")
+        if advisory_hints["force_cognitive"]:
+            escalation_reasons.append("cognitive_advisory_forced")
         if enrichment_auth == "LOW" and decision_kind == DecisionKind.COGNITIVE.value:
             escalation_reasons.append("LOW_authority_cannot_force_fast")
         logger.info(

@@ -126,6 +126,63 @@ def _pair_key(pair: Tuple[str, Optional[str]]) -> str:
     return f"{t}|{d or ''}"
 
 
+def _normalize_logical_id(value: Any) -> Optional[str]:
+    """Normalize preferred logical-id hints from task metadata."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _extract_step_preferred_logical_id(step: Dict[str, Any]) -> Optional[str]:
+    """Extract the strongest organ hint available from a step payload."""
+    if not isinstance(step, dict):
+        return None
+
+    direct_hint = (
+        step.get("organ_hint")
+        or step.get("organ_id")
+        or step.get("preferred_logical_id")
+    )
+    normalized = _normalize_logical_id(direct_hint)
+    if normalized:
+        return normalized
+
+    task = step.get("task")
+    if not isinstance(task, dict):
+        return None
+
+    task_hint = task.get("organ_hint") or task.get("organ_id")
+    normalized = _normalize_logical_id(task_hint)
+    if normalized:
+        return normalized
+
+    params = task.get("params") or {}
+    if not isinstance(params, dict):
+        return None
+
+    routing = params.get("routing") or {}
+    if isinstance(routing, dict):
+        normalized = _normalize_logical_id(routing.get("target_organ_hint"))
+        if normalized:
+            return normalized
+
+    return _normalize_logical_id(params.get("preferred_logical_id"))
+
+
+def _select_fallback_logical_id(
+    task_type: str,
+    domain: Optional[str],
+    static_route_fallback_func: Callable[[str, Optional[str]], str],
+    preferred_logical_id: Optional[str] = None,
+) -> str:
+    """Prefer AI- or planner-provided logical-id hints before static fallback."""
+    hint = _normalize_logical_id(preferred_logical_id)
+    if hint:
+        return hint
+    return static_route_fallback_func(task_type, domain)
+
+
 def get_cached_route(task_type: str, domain: Optional[str], route_cache: "RouteCache") -> Optional[str]:
     """Get cached route for a single task type/domain pair."""
     if not route_cache:
@@ -170,6 +227,7 @@ async def bulk_resolve_routes_cached(
     mapping: Dict[int, str] = {}  # final result
     to_resolve = []
     seen_keys: set[str] = set()
+    resolve_index_by_key: Dict[str, int] = {}
 
     for idx, step in enumerate(steps):
         subtask = step.get("task") or {}
@@ -205,9 +263,16 @@ async def bulk_resolve_routes_cached(
                     "key": key_str,
                     "type": t,
                     "domain": d,
-                    "preferred_logical_id": step.get("organ_hint"),  # Forward hints
+                    "preferred_logical_id": _extract_step_preferred_logical_id(step),
                 })
                 seen_keys.add(key_str)
+                resolve_index_by_key[key_str] = len(to_resolve) - 1
+            else:
+                preferred_logical_id = _extract_step_preferred_logical_id(step)
+                if preferred_logical_id:
+                    item = to_resolve[resolve_index_by_key[key_str]]
+                    if not item.get("preferred_logical_id"):
+                        item["preferred_logical_id"] = preferred_logical_id
 
     if not to_resolve:
         return mapping, None  # all from cache
@@ -305,9 +370,16 @@ async def bulk_resolve_routes_cached(
                 # Fallback for this (type, domain) pair
                 t, d = key.split("|", 1)
                 d = d if d else None
-                logical_id = static_route_fallback_func(t, d)
                 for step_idx in pairs[(t, d)]:
-                    mapping[step_idx] = logical_id
+                    preferred_logical_id = _extract_step_preferred_logical_id(
+                        steps[step_idx]
+                    )
+                    mapping[step_idx] = _select_fallback_logical_id(
+                        t,
+                        d,
+                        static_route_fallback_func,
+                        preferred_logical_id=preferred_logical_id,
+                    )
                     
         return mapping, new_epoch
 
@@ -319,9 +391,16 @@ async def bulk_resolve_routes_cached(
         for item in to_resolve:
             t, d = item["key"].split("|", 1)
             d = d if d else None
-            logical_id = static_route_fallback_func(t, d)
             for step_idx in pairs[(t, d)]:
-                mapping[step_idx] = logical_id
+                preferred_logical_id = _extract_step_preferred_logical_id(
+                    steps[step_idx]
+                )
+                mapping[step_idx] = _select_fallback_logical_id(
+                    t,
+                    d,
+                    static_route_fallback_func,
+                    preferred_logical_id=preferred_logical_id,
+                )
         return mapping, None
 
 
@@ -405,7 +484,12 @@ async def resolve_route_cached_async(
     # Check feature flag after cache lookup. If remote routing is disabled (or
     # type not enabled) fall back to static routing.
     if not routing_remote_enabled or t not in routing_remote_types:
-        return static_route_fallback_func(t, d)
+        return _select_fallback_logical_id(
+            t,
+            d,
+            static_route_fallback_func,
+            preferred_logical_id=preferred_logical_id,
+        )
 
     # 2) Single-flight: if another coroutine is already resolving this key, await it
     async for (fut, is_leader) in route_cache.singleflight(key):
@@ -471,7 +555,12 @@ async def resolve_route_cached_async(
             # 4) Fallback: use static defaults
             if metrics:
                 metrics.increment_counter("route_remote_fail_total")
-            logical_id = static_route_fallback_func(t, d)
+            logical_id = _select_fallback_logical_id(
+                t,
+                d,
+                static_route_fallback_func,
+                preferred_logical_id=preferred_logical_id,
+            )
             # Always complete the future - either with result or exception
             if is_leader and not fut.done():
                 fut.set_result(logical_id)

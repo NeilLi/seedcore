@@ -18,12 +18,17 @@ except ImportError:
     from typing_extensions import NotRequired  # pyright: ignore[reportMissingModuleSource]
 
 from seedcore.models.cognitive import DecisionKind
+from .cognitive_reasoning import CoordinatorCognitiveReasoner
 from .features import compute_all_features
 
 logger = logging.getLogger(__name__)
 
 # Constants
 EPS = 1e-12
+
+
+def _clip01(x: float) -> float:
+    return max(0.0, min(1.0, float(x)))
 
 
 # --- Type Definitions ---
@@ -54,6 +59,14 @@ class SurpriseSignals(TypedDict, total=False):
     criticality: float
     # NEW: Eventizer Tags for Semantic Urgency
     event_tags: Any
+    advisory_available: bool
+    advisory_ambiguity: float
+    advisory_risk: float
+    advisory_step_count: int
+    advisory_has_conditional_logic: bool
+    advisory_has_multiple_actions: bool
+    advisory_requires_planning: bool
+    advisory_force_cognitive: bool
 
 
 # --- Helpers ---
@@ -90,6 +103,43 @@ def _parse_weights(env_var: str, default=(0.25, 0.20, 0.15, 0.20, 0.10, 0.10)):
         return default
 
 
+def _compute_advisory_pressure(signals: SurpriseSignals) -> tuple[Optional[float], bool]:
+    """Compute AI-derived surprise pressure from advisory contract signals."""
+    if not bool(signals.get("advisory_available")):
+        return None, False
+
+    ambiguity = (
+        float(signals.get("advisory_ambiguity"))
+        if isinstance(signals.get("advisory_ambiguity"), (int, float))
+        else 0.0
+    )
+    risk = (
+        float(signals.get("advisory_risk"))
+        if isinstance(signals.get("advisory_risk"), (int, float))
+        else 0.0
+    )
+    step_count = (
+        int(signals.get("advisory_step_count"))
+        if isinstance(signals.get("advisory_step_count"), int)
+        else 0
+    )
+
+    step_pressure = _clip01((max(0, step_count - 1)) / 2.0) if step_count else 0.0
+    conditional_pressure = 0.8 if bool(signals.get("advisory_has_conditional_logic")) else 0.0
+    multi_action_pressure = 0.65 if bool(signals.get("advisory_has_multiple_actions")) else 0.0
+    planning_pressure = 0.55 if bool(signals.get("advisory_requires_planning")) else 0.0
+
+    pressure = max(
+        _clip01(ambiguity),
+        _clip01(risk),
+        step_pressure,
+        conditional_pressure,
+        multi_action_pressure,
+        planning_pressure,
+    )
+    return pressure, bool(signals.get("advisory_force_cognitive"))
+
+
 # --- Core Classes ---
 
 
@@ -120,8 +170,20 @@ class SurpriseComputer:
         # 2. Weighted Sum
         S = max(0.0, min(1.0, sum(w * x for w, x in zip(self.w_hat, xs))))
 
+        advisory_pressure, advisory_force = _compute_advisory_pressure(signals)
+        if advisory_pressure is not None:
+            # AI advisory is primary semantic authority; classical features remain as fallback/context.
+            S = _clip01((S * 0.25) + (advisory_pressure * 0.75))
+            if advisory_force:
+                S = max(S, advisory_pressure)
+
         # 3. Thresholding
-        if S < self.tau_fast:
+        if advisory_force:
+            if advisory_pressure is not None and advisory_pressure >= 0.85:
+                decision_kind = DecisionKind.ESCALATED.value
+            else:
+                decision_kind = DecisionKind.COGNITIVE.value
+        elif S < self.tau_fast:
             decision_kind = DecisionKind.FAST_PATH.value
         elif S < self.tau_plan:
             decision_kind = DecisionKind.COGNITIVE.value
@@ -222,6 +284,10 @@ async def compute_drift_score(
 
     if not text_for_drift:
         text_for_drift = task.get("description") or ""
+
+    advisory_drift = CoordinatorCognitiveReasoner.derive_drift_score(task)
+    if advisory_drift is not None:
+        return advisory_drift
 
     # 1. ML Service Call (Remote)
     if ml_client and hasattr(ml_client, "compute_drift_score"):

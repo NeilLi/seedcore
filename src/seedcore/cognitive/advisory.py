@@ -146,6 +146,40 @@ class CognitiveAdvisoryContractBuilder:
         ambiguity = cls.estimate_ambiguity(request, cognitive_result)
         risk_score, risk_level, risk_triggers = cls.derive_risk(request, ambiguity)
 
+        steps = []
+        if isinstance(cognitive_result.get("solution_steps"), list):
+            steps = cognitive_result["solution_steps"]
+        elif isinstance(cognitive_result.get("steps"), list):
+            steps = cognitive_result["steps"]
+
+        proto_steps = (
+            proto_plan.get("steps") if isinstance(proto_plan.get("steps"), list) else []
+        )
+        step_count = max(len(steps), len(proto_steps))
+
+        edges = []
+        if isinstance(proto_plan.get("edges"), list):
+            edges = proto_plan.get("edges") or []
+        elif isinstance(cognitive_result.get("edges"), list):
+            edges = cognitive_result.get("edges") or []
+
+        has_conditional_logic = bool(edges)
+        if not has_conditional_logic:
+            for step in steps or proto_steps:
+                if not isinstance(step, dict):
+                    continue
+                depends_on = step.get("depends_on")
+                if not depends_on and isinstance(step.get("task"), dict):
+                    depends_on = step["task"].get("depends_on")
+                if isinstance(depends_on, list) and depends_on:
+                    has_conditional_logic = True
+                    break
+                if isinstance(depends_on, str) and depends_on.strip():
+                    has_conditional_logic = True
+                    break
+
+        has_multiple_actions = step_count > 1
+
         interpretation = {
             "task_type": request.type,
             "domain": request.domain,
@@ -159,13 +193,10 @@ class CognitiveAdvisoryContractBuilder:
                 else None
             )
             or request.description,
+            "step_count": step_count,
+            "has_multiple_actions": has_multiple_actions,
+            "has_conditional_logic": has_conditional_logic,
         }
-
-        steps = []
-        if isinstance(cognitive_result.get("solution_steps"), list):
-            steps = cognitive_result["solution_steps"]
-        elif isinstance(cognitive_result.get("steps"), list):
-            steps = cognitive_result["steps"]
 
         has_plan = bool(steps) or bool(proto_plan.get("steps")) or bool(
             cognitive_result.get("nodes")
@@ -204,7 +235,6 @@ class CognitiveAdvisoryContractBuilder:
 
         summary_text = cognitive_result.get("summary")
         if not isinstance(summary_text, str) or not summary_text.strip():
-            step_count = len(steps) if steps else len(proto_plan.get("steps") or [])
             summary_text = (
                 f"Prepared proto-planning advisory with {step_count} proposed step(s)."
             )

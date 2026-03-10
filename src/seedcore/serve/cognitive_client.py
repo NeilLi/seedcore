@@ -265,6 +265,30 @@ class CognitiveServiceClient(BaseServiceClient):
             "/execute", json=updated_payload.model_dump(), timeout=effective_timeout
         )
 
+    async def advisory_async(
+        self,
+        *,
+        task: Union[TaskPayload, Dict[str, Any]],
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Stateless cognitive advisory interface for coordinator/core reasoning.
+
+        This endpoint returns advisory interpretation and proto-planning hints
+        without authorizing execution or writing memory.
+        """
+        if isinstance(task, TaskPayload):
+            payload = task
+        else:
+            payload = TaskPayload.from_db(dict(task or {}))
+
+        effective_timeout = timeout if timeout is not None else self.timeout
+        return await self.post(
+            "/advisory",
+            json=payload.model_dump(),
+            timeout=effective_timeout,
+        )
+
     # ---------------------------
     # Service info / health
     # ---------------------------
@@ -320,6 +344,27 @@ class CognitiveServiceClient(BaseServiceClient):
                 llm_model_override=llm_model_override,
                 proto_plan=proto_plan,
                 ocps=ocps,
+            )
+
+        try:
+            asyncio.get_running_loop()
+            future = _SYNC_EXECUTOR.submit(lambda: asyncio.run(_runner()))
+            return future.result(timeout=self.timeout + 5.0)
+        except RuntimeError:
+            return asyncio.run(_runner())
+
+    def advisory_sync(
+        self,
+        *,
+        task: Union[TaskPayload, Dict[str, Any]],
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Synchronous wrapper for advisory_async."""
+
+        async def _runner():
+            return await self.advisory_async(
+                task=task,
+                timeout=timeout,
             )
 
         try:
