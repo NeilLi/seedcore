@@ -2,6 +2,8 @@
 
 This reference details the `TaskPayload` model, explaining how the `Task` row carries routing inputs, cognitive metadata, chat envelopes, interaction state, execution telemetry, and **multimodal media references**—**without schema migrations**.
 
+`TaskPayload` is the **judgment envelope** for AI and routing. In the current SeedCore baseline, that judgment executes on the cognitive core and coordinator planning stack. `TaskPayload` is not the authorization artifact for physical execution.
+
 SeedCore leverages PostgreSQL `JSONB` to store high-evolution metadata:
 
 * **Inputs:** `params` (JSONB)
@@ -27,6 +29,16 @@ params: Mapped[Dict[str, Any]] = mapped_column(
 * **Evolution:** New envelopes (e.g., `graph`, `planning`, `multimodal`) can be added without table locks.
 * **Multimodal:** Voice and Vision inputs are stored as metadata in `params.multimodal` while embeddings are stored in the dedicated `task_multimodal_embeddings` table (direct FK) for fast "Living System" response times. Graph embeddings use separate tables (`graph_embeddings_128`/`graph_embeddings_1024`) via `graph_node_map` for structural memory.
 
+## Zero-Trust Position
+
+For zero-trust runtime behavior, keep these contracts separate:
+
+* **`TaskPayload`** = cognition, routing, and AI judgment envelope
+* **`ActionIntent`** = accountable Agent contract submitted to the PDP
+* **`ExecutionToken`** = the only authorization artifact that may unlock robotic or controlled physical execution
+
+The router is not an authorizer. A task reaching an agent does not mean the agent is cleared to act.
+
 ---
 
 ## 1. Interaction Envelope (`params.interaction`)
@@ -48,10 +60,10 @@ Controls **how** the task flows through the system topology.
 | Mode | Behavior |
 | :--- | :--- |
 | **`coordinator_routed`** | **Default.** Task is sent to the Coordinator, scored, and routed to the best Organ/Agent. |
-| **`agent_tunnel`** | **Bypasses Router.** Task is sent directly to `assigned_agent_id`. Used for low-latency chat. |
+| **`agent_tunnel`** | **Bypasses Router only.** Task is sent directly to `assigned_agent_id`. Suitable for low-latency conversational or virtual flows, but not as an authorization bypass for physical execution. |
 | **`one_shot`** | Stateless request/response. No memory hydration. |
 
-**Critical Rule:** If `mode == "agent_tunnel"`, the **Router is skipped entirely**. The `params.routing` envelope is ignored.
+**Critical Rule:** If `mode == "agent_tunnel"`, the **Router is skipped entirely** and the `params.routing` envelope is ignored. This does **not** bypass the PDP. Any physical, actuator-bound, or high-stakes action must still be derived into an `ActionIntent` and evaluated by the PDP before execution.
 
 ---
 
@@ -88,6 +100,8 @@ Controls **how** the task flows through the system topology.
 
 **Precedence rule:** instance `params.routing.*` overrides task-type defaults, which override organ defaults. When a hard constraint is sourced from defaults, the router should include that provenance in `_router.reason`.
 
+**Zero-trust rule:** `hints.ttl_seconds` is only a routing or memory hint. It is not a substitute for the mandatory absolute `ActionIntent.valid_until` timestamp required by the PDP.
+
 ---
 
 ## 3. Router Output (`params._router`)
@@ -114,11 +128,15 @@ Controls **how** the task flows through the system topology.
 
 **Rule:** if `_router.is_high_stakes != risk.is_high_stakes`, `_router.reason` should explain why.
 
+### Router vs Authorization
+
+`params._router` records a routing choice only. It does not grant permission to move an asset, trigger an actuator, or finalize a custody transition. For governed execution, the accountable Agent must derive an `ActionIntent` and obtain `ExecutionToken` or `PolicyDeny` from the PDP.
+
 ---
 
 ## 4. Cognitive Metadata (`params.cognitive`)
 
-Controls the reasoning engine, LLM selection, and memory I/O barriers.
+Controls the reasoning engine, LLM selection, and memory I/O barriers for the **AI judgment layer**.
 
 ```json
 {
@@ -141,7 +159,22 @@ Controls the reasoning engine, LLM selection, and memory I/O barriers.
 * **`skip_retrieval`**: If `true`, the ContextBuilder skips vector/graph lookups (saving latency).
 * **`disable_memory_write`**: If `true`, the interaction is **not** saved to episodic memory (e.g., for PII reasons or trivial chit-chat).
 
-**Note:** The `agent_id` is typically populated after routing (from `params._router.agent_id`).
+**Note:** The `agent_id` is typically populated after routing (from `params._router.agent_id`). This is still a judgment/routing identity, not yet the canonical `principal` block used for PDP evaluation.
+
+## 4.5 TaskPayload -> ActionIntent Transformation
+
+When a task can cause physical, regulated, or high-stakes side effects, the accountable Agent must derive an `ActionIntent` from `TaskPayload` before execution.
+
+### Minimum mapping
+
+* `interaction.assigned_agent_id` -> `principal.agent_id`
+* `multimodal.location_context` -> `resource.target_zone`
+* Agent `RoleProfile` -> `action.security_contract.version`
+* routing or multimodal `ttl_seconds` -> mandatory absolute `valid_until`
+
+### Identity consolidation rule
+
+`TaskPayload` currently spreads identity across `interaction.assigned_agent_id`, `params._router.agent_id`, and `params.cognitive.agent_id`. Before submitting to the PDP, the accountable Agent must consolidate these into a single canonical `principal` block.
 
 ---
 
@@ -444,12 +477,15 @@ This partial index only indexes rows that contain the `multimodal` key, dramatic
    * **Queue Prioritization:** If `is_real_time: true`, prioritize in Kafka queue.
    * **Unified Memory Query:** Use `v_unified_cortex_memory` view for semantic search across all memory tiers.
 5. **Routing:** Standard routing logic applies using `params.routing` and other envelopes, enriched with multimodal context.
+6. **Authorization:** If the selected work can affect the physical world, the accountable Agent derives `ActionIntent` and calls the PDP synchronously.
+7. **Execution:** Only a signed `ExecutionToken` may unlock actuator or controlled endpoint execution.
+8. **Evidence:** The resulting `EvidenceBundle` is merged back into `result.meta` as the gold-standard proof of execution.
 
 ---
 
 ## 9. Result Metadata (`result.meta`)
 
-The source of truth for execution telemetry and decision provenance.
+The source of truth for execution telemetry, decision provenance, and the gold-standard execution evidence merged back from the actuator path.
 
 ```json
 {
@@ -463,11 +499,24 @@ The source of truth for execution telemetry and decision provenance.
       {"agent_id": "agent_GEA_07", "score": 0.82}
     ]
   },
+  "authorization": {
+    "intent_id": "intent_123",
+    "policy_outcome": "allow",
+    "execution_token_id": "token_123",
+    "valid_until": "2025-11-11T11:13:00Z"
+  },
   "exec": {
     "started_at": "2025-11-11T11:12:00Z",
     "finished_at": "2025-11-11T11:12:35Z",
+    "executed_at": "2025-11-11T11:12:35Z",
     "latency_ms": 350,
-    "attempt": 1
+    "attempt": 1,
+    "execution_receipt_hash": "sha256:abc123"
+  },
+  "evidence": {
+    "intent_ref": "intent_123",
+    "telemetry_snapshot_ref": "telemetry_bundle_456",
+    "execution_receipt_hash": "sha256:abc123"
   },
   "cognitive_trace": {
     "retrieval_scope": {
@@ -481,6 +530,12 @@ The source of truth for execution telemetry and decision provenance.
   }
 }
 ```
+
+### Evidence semantics
+
+* `authorization` captures the policy decision that allowed execution.
+* `exec.execution_receipt_hash` is the minimum actuator receipt field required for custody-grade proof.
+* `evidence` records the merged `EvidenceBundle` references needed for black-box forensics.
 
 ---
 

@@ -4,6 +4,8 @@ This document is the canonical reference for how SeedCore maps **database-define
 
 It merges the SeedCore baseline architecture with the modern **TaskPayload v2.5** envelope design, with a focus on **stable contracts**, **safe migration**, and **future evolution without schema migrations**.
 
+In the current baseline, **AI judgment** executes on the cognitive core and coordinator planning stack. `TaskPayload` is the judgment envelope for that layer, not the final authorization primitive for physical execution.
+
 ---
 
 ## 1) Core Concepts
@@ -20,6 +22,8 @@ SeedCore uses two complementary layers:
   * Declares what a *specific task instance* needs right now: routing constraints, cognitive flags, tool calls, multimodal metadata.
 
 **Key principle:** *Type-level defaults provide guardrails; instance-level payloads provide execution-time intent.*
+
+**Zero-trust principle:** `TaskPayload` handles judgment and routing, while `ActionIntent` handles accountability and PDP evaluation.
 
 ---
 
@@ -145,6 +149,14 @@ Router / Coordinator (selects best Organ/Agent using routing inbox)
 
 If `params.interaction.mode == "agent_tunnel"`, router is skipped and `params.routing` is ignored.
 
+This does **not** bypass the PDP. Any physical, actuator-bound, or high-stakes action must still be transformed into `ActionIntent` and evaluated synchronously by the PDP before execution.
+
+### 5.4 Zero-trust notes for routing hints
+
+* `routing.hints.ttl_seconds` is a scheduling or pruning hint, not an authorization TTL.
+* The accountable Agent must convert any relative TTL into an absolute `ActionIntent.valid_until`.
+* Routing identity is not yet canonical principal identity.
+
 ---
 
 ## 6) Tool Calls: `params.tool_calls` (Executable Requests)
@@ -179,6 +191,8 @@ To avoid conflating **tool permission requirements** with **execution requests**
 
 **Write-only rule:** upstream components must never write `_router`.
 
+**Authorization note:** `_router` is routing output only. It never replaces `ExecutionToken`.
+
 ---
 
 ## 8) Cognitive Envelope: `params.cognitive`
@@ -202,6 +216,13 @@ Controls inference style, memory I/O, and model routing.
 ```
 
 **Key note:** `agent_id` is usually populated after routing, derived from `_router.agent_id`.
+
+For governed physical execution, the accountable Agent should then derive:
+
+* `interaction.assigned_agent_id` -> `principal.agent_id`
+* `multimodal.location_context` -> `resource.target_zone`
+* `RoleProfile` -> `action.security_contract.version`
+* `ttl_seconds` -> mandatory absolute `valid_until`
 
 ---
 

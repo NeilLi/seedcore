@@ -949,9 +949,11 @@ TaskPayload v2.5+ introduces a **stable contract** for task instance routing and
 **TaskPayload (Instance-Level)**:
 - Stored in `tasks.params` (JSONB)
 - Declares what a *specific task instance* needs: routing constraints, cognitive flags, tool calls, multimodal metadata
-- Provides execution-time intent
+- Provides execution-time intent for the AI judgment layer running on the current baseline cognitive core
 
 **Key Principle**: *Type-level defaults provide guardrails; instance-level payloads provide execution-time intent.*
+
+**Zero-trust split**: `TaskPayload` remains the judgment and routing envelope. `ActionIntent` is the narrow accountability contract evaluated by the PDP before physical execution.
 
 ### End-to-End Runtime Flow
 
@@ -1019,6 +1021,8 @@ TaskPayload v2.5+ uses strict envelope isolation to prevent conflicts and enable
 
 If `params.interaction.mode == "agent_tunnel"`, router is skipped and `params.routing` is ignored.
 
+This must not be treated as an authorization bypass. Physical or high-stakes execution still requires the accountable Agent to derive `ActionIntent` and obtain `ExecutionToken` or `PolicyDeny` from the PDP.
+
 ### Router Output: `params._router`
 
 ```jsonc
@@ -1033,6 +1037,8 @@ If `params.interaction.mode == "agent_tunnel"`, router is skipped and `params.ro
 ```
 
 **Write-only rule**: Upstream components must never write `_router`.
+
+**Authorization note**: `_router` is a routing record only. It does not authorize actuator or custody-changing execution.
 
 ### Tool Calls: `params.tool_calls`
 
@@ -1070,6 +1076,17 @@ Controls inference style, memory I/O, and model routing:
 ```
 
 **Key note**: `agent_id` is usually populated after routing, derived from `_router.agent_id`.
+
+### TaskPayload -> ActionIntent Mapping
+
+For governed physical execution, the accountable Agent derives `ActionIntent` from `TaskPayload` using the following minimum mapping:
+
+- `interaction.assigned_agent_id` -> `principal.agent_id`
+- `multimodal.location_context` -> `resource.target_zone`
+- `RoleProfile` -> `action.security_contract.version`
+- `routing.hints.ttl_seconds` or `multimodal.ttl_seconds` -> mandatory absolute `valid_until`
+
+The PDP evaluates that `ActionIntent` synchronously and returns signed `ExecutionToken` or `PolicyDeny`.
 
 ### Multimodal Envelope: `params.multimodal`
 
@@ -1425,6 +1442,5 @@ The implementation successfully achieves the recommended architecture:
 - ✅ **Result Provenance**: Routing decisions, execution telemetry, and cognitive traces stored in `result.meta`
 
 This architecture provides a solid foundation for future enhancements while maintaining system stability and performance. The database schema evolution enables advanced AI/ML capabilities while preserving the core service architecture benefits.
-
 
 

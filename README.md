@@ -2,212 +2,220 @@
 
 Unit-test workflow is currently set to manual runs only.
 
-### Reasoning Infrastructure for the Physical World
+## Zero-Trust Runtime for Governed Agents and Robotic Endpoints
 
-SeedCore is an **AI-native orchestration and execution system** that allows large reasoning models (such as **Gemini 3**) to safely plan, execute, and adapt actions in **real-world environments**.
+SeedCore is the zero-trust runtime that sits between AI judgment, Governed Agents, actuator endpoints, operators, and high-value physical assets. Every action is denied by default until identity, policy, provenance, custody, and execution conditions are verified.
 
-SeedCore does **not** treat AI as a chatbot or UI feature.
-It treats **reasoning as infrastructure**.
+It is designed for sealed inventory, high-value lots, vault workflows, lab handling, and partner handoffs where chain-of-custody matters as much as automation speed.
 
-Reasoning models *decide what should happen*.
-SeedCore ensures it *can happen*, *should happen*, and *actually happens* — safely, audibly, and adaptively.
+**Execution boundary**
 
----
+```text
+AI Judgment -> Agent Accountability -> Zero-Trust Policy -> Robotic Embodiment -> Immutable Custody
+```
 
 ## What SeedCore Is
 
-SeedCore is a **closed-loop reasoning → execution platform** that connects abstract AI planning to concrete physical systems.
+SeedCore is not a chatbot wrapper and not a tool-calling shortcut for a model. It is the governed runtime that turns advisory AI output into controlled enterprise execution.
+
+In the current baseline, **AI judgment** executes on the cognitive core and coordinator planning stack. That layer can interpret, reason, and route, but it is not an authorizer.
 
 It provides:
 
-- execution guarantees
-- policy enforcement
-- capability binding
-- feedback-driven replanning
-- distributed, auditable control
+- deny-by-default authorization before movement or release
+- governed dispatch through accountable agents
+- policy-bound robotic and operator execution
+- playback-grade telemetry and black-box forensics
+- quarantine, rollback, and recovery paths that preserve custody state
 
-SeedCore turns real environments into **Intelligent Centers**: programmable systems that can handle **creative, ambiguous, high-surprise requests** without sacrificing safety or control.
+## Judgment and Accountability Split
 
----
+SeedCore now treats orchestration and authorization as separate layers:
+
+- **`TaskPayload`** is the judgment envelope. It carries AI/cognitive routing, multimodal context, and execution planning inputs.
+- **`ActionIntent`** is the accountability contract. It is the narrow policy object submitted by the accountable Agent to the PDP.
+- The router may select an Agent, but it does not authorize execution.
+- Physical or high-stakes actions remain deny-by-default until the PDP returns a signed `ExecutionToken`.
 
 ## Who This Repository Is For
 
-- **Evaluators / Reviewers**
-  Read: *Why SeedCore Exists*, *Closed-Loop Execution*, *Vision*
-- **System Builders / Contributors**
-  Read: *Quick Start*, *Architecture Overview*, *Deployment*
-- **Researchers / Architects**
-  Read: *Planes of Control*, *Design Notes*, *Advanced Architecture*
-
----
+- **Evaluators / Reviewers**: read *Why SeedCore Exists*, *Next-Stage Architecture*, and *Runtime Surfaces*
+- **System Builders / Contributors**: read *Repository Upgrade Path*, *Quick Start*, and *Architecture Overview*
+- **Researchers / Architects**: read *Next-Stage Architecture*, *Design Notes*, and *Advanced Architecture*
 
 ## Why SeedCore Exists
 
-Most AI systems stop at **generation**:
+Most AI systems are built to generate text, images, or recommendations. Physical operations need a harder contract:
 
-- text
-- images
-- recommendations
+- actions must be authorized before execution
+- agents must be accountable for every controlled handoff
+- actuators must behave as policy subjects, not autonomous peers
+- provenance and custody evidence must survive failures and disputes
+- exception paths must default to quarantine rather than graceful drift into execution
 
-But real environments require **agency**:
+SeedCore fills that gap. AI remains advisory. The runtime governs whether anything is allowed to happen at all.
 
-- tools must be authorized
-- policies must be enforced
-- robots and infrastructure must act
-- failures must be handled
-- intent must persist across time
+## Next-Stage Architecture
 
-SeedCore fills this gap.
+The next stage of SeedCore is a zero-trust custody runtime with one strict principle:
 
-> **Reasoning models reason.**
-> **SeedCore executes.**
+> The model can propose. The Agent is accountable. The PDP decides. The robot executes. The evidence closes the loop.
 
-Together, they form a closed loop:
+This revision formalizes four contracts.
 
+### 1. Actor Authority and the Stateless PDP
+
+- The **Policy Decision Point (PDP)** must be stateless and synchronous.
+- `evaluate_intent` must return either a signed `ExecutionToken` or a deny result in a single call.
+- The PDP must not store per-intent state.
+- The PDP validates the incoming `ActionIntent` only against the active Policy Knowledge Graph (PKG) snapshot and its current policy contract.
+- AI is advisory only. In the current baseline this judgment runs on the cognitive core and coordinator planning stack. It may produce an `AdvisoryPlan`, but it does not authorize execution.
+- The Agent is the accountable actor that formulates `ActionIntent`, presents evidence, receives `EvidenceBundle`, and closes the custody loop.
+
+### 2. Updated `ActionIntent` Contract
+
+To prevent replay attacks and keep execution bound to the active policy contract, every action intent must include a TTL and contract version.
+
+```jsonc
+{
+  "intent_id": "string (UUID)",
+  "timestamp": "string (ISO-8601)",
+  "valid_until": "string (ISO-8601)",
+  "principal": {
+    "agent_id": "string",
+    "role_profile": "string",
+    "session_token": "string"
+  },
+  "action": {
+    "type": "enum",
+    "options": [
+      "PICK",
+      "PLACE",
+      "SCAN",
+      "SEAL",
+      "TRANSPORT",
+      "RELEASE",
+      "LOCK",
+      "QUARANTINE"
+    ],
+    "parameters": "object",
+    "security_contract": {
+      "hash": "string",
+      "version": "string"
+    }
+  },
+  "resource": {
+    "asset_id": "string",
+    "target_zone": "string",
+    "provenance_hash": "string"
+  }
+}
 ```
-Intent → Reasoning → Plan → Execution → Feedback → Replanning
+
+### 3. Enhanced `EvidenceBundle` Telemetry
+
+To support playback and black-box forensics, the execution evidence envelope must include:
+
+- `intent_ref`: link to the authorized `ActionIntent`
+- `executed_at`: precise ISO-8601 timestamp of physical completion
+- `telemetry_snapshot`: multimodal state from vision, sensors, GPS, and zone checks
+- `execution_receipt`: cryptographic proof from the actuator or controlled endpoint
+
+This is the minimum evidence required to explain why a custody transition was proposed, what policy allowed it, who or what executed it, and what state the asset was in at completion.
+
+### 4. Corrected State Transition Flow
+
+```text
+Ingress: Event -> AI
+Formulation: AI -> AdvisoryPlan -> Agent
+Governance: Agent -> ActionIntent -> PDP -> ExecutionToken
+Actuation: ExecutionToken -> Robot -> EvidenceBundle
+Validation and Closing: EvidenceBundle -> Agent -> Validation -> Custody_Ledger_Updated
 ```
 
-Remove the reasoning model → no planning or adaptation.
-Remove SeedCore → reasoning cannot safely reach the real world.
+The Agent remains the central point of accountability for closing the custody loop.
+
+### 5. TaskPayload to ActionIntent Mapping
+
+For governed physical execution, the accountable Agent derives `ActionIntent` from `TaskPayload` using the following minimum mapping:
+
+- `interaction.assigned_agent_id` is the source for `principal.agent_id`
+- `multimodal.location_context` maps to `resource.target_zone`
+- the Agent injects `action.security_contract.version` from its own `RoleProfile`
+- optional `ttl_seconds` hints must be converted into a mandatory absolute `valid_until`
+
+`TaskPayload` remains the judgment envelope. `ActionIntent` remains the authorization contract.
+
+## Runtime Surfaces
+
+SeedCore is organized around five governed surfaces that keep AI useful without allowing unverified release or movement.
+
+### Event Ingress
+
+Telemetry, provenance scans, operator requests, voice, images, and sensor signals enter as control inputs rather than side channels around the model.
+
+### Policy Layer
+
+The policy layer decides what is allowed before the runtime touches inventory, vaults, zones, or actuators. Role boundaries, release windows, provenance rules, seal status, and lockouts are runtime policy, not prompt hints.
+
+### Execution Routing
+
+SeedCore routes work to the right Governed Agent based on privilege, capability, and risk. The Agent translates approved intent into verified contracts for robotic endpoints, edge systems, or human approvers.
+
+### Playback and Audit
+
+Every custody transition should be replayable from source registration through final release, quarantine, or rollback.
+
+### Exception Recovery
+
+Broken seals, identity mismatches, out-of-zone movement, or missing evidence should route to lock, quarantine, alternate handling, or escalation before loss propagates.
+
+## Repository Upgrade Path
+
+The revised architecture can reuse most of the current SeedCore building blocks. The main change is tightening contracts between them.
+
+| Next-stage contract | Existing components to reuse | Upgrade direction |
+| --- | --- | --- |
+| Event ingress | `EventizerService`, `OpsGateway` | Normalize telemetry, source claims, and operator input into governed ingress events |
+| Advisory planning | Cognitive services, coordinator planning flow | Keep AI advisory and emit `AdvisoryPlan` rather than implicit authority |
+| Stateless PDP | PKG evaluation path, coordinator policy logic, `src/seedcore/coordinator/core/execute.py` | Refactor policy evaluation into a synchronous `evaluate_intent` boundary that returns `ExecutionToken` or deny without persisting intent state |
+| Governed execution | `PlanExecutor`, `OrganismService`, routing layer | Dispatch only tokenized actions to robotic or controlled endpoints |
+| Evidence and custody | `FactManagerService`, `StateService`, telemetry stack | Persist `EvidenceBundle`, enable playback, and update custody ledger only after validation |
+
+## Rare Asset and High-Trust Workflows
+
+The runtime is aimed at environments where a mistaken release is materially expensive:
+
+- rare and precious lots with provenance requirements
+- enterprise labs and vaults with zone and seal controls
+- distributed partner networks that need replayable custody evidence
+
+In these environments, the default action is quarantine, not graceful degradation.
+
+## Architecture Overview
+
+SeedCore currently uses:
+
+- **Ray Serve** for service orchestration
+- **Ray Actors** for governed agent and execution runtime behavior
+- **Postgres / Redis / Neo4j** for state, memory, telemetry, and policy foundations
+
+The current repository already contains most of the primitives needed for the next-stage design:
+
+- coordinator services for planning and policy gating
+- PKG infrastructure for active policy evaluation
+- organism services for execution routing
+- ops services for ingress, facts, and state
+
+For deep technical details see:
+
+- *Advanced Architecture*
+- *Design Notes*
+- *Architecture Migration Summary*
 
 ---
 
-## How SeedCore Works (High Level)
-
-SeedCore is built on **Ray**, **Ray Serve**, and modern distributed-systems principles.
-It **strictly separates thinking from doing**.
-
-### 🧠 Reasoning Models — Planning Supervisor
-
-Large reasoning models (e.g. Gemini 3) are used as **planners**, not controllers.
-
-They:
-
-- interpret multimodal intent
-- reason across constraints and context
-- decompose intent into **Task Graphs (DAGs)**
-- propose replans when execution drifts
-
-**They never call tools, devices, or APIs directly.**
-
-### 🧩 SeedCore — Orchestration & Agency Layer
-
-SeedCore provides the infrastructure required to turn plans into safe execution:
-
-- **TaskPayload v2.5+** — stable execution envelope
-- **High-surprise detection** — decide fast path vs deep reasoning
-- **Policy Knowledge Graph (PKG)** — deny-by-default authorization
-- **PlanExecutor** — step-level execution, dependency tracking, retries
-- **JIT agent materialization** — capabilities spawned on demand
-- **RBAC & tool boundaries** — enforced at runtime
-- **Telemetry & provenance** — full audit trail
-- **Holon Memory** — hierarchical state across sessions and devices
-
-Every AI decision is **executable, auditable, and reversible**.
-
----
-
-## Closed-Loop Execution (Core Loop)
-
-```
-1. Intent
-   High-ambiguity request arrives via TaskPayload v2.5+
-
-2. Surprise Detection
-   Decide reflex execution vs deep reasoning
-
-3. Planning
-   Gemini 3 produces a structured task plan (DAG or steps)
-
-4. Policy Enforcement
-   PKG authorizes every step (deny-by-default)
-
-5. Execution
-   PlanExecutor materializes agents and executes steps
-
-6. Feedback
-   Telemetry and failures are captured
-
-7. Replanning
-   Reasoning model adapts plan if reality diverges
-```
-
-This loop enables **Industrialized Intelligence** — AI that can operate in the physical world, not just describe it.
-
----
-
-## Core Architectural Planes
-
-SeedCore uses a **Planes of Control** architecture to isolate concerns and reduce coupling.
-
-```
-Intelligence Plane  →  Control Plane  →  Execution Plane  →  Infrastructure Plane
-        ↑                                                        ↓
-        └────────────────── Feedback & Drift ──────────────────┘
-```
-
-### 🧠 Intelligence Plane
-
-- Reasoning interfaces
-- Context hydration
-- Model connectors (Gemini 3, others)
-
-### 🎮 Control Plane
-
-- Surprise detection
-- Policy enforcement (PKG)
-- Plan → Execute → Audit orchestration
-- Planner + PlanExecutor coordination
-
-### ⚡ Execution Plane
-
-- Distributed agent runtime
-- Capability registry
-- RBAC-enforced tool execution
-- Telemetry emission
-
-### ⚙️ Infrastructure Plane
-
-- Drift detection
-- Regime classification
-- Structural reasoning (HGNN)
-- Health, energy, and performance monitoring
-
----
-
-## Key Capabilities
-
-- **Reasoning-Aware Orchestration**
-  Deep reasoning only when needed
-- **High-Surprise Handling**
-  Creative requests become structured plans
-- **Policy-First Execution**
-  No action without authorization
-- **Dynamic Capability Materialization**
-  Agents and skills spawned just-in-time
-- **Memory & Continuity**
-  Holon Memory preserves intent across failures
-
----
-
-## Vision
-
-SeedCore demonstrates a future where:
-
-- reasoning models provide **intellect**
-- SeedCore provides **agency**
-- physical environments become **adaptive systems**
-- AI moves from **generation → execution**
-
-SeedCore is **model-agnostic** and can integrate with any reasoning-capable model that supports planning and replanning.
-
-> This is not a demo app.
-> This is reasoning infrastructure.
-
----
-
-## 🚀 Quick Start (Kubernetes + KubeRay)
+## Quick Start (Kubernetes + KubeRay)
 
 ### Prerequisites
 
@@ -241,22 +249,6 @@ curl http://localhost:8000/cognitive/health
 curl http://localhost:8000/pipeline/health
 curl http://localhost:8000/organism/health
 ```
-
----
-
-## 🏗️ Architecture Overview
-
-SeedCore uses:
-
-- **Ray Serve** for service orchestration
-- **Ray Actors** for agent execution
-- **Postgres / Redis / Neo4j** for state, memory, and policy
-
-For deep technical details see:
-
-- *Advanced Architecture*
-- *Design Notes*
-- *Architecture Migration Summary*
 
 ---
 
