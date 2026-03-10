@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
 
 from seedcore.models import TaskPayload
 from seedcore.models.result_schema import make_envelope
+from seedcore.ops.evidence.builder import attach_evidence_bundle
 from .roles import (
     Specialization,
     SpecializationProtocol,
@@ -1907,6 +1908,11 @@ class BaseAgent:
 
             # (c) Execution
             args = dict(call.get("args") or {})
+            if self._is_governed_task(task_dict):
+                governance = self._extract_governance_context(task_dict)
+                if governance:
+                    # Control-plane metadata for ToolManager enforcement, stripped before tool.run()
+                    args["_governance"] = governance
             tool_timeout = float(args.pop("_timeout_s", default_tool_timeout_s))
 
             # Check for cancellation before starting
@@ -2088,7 +2094,7 @@ class BaseAgent:
                 f"[{self.agent_id}] Error in behavior post-execution hooks: {e}",
                 exc_info=True,
             )
-        
+        result = await self._close_governed_custody_loop(task_dict, result)
         return result
 
         # Build result envelope
@@ -2262,6 +2268,209 @@ class BaseAgent:
             meta=meta_data,
             path="agent",
         )
+
+    async def _close_governed_custody_loop(
+        self, task_dict: Dict[str, Any], result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        if not isinstance(result, dict) or not self._is_governed_task(task_dict):
+            return result
+
+        governance = self._extract_governance_context(task_dict)
+        action_intent = governance.get("action_intent", {})
+        if not isinstance(action_intent, dict) or not action_intent:
+            return result
+
+        meta = result.get("meta", {}) if isinstance(result.get("meta"), dict) else {}
+        custody = meta.get("custody", {}) if isinstance(meta.get("custody"), dict) else {}
+
+        if not bool(result.get("success")):
+            custody.update(
+                {
+                    "validated": False,
+                    "ledger_updated": False,
+                    "status": "skipped_task_failed",
+                }
+            )
+            meta["custody"] = custody
+            result["meta"] = meta
+            return result
+
+        evidence = self._extract_evidence_bundle(result)
+        if not evidence:
+            try:
+                result = attach_evidence_bundle(
+                    task_dict=task_dict,
+                    envelope=result,
+                    organ_id=self.organ_id,
+                    agent_id=self.agent_id,
+                )
+                evidence = self._extract_evidence_bundle(result)
+            except Exception as exc:
+                custody.update(
+                    {
+                        "validated": False,
+                        "ledger_updated": False,
+                        "status": "evidence_build_failed",
+                        "reason": str(exc),
+                    }
+                )
+                meta["custody"] = custody
+                result["meta"] = meta
+                result["success"] = False
+                result["error"] = "Failed to build evidence bundle."
+                result["error_type"] = "evidence_build_failed"
+                result["retry"] = True
+                return result
+
+        valid, reason = self._validate_governed_evidence(governance, evidence)
+        if not valid:
+            custody.update(
+                {
+                    "validated": False,
+                    "ledger_updated": False,
+                    "status": "validation_failed",
+                    "reason": reason,
+                }
+            )
+            meta["custody"] = custody
+            result["meta"] = meta
+            result["success"] = False
+            result["error"] = f"Evidence validation failed: {reason}"
+            result["error_type"] = "evidence_validation_failed"
+            result["retry"] = False
+            return result
+
+        ledger_entry = {
+            "task_id": result.get("task_id"),
+            "intent_ref": evidence.get("intent_ref"),
+            "agent_id": self.agent_id,
+            "organ_id": self.organ_id,
+            "validation_status": "validated",
+            "validated_at": self._utc_now_iso(),
+            "execution_token": governance.get("execution_token"),
+            "policy_decision": governance.get("policy_decision"),
+            "evidence_bundle": evidence,
+        }
+        try:
+            ledger_res = await self.use_tool(
+                "custody.ledger.record",
+                {"entry": ledger_entry, "_governance": governance},
+            )
+            custody.update(
+                {
+                    "validated": True,
+                    "ledger_updated": bool(
+                        isinstance(ledger_res, dict) and ledger_res.get("ok")
+                    ),
+                    "ledger_entry_id": ledger_res.get("entry_id")
+                    if isinstance(ledger_res, dict)
+                    else None,
+                    "status": "closed",
+                }
+            )
+            if not custody["ledger_updated"]:
+                result["success"] = False
+                result["error"] = "Custody ledger update failed."
+                result["error_type"] = "custody_ledger_update_failed"
+                result["retry"] = True
+        except Exception as exc:
+            custody.update(
+                {
+                    "validated": True,
+                    "ledger_updated": False,
+                    "status": "ledger_update_failed",
+                    "reason": str(exc),
+                }
+            )
+            result["success"] = False
+            result["error"] = "Custody ledger update failed."
+            result["error_type"] = "custody_ledger_update_failed"
+            result["retry"] = True
+
+        meta = result.get("meta", {}) if isinstance(result.get("meta"), dict) else {}
+        meta["custody"] = custody
+        result["meta"] = meta
+
+        payload = result.get("payload")
+        if isinstance(payload, dict):
+            payload_meta = (
+                payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {}
+            )
+            payload_meta["custody"] = custody
+            payload["meta"] = payload_meta
+            result["payload"] = payload
+
+        return result
+
+    def _extract_governance_context(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(task_dict, dict):
+            return {}
+        params = task_dict.get("params", {})
+        if not isinstance(params, dict):
+            return {}
+        governance = params.get("governance", {})
+        return governance if isinstance(governance, dict) else {}
+
+    def _is_governed_task(self, task_dict: Dict[str, Any]) -> bool:
+        governance = self._extract_governance_context(task_dict)
+        return bool(governance.get("action_intent"))
+
+    def _extract_evidence_bundle(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(result, dict):
+            return {}
+
+        meta = result.get("meta", {})
+        if isinstance(meta, dict) and isinstance(meta.get("evidence_bundle"), dict):
+            return meta["evidence_bundle"]
+
+        payload = result.get("payload", {})
+        if isinstance(payload, dict):
+            payload_meta = payload.get("meta", {})
+            if isinstance(payload_meta, dict) and isinstance(
+                payload_meta.get("evidence_bundle"), dict
+            ):
+                return payload_meta["evidence_bundle"]
+        return {}
+
+    def _validate_governed_evidence(
+        self, governance: Dict[str, Any], evidence: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        if not isinstance(evidence, dict):
+            return False, "missing_evidence_bundle"
+
+        required = ("intent_ref", "executed_at", "telemetry_snapshot", "execution_receipt")
+        for field in required:
+            if field not in evidence:
+                return False, f"missing_{field}"
+
+        action_intent = governance.get("action_intent", {})
+        if not isinstance(action_intent, dict):
+            return False, "missing_action_intent"
+        intent_id = action_intent.get("intent_id")
+        if not intent_id:
+            return False, "missing_action_intent_id"
+        if evidence.get("intent_ref") != f"governance://action-intent/{intent_id}":
+            return False, "intent_ref_mismatch"
+
+        executed_at = evidence.get("executed_at")
+        executed_ts = self._iso_to_ts(str(executed_at)) if executed_at else None
+        if executed_ts is None:
+            return False, "invalid_executed_at"
+
+        receipt = evidence.get("execution_receipt", {})
+        if not isinstance(receipt, dict):
+            return False, "invalid_execution_receipt"
+        if not receipt.get("payload_hash") or not receipt.get("signature"):
+            return False, "invalid_execution_receipt"
+
+        execution_token = governance.get("execution_token", {})
+        if isinstance(execution_token, dict):
+            valid_until = execution_token.get("valid_until")
+            valid_until_ts = self._iso_to_ts(str(valid_until)) if valid_until else None
+            if valid_until_ts is not None and executed_ts > valid_until_ts:
+                return False, "executed_after_token_expiry"
+
+        return True, "ok"
 
     def _score_skill_match(
         self, materialized: Dict[str, float], desired: Dict[str, float]

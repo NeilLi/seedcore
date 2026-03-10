@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
 import asyncio
 import time
+from datetime import datetime, timezone
+import uuid
 
 from seedcore.serve.ml_client import MLServiceClient
 
@@ -123,6 +125,10 @@ class ToolManager:
         self._latency_hist: Dict[str, List[float]] = {}
         self._last_error: Dict[str, str] = {}  # Track last error per tool for debugging
 
+        # Custody ledger (append-only in-process store)
+        self._custody_ledger: List[Dict[str, Any]] = []
+        self._custody_lock = asyncio.Lock()
+
         logger.info("🔧 ToolManager initialized (v2.1+)")
 
     # ============================================================
@@ -207,6 +213,13 @@ class ToolManager:
                     return True
             # If not registered yet, return False (don't fall through to MCP)
             return False
+        
+        # 4.5. Built-in custody ledger tools
+        if name.startswith("custody.ledger."):
+            return name in {
+                "custody.ledger.record",
+                "custody.ledger.list",
+            }
         
         # 5. Check MCP tools (if client is available)
         # Note: We don't actually query MCP here for performance reasons.
@@ -407,6 +420,8 @@ class ToolManager:
         )
         start = time.perf_counter()
         failed = False
+        safe_args = dict(args or {})
+        governance_ctx = safe_args.pop("_governance", None)
 
         # RBAC (optional)
         if self.rbac_provider:
@@ -418,6 +433,14 @@ class ToolManager:
                 logger.debug("RBAC check skipped or failed")
 
         try:
+            # 0. Built-in custody ledger tools
+            if name.startswith("custody.ledger."):
+                return await self._execute_custody(name, safe_args, agent_id)
+
+            # 0.5 Governance gate for actuation tools
+            if self._is_actuation_tool(name):
+                self._validate_execution_token(name, governance_ctx)
+
             # 1. Internal tools (includes all query tools registered via register_query_tools)
             # Query tools are registered as internal tools with names like:
             # - general_query
@@ -437,28 +460,28 @@ class ToolManager:
             if tool:
                 if is_query_tool:
                     logger.debug(f"Executing query tool: {name}")
-                return await tool.execute(**args)
+                return await tool.execute(**safe_args)
 
             # 2. MW tools
             if name.startswith("memory.mw."):
-                return await self._execute_mw(name, args, agent_id)
+                return await self._execute_mw(name, safe_args, agent_id)
 
             # 3. HolonFabric tools (replaces legacy LTM tools)
             if name.startswith("memory.ltm.") or name.startswith("memory.holon."):
-                return await self._execute_holon(name, args, agent_id)
+                return await self._execute_holon(name, safe_args, agent_id)
 
             # 4. Cognitive service tools (direct cognitive service calls)
             # Note: cognitive.* query tools are handled above as internal tools
             # This handles direct cognitive service calls with cog.* or reason.* prefixes
             if name.startswith("cog.") or name.startswith("reason."):
                 method = name.split(".", 1)[-1]
-                return await self.call_cognitive(method, **args)
+                return await self.call_cognitive(method, **safe_args)
 
             # 5. External MCP fallback
             if not self._mcp_client:
                 raise ToolError(name, "tool_not_found")
 
-            response = await self._mcp_client.call_tool_async(name, args)
+            response = await self._mcp_client.call_tool_async(name, safe_args)
             if response.get("error"):
                 raise ToolError(name, response["error"]["message"])
             return response.get("result")
@@ -494,6 +517,71 @@ class ToolManager:
             if self.enable_tracing:
                 tool_type = "query" if is_query_tool else "tool"
                 logger.info(f"📡 ToolManager {tool_type} call: {name} ({elapsed:.3f}s)")
+
+    # ============================================================
+    # Governance / Custody
+    # ============================================================
+
+    def _is_actuation_tool(self, name: str) -> bool:
+        return (
+            name.startswith("reachy.")
+            or name == "tuya.send_command"
+            or name.startswith("actuator.")
+            or name.startswith("robot.")
+        )
+
+    def _validate_execution_token(self, tool_name: str, governance_ctx: Any) -> None:
+        if not isinstance(governance_ctx, dict):
+            raise ToolError(tool_name, "missing_execution_token")
+
+        token = governance_ctx.get("execution_token", {})
+        if not isinstance(token, dict):
+            raise ToolError(tool_name, "missing_execution_token")
+
+        token_id = token.get("token_id")
+        intent_id = token.get("intent_id")
+        valid_until = token.get("valid_until")
+        signature = token.get("signature")
+        if not token_id or not intent_id or not valid_until or not signature:
+            raise ToolError(tool_name, "invalid_execution_token")
+
+        valid_until_ts = self._iso_to_ts(str(valid_until))
+        if valid_until_ts is None:
+            raise ToolError(tool_name, "invalid_execution_token")
+        if valid_until_ts < datetime.now(timezone.utc).timestamp():
+            raise ToolError(tool_name, "execution_token_expired")
+
+    async def _execute_custody(self, name: str, args: Dict[str, Any], agent_id: Optional[str]):
+        if name == "custody.ledger.record":
+            entry = args.get("entry")
+            if not isinstance(entry, dict):
+                raise ToolError(name, "entry_required")
+            record = dict(entry)
+            record.setdefault("entry_id", str(uuid.uuid4()))
+            record.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
+            if agent_id and not record.get("agent_id"):
+                record["agent_id"] = agent_id
+            async with self._custody_lock:
+                self._custody_ledger.append(record)
+            return {"ok": True, "entry_id": record["entry_id"]}
+
+        if name == "custody.ledger.list":
+            limit = args.get("limit", 50)
+            try:
+                limit = max(1, min(int(limit), 500))
+            except Exception:
+                limit = 50
+            async with self._custody_lock:
+                rows = list(self._custody_ledger[-limit:])
+            return {"ok": True, "entries": rows}
+
+        raise ToolError(name, "tool_not_found")
+
+    def _iso_to_ts(self, iso: str) -> Optional[float]:
+        try:
+            return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
 
     # ============================================================
     # Tool Reflection (Agents learn how to use tools better)
