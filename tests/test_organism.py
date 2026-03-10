@@ -574,9 +574,21 @@ async def test_organism_core_execute_on_agent(mock_ray, mock_config_file):
     from seedcore.models import TaskPayload
     task = TaskPayload(
         task_id="test-task",
-        type="test",
-        description="Test task",
-        params={},
+        type="action",
+        description="Test action task",
+        params={
+            "multimodal": {
+                "location_context": "zone_a",
+                "gps": {"lat": 13.75, "lon": 100.5},
+            },
+            "governance": {
+                "action_intent": {
+                    "intent_id": "intent-test-123",
+                    "resource": {"target_zone": "zone_a"},
+                },
+                "execution_token": {"token_id": "token-test-123"},
+            },
+        },
     )
     
     # Execute task
@@ -584,6 +596,14 @@ async def test_organism_core_execute_on_agent(mock_ray, mock_config_file):
     
     # Verify execution
     assert result["success"] is True
+    evidence = result.get("meta", {}).get("evidence_bundle", {})
+    assert evidence.get("intent_ref") == "governance://action-intent/intent-test-123"
+    assert isinstance(evidence.get("executed_at"), str)
+    assert "telemetry_snapshot" in evidence
+    assert "execution_receipt" in evidence
+    assert isinstance(
+        evidence.get("execution_receipt", {}).get("signature"), str
+    )
     # Verify execute_task.remote was called
     execute_task_remote_mock.assert_called_once()
 

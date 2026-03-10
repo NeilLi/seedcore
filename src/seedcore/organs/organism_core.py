@@ -70,6 +70,7 @@ from seedcore.models import TaskPayload
 from seedcore.models.holon import Holon, HolonType, HolonScope
 from seedcore.models.result_schema import make_envelope, normalize_envelope
 from seedcore.models.cognitive import DecisionKind
+from seedcore.ops.evidence.builder import attach_evidence_bundle
 
 from seedcore.organs.organ import Organ  # ← NEW ORGAN CLASS
 from seedcore.organs.tunnel_policy import TunnelActivationPolicy
@@ -2184,6 +2185,13 @@ class OrganismCore:
                     "requested_agent_id": requested_agent_id,
                     "requested_organ_id": requested_organ_id,
                 }
+                if self._should_attach_evidence_bundle(task_dict):
+                    normalized = attach_evidence_bundle(
+                        task_dict=task_dict,
+                        envelope=normalized,
+                        organ_id=resolved_organ_id,
+                        agent_id=resolved_agent_id,
+                    )
                 return self._post_process_agent_result(
                     normalized, resolved_organ_id, resolved_agent_id
                 )
@@ -2201,6 +2209,13 @@ class OrganismCore:
                     },
                     path="organism_core",
                 )
+                if self._should_attach_evidence_bundle(task_dict):
+                    wrapped = attach_evidence_bundle(
+                        task_dict=task_dict,
+                        envelope=wrapped,
+                        organ_id=resolved_organ_id,
+                        agent_id=resolved_agent_id,
+                    )
                 return self._post_process_agent_result(
                     wrapped, resolved_organ_id, resolved_agent_id
                 )
@@ -2681,6 +2696,14 @@ class OrganismCore:
             return envelope
         except Exception:
             return envelope
+
+    def _should_attach_evidence_bundle(self, task_dict: Dict[str, Any]) -> bool:
+        task_type = str(task_dict.get("type") or "").strip().lower()
+        params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
+        governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
+        if task_type == "action":
+            return True
+        return bool(governance.get("action_intent"))
 
     # =========================================================
     # 🔧 HELPER: JIT PROVISIONING
