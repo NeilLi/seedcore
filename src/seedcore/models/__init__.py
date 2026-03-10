@@ -7,7 +7,19 @@ All imports are safe and don't trigger runtime dependencies.
 
 from .task import Task as DatabaseTask, TaskStatus, Base as TaskBase
 from .fact import Fact, Base as FactBase
+from .action_intent import ActionIntent, ExecutionToken, PolicyDecision
 from .task_payload import TaskPayload
 from .task_api import Task
 
-__all__ = ["DatabaseTask", "Task", "TaskStatus", "TaskBase", "Fact", "FactBase", "TaskPayload"]
+__all__ = [
+    "DatabaseTask",
+    "Task",
+    "TaskStatus",
+    "TaskBase",
+    "Fact",
+    "FactBase",
+    "TaskPayload",
+    "ActionIntent",
+    "ExecutionToken",
+    "PolicyDecision",
+]

@@ -58,6 +58,10 @@ from ..coordinator.core.execute import (
     RouteConfig,
     ExecutionConfig,
 )
+from ..coordinator.core.governance import (
+    build_governance_context,
+    requires_action_intent,
+)
 from ..coordinator.core.advisory import CoordinatorAdvisoryCore
 from ..coordinator.core.routing import (
     static_route_fallback,
@@ -1769,6 +1773,22 @@ class Coordinator:
             if not interaction.get("mode"):
                 interaction["mode"] = "coordinator_routed"
 
+            if requires_action_intent(payload):
+                governance = build_governance_context(payload)
+                params["governance"] = governance
+                policy_decision = governance.get("policy_decision", {})
+                if not policy_decision.get("allowed"):
+                    return make_envelope(
+                        task_id=payload.get("task_id") or "unknown",
+                        success=False,
+                        error=policy_decision.get("reason") or "Policy denied action intent.",
+                        error_type="policy_denied",
+                        retry=False,
+                        decision_kind=DecisionKind.ERROR.value,
+                        meta={"governance": governance},
+                        path="coordinator_policy_gate",
+                    )
+
             # (Optional) If you map Organ IDs to Specializations, you could enforce it here:
             # params.setdefault("routing", {})["required_specialization"] = _map_organ_to_spec(organ_id)
 
@@ -1819,12 +1839,16 @@ class Coordinator:
                     if "meta" not in result_envelope:
                         result_envelope["meta"] = {}
                     result_envelope["meta"]["organ_id"] = final_organ
+                    if isinstance(params.get("governance"), dict):
+                        result_envelope["meta"]["governance"] = params["governance"]
                     
                     # Also add to payload.meta if payload is a dict (for backward compatibility)
                     if isinstance(payload_data, dict):
                         if "meta" not in payload_data:
                             payload_data["meta"] = {}
                         payload_data["meta"]["organ_id"] = final_organ
+                        if isinstance(params.get("governance"), dict):
+                            payload_data["meta"]["governance"] = params["governance"]
                         result_envelope["payload"] = payload_data
 
                     return result_envelope

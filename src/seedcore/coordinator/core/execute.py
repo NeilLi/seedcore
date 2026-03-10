@@ -1916,6 +1916,9 @@ def _prepare_step_task_payload(
         # prefer task_id field
         step_task["task_id"] = f"{parent_task.task_id}:{index}:{uuid.uuid4().hex[:6]}"
 
+    if step_task.get("snapshot_id") is None and parent_task.snapshot_id is not None:
+        step_task["snapshot_id"] = parent_task.snapshot_id
+
     # Ensure params exists
     params = step_task.setdefault("params", {})
 
