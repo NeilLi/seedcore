@@ -90,6 +90,189 @@ command -v kubectl >/dev/null || { log ERR "kubectl not found"; exit 1; }
 if [[ "${SKIP_LOAD:-0}" -eq 0 ]]; then command -v kind >/dev/null || { log ERR "kind not found (or set SKIP_LOAD=1)"; exit 1; }; fi
 command -v envsubst >/dev/null || { log ERR "envsubst not found (install gettext)"; exit 1; }
 
+print_latest_api_list() {
+  local repo_root="${SCRIPT_DIR}/.."
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    log WARN "python3 not found; skipping latest API list."
+    return 0
+  fi
+
+  if ! python3 - "$repo_root" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+
+repo_root = Path(sys.argv[1]).resolve()
+main_path = repo_root / "src/seedcore/main.py"
+registry_path = repo_root / "src/seedcore/api/routers/__init__.py"
+routers_root = registry_path.parent
+
+
+def load_tree(path: Path) -> ast.AST:
+    return ast.parse(path.read_text(), filename=str(path))
+
+
+def read_assignment(tree: ast.AST, name: str):
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == name:
+                return ast.literal_eval(node.value)
+    raise RuntimeError(f"Could not find assignment for {name!r}")
+
+
+def version_key(prefix: str) -> tuple[int, ...]:
+    match = re.fullmatch(r"/api/v(\d+(?:\.\d+)*)", prefix)
+    if not match:
+        raise ValueError(prefix)
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def join_paths(*parts: str) -> str:
+    segments: list[str] = []
+    for part in parts:
+        if not part or part == "/":
+            continue
+        segments.extend(segment for segment in part.strip("/").split("/") if segment)
+    return "/" + "/".join(segments)
+
+
+main_tree = load_tree(main_path)
+version_prefixes: list[str] = []
+for node in ast.walk(main_tree):
+    if not isinstance(node, ast.Call):
+        continue
+    if not isinstance(node.func, ast.Attribute) or node.func.attr != "include_router":
+        continue
+    for keyword in node.keywords:
+        if (
+            keyword.arg == "prefix"
+            and isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+            and re.fullmatch(r"/api/v\d+(?:\.\d+)*", keyword.value.value)
+        ):
+            version_prefixes.append(keyword.value.value)
+
+if not version_prefixes:
+    raise RuntimeError("No versioned API prefix found in src/seedcore/main.py")
+
+latest_prefix = max(version_prefixes, key=version_key)
+
+registry_tree = load_tree(registry_path)
+active_specs = read_assignment(registry_tree, "ACTIVE_ROUTER_SPECS")
+router_modules = read_assignment(registry_tree, "_ROUTER_MODULES")
+
+route_methods = {
+    "get": ["GET"],
+    "post": ["POST"],
+    "put": ["PUT"],
+    "patch": ["PATCH"],
+    "delete": ["DELETE"],
+    "options": ["OPTIONS"],
+    "head": ["HEAD"],
+}
+
+tag_entries: list[tuple[str, list[tuple[str, str]]]] = []
+
+for tag, router_name in active_specs:
+    module_rel = router_modules[router_name]
+    module_path = routers_root / (module_rel.lstrip(".").replace(".", "/") + ".py")
+    module_tree = load_tree(module_path)
+
+    router_prefix = ""
+    for node in getattr(module_tree, "body", []):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "router" for target in node.targets):
+            continue
+        if not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        func_name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if func_name != "APIRouter":
+            continue
+        for keyword in node.value.keywords:
+            if (
+                keyword.arg == "prefix"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ):
+                router_prefix = keyword.value.value
+                break
+        break
+
+    routes: list[tuple[str, str]] = []
+    for node in getattr(module_tree, "body", []):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            if not isinstance(decorator.func, ast.Attribute):
+                continue
+            if not isinstance(decorator.func.value, ast.Name) or decorator.func.value.id != "router":
+                continue
+
+            if any(
+                keyword.arg == "include_in_schema"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in decorator.keywords
+            ):
+                continue
+
+            methods = route_methods.get(decorator.func.attr, [])
+            if decorator.func.attr == "api_route":
+                for keyword in decorator.keywords:
+                    if keyword.arg != "methods" or not isinstance(keyword.value, (ast.List, ast.Tuple, ast.Set)):
+                        continue
+                    methods = [
+                        item.value.upper()
+                        for item in keyword.value.elts
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                    ]
+                    break
+            if not methods:
+                continue
+
+            path = None
+            if decorator.args and isinstance(decorator.args[0], ast.Constant) and isinstance(decorator.args[0].value, str):
+                path = decorator.args[0].value
+            else:
+                for keyword in decorator.keywords:
+                    if (
+                        keyword.arg == "path"
+                        and isinstance(keyword.value, ast.Constant)
+                        and isinstance(keyword.value.value, str)
+                    ):
+                        path = keyword.value.value
+                        break
+            if not path:
+                continue
+
+            full_path = join_paths(latest_prefix, router_prefix, path)
+            for method in methods:
+                routes.append((method, full_path))
+
+    tag_entries.append((tag, routes))
+
+total_routes = sum(len(routes) for _, routes in tag_entries)
+print(f"Latest version API list ({latest_prefix})")
+print(f"  {total_routes} endpoints across {len(tag_entries)} active routers")
+for tag, routes in tag_entries:
+    print(f"  [{tag}]")
+    for method, path in routes:
+        print(f"    {method:<7} {path}")
+PY
+  then
+    log WARN "Failed to derive latest API list from source files."
+  fi
+}
+
 # ---- Smart Kind image load (uses kind get nodes + ctr, works on Debian/Ubuntu/macOS)
 smart_kind_load() {
   local img="$1" cluster="$2"
@@ -247,6 +430,8 @@ echo "  - Port-forward: kubectl -n ${NAMESPACE} port-forward svc/${SERVICE_NAME}
 echo "  - Health:       curl -sf http://127.0.0.1:${LOCAL_PORT}/health || :"
 echo "  - Ready:        curl -si http://127.0.0.1:${LOCAL_PORT}/readyz | head -n1"
 echo "  - Delete:       $(basename "$0") --delete -n ${NAMESPACE}"
+echo
+print_latest_api_list
 echo
 
 if [[ "$PORT_FORWARD" -eq 1 ]]; then
