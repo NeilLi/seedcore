@@ -81,7 +81,7 @@ class PKGManager:
         self, 
         pkg_client: PKGClient, 
         redis_client: Any,
-        mode: PKGMode = PKGMode.ADVISORY  # P0: Default to advisory for backward compatibility
+        mode: PKGMode = PKGMode.CONTROL
     ):
         self._client = pkg_client  # Now used for both Snapshots AND Cortex queries
         self._redis_client = redis_client
@@ -704,7 +704,7 @@ _global_manager: Optional[PKGManager] = None
 async def initialize_global_pkg_manager(
     pkg_client, 
     redis_client, 
-    mode: PKGMode = PKGMode.ADVISORY
+    mode: PKGMode = PKGMode.CONTROL
 ) -> PKGManager:
     """
     Initialize global PKG manager singleton.

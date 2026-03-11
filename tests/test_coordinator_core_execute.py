@@ -9,8 +9,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
 
 import pytest
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, patch
 from typing import Any, Optional
+from types import SimpleNamespace
 
 from seedcore.models.cognitive import DecisionKind
 from seedcore.models.task_payload import TaskPayload
@@ -252,11 +253,17 @@ class TestExecuteTask:
             normalize_domain=lambda x: x.lower() if x else None,
         )
 
-        result = await execute_task(
-            task=task,
-            route_config=route_config,
-            execution_config=execution_config,
-        )
+        with patch(
+            "seedcore.coordinator.core.execute.get_global_pkg_manager",
+            return_value=SimpleNamespace(
+                get_metadata=lambda: {"mode": "control"}
+            ),
+        ):
+            result = await execute_task(
+                task=task,
+                route_config=route_config,
+                execution_config=execution_config,
+            )
 
         assert result["success"] is True
         assert result["path"] == "coordinator_pkg_gate"
@@ -398,11 +405,17 @@ class TestExecuteTask:
             normalize_domain=lambda x: x.lower() if x else None,
         )
 
-        result = await execute_task(
-            task=task,
-            route_config=route_config,
-            execution_config=execution_config,
-        )
+        with patch(
+            "seedcore.coordinator.core.execute.get_global_pkg_manager",
+            return_value=SimpleNamespace(
+                get_metadata=lambda: {"mode": "control"}
+            ),
+        ):
+            result = await execute_task(
+                task=task,
+                route_config=route_config,
+                execution_config=execution_config,
+            )
 
         assert result["decision_kind"] == DecisionKind.ERROR.value
         assert result.get("error_type") == "pkg_incomplete"
@@ -457,11 +470,17 @@ class TestExecuteTask:
             normalize_domain=lambda x: x.lower() if x else None,
         )
 
-        result = await execute_task(
-            task=task,
-            route_config=route_config,
-            execution_config=execution_config,
-        )
+        with patch(
+            "seedcore.coordinator.core.execute.get_global_pkg_manager",
+            return_value=SimpleNamespace(
+                get_metadata=lambda: {"mode": "control"}
+            ),
+        ):
+            result = await execute_task(
+                task=task,
+                route_config=route_config,
+                execution_config=execution_config,
+            )
 
         assert result["success"] is True
         assert result["payload"]["status"] == "policy_noop"
@@ -518,11 +537,66 @@ class TestExecuteTask:
             normalize_domain=lambda x: x.lower() if x else None,
         )
 
-        result = await execute_task(
-            task=task,
-            route_config=route_config,
-            execution_config=execution_config,
-        )
+        with patch(
+            "seedcore.coordinator.core.execute.get_global_pkg_manager",
+            return_value=SimpleNamespace(
+                get_metadata=lambda: {"mode": "control"}
+            ),
+        ):
+            result = await execute_task(
+                task=task,
+                route_config=route_config,
+                execution_config=execution_config,
+            )
 
         assert result["success"] is False
         assert result.get("error_type") == "pkg_incomplete"
+
+    async def test_action_task_fails_closed_when_pkg_mode_is_not_control(self):
+        """All action paths must fail closed when PKG mode is not CONTROL."""
+        task = TaskPayload(
+            task_id="task-pkg-mode-violation",
+            type="action",
+            description="turn on light",
+            params={"routing": {"required_specialization": "device_orchestrator"}},
+        )
+
+        route_config = RouteConfig(
+            surprise_computer=FakeSurpriseComputer(return_value={"decision_kind": "fast"}),
+            ocps_valve=NeuralCUSUMValve(
+                expected_baseline=0.1,
+                min_detectable_change=0.2,
+                threshold=2.5,
+                sigma=0.15,
+            ),
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={"metadata": {"evaluated": True}}),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.1),
+            organism_execute=AsyncMock(return_value={"success": True}),
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        with patch(
+            "seedcore.coordinator.core.execute.get_global_pkg_manager",
+            return_value=SimpleNamespace(
+                get_metadata=lambda: {"mode": "advisory"}
+            ),
+        ):
+            result = await execute_task(
+                task=task,
+                route_config=route_config,
+                execution_config=execution_config,
+            )
+
+        assert result["success"] is False
+        assert result.get("error_type") == "pkg_mode_violation"

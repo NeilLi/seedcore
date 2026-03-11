@@ -81,7 +81,7 @@ from ..graph.task_metadata_repository import TaskMetadataRepository
 from ..predicates.safe_storage import SafeStorage
 
 # Operations
-from ..ops.pkg.manager import get_global_pkg_manager
+from ..ops.pkg.manager import PKGMode, get_global_pkg_manager
 from ..ops.pkg.capability_monitor import CapabilityMonitor
 from ..ops.pkg.capability_registry import CapabilityRegistry
 from ..ops.pkg.client import PKGClient
@@ -1102,16 +1102,8 @@ class Coordinator:
         return False
 
     def _is_pkg_mandatory_action_task(self, task_dict: Dict[str, Any]) -> bool:
-        """PKG-mandatory gate: action tasks with rich facts and no executor identity."""
-        if not isinstance(task_dict, dict) or task_dict.get("type") != "action":
-            return False
-        params = task_dict.get("params") or {}
-        routing = params.get("routing", {}) if isinstance(params, dict) else {}
-        has_specialization = bool(
-            routing.get("required_specialization") or routing.get("specialization")
-        )
-        has_emission = "_emission" in params and params.get("_emission") is not None
-        return (not has_specialization) and (not has_emission) and self._has_rich_domain_facts(params)
+        """PKG-mandatory gate: all action tasks require PKG validation."""
+        return bool(isinstance(task_dict, dict) and task_dict.get("type") == "action")
 
     async def _run_eventizer(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1481,26 +1473,14 @@ class Coordinator:
             pkg_mgr = get_global_pkg_manager()
             if not pkg_mgr:
                 logger.warning("[PKG] PKG manager not available - degrading to fallback routing")
-                # Return minimal proto_plan instead of raising (graceful degradation)
-                return {
-                    "version": None,
-                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
-                    "edges": [],
-                    "routing": {},
-                }
+                raise RuntimeError("PKG manager not available")
 
             evaluator = pkg_mgr.get_active_evaluator()
             if not evaluator:
                 logger.warning(
                     "[PKG] Evaluator not available - degrading to fallback routing"
                 )
-                # Return minimal proto_plan instead of raising (graceful degradation)
-                return {
-                    "version": None,
-                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
-                    "edges": [],
-                    "routing": {},
-                }
+                raise RuntimeError("PKG evaluator not available")
 
             logger.debug(
                 f"[PKG] Evaluator active: version={getattr(evaluator, 'version', 'unknown')}, "
@@ -1534,23 +1514,11 @@ class Coordinator:
                     timeout=pkg_timeout_actual
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"[PKG] Evaluation timed out after {pkg_timeout_actual}s - degrading to fallback routing")
-                # Return minimal proto_plan instead of raising (graceful degradation)
-                return {
-                    "version": None,
-                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
-                    "edges": [],
-                    "routing": {},
-                }
+                logger.warning(f"[PKG] Evaluation timed out after {pkg_timeout_actual}s")
+                raise RuntimeError(f"PKG evaluation timeout after {pkg_timeout_actual}s")
             except Exception as e:
-                logger.warning(f"[PKG] Evaluation failed: {e} - degrading to fallback routing", exc_info=True)
-                # Return minimal proto_plan instead of raising (graceful degradation)
-                return {
-                    "version": None,
-                    "steps": [{"task": context.get("raw_task", {})}] if context else [],
-                    "edges": [],
-                    "routing": {},
-                }
+                logger.warning(f"[PKG] Evaluation failed: {e}", exc_info=True)
+                raise RuntimeError(f"PKG evaluation failed: {e}") from e
 
             # Verification: Log PKG output structure
             logger.debug(
@@ -2268,7 +2236,9 @@ class Coordinator:
                 session_factory = get_async_pg_session_factory()
                 pkg_client = PKGClient(session_factory)
                 redis_client = await get_async_redis_client()
-                await initialize_global_pkg_manager(pkg_client, redis_client)
+                await initialize_global_pkg_manager(
+                    pkg_client, redis_client, mode=PKGMode.CONTROL
+                )
                 logger.info("✅ PKG Manager initialized and ready")
             else:
                 logger.debug("PKG Manager already initialized")

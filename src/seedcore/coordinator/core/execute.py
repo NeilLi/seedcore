@@ -40,6 +40,7 @@ from typing import (
 )
 
 from seedcore.agents.roles import Specialization
+from seedcore.ops.pkg.manager import PKGMode, get_global_pkg_manager
 from seedcore.coordinator.core.ocps_valve import NeuralCUSUMValve
 from seedcore.coordinator.core.intent import (
     RoutingIntent,
@@ -660,6 +661,33 @@ async def execute_task(
 
     # PKG-mandatory gate: forbid cognitive planning and require PKG output
     if pkg_mandatory:
+        pkg_mgr = get_global_pkg_manager()
+        pkg_mode = None
+        if pkg_mgr and hasattr(pkg_mgr, "get_metadata"):
+            try:
+                pkg_mode = str((pkg_mgr.get_metadata() or {}).get("mode") or "").lower()
+            except Exception:
+                pkg_mode = None
+        if pkg_mode != PKGMode.CONTROL.value:
+            error_msg = (
+                "PKG control mode is required for action execution. "
+                f"Current mode='{pkg_mode or 'unknown'}'."
+            )
+            logger.error("[Coordinator] %s task_id=%s", error_msg, ctx.task_id)
+            return make_envelope(
+                task_id=ctx.task_id,
+                success=False,
+                error=error_msg,
+                error_type="pkg_mode_violation",
+                decision_kind=DecisionKind.ERROR.value,
+                path="coordinator_pkg_gate",
+                meta={
+                    "pkg_mandatory": True,
+                    "required_mode": PKGMode.CONTROL.value,
+                    "current_mode": pkg_mode or "unknown",
+                },
+            )
+
         proto_plan = _extract_proto_plan(router_result_payload)
         if proto_plan is None and isinstance(router_result_payload, dict):
             payload_meta = (router_result_payload.get("payload") or {}).get("metadata") or {}
@@ -1459,20 +1487,9 @@ def _has_rich_domain_facts(params: Dict[str, Any]) -> bool:
 
 def _is_pkg_mandatory_action(task: TaskPayload) -> bool:
     """
-    Structural gate: ACTION tasks with rich domain facts and no executor identity
-    must be decomposed by PKG (Cognitive may not plan execution).
+    Structural gate: all ACTION tasks are PKG-mandatory.
     """
-    if not task or task.type != TaskType.ACTION.value:
-        return False
-
-    params = task.params or {}
-    routing = params.get("routing", {}) if isinstance(params, dict) else {}
-    has_specialization = bool(
-        routing.get("required_specialization") or routing.get("specialization")
-    )
-    has_emission = "_emission" in params and params.get("_emission") is not None
-
-    return (not has_specialization) and (not has_emission) and _has_rich_domain_facts(params)
+    return bool(task and task.type == TaskType.ACTION.value)
 
 
 def _validate_planner_output(plan_res: Any, task: TaskPayload) -> Tuple[bool, List[str]]:

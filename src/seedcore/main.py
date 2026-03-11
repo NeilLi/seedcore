@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
             except Exception as redis_err:
                 logger.warning("Redis unavailable for PKG hot-swap: %s", redis_err)
                 redis_client = None
-            mode_str = os.getenv("PKG_MODE", PKGMode.ADVISORY.value).lower().strip()
+            mode_str = os.getenv("PKG_MODE", PKGMode.CONTROL.value).lower().strip()
             mode = PKGMode.CONTROL if mode_str == PKGMode.CONTROL.value else PKGMode.ADVISORY
             pkg_mgr = await initialize_global_pkg_manager(pkg_client, redis_client, mode=mode)
             
