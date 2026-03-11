@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 from .organ import AgentIDFactory
 
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
+from seedcore.models.cognitive import DecisionKind
+from seedcore.models.result_schema import make_envelope
 
 setup_logging(app_name="seedcore.organs.router")
 logger = ensure_serve_logger("seedcore.organs.router", level="DEBUG")
@@ -58,6 +60,21 @@ class RouterDecision:
     organ_id: str
     reason: str
     is_high_stakes: bool = False
+
+
+class HardRoutingFailure(RuntimeError):
+    """Raised when routing must halt instead of degrading to a fallback target."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.meta = meta or {}
 
 
 # Routing structures
@@ -207,6 +224,11 @@ class RoutingDirectory:
         # Async lock for dynamic route updates (not read operations)
         self._lock = asyncio.Lock()
 
+    def _log_critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Use critical logging when available, otherwise degrade to error."""
+        log_fn = getattr(self.logger, "critical", None) or getattr(self.logger, "error")
+        log_fn(msg, *args, **kwargs)
+
     def _initialize_routing_rules(self) -> None:
         """
         Internal helper to pre-compute lookup tables and apply default
@@ -334,6 +356,54 @@ class RoutingDirectory:
                 return organ_id
 
         return None
+
+    def _required_specialization_failure(
+        self,
+        required_spec: str,
+        *,
+        task_type: Optional[str] = None,
+        domain: Optional[str] = None,
+        organ_id: Optional[str] = None,
+        is_high_stakes: bool = False,
+    ) -> HardRoutingFailure:
+        normalized_spec = self._normalize(required_spec) or str(required_spec)
+        is_registered = self._is_registered_specialization(normalized_spec)
+        error_type = (
+            "required_specialization_unregistered"
+            if not is_registered
+            else "required_specialization_unavailable"
+        )
+        severity = "critical" if is_high_stakes else "error"
+        message = (
+            f"Execution halted: required specialization '{required_spec}' "
+            f"{'is not registered' if not is_registered else 'is unavailable'}."
+        )
+        meta = {
+            "halted": True,
+            "required_specialization": required_spec,
+            "registered": is_registered,
+            "task_type": task_type,
+            "domain": domain,
+            "organ_id": organ_id,
+            "is_high_stakes": bool(is_high_stakes),
+            "alert": {
+                "kind": "routing_halt",
+                "severity": severity,
+                "code": error_type,
+                "message": message,
+            },
+        }
+        self._log_critical(
+            "[Router] HALT: required specialization '%s' failed routing "
+            "(registered=%s, task_type=%s, domain=%s, organ_id=%s, high_stakes=%s)",
+            required_spec,
+            is_registered,
+            task_type,
+            domain,
+            organ_id,
+            is_high_stakes,
+        )
+        return HardRoutingFailure(message, error_type=error_type, meta=meta)
 
     # --- (A) AgentIDFactory Integration ---
 
@@ -855,6 +925,12 @@ class RoutingDirectory:
                     return organ_id, reason
 
                 except Exception as e:
+                    if isinstance(e, HardRoutingFailure):
+                        if not fut.done():
+                            # Avoid "Future exception was never retrieved" when
+                            # no follower awaits this singleflight future.
+                            fut.set_result(e)
+                        raise
                     # CRITICAL: If leader crashes, we must release followers
                     # otherwise they await forever (Deadlock).
                     self.logger.error(f"[Router] Leader calculation failed: {e}")
@@ -876,7 +952,11 @@ class RoutingDirectory:
                 # Await the leader's result
                 try:
                     entry = await fut
+                    if isinstance(entry, HardRoutingFailure):
+                        raise entry
                     return entry.logical_id, entry.resolved_from
+                except HardRoutingFailure:
+                    raise
                 except Exception:
                     # If the future itself breaks (rare)
                     return "utility_organ", "singleflight_error"
@@ -918,11 +998,12 @@ class RoutingDirectory:
                     "(hard constraint, highest priority)"
                 )
                 return lid, "required-specialization"
-            else:
-                # Note: We warn and fall through, allowing softer rules to match.
-                logger.warning(
-                    f"[Router] Required spec '{required_spec}' not found in any local organ."
-                )
+            raise self._required_specialization_failure(
+                required_spec,
+                task_type=tt,
+                domain=dm,
+                is_high_stakes=bool(input_meta.get("is_high_stakes")),
+            )
 
         # --- Stage 2 — Preferred Organ (Explicit Hint) ---
         # Logic: Coordinator or Caller explicitly asked for this Organ ID.
@@ -1147,6 +1228,14 @@ class RoutingDirectory:
                 # Guard: If specialization is unregistered, do NOT generate a new ID for it.
                 # Instead, try to reuse existing GENERALIST/USER_LIAISON agents.
                 if spec and not self._is_registered_specialization(spec):
+                    if routing_in.get("required_specialization"):
+                        raise self._required_specialization_failure(
+                            spec,
+                            task_type=task_dict.get("type"),
+                            domain=task_dict.get("domain"),
+                            organ_id=organ_id,
+                            is_high_stakes=bool(risk.get("is_high_stakes", False)),
+                        )
                     self.logger.info(
                         f"[Router] Specialization '{spec}' is unregistered. "
                         "Skipping ID generation and attempting fallback reuse."
@@ -1434,13 +1523,32 @@ class RoutingDirectory:
             # We pass task_dict by reference.
             decision = await self.route_only(task_dict)
 
+        except HardRoutingFailure as e:
+            task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=str(e),
+                error_type=e.error_type,
+                retry=False,
+                decision_kind=DecisionKind.ERROR.value,
+                payload={"halted": True, "alert": e.meta.get("alert")},
+                meta=e.meta,
+                path="organism_router",
+            )
         except Exception as e:
             self.logger.error(f"[Router] Routing decision failed: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": f"Routing Failure: {str(e)}",
-                "stage": "routing",
-            }
+            task_id = task_dict.get("task_id") or task_dict.get("id") or "unknown"
+            return make_envelope(
+                task_id=task_id,
+                success=False,
+                error=f"Routing Failure: {str(e)}",
+                error_type="routing_failure",
+                retry=False,
+                decision_kind=DecisionKind.ERROR.value,
+                payload={"stage": "routing"},
+                path="organism_router",
+            )
 
         # --- 3. Execution (Action Phase) ---
         try:

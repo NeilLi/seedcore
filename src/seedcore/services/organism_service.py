@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, status  # pyright: ignore[reportMiss
 
 # SeedCore Imports
 from seedcore.organs.organism_core import OrganismCore
-from seedcore.organs.router import RoutingDirectory
+from seedcore.organs.router import HardRoutingFailure, RoutingDirectory
 from seedcore.models import TaskPayload
 from seedcore.models.organism import (
     OrganismStatusResponse,
@@ -39,6 +39,12 @@ setup_logging(app_name="seedcore.organism_service.driver")
 logger = ensure_serve_logger("seedcore.organism_service", level="DEBUG")
 
 app = FastAPI(title="SeedCore Organism Service", version="2.0.0")
+
+
+def _log_critical(msg: str, *args: Any, **kwargs: Any) -> None:
+    """Use critical logging when available, otherwise degrade to error."""
+    log_fn = getattr(logger, "critical", None) or getattr(logger, "error")
+    log_fn(msg, *args, **kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -414,6 +420,16 @@ class OrganismService:
 
         except HTTPException:
             raise
+        except HardRoutingFailure as e:
+            _log_critical("[route-only] Routing halt: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": str(e),
+                    "error_type": e.error_type,
+                    "meta": e.meta,
+                },
+            )
         except Exception as e:
             logger.exception(f"[route-only] Error: {e}")
             # Fail-Safe Fallback
@@ -472,7 +488,18 @@ class OrganismService:
                 )
             else:
                 error = canonical_result.get("error", "unknown_error")
+                error_type = canonical_result.get("error_type")
                 retry = canonical_result.get("retry", False)
+                if error_type in {
+                    "required_specialization_unregistered",
+                    "required_specialization_unavailable",
+                }:
+                    _log_critical(
+                        "[route-and-execute] HALT task %s: %s (%s)",
+                        task_id,
+                        error,
+                        error_type,
+                    )
                 logger.warning(
                     f"[route-and-execute] ❌ Task {task_id} failed: {error} "
                     f"(retry={'enabled' if retry else 'disabled'})"

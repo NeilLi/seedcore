@@ -375,6 +375,11 @@ class OrganismCore:
         # State service (lazy connection)
         self._state_service: Optional[Any] = None
 
+    def _log_critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Use critical logging when available, otherwise degrade to error."""
+        log_fn = getattr(self.logger, "critical", None) or getattr(self.logger, "error")
+        log_fn(msg, *args, **kwargs)
+
     # ------------------------------------------------------------------
     #  CONFIG LOADING
     # ------------------------------------------------------------------
@@ -2370,97 +2375,46 @@ class OrganismCore:
         task_dict: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Use a GENERALIST fallback agent to call cognitive service and craft
-        a user-facing guidance message when specialization is unregistered.
+        Halt execution when a hard-required specialization is unregistered.
         """
-        fallback_agent_id = await self._ensure_generalist_fallback_agent(
-            organ_id, organ_handle
+        risk = ((task_dict or {}).get("params") or {}).get("risk", {})
+        is_high_stakes = bool(risk.get("is_high_stakes", False))
+        message = (
+            f"Execution halted: required specialization '{required_spec}' is not registered."
         )
-        if not self.cognitive_client:
-            return make_envelope(
-                task_id=task_id,
-                success=False,
-                error=(
-                    f"Specialization '{required_spec}' is not registered and cognitive "
-                    "fallback is unavailable."
-                ),
-                error_type="specialization_unregistered",
-                retry=False,
-                meta={
-                    "organ_id": organ_id,
-                    "agent_id": agent_id,
-                    "required_specialization": required_spec,
+        self._log_critical(
+            "[%s] HALT: required specialization '%s' is not registered "
+            "(agent_id=%s, high_stakes=%s)",
+            organ_id,
+            required_spec,
+            agent_id,
+            is_high_stakes,
+        )
+        return make_envelope(
+            task_id=task_id,
+            success=False,
+            error=message,
+            error_type="required_specialization_unregistered",
+            retry=False,
+            decision_kind=DecisionKind.ERROR.value,
+            payload={
+                "halted": True,
+                "alert": {
+                    "kind": "routing_halt",
+                    "severity": "critical" if is_high_stakes else "error",
+                    "code": "required_specialization_unregistered",
+                    "message": message,
                 },
-                path="organism_core",
-            )
-
-        try:
-            cog_task = dict(task_dict or {})
-            cog_params = cog_task.get("params", {}) or {}
-            cog_params.setdefault("cognitive", {})
-            cog_params["cognitive"].update(
-                {
-                    "decision_kind": DecisionKind.COGNITIVE.value,
-                    "note": "fallback_for_unregistered_specialization",
-                }
-            )
-            cog_task["params"] = cog_params
-            cog_task.setdefault(
-                "description",
-                f"Provide guidance: specialization '{required_spec}' is not registered. "
-                "Suggest next steps or alternatives.",
-            )
-
-            response = await self.cognitive_client.execute_async(
-                agent_id=fallback_agent_id or agent_id,
-                cog_type="problem_solving",
-                decision_kind=DecisionKind.COGNITIVE,
-                task=cog_task,
-            )
-
-            return make_envelope(
-                task_id=task_id,
-                success=False,
-                payload={
-                    "owner_message": response,
-                    "reason": "specialization_unregistered",
-                    "required_specialization": required_spec,
-                },
-                error=(
-                    f"Specialization '{required_spec}' is not registered. "
-                    "Provided guidance via cognitive fallback."
-                ),
-                error_type="specialization_unregistered",
-                retry=False,
-                meta={
-                    "organ_id": organ_id,
-                    "agent_id": agent_id,
-                    "fallback_agent_id": fallback_agent_id,
-                    "required_specialization": required_spec,
-                },
-                path="organism_core",
-            )
-        except Exception as e:
-            self.logger.warning(
-                f"[{organ_id}] Cognitive fallback failed for '{required_spec}': {e}",
-                exc_info=True,
-            )
-            return make_envelope(
-                task_id=task_id,
-                success=False,
-                error=(
-                    f"Specialization '{required_spec}' is not registered and cognitive "
-                    f"fallback failed: {e}"
-                ),
-                error_type="specialization_unregistered",
-                retry=False,
-                meta={
-                    "organ_id": organ_id,
-                    "agent_id": agent_id,
-                    "required_specialization": required_spec,
-                },
-                path="organism_core",
-            )
+            },
+            meta={
+                "organ_id": organ_id,
+                "agent_id": agent_id,
+                "required_specialization": required_spec,
+                "is_high_stakes": is_high_stakes,
+                "halted": True,
+            },
+            path="organism_core",
+        )
 
     async def _cognitive_fallback_for_rbac_denied(
         self,
@@ -2727,6 +2681,7 @@ class OrganismCore:
         # but an agent with the same specialization already exists
         routing = params.get("routing", {})
         executor = params.get("executor", {})
+        is_hard_required = bool(routing.get("required_specialization"))
         required_spec = (
             routing.get("required_specialization")
             or routing.get("specialization")
@@ -2734,11 +2689,20 @@ class OrganismCore:
         )
         
         if required_spec:
-            # If specialization is unregistered, reuse an existing fallback agent
+            # Hard-required specializations must fail closed, not downgrade to a fallback agent.
             resolved_spec = self._resolve_registered_specialization(
                 str(required_spec).strip().lower(), params
             )
             if not resolved_spec:
+                if is_hard_required:
+                    self._log_critical(
+                        "[%s] HALT: refusing fallback agent reuse for unregistered "
+                        "required specialization '%s'.",
+                        organ_id,
+                        required_spec,
+                    )
+                    return None
+
                 fallback_handle = await self._find_existing_fallback_handle()
                 if fallback_handle:
                     fallback_agent_id, fallback_handle_obj, fallback_organ_id = fallback_handle
@@ -3832,6 +3796,19 @@ class OrganismCore:
                                 f"(explicit preferred_organ from pkg_subtask_types.default_params.routing for capability '{capability_name}')"
                             )
                             return preferred_organ
+                        # Backward compatibility for older PKG snapshots that referenced
+                        # organs removed in the v2.5 topology (e.g., memory/policy organs).
+                        legacy_preferred_organ_aliases = {
+                            "memory_organ": "utility_organ",
+                            "policy_organ": "utility_organ",
+                        }
+                        remapped_organ = legacy_preferred_organ_aliases.get(preferred_organ)
+                        if remapped_organ and remapped_organ in self.organs:
+                            self.logger.info(
+                                f"📌 Capability '{capability_name}' preferred_organ '{preferred_organ}' "
+                                f"remapped to '{remapped_organ}' (legacy organ alias)"
+                            )
+                            return remapped_organ
                         else:
                             self.logger.warning(
                                 f"⚠️ Capability '{capability_name}' specifies preferred_organ '{preferred_organ}' "

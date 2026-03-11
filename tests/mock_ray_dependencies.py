@@ -495,6 +495,9 @@ class MockLogger:
     
     def error(self, msg, *args, **kwargs):
         self.logger.error(msg, *args, **kwargs)
+
+    def critical(self, msg, *args, **kwargs):
+        self.logger.critical(msg, *args, **kwargs)
     
     def debug(self, msg, *args, **kwargs):
         self.logger.debug(msg, *args, **kwargs)

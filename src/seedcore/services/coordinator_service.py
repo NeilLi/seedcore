@@ -111,6 +111,12 @@ from ..coordinator.metrics.registry import get_global_metrics_tracker
 setup_logging(app_name="seedcore.coordinator_service.driver")
 logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
+
+def _log_critical(msg: str, *args: Any, **kwargs: Any) -> None:
+    """Use critical logging when available, otherwise degrade to error."""
+    log_fn = getattr(logger, "critical", None) or getattr(logger, "error")
+    log_fn(msg, *args, **kwargs)
+
 # --- Constants & Configuration Models ---
 CONFIG_PATH = os.getenv(
     "COORDINATOR_CONFIG_PATH", "/app/config/coordinator_config.yaml"
@@ -1850,6 +1856,16 @@ class Coordinator:
                         if isinstance(params.get("governance"), dict):
                             payload_data["meta"]["governance"] = params["governance"]
                         result_envelope["payload"] = payload_data
+
+                    if result_envelope.get("error_type") in {
+                        "required_specialization_unregistered",
+                        "required_specialization_unavailable",
+                    }:
+                        _log_critical(
+                            "Coordinator observed routing halt for task %s: %s",
+                            payload.get("task_id") or "unknown",
+                            result_envelope.get("error"),
+                        )
 
                     return result_envelope
                 
