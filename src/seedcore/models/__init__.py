@@ -18,6 +18,9 @@ from .source_registration import (
     SourceRegistrationStatus,
     RegistrationDecision,
     RegistrationDecisionStatus,
+    TrackingEvent,
+    TrackingEventType,
+    TrackingEventSourceKind,
 )
 
 __all__ = [
@@ -39,4 +42,7 @@ __all__ = [
     "SourceRegistrationStatus",
     "RegistrationDecision",
     "RegistrationDecisionStatus",
+    "TrackingEvent",
+    "TrackingEventType",
+    "TrackingEventSourceKind",
 ]

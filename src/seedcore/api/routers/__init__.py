@@ -2,7 +2,7 @@
 Router package for SeedCore API.
 """
 
-__all__ = ["tasks_router", "source_registrations_router"]
+__all__ = ["tasks_router", "source_registrations_router", "tracking_events_router"]
 
 
 def __getattr__(name):
@@ -14,4 +14,8 @@ def __getattr__(name):
         from .source_registrations_router import router as source_registrations_router
 
         return source_registrations_router
+    if name == "tracking_events_router":
+        from .tracking_events_router import router as tracking_events_router
+
+        return tracking_events_router
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

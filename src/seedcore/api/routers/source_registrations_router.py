@@ -17,7 +17,10 @@ from ...models.source_registration import (
     SourceRegistrationArtifact,
     SourceRegistrationMeasurement,
     SourceRegistrationStatus,
+    TrackingEventSourceKind,
+    TrackingEventType,
 )
+from ...ops.source_registration.projector import record_tracking_event
 
 
 router = APIRouter()
@@ -128,6 +131,10 @@ class SubmitRegistrationResponse(BaseModel):
     status: str
 
 
+ENVIRONMENTAL_MEASUREMENT_TYPES = {"oxygen_level", "humidity", "gps", "altitude_meters"}
+BIO_SIGNATURE_MEASUREMENT_TYPES = {"pollen_count", "purity_score", "spectral_match_score"}
+
+
 async def _ensure_task_node_mapping(session: AsyncSession, task_id: uuid.UUID) -> None:
     await session.execute(
         text("SELECT ensure_task_node(CAST(:task_id AS uuid))"),
@@ -156,6 +163,18 @@ async def _get_registration_or_404(
     if registration is None:
         raise HTTPException(status_code=404, detail="SourceRegistration not found")
     return registration
+
+
+def _artifact_event_type(artifact_type: str) -> TrackingEventType:
+    if artifact_type == "seal_macro_image":
+        return TrackingEventType.SEAL_CHECK_CAPTURED
+    return TrackingEventType.PROVENANCE_SCAN_CAPTURED
+
+
+def _measurement_event_type(measurement_type: str) -> TrackingEventType:
+    if measurement_type in BIO_SIGNATURE_MEASUREMENT_TYPES:
+        return TrackingEventType.BIO_SIGNATURE_RECORDED
+    return TrackingEventType.ENVIRONMENTAL_READING_RECORDED
 
 
 async def _build_registration_read(
@@ -252,47 +271,83 @@ async def create_source_registration(
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> SourceRegistrationRead:
     registration = SourceRegistration(
-        source_claim_id=payload.source_claim_id,
         lot_id=payload.lot_id,
         producer_id=payload.producer_id,
-        rare_grade_profile_id=payload.rare_grade_profile_id,
-        status=SourceRegistrationStatus.INGESTING,
-        claimed_origin=payload.claimed_origin,
-        collection_site=payload.collection_site,
-        collected_at=payload.collected_at,
+        status=SourceRegistrationStatus.DRAFT,
         snapshot_id=await _resolve_snapshot_id(session, payload.snapshot_id),
     )
     session.add(registration)
     await session.flush()
 
+    await record_tracking_event(
+        session,
+        registration=registration,
+        event_type=TrackingEventType.SOURCE_CLAIM_DECLARED,
+        source_kind=TrackingEventSourceKind.SOURCE_DECLARATION,
+        payload={
+            "source_claim_id": payload.source_claim_id,
+            "lot_id": payload.lot_id,
+            "producer_id": payload.producer_id,
+            "rare_grade_profile_id": payload.rare_grade_profile_id,
+            "claimed_origin": payload.claimed_origin,
+            "collection_site": payload.collection_site,
+            "collected_at": (
+                payload.collected_at.isoformat() if payload.collected_at is not None else None
+            ),
+        },
+        captured_at=payload.collected_at,
+        snapshot_id=registration.snapshot_id,
+    )
+
     for artifact in payload.artifacts:
-        session.add(
-            SourceRegistrationArtifact(
-                registration_id=registration.id,
-                artifact_type=artifact.artifact_type,
-                uri=artifact.uri,
-                sha256=artifact.sha256,
-                captured_at=artifact.captured_at,
-                captured_by=artifact.captured_by,
-                device_id=artifact.device_id,
-                content_type=artifact.content_type,
-                meta_data=artifact.metadata,
-            )
+        await record_tracking_event(
+            session,
+            registration=registration,
+            event_type=_artifact_event_type(artifact.artifact_type),
+            source_kind=TrackingEventSourceKind.PROVENANCE_SCAN,
+            payload={
+                "artifact_type": artifact.artifact_type,
+                "uri": artifact.uri,
+                "sha256": artifact.sha256,
+                "captured_at": (
+                    artifact.captured_at.isoformat() if artifact.captured_at is not None else None
+                ),
+                "captured_by": artifact.captured_by,
+                "device_id": artifact.device_id,
+                "content_type": artifact.content_type,
+                "metadata": artifact.metadata,
+            },
+            captured_at=artifact.captured_at,
+            device_id=artifact.device_id,
+            sha256=artifact.sha256,
         )
 
     for measurement in payload.measurements:
-        session.add(
-            SourceRegistrationMeasurement(
-                registration_id=registration.id,
-                measurement_type=measurement.measurement_type,
-                value=measurement.value,
-                unit=measurement.unit,
-                measured_at=measurement.measured_at,
-                sensor_id=measurement.sensor_id,
-                quality_score=measurement.quality_score,
-                raw_artifact_id=measurement.raw_artifact_id,
-                meta_data=measurement.metadata,
-            )
+        await record_tracking_event(
+            session,
+            registration=registration,
+            event_type=_measurement_event_type(measurement.measurement_type),
+            source_kind=TrackingEventSourceKind.TELEMETRY,
+            payload={
+                "measurement_type": measurement.measurement_type,
+                "value": measurement.value,
+                "unit": measurement.unit,
+                "measured_at": (
+                    measurement.measured_at.isoformat()
+                    if measurement.measured_at is not None
+                    else None
+                ),
+                "sensor_id": measurement.sensor_id,
+                "quality_score": measurement.quality_score,
+                "raw_artifact_id": (
+                    str(measurement.raw_artifact_id)
+                    if measurement.raw_artifact_id is not None
+                    else None
+                ),
+                "metadata": measurement.metadata,
+            },
+            captured_at=measurement.measured_at,
+            device_id=measurement.sensor_id,
         )
 
     await session.commit()
@@ -319,21 +374,27 @@ async def add_source_registration_artifact(
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> SourceRegistrationRead:
     registration = await _get_registration_or_404(session, registration_id)
-    session.add(
-        SourceRegistrationArtifact(
-            registration_id=registration.id,
-            artifact_type=payload.artifact_type,
-            uri=payload.uri,
-            sha256=payload.sha256,
-            captured_at=payload.captured_at,
-            captured_by=payload.captured_by,
-            device_id=payload.device_id,
-            content_type=payload.content_type,
-            meta_data=payload.metadata,
-        )
+    await record_tracking_event(
+        session,
+        registration=registration,
+        event_type=_artifact_event_type(payload.artifact_type),
+        source_kind=TrackingEventSourceKind.PROVENANCE_SCAN,
+        payload={
+            "artifact_type": payload.artifact_type,
+            "uri": payload.uri,
+            "sha256": payload.sha256,
+            "captured_at": (
+                payload.captured_at.isoformat() if payload.captured_at is not None else None
+            ),
+            "captured_by": payload.captured_by,
+            "device_id": payload.device_id,
+            "content_type": payload.content_type,
+            "metadata": payload.metadata,
+        },
+        captured_at=payload.captured_at,
+        device_id=payload.device_id,
+        sha256=payload.sha256,
     )
-    if registration.status == SourceRegistrationStatus.DRAFT:
-        registration.status = SourceRegistrationStatus.INGESTING
     await session.commit()
     await session.refresh(registration)
     return await _build_registration_read(session, registration)
@@ -408,24 +469,35 @@ async def submit_source_registration(
                     for artifact in artifacts
                 ],
                 "measurements": {
-                    measurement.measurement_type: {
-                        "measurement_id": str(measurement.id),
-                        "value": measurement.value,
-                        "unit": measurement.unit,
-                        "measured_at": (
-                            measurement.measured_at.isoformat()
-                            if measurement.measured_at is not None
-                            else None
-                        ),
-                        "sensor_id": measurement.sensor_id,
-                        "quality_score": measurement.quality_score,
-                        "raw_artifact_id": (
-                            str(measurement.raw_artifact_id)
-                            if measurement.raw_artifact_id is not None
-                            else None
-                        ),
-                        "metadata": measurement.meta_data or {},
-                    }
+                    measurement.measurement_type: (
+                        {
+                            "measurement_id": str(measurement.id),
+                            "value": measurement.value,
+                            "unit": measurement.unit,
+                            "measured_at": (
+                                measurement.measured_at.isoformat()
+                                if measurement.measured_at is not None
+                                else None
+                            ),
+                            "sensor_id": measurement.sensor_id,
+                            "quality_score": measurement.quality_score,
+                            "raw_artifact_id": (
+                                str(measurement.raw_artifact_id)
+                                if measurement.raw_artifact_id is not None
+                                else None
+                            ),
+                            "metadata": measurement.meta_data or {},
+                            **(
+                                {
+                                    "lat": (measurement.meta_data or {}).get("lat"),
+                                    "lon": (measurement.meta_data or {}).get("lon"),
+                                    "altitude_meters": (measurement.meta_data or {}).get("altitude_meters"),
+                                }
+                                if measurement.measurement_type == "gps"
+                                else {}
+                            ),
+                        }
+                    )
                     for measurement in measurements
                 },
             },
@@ -450,7 +522,16 @@ async def submit_source_registration(
     await session.flush()
     await _ensure_task_node_mapping(session, task.id)
 
-    registration.status = SourceRegistrationStatus.VERIFYING
+    await record_tracking_event(
+        session,
+        registration=registration,
+        event_type=TrackingEventType.OPERATOR_REQUEST_RECEIVED,
+        source_kind=TrackingEventSourceKind.OPERATOR_REQUEST,
+        payload={
+            "command": "submit_for_decision",
+            "task_id": str(task.id),
+        },
+    )
     registration.submitted_task_id = task.id
 
     await session.commit()
