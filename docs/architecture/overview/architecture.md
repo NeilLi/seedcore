@@ -1764,7 +1764,7 @@ TaskPayload v2.5+ introduces a **stable contract** for task instance routing and
 **TaskPayload (Instance-Level)**:
 - Stored in `tasks.params` (JSONB)
 - Declares what a *specific task instance* needs: routing constraints, cognitive flags, tool calls, multimodal metadata
-- Provides execution-time intent for the AI judgment layer running on the current baseline cognitive core
+- Provides execution-time intent for the normalization and AI judgment layers, including Eventizer/FastEventizer and the cognitive service
 
 **Key Principle**: *Type-level defaults provide guardrails; instance-level payloads provide execution-time intent.*
 

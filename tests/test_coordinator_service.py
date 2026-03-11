@@ -15,6 +15,7 @@ import pytest
 # Adjust this import path if your repository structure differs:
 import seedcore.services.coordinator_service as cs
 from seedcore.models.cognitive import DecisionKind
+from seedcore.models.eventizer import EventizerRequest
 
 
 class StubAsyncTransaction:
@@ -643,3 +644,119 @@ async def test_async_sync_helper():
     # In the refactored code, async functions are awaited directly
     result = await async_func(5)
     assert result == 15
+
+
+def test_eventizer_request_accepts_fast_eventizer_refinement_fields():
+    request = EventizerRequest(
+        text="seal check captured",
+        normalized_text="seal check captured",
+        processed_text="seal check captured",
+        _fast_eventizer_processed=True,
+        _fast_eventizer_pii_redacted=False,
+        _fast_eventizer_normalized=True,
+    )
+
+    assert request.fast_eventizer_processed is True
+    assert request.fast_eventizer_pii_redacted is False
+    assert request.fast_eventizer_normalized is True
+    assert request.normalized_text == "seal check captured"
+    assert request.processed_text == "seal check captured"
+
+
+@pytest.mark.asyncio
+async def test_handle_source_registration_task_applies_normalization_and_cognitive_enrichment():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator._session_factory = None
+    coordinator.graph_task_repo = None
+    coordinator.timeout_s = 10.0
+    coordinator._persist_source_registration_decision = AsyncMock()
+    coordinator.cognitive_client = SimpleNamespace(
+        execute_async=AsyncMock(
+            return_value={
+                "result": {
+                    "summary": "Cross-modal evidence aligned",
+                    "semantic_hints": ["seal integrity consistent"],
+                    "conflicts": [],
+                }
+            }
+        )
+    )
+
+    task_dict = {
+        "task_id": "task-reg-1",
+        "type": "registration",
+        "domain": "provenance",
+        "description": "Source registration for lot lot-7 from producer producer-3",
+        "params": {
+            "source_registration": {
+                "registration_id": "reg-1",
+                "lot_id": "lot-7",
+                "producer_id": "producer-3",
+                "claimed_origin": {"zone_id": "zone-a", "altitude_meters": 2430},
+                "artifacts": [
+                    {
+                        "artifact_type": "Honeycomb Macro Image",
+                        "uri": "s3://bucket/honeycomb.jpg",
+                        "sha256": "ABC123",
+                    },
+                    {
+                        "artifact_type": "seal macro image",
+                        "uri": "s3://bucket/seal.jpg",
+                        "sha256": "DEF456",
+                    },
+                ],
+                "measurements": {
+                    "gps": {
+                        "altitude_meters": 2438.7,
+                        "lat": 18.801,
+                        "lon": 98.921,
+                    },
+                    "oxygen_level": {"value": 18.4, "unit": "percent"},
+                    "humidity": {"value": 67.2, "unit": "percent"},
+                    "pollen_count": {"value": 184000, "unit": "ppm"},
+                    "purity_score": {"value": 0.992, "unit": "ratio"},
+                    "spectral_match_score": {"value": 0.961, "unit": "ratio"},
+                },
+                "tracking_events": [
+                    {
+                        "id": "evt-1",
+                        "event_type": "source_claim_declared",
+                        "source_kind": "source_declaration",
+                        "payload": {},
+                    },
+                    {
+                        "id": "evt-2",
+                        "event_type": "operator_request_received",
+                        "source_kind": "operator_request",
+                        "payload": {"command": "submit_for_decision"},
+                    },
+                ],
+            },
+            "multimodal": {},
+            "governance": {"workflow": "source_registration"},
+        },
+    }
+
+    result = await coordinator._handle_source_registration_task(task_dict, "corr-1")
+
+    payload = result["payload"]
+    normalized_registration = payload["normalized_registration"]
+    decision = payload["registration_decision"]
+
+    assert normalized_registration["artifacts"][0]["artifact_type"] == "honeycomb_macro_image"
+    assert normalized_registration["measurements"]["gps"]["value"] == pytest.approx(2438.7)
+    assert normalized_registration["normalization"]["cognitive_enrichment_required"] is True
+    assert normalized_registration["ingress_event_ids"] == ["evt-1", "evt-2"]
+    assert payload["proto_plan"]["metadata"]["cognitive_enrichment"]["summary"] == "Cross-modal evidence aligned"
+    assert decision["decision"] == "approved"
+    assert decision["rule_trace"]["normalization"]["artifact_types"] == [
+        "honeycomb_macro_image",
+        "seal_macro_image",
+    ]
+    assert decision["rule_trace"]["cognitive_enrichment"]["semantic_hints"] == [
+        "seal integrity consistent"
+    ]
+    coordinator.cognitive_client.execute_async.assert_awaited_once()
+    coordinator._persist_source_registration_decision.assert_awaited_once()

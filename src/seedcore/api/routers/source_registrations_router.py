@@ -17,9 +17,11 @@ from ...models.source_registration import (
     SourceRegistrationArtifact,
     SourceRegistrationMeasurement,
     SourceRegistrationStatus,
+    TrackingEvent,
     TrackingEventSourceKind,
     TrackingEventType,
 )
+from ...ops.source_registration.normalizer import normalize_source_registration_context
 from ...ops.source_registration.projector import record_tracking_event
 
 
@@ -426,6 +428,110 @@ async def submit_source_registration(
             )
         )
     ).scalars().all()
+    tracking_events = (
+        await session.execute(
+            select(TrackingEvent).where(TrackingEvent.registration_id == registration.id)
+        )
+    ).scalars().all()
+
+    raw_source_registration = {
+        "registration_id": str(registration.id),
+        "source_claim_id": registration.source_claim_id,
+        "lot_id": registration.lot_id,
+        "producer_id": registration.producer_id,
+        "rare_grade_profile_id": registration.rare_grade_profile_id,
+        "claimed_origin": registration.claimed_origin or {},
+        "collection_site": registration.collection_site or {},
+        "collected_at": (
+            registration.collected_at.isoformat()
+            if registration.collected_at is not None
+            else None
+        ),
+        "artifacts": [
+            {
+                "artifact_id": str(artifact.id),
+                "artifact_type": artifact.artifact_type,
+                "uri": artifact.uri,
+                "sha256": artifact.sha256,
+                "captured_at": (
+                    artifact.captured_at.isoformat()
+                    if artifact.captured_at is not None
+                    else None
+                ),
+                "device_id": artifact.device_id,
+                "content_type": artifact.content_type,
+                "metadata": artifact.meta_data or {},
+            }
+            for artifact in artifacts
+        ],
+        "measurements": {
+            measurement.measurement_type: (
+                {
+                    "measurement_id": str(measurement.id),
+                    "value": measurement.value,
+                    "unit": measurement.unit,
+                    "measured_at": (
+                        measurement.measured_at.isoformat()
+                        if measurement.measured_at is not None
+                        else None
+                    ),
+                    "sensor_id": measurement.sensor_id,
+                    "quality_score": measurement.quality_score,
+                    "raw_artifact_id": (
+                        str(measurement.raw_artifact_id)
+                        if measurement.raw_artifact_id is not None
+                        else None
+                    ),
+                    "metadata": measurement.meta_data or {},
+                    **(
+                        {
+                            "lat": (measurement.meta_data or {}).get("lat"),
+                            "lon": (measurement.meta_data or {}).get("lon"),
+                            "altitude_meters": (measurement.meta_data or {}).get("altitude_meters"),
+                        }
+                        if measurement.measurement_type == "gps"
+                        else {}
+                    ),
+                }
+            )
+            for measurement in measurements
+        },
+        "tracking_events": [
+            {
+                "id": str(event.id),
+                "event_type": event.event_type.value,
+                "source_kind": event.source_kind.value,
+                "payload": event.payload or {},
+                "captured_at": event.captured_at.isoformat() if event.captured_at is not None else None,
+                "producer_id": event.producer_id,
+                "device_id": event.device_id,
+                "operator_id": event.operator_id,
+                "correlation_id": event.correlation_id,
+                "snapshot_id": event.snapshot_id,
+            }
+            for event in tracking_events
+        ],
+    }
+    raw_multimodal = {
+        "artifacts": [
+            {
+                "artifact_type": artifact.artifact_type,
+                "uri": artifact.uri,
+                "sha256": artifact.sha256,
+                "device_id": artifact.device_id,
+            }
+            for artifact in artifacts
+        ],
+    }
+    normalized_context = normalize_source_registration_context(
+        raw_source_registration,
+        tracking_events=raw_source_registration["tracking_events"],
+        multimodal_context=raw_multimodal,
+        task_description=(
+            f"Source registration for lot {registration.lot_id} "
+            f"from producer {registration.producer_id}"
+        ),
+    )
 
     task = Task(
         type="registration",
@@ -438,80 +544,8 @@ async def submit_source_registration(
         status=TaskStatus.QUEUED,
         snapshot_id=registration.snapshot_id or await _resolve_snapshot_id(session, None),
         params={
-            "source_registration": {
-                "registration_id": str(registration.id),
-                "source_claim_id": registration.source_claim_id,
-                "lot_id": registration.lot_id,
-                "producer_id": registration.producer_id,
-                "rare_grade_profile_id": registration.rare_grade_profile_id,
-                "claimed_origin": registration.claimed_origin or {},
-                "collection_site": registration.collection_site or {},
-                "collected_at": (
-                    registration.collected_at.isoformat()
-                    if registration.collected_at is not None
-                    else None
-                ),
-                "artifacts": [
-                    {
-                        "artifact_id": str(artifact.id),
-                        "artifact_type": artifact.artifact_type,
-                        "uri": artifact.uri,
-                        "sha256": artifact.sha256,
-                        "captured_at": (
-                            artifact.captured_at.isoformat()
-                            if artifact.captured_at is not None
-                            else None
-                        ),
-                        "device_id": artifact.device_id,
-                        "content_type": artifact.content_type,
-                        "metadata": artifact.meta_data or {},
-                    }
-                    for artifact in artifacts
-                ],
-                "measurements": {
-                    measurement.measurement_type: (
-                        {
-                            "measurement_id": str(measurement.id),
-                            "value": measurement.value,
-                            "unit": measurement.unit,
-                            "measured_at": (
-                                measurement.measured_at.isoformat()
-                                if measurement.measured_at is not None
-                                else None
-                            ),
-                            "sensor_id": measurement.sensor_id,
-                            "quality_score": measurement.quality_score,
-                            "raw_artifact_id": (
-                                str(measurement.raw_artifact_id)
-                                if measurement.raw_artifact_id is not None
-                                else None
-                            ),
-                            "metadata": measurement.meta_data or {},
-                            **(
-                                {
-                                    "lat": (measurement.meta_data or {}).get("lat"),
-                                    "lon": (measurement.meta_data or {}).get("lon"),
-                                    "altitude_meters": (measurement.meta_data or {}).get("altitude_meters"),
-                                }
-                                if measurement.measurement_type == "gps"
-                                else {}
-                            ),
-                        }
-                    )
-                    for measurement in measurements
-                },
-            },
-            "multimodal": {
-                "artifacts": [
-                    {
-                        "artifact_type": artifact.artifact_type,
-                        "uri": artifact.uri,
-                        "sha256": artifact.sha256,
-                        "device_id": artifact.device_id,
-                    }
-                    for artifact in artifacts
-                ],
-            },
+            "source_registration": normalized_context.registration,
+            "multimodal": normalized_context.multimodal_context,
             "governance": {
                 "workflow": "source_registration",
                 "require_registration_verdict": True,
@@ -522,7 +556,7 @@ async def submit_source_registration(
     await session.flush()
     await _ensure_task_node_mapping(session, task.id)
 
-    await record_tracking_event(
+    submit_event = await record_tracking_event(
         session,
         registration=registration,
         event_type=TrackingEventType.OPERATOR_REQUEST_RECEIVED,
@@ -532,6 +566,35 @@ async def submit_source_registration(
             "task_id": str(task.id),
         },
     )
+    refreshed_tracking_events = list(raw_source_registration["tracking_events"])
+    refreshed_tracking_events.append(
+        {
+            "id": str(submit_event.id),
+            "event_type": submit_event.event_type.value,
+            "source_kind": submit_event.source_kind.value,
+            "payload": submit_event.payload or {},
+            "captured_at": submit_event.captured_at.isoformat() if submit_event.captured_at is not None else None,
+            "producer_id": submit_event.producer_id,
+            "device_id": submit_event.device_id,
+            "operator_id": submit_event.operator_id,
+            "correlation_id": submit_event.correlation_id,
+            "snapshot_id": submit_event.snapshot_id,
+        }
+    )
+    normalized_context = normalize_source_registration_context(
+        {
+            **raw_source_registration,
+            "tracking_events": refreshed_tracking_events,
+        },
+        tracking_events=refreshed_tracking_events,
+        multimodal_context=raw_multimodal,
+        task_description=task.description,
+    )
+    task.params = {
+        **dict(task.params or {}),
+        "source_registration": normalized_context.registration,
+        "multimodal": normalized_context.multimodal_context,
+    }
     registration.submitted_task_id = task.id
 
     await session.commit()

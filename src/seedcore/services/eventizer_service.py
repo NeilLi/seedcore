@@ -179,13 +179,13 @@ class EventizerServiceImpl:
 
             # Check if this is a refinement request (FastEventizer already processed)
             # FastEventizer output includes metadata flags in the request
-            fast_eventizer_processed = getattr(request, '_fast_eventizer_processed', False)
-            fast_eventizer_pii_redacted = getattr(request, '_fast_eventizer_pii_redacted', False)
-            fast_eventizer_normalized = getattr(request, '_fast_eventizer_normalized', False)
-            
-            # Also check if processed_text is provided (from FastEventizer output)
-            fast_processed_text = getattr(request, 'processed_text', None)
-            fast_normalized_text = getattr(request, 'normalized_text', None)
+            fast_eventizer_processed = bool(request.fast_eventizer_processed)
+            fast_eventizer_pii_redacted = bool(request.fast_eventizer_pii_redacted)
+            fast_eventizer_normalized = bool(request.fast_eventizer_normalized)
+
+            # FastEventizer can provide precomputed normalized/processed text for refinement.
+            fast_processed_text = request.processed_text
+            fast_normalized_text = request.normalized_text
 
             # 1. Normalize (with tiered normalization based on request context)
             # Skip if FastEventizer already normalized (use its normalized text)

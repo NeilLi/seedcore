@@ -121,7 +121,10 @@ class EventizerServiceClient:
         text = payload.get("text", "")
         domain = payload.get("domain", "")
         # v2.5 Multimodal support: Include media pointer in cache key
-        media_uri = payload.get("multimodal", {}).get("media_uri", "")
+        media_context = payload.get("media_context")
+        if not isinstance(media_context, dict):
+            media_context = payload.get("multimodal", {})
+        media_uri = media_context.get("media_uri", "") if isinstance(media_context, dict) else ""
 
         raw = f"{text}|{domain}|{media_uri}"
         return hashlib.sha256(raw.encode()).hexdigest()

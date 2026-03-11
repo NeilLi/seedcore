@@ -12,18 +12,37 @@ Support an app-layer feature where a source claim is not a plain form submit. It
 - evaluates the claim against policy and grading rules
 - produces a replayable registration record before any downstream packing or release step
 
+## Normalization Baseline
+
+The current baseline should match the governed ingress model described in [source-registration-events.md](/Users/ningli/project/seedcore/docs/references/source-registration-events.md).
+
+SeedCore normalizes source declarations, vision scans, seal checks, environmental readings, and operator commands into one governed `TrackingEvent` stream before planning begins.
+
+That means the normalization component is not only a parser. It is the ingress layer that:
+
+- captures immutable `TrackingEvent` records
+- projects those events into `SourceRegistration`
+- prepares deterministic attributes for policy and planning
+- calls the cognitive service as a core capability for semantic refinement, multimodal interpretation, and conflict resolution during normalization
+
+`SourceRegistration` remains the app-facing aggregate, but it is no longer the first write.
+
 ## Current SeedCore Fit
 
 The current framework already provides most of the runtime skeleton:
 
 - API ingress persists tasks as a thin pipe in [src/seedcore/api/routers/tasks_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tasks_router.py)
+- governed ingress for tracking events already exists in [src/seedcore/api/routers/tracking_events_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tracking_events_router.py)
+- `SourceRegistration` projection logic already exists in [src/seedcore/ops/source_registration/projector.py](/Users/ningli/project/seedcore/src/seedcore/ops/source_registration/projector.py)
 - `TaskPayload` already carries multimodal and routing metadata in [src/seedcore/models/task_payload.py](/Users/ningli/project/seedcore/src/seedcore/models/task_payload.py)
 - the coordinator already refines `params.multimodal`, calls Eventizer, and persists multimodal context in [src/seedcore/services/coordinator_service.py](/Users/ningli/project/seedcore/src/seedcore/services/coordinator_service.py)
+- deterministic normalization and multimodal refinement already exist in [src/seedcore/services/eventizer_service.py](/Users/ningli/project/seedcore/src/seedcore/services/eventizer_service.py)
+- cognitive reasoning and semantic enrichment already exist in [src/seedcore/services/cognitive_service.py](/Users/ningli/project/seedcore/src/seedcore/services/cognitive_service.py)
 - governed fact persistence already exists in [src/seedcore/services/fact_service.py](/Users/ningli/project/seedcore/src/seedcore/services/fact_service.py)
 - audit evidence already exists through `EvidenceBundle` in [src/seedcore/models/evidence_bundle.py](/Users/ningli/project/seedcore/src/seedcore/models/evidence_bundle.py)
 - snapshot-scoped policy evaluation already exists through PKG and `snapshot_id`
 
-The gap is not orchestration. The gap is domain contract shape. Today the system accepts generic multimodal payloads, but the app layer has no stable, provenance-specific registration aggregate to target.
+The gap is not orchestration. The gap is consolidating the new event-stream-first baseline into a clear domain contract. Today the runtime can accept multimodal payloads and governed tracking events, but the app layer and planning layer still need one explicit normalization story that ties `TrackingEvent`, `SourceRegistration`, Eventizer, and cognitive service together.
 
 ## Recommendation
 
@@ -31,21 +50,23 @@ Do not build this as a special front-end-only workflow.
 
 Build it as a first-class governed domain flow:
 
-1. App layer creates a `SourceRegistration`
-2. SeedCore persists that registration as a domain aggregate
-3. SeedCore enqueues an orchestration task tied to the aggregate
-4. Coordinator runs a policy-backed registration workflow
-5. Facts, evidence, and verdicts are persisted as the system of record
-6. Packing-line release remains a later `ActionIntent` step, not part of registration itself
+1. App layer emits source declarations, scans, readings, and operator commands as governed `TrackingEvent`s
+2. SeedCore persists the append-only event stream as the first write
+3. SeedCore projects the stream into `SourceRegistration` as the app-facing aggregate
+4. The normalization component enriches the projected state with deterministic parsing plus cognitive service interpretation
+5. Coordinator runs a policy-backed registration workflow on that normalized projection
+6. Facts, evidence, and verdicts are persisted as the system of record
+7. Packing-line release remains a later `ActionIntent` step, not part of registration itself
 
 ## Architectural Change
 
-Introduce a new domain aggregate: `SourceRegistration`.
+Retain `SourceRegistration` as the domain aggregate, but make `TrackingEvent` the first write.
 
 This should be separate from `Task`.
 
 - `Task` remains the orchestration envelope
-- `SourceRegistration` becomes the app-facing system of record
+- `TrackingEvent` becomes the governed ingress log
+- `SourceRegistration` becomes the projected app-facing system of record
 
 That split matters because the app needs a stable object whose lifecycle is:
 
@@ -56,7 +77,7 @@ That split matters because the app needs a stable object whose lifecycle is:
 - `quarantined`
 - `rejected`
 
-`Task` does not model that lifecycle well enough on its own.
+`Task` does not model that lifecycle well enough on its own, and `SourceRegistration` should not be overloaded to act like the raw ingress log.
 
 ## Proposed Domain Model
 
@@ -151,6 +172,8 @@ Add a dedicated envelope under `params.source_registration`.
 
 Do not overload generic `params.multimodal` as the only source of truth.
 
+When a task is created from the registration flow, it should reference the normalized event stream and the projected aggregate together.
+
 Recommended shape:
 
 ```json
@@ -160,6 +183,7 @@ Recommended shape:
   "params": {
     "source_registration": {
       "registration_id": "uuid",
+      "ingress_event_ids": ["evt-1", "evt-2"],
       "claim_kind": "origin_ritual",
       "producer_id": "string",
       "lot_id": "string",
@@ -183,6 +207,16 @@ Recommended shape:
         "pollen_count": {"value": 184000, "unit": "ppm"},
         "purity_score": {"value": 0.992, "unit": "ratio"},
         "spectral_match_score": {"value": 0.961, "unit": "ratio"}
+      },
+      "normalization": {
+        "source": "tracking_event_projection",
+        "stream_kinds": [
+          "source_declaration",
+          "provenance_scan",
+          "telemetry",
+          "operator_request"
+        ],
+        "cognitive_enrichment_required": true
       }
     },
     "multimodal": {},
@@ -197,8 +231,10 @@ Recommended shape:
 Why:
 
 - app layer gets a stable contract
+- planning can trace every projected field back to immutable ingress events
 - coordinator keeps using the existing task pipeline
-- multimodal processing still works, but now as a child of a domain aggregate
+- multimodal processing still works, but now as a child of a governed aggregate projection
+- cognitive service is explicitly part of normalization instead of being treated as a late-stage optional add-on
 
 ## Governance Model
 
@@ -280,9 +316,10 @@ Add a workflow branch keyed on:
 
 Coordinator changes should:
 
-- require the new envelope
-- normalize provenance inputs into deterministic attributes
-- synthesize a registration proto-plan
+- require the new envelope plus linked ingress event IDs
+- normalize provenance inputs from the governed event stream into deterministic attributes
+- call cognitive service as a core normalization capability for semantic extraction, evidence correlation, and ambiguity resolution
+- synthesize a registration proto-plan from the normalized projection
 - produce `RegistrationDecision`
 
 ### Eventizer / Multimodal Refinement
@@ -294,7 +331,15 @@ Extend the current multimodal path to understand provenance modalities:
 - site telemetry bundles
 - spectroscopy summaries
 
-Do not ask Eventizer to become the chemistry engine. It should only normalize and classify input context. Domain validation should happen in dedicated validators.
+Eventizer should remain the deterministic normalization layer for structure, canonical fields, and modality classification.
+
+The cognitive service should be treated as the paired semantic layer inside the normalization component:
+
+- interpret vision and telemetry evidence that does not reduce cleanly to rule-based extraction
+- reconcile cross-modal inconsistencies before planning
+- emit normalized semantic annotations that validators and planners can trust
+
+Do not ask either Eventizer or cognitive service to become the chemistry engine. Domain validation should still happen in dedicated validators.
 
 ### Fact Service
 
@@ -337,7 +382,7 @@ Expected behavior:
 - return deterministic scores, thresholds, reason codes, and raw trace
 - remain independently testable
 
-These can be local Python services first. They do not need to be folded into the generic Eventizer path.
+These can be local Python services first. They do not need to be folded into the generic Eventizer path, but they should consume the same normalized projection produced by Eventizer plus cognitive service.
 
 ## Read Model For The App Layer
 
@@ -390,10 +435,12 @@ That keeps custody and provenance aligned with the current SeedCore zero-trust m
 
 Phase 1:
 
-- add `SourceRegistration` tables
+- standardize `TrackingEvent`-first ingress across the app-facing flow
+- add or finalize `SourceRegistration` tables and projection wiring
 - add app-facing API
 - add `params.source_registration`
 - add coordinator workflow branch
+- wire cognitive service into normalization for provenance-heavy registrations
 - persist verdict as facts plus JSON result
 
 Phase 2:
@@ -411,4 +458,4 @@ Phase 3:
 
 The app layer should integrate against `SourceRegistration`, not directly against generic tasks.
 
-SeedCore should still orchestrate with tasks internally, but the business object for this feature must be a provenance-specific aggregate with its own lifecycle, evidence model, and verdict contract.
+SeedCore should still orchestrate with tasks internally, but the business object for this feature must be a provenance-specific aggregate projected from a governed event stream, with Eventizer and cognitive service acting as the core normalization capability before planning and decisioning.

@@ -109,6 +109,7 @@ from ..ops.eventizer.utils.text_normalizer import TextNormalizer, NormalizationT
 
 # Multimodal Context Refinement (bridges perception to Unified Memory)
 from ..ops.eventizer.utils.context_refiner import MultimodalContextRefiner
+from ..ops.source_registration.normalizer import normalize_source_registration_context
 
 from ..coordinator.core.signals import SignalEnricher
 from ..coordinator.metrics.registry import get_global_metrics_tracker
@@ -1330,10 +1331,29 @@ class Coordinator:
         correlation_id: str,
     ) -> Dict[str, Any]:
         params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
-        registration = (
+        raw_registration = (
             params.get("source_registration")
             if isinstance(params.get("source_registration"), dict)
             else {}
+        )
+        multimodal_ctx = params.get("multimodal") if isinstance(params.get("multimodal"), dict) else {}
+        normalization_result = normalize_source_registration_context(
+            raw_registration,
+            tracking_events=raw_registration.get("tracking_events"),
+            multimodal_context=multimodal_ctx,
+            task_description=task_dict.get("description") or "",
+        )
+        registration = normalization_result.registration
+        params["source_registration"] = registration
+        params["multimodal"] = normalization_result.multimodal_context
+        task_dict["params"] = params
+
+        cognitive_enrichment = await self._enrich_source_registration_semantics(
+            task_dict=task_dict,
+            registration=registration,
+            summary_text=normalization_result.eventizer_text,
+            correlation_id=correlation_id,
+            required=normalization_result.cognitive_enrichment_required,
         )
         task_id = str(task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4())
         proto_plan = {
@@ -1354,10 +1374,16 @@ class Coordinator:
                 "registration_id": registration.get("registration_id"),
                 "correlation_id": correlation_id,
                 "evaluated": True,
+                "normalization": registration.get("normalization") or {},
+                "cognitive_enrichment": cognitive_enrichment,
             },
         }
 
         decision = self._evaluate_source_registration_claim(registration)
+        decision.setdefault("rule_trace", {})
+        decision["rule_trace"]["normalization"] = registration.get("normalization") or {}
+        if cognitive_enrichment:
+            decision["rule_trace"]["cognitive_enrichment"] = cognitive_enrichment
         await self._persist_source_registration_decision(task_dict, decision)
 
         if task_dict.get("task_id") and self._session_factory:
@@ -1368,17 +1394,101 @@ class Coordinator:
             success=True,
             payload={
                 "registration_decision": decision,
+                "normalized_registration": registration,
                 "proto_plan": proto_plan,
             },
             retry=False,
-            decision_kind=DecisionKind.PLANNER.value,
+            decision_kind=DecisionKind.COGNITIVE.value,
             meta={
                 "workflow": "source_registration",
                 "registration_decision": decision,
+                "normalized_registration": registration,
                 "proto_plan": proto_plan,
             },
             path="coordinator_source_registration",
         )
+
+    async def _enrich_source_registration_semantics(
+        self,
+        *,
+        task_dict: Dict[str, Any],
+        registration: Dict[str, Any],
+        summary_text: str,
+        correlation_id: str,
+        required: bool,
+    ) -> Dict[str, Any]:
+        if not required:
+            return {}
+        if not summary_text.strip():
+            return {"status": "skipped", "reason": "empty_summary"}
+        if not getattr(self, "cognitive_client", None):
+            return {"status": "skipped", "reason": "cognitive_client_unavailable"}
+
+        cognitive_task = {
+            "task_id": str(task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4()),
+            "type": "general_query",
+            "description": summary_text,
+            "domain": task_dict.get("domain") or "provenance",
+            "correlation_id": correlation_id,
+            "params": {
+                "source_registration": registration,
+                "cognitive": {
+                    "skip_retrieval": True,
+                    "disable_memory_write": True,
+                },
+            },
+        }
+
+        try:
+            timeout_s = float(max(5.0, min(float(getattr(self, "timeout_s", 10.0)), 20.0)))
+            response = await self.cognitive_client.execute_async(
+                agent_id="coordinator",
+                cog_type=CognitiveType.PROBLEM_SOLVING,
+                decision_kind=DecisionKind.COGNITIVE,
+                task=cognitive_task,
+                timeout=timeout_s,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Source registration cognitive enrichment failed for %s: %s",
+                registration.get("registration_id"),
+                exc,
+            )
+            return {"status": "unavailable", "reason": str(exc)}
+
+        return self._summarize_source_registration_cognitive_enrichment(response)
+
+    def _summarize_source_registration_cognitive_enrichment(
+        self,
+        response: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(response, dict):
+            return {"status": "ignored", "reason": "non_dict_response"}
+
+        result = response.get("result")
+        result_dict = result if isinstance(result, dict) else {}
+        summary = (
+            response.get("summary")
+            or result_dict.get("summary")
+            or response.get("message")
+            or result_dict.get("message")
+        )
+        semantic_hints = response.get("semantic_hints") or result_dict.get("semantic_hints")
+        if not isinstance(semantic_hints, list):
+            semantic_hints = []
+        conflicts = response.get("conflicts") or result_dict.get("conflicts")
+        if not isinstance(conflicts, list):
+            conflicts = []
+
+        normalized = {
+            "status": "applied",
+            "summary": str(summary).strip() if summary else None,
+            "semantic_hints": [str(item) for item in semantic_hints[:5] if str(item).strip()],
+            "conflicts": [str(item) for item in conflicts[:5] if str(item).strip()],
+        }
+        if normalized["summary"] or normalized["semantic_hints"] or normalized["conflicts"]:
+            return normalized
+        return {"status": "applied", "keys": sorted(result_dict.keys())[:10]}
 
     async def _run_eventizer(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
         """

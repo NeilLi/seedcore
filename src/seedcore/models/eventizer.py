@@ -712,8 +712,19 @@ class EventizerRequest(BaseModel):
     include_pkg_hint: bool = True
 
     custom_patterns: Optional[List[Dict[str, Any]]] = None
+    normalized_text: Optional[str] = None
+    processed_text: Optional[str] = None
+    fast_eventizer_processed: bool = Field(default=False, alias="_fast_eventizer_processed")
+    fast_eventizer_pii_redacted: bool = Field(
+        default=False,
+        alias="_fast_eventizer_pii_redacted",
+    )
+    fast_eventizer_normalized: bool = Field(
+        default=False,
+        alias="_fast_eventizer_normalized",
+    )
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class EventizerResponse(BaseModel):
