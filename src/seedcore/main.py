@@ -19,6 +19,7 @@ from .database import get_async_pg_engine  # must return postgresql+asyncpg engi
 from .models import TaskBase
 from .models.fact import Base as FactBase
 from .api.routers.tasks_router import router as tasks_router
+from .api.routers.source_registrations_router import router as source_registrations_router
 from .api.routers.control_router import router as control_router
 from .api.routers.advisory_router import router as advisory_router
 from .api.routers.pkg_router import router as pkg_router
@@ -153,6 +154,7 @@ app.add_middleware(
 )
 
 app.include_router(tasks_router, prefix="/api/v1", tags=["Tasks"])
+app.include_router(source_registrations_router, prefix="/api/v1", tags=["Source Registrations"])
 app.include_router(control_router, prefix="/api/v1", tags=["Control"])
 app.include_router(advisory_router, prefix="/api/v1", tags=["Advisory"])
 app.include_router(pkg_router, prefix="/api/v1", tags=["PKG"])

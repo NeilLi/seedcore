@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from fastapi import FastAPI, Request, Body  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
-from sqlalchemy import text  # pyright: ignore[reportMissingImports]
+from sqlalchemy import select, text  # pyright: ignore[reportMissingImports]
 
 # --- Internal Imports ---
 from ..logging_setup import ensure_serve_logger, setup_logging
@@ -41,6 +41,12 @@ from ..models.result_schema import (
     normalize_envelope,
 )
 from ..models.advisory import AmbiguityAssessment
+from ..models.source_registration import (
+    RegistrationDecision,
+    RegistrationDecisionStatus,
+    SourceRegistration,
+    SourceRegistrationStatus,
+)
 from ..coordinator.models import (
     AnomalyTriageRequest,
     AnomalyTriageResponse,
@@ -116,6 +122,15 @@ def _log_critical(msg: str, *args: Any, **kwargs: Any) -> None:
     """Use critical logging when available, otherwise degrade to error."""
     log_fn = getattr(logger, "critical", None) or getattr(logger, "error")
     log_fn(msg, *args, **kwargs)
+
+
+def _measurement_value(value: Any) -> float | None:
+    if isinstance(value, dict):
+        value = value.get("value")
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 # --- Constants & Configuration Models ---
 CONFIG_PATH = os.getenv(
@@ -879,6 +894,13 @@ class Coordinator:
                     f"[Coordinator] PKG-mandatory gate active for task {task_id} "
                     "— ignoring cognitive planning request."
                 )
+
+            if self._is_source_registration_task(task_dict):
+                logger.info(
+                    "[Coordinator] Source registration task %s detected - evaluating provenance workflow",
+                    task_id,
+                )
+                return await self._handle_source_registration_task(task_dict, correlation_id)
             
             # For planning tasks: Return immediate ACK, process async
             if is_planning_task:
@@ -1104,6 +1126,259 @@ class Coordinator:
     def _is_pkg_mandatory_action_task(self, task_dict: Dict[str, Any]) -> bool:
         """PKG-mandatory gate: all action tasks require PKG validation."""
         return bool(isinstance(task_dict, dict) and task_dict.get("type") == "action")
+
+    def _is_source_registration_task(self, task_dict: Dict[str, Any]) -> bool:
+        if not isinstance(task_dict, dict):
+            return False
+        if str(task_dict.get("type") or "").strip().lower() == "registration":
+            return True
+        params = task_dict.get("params", {}) or {}
+        governance = params.get("governance", {}) if isinstance(params, dict) else {}
+        workflow = governance.get("workflow") if isinstance(governance, dict) else None
+        return str(workflow or "").strip().lower() == "source_registration"
+
+    def _evaluate_source_registration_claim(
+        self,
+        registration: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        artifacts = registration.get("artifacts") if isinstance(registration.get("artifacts"), list) else []
+        measurements = registration.get("measurements") if isinstance(registration.get("measurements"), dict) else {}
+        claimed_origin = (
+            registration.get("claimed_origin")
+            if isinstance(registration.get("claimed_origin"), dict)
+            else {}
+        )
+
+        artifact_types = {
+            str(item.get("artifact_type")).strip().lower()
+            for item in artifacts
+            if isinstance(item, dict) and item.get("artifact_type")
+        }
+        required_artifacts = {
+            "honeycomb_macro_image",
+            "seal_macro_image",
+        }
+        required_measurements = {
+            "oxygen_level",
+            "humidity",
+            "gps",
+            "pollen_count",
+            "purity_score",
+            "spectral_match_score",
+        }
+
+        reason_codes: list[str] = []
+
+        missing_artifacts = sorted(required_artifacts - artifact_types)
+        if missing_artifacts:
+            reason_codes.append("missing_required_artifacts")
+
+        missing_measurements = sorted(
+            key for key in required_measurements if key not in measurements
+        )
+        if missing_measurements:
+            reason_codes.append("missing_required_measurements")
+
+        gps = measurements.get("gps") if isinstance(measurements.get("gps"), dict) else {}
+        claimed_altitude = claimed_origin.get("altitude_meters")
+        measured_altitude = gps.get("altitude_meters")
+        altitude_delta = None
+        if claimed_altitude is not None and measured_altitude is not None:
+            try:
+                altitude_delta = abs(float(claimed_altitude) - float(measured_altitude))
+                if altitude_delta > 150.0:
+                    reason_codes.append("altitude_claim_mismatch")
+            except (TypeError, ValueError):
+                reason_codes.append("invalid_altitude_measurement")
+
+        purity_score = _measurement_value(measurements.get("purity_score"))
+        if purity_score is not None and purity_score < 0.95:
+            reason_codes.append("purity_below_rare_grade")
+
+        spectral_match = _measurement_value(measurements.get("spectral_match_score"))
+        if spectral_match is not None and spectral_match < 0.95:
+            reason_codes.append("spectral_match_below_threshold")
+
+        pollen_count = _measurement_value(measurements.get("pollen_count"))
+        if pollen_count is not None and pollen_count <= 0:
+            reason_codes.append("invalid_pollen_count")
+
+        if missing_artifacts or missing_measurements:
+            decision = RegistrationDecisionStatus.REJECTED.value
+            confidence = 0.0
+        elif reason_codes:
+            decision = RegistrationDecisionStatus.QUARANTINED.value
+            confidence = 0.35
+        else:
+            decision = RegistrationDecisionStatus.APPROVED.value
+            confidence = 0.98
+
+        return {
+            "registration_id": registration.get("registration_id"),
+            "decision": decision,
+            "grade_result": (
+                "rare_grade" if decision == RegistrationDecisionStatus.APPROVED.value else None
+            ),
+            "confidence": confidence,
+            "reason_codes": {
+                "codes": reason_codes,
+                "missing_artifacts": missing_artifacts,
+                "missing_measurements": missing_measurements,
+            },
+            "rule_trace": {
+                "required_artifacts": sorted(required_artifacts),
+                "required_measurements": sorted(required_measurements),
+                "artifact_types_present": sorted(artifact_types),
+                "altitude_delta_meters": altitude_delta,
+                "purity_score": purity_score,
+                "spectral_match_score": spectral_match,
+                "pollen_count": pollen_count,
+            },
+        }
+
+    async def _resolve_approved_source_registrations(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, str | None]:
+        params = payload.get("params", {}) if isinstance(payload.get("params"), dict) else {}
+        governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
+        resource = params.get("resource", {}) if isinstance(params.get("resource"), dict) else {}
+        source_registration = (
+            params.get("source_registration")
+            if isinstance(params.get("source_registration"), dict)
+            else {}
+        )
+        registration_decision = (
+            governance.get("registration_decision")
+            if isinstance(governance.get("registration_decision"), dict)
+            else {}
+        )
+        registration_id = (
+            resource.get("source_registration_id")
+            or params.get("source_registration_id")
+            or source_registration.get("registration_id")
+            or registration_decision.get("registration_id")
+        )
+        if not registration_id or not self._session_factory:
+            return {}
+
+        try:
+            reg_uuid = uuid.UUID(str(registration_id))
+        except (TypeError, ValueError):
+            return {}
+
+        async with self._session_factory() as session:
+            latest_decision = (
+                await session.execute(
+                    select(RegistrationDecision)
+                    .where(RegistrationDecision.registration_id == reg_uuid)
+                    .order_by(RegistrationDecision.decided_at.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            if latest_decision is None:
+                return {}
+            if latest_decision.decision != RegistrationDecisionStatus.APPROVED:
+                return {}
+            return {str(reg_uuid): str(latest_decision.id)}
+
+    async def _persist_source_registration_decision(
+        self,
+        task_dict: Dict[str, Any],
+        decision: Dict[str, Any],
+    ) -> None:
+        registration_id = decision.get("registration_id")
+        if not registration_id or not self._session_factory:
+            return
+
+        try:
+            reg_uuid = uuid.UUID(str(registration_id))
+        except (TypeError, ValueError):
+            logger.warning("Invalid SourceRegistration ID on decision payload: %s", registration_id)
+            return
+
+        async with self._session_factory() as session:
+            registration = await session.get(SourceRegistration, reg_uuid)
+            if registration is None:
+                logger.warning("SourceRegistration %s not found for decision persistence", registration_id)
+                return
+
+            decision_row = RegistrationDecision(
+                registration_id=reg_uuid,
+                decision=RegistrationDecisionStatus(decision["decision"]),
+                grade_result=decision.get("grade_result"),
+                confidence=float(decision.get("confidence") or 0.0),
+                policy_snapshot_id=task_dict.get("snapshot_id"),
+                rule_trace=decision.get("rule_trace") or {},
+                reason_codes=decision.get("reason_codes") or {},
+                created_by="coordinator_service",
+            )
+            session.add(decision_row)
+
+            if decision["decision"] == RegistrationDecisionStatus.APPROVED.value:
+                registration.status = SourceRegistrationStatus.APPROVED
+            elif decision["decision"] == RegistrationDecisionStatus.QUARANTINED.value:
+                registration.status = SourceRegistrationStatus.QUARANTINED
+            else:
+                registration.status = SourceRegistrationStatus.REJECTED
+
+            await session.commit()
+
+    async def _handle_source_registration_task(
+        self,
+        task_dict: Dict[str, Any],
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
+        registration = (
+            params.get("source_registration")
+            if isinstance(params.get("source_registration"), dict)
+            else {}
+        )
+        task_id = str(task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4())
+        proto_plan = {
+            "version": "source_registration.v1",
+            "route": "source_registration",
+            "steps": [
+                {"id": "verify_artifact_integrity", "type": "validation"},
+                {"id": "extract_visual_features", "type": "validation", "depends_on": ["verify_artifact_integrity"]},
+                {"id": "validate_site_telemetry", "type": "validation", "depends_on": ["verify_artifact_integrity"]},
+                {"id": "validate_geo_altitude_claim", "type": "validation", "depends_on": ["validate_site_telemetry"]},
+                {"id": "validate_bio_signature", "type": "validation", "depends_on": ["verify_artifact_integrity"]},
+                {"id": "evaluate_rare_grade_policy", "type": "policy", "depends_on": ["extract_visual_features", "validate_geo_altitude_claim", "validate_bio_signature"]},
+                {"id": "persist_registration_facts", "type": "fact_write", "depends_on": ["evaluate_rare_grade_policy"]},
+                {"id": "emit_registration_verdict", "type": "decision", "depends_on": ["persist_registration_facts"]},
+            ],
+            "metadata": {
+                "workflow": "source_registration",
+                "registration_id": registration.get("registration_id"),
+                "correlation_id": correlation_id,
+                "evaluated": True,
+            },
+        }
+
+        decision = self._evaluate_source_registration_claim(registration)
+        await self._persist_source_registration_decision(task_dict, decision)
+
+        if task_dict.get("task_id") and self._session_factory:
+            await self._persist_proto_plan(self.graph_task_repo, task_id, "registration", proto_plan)
+
+        return make_envelope(
+            task_id=task_id,
+            success=True,
+            payload={
+                "registration_decision": decision,
+                "proto_plan": proto_plan,
+            },
+            retry=False,
+            decision_kind=DecisionKind.PLANNER.value,
+            meta={
+                "workflow": "source_registration",
+                "registration_decision": decision,
+                "proto_plan": proto_plan,
+            },
+            path="coordinator_source_registration",
+        )
 
     async def _run_eventizer(self, task_dict: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1748,8 +2023,19 @@ class Coordinator:
                 interaction["mode"] = "coordinator_routed"
 
             if requires_action_intent(payload):
-                governance = build_governance_context(payload)
-                params["governance"] = governance
+                existing_governance = (
+                    dict(params.get("governance"))
+                    if isinstance(params.get("governance"), dict)
+                    else {}
+                )
+                approved_source_registrations = await self._resolve_approved_source_registrations(
+                    payload
+                )
+                governance = build_governance_context(
+                    payload,
+                    approved_source_registrations=approved_source_registrations,
+                )
+                params["governance"] = {**existing_governance, **governance}
                 policy_decision = governance.get("policy_decision", {})
                 if not policy_decision.get("allowed"):
                     return make_envelope(

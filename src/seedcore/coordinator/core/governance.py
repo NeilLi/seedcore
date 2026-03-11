@@ -37,6 +37,8 @@ SYSTEM_PARAM_KEYS = {
     "metadata",
 }
 
+PACKING_ACTION_TYPES = {"PACK", "RELEASE"}
+
 
 def requires_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> bool:
     payload = _task_to_dict(task)
@@ -56,6 +58,16 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
     resource = params.get("resource") if isinstance(params.get("resource"), dict) else {}
     executor = params.get("executor") if isinstance(params.get("executor"), dict) else {}
     cognitive = params.get("cognitive") if isinstance(params.get("cognitive"), dict) else {}
+    source_registration = (
+        params.get("source_registration")
+        if isinstance(params.get("source_registration"), dict)
+        else {}
+    )
+    registration_decision = (
+        governance.get("registration_decision")
+        if isinstance(governance.get("registration_decision"), dict)
+        else {}
+    )
 
     issued_at = _utcnow()
     ttl_seconds = _derive_ttl_seconds(payload, routing, governance)
@@ -109,8 +121,27 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
             )
         )
     )
+    source_registration_id = (
+        resource.get("source_registration_id")
+        or params.get("source_registration_id")
+        or source_registration.get("registration_id")
+        or registration_decision.get("registration_id")
+    )
+    registration_decision_id = (
+        resource.get("registration_decision_id")
+        or params.get("registration_decision_id")
+        or registration_decision.get("decision_id")
+        or registration_decision.get("id")
+    )
 
     contract_version = _derive_contract_version(payload, governance)
+    action_type = _derive_action_type(payload, params)
+    action_parameters = _derive_action_parameters(params)
+    if governance.get("requires_approved_source_registration") is not None:
+        action_parameters.setdefault(
+            "requires_approved_source_registration",
+            bool(governance.get("requires_approved_source_registration")),
+        )
     security_contract = SecurityContract(
         hash=_sha256_hex(
             _canonical_json(
@@ -121,6 +152,8 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
                     "skills": routing.get("skills") or {},
                     "target_zone": target_zone,
                     "task_type": payload.get("type"),
+                    "action_type": action_type,
+                    "source_registration_id": source_registration_id,
                 }
             )
         ),
@@ -137,14 +170,22 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
             session_token=str(session_token),
         ),
         action=IntentAction(
-            type=_derive_action_type(payload, params),
-            parameters=_derive_action_parameters(params),
+            type=action_type,
+            parameters=action_parameters,
             security_contract=security_contract,
         ),
         resource=IntentResource(
             asset_id=str(asset_id),
             target_zone=str(target_zone) if target_zone is not None else None,
             provenance_hash=str(provenance_hash),
+            source_registration_id=(
+                str(source_registration_id) if source_registration_id is not None else None
+            ),
+            registration_decision_id=(
+                str(registration_decision_id)
+                if registration_decision_id is not None
+                else None
+            ),
         ),
     )
 
@@ -153,6 +194,7 @@ def evaluate_intent(
     action_intent: ActionIntent,
     *,
     policy_snapshot: str | None = None,
+    approved_source_registrations: Mapping[str, str | None] | None = None,
 ) -> PolicyDecision:
     try:
         issued_at = _parse_iso8601(action_intent.timestamp)
@@ -197,6 +239,34 @@ def evaluate_intent(
             policy_snapshot=policy_snapshot,
         )
 
+    if _requires_approved_source_registration(action_intent):
+        source_registration_id = (
+            action_intent.resource.source_registration_id or ""
+        ).strip()
+        if not source_registration_id:
+            return PolicyDecision(
+                allowed=False,
+                reason=(
+                    "Physical packing actions must reference an approved "
+                    "SourceRegistration."
+                ),
+                deny_code="missing_source_registration",
+                policy_snapshot=policy_snapshot,
+            )
+        if not _is_approved_source_registration(
+            action_intent,
+            approved_source_registrations or {},
+        ):
+            return PolicyDecision(
+                allowed=False,
+                reason=(
+                    "Physical packing actions require an approved "
+                    "SourceRegistration decision."
+                ),
+                deny_code="unapproved_source_registration",
+                policy_snapshot=policy_snapshot,
+            )
+
     token_payload = {
         "token_id": str(uuid.uuid4()),
         "intent_id": action_intent.intent_id,
@@ -208,6 +278,8 @@ def evaluate_intent(
             "target_zone": action_intent.resource.target_zone,
             "asset_id": action_intent.resource.asset_id,
             "principal_agent_id": action_intent.principal.agent_id,
+            "source_registration_id": action_intent.resource.source_registration_id,
+            "registration_decision_id": action_intent.resource.registration_decision_id,
         },
     }
     signature = _sign_payload(token_payload)
@@ -220,11 +292,16 @@ def evaluate_intent(
     )
 
 
-def build_governance_context(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> Dict[str, Any]:
+def build_governance_context(
+    task: TaskPayload | Mapping[str, Any] | Dict[str, Any],
+    *,
+    approved_source_registrations: Mapping[str, str | None] | None = None,
+) -> Dict[str, Any]:
     intent = build_action_intent(task)
     decision = evaluate_intent(
         intent,
         policy_snapshot=intent.action.security_contract.version,
+        approved_source_registrations=approved_source_registrations,
     )
     context = {
         "action_intent": intent.model_dump(mode="json"),
@@ -268,6 +345,34 @@ def _derive_action_parameters(params: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in params.items()
         if key not in SYSTEM_PARAM_KEYS and not key.startswith("_")
     }
+
+
+def _requires_approved_source_registration(action_intent: ActionIntent) -> bool:
+    action_type = str(action_intent.action.type or "").strip().upper()
+    if action_type in PACKING_ACTION_TYPES:
+        return True
+    parameters = (
+        action_intent.action.parameters
+        if isinstance(action_intent.action.parameters, dict)
+        else {}
+    )
+    return bool(parameters.get("requires_approved_source_registration"))
+
+
+def _is_approved_source_registration(
+    action_intent: ActionIntent,
+    approved_source_registrations: Mapping[str, str | None],
+) -> bool:
+    registration_id = action_intent.resource.source_registration_id
+    if not registration_id:
+        return False
+    if registration_id not in approved_source_registrations:
+        return False
+    required_decision_id = action_intent.resource.registration_decision_id
+    approved_decision_id = approved_source_registrations.get(registration_id)
+    if required_decision_id:
+        return approved_decision_id == required_decision_id
+    return True
 
 
 def _derive_ttl_seconds(
@@ -329,4 +434,3 @@ def _parse_iso8601(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-

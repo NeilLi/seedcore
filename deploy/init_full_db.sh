@@ -33,13 +33,14 @@ MIGRATION_118="${SCRIPT_DIR}/migrations/118_task_outbox_hardening.sql"
 MIGRATION_119="${SCRIPT_DIR}/migrations/119_task_router_telemetry.sql"
 MIGRATION_120="${SCRIPT_DIR}/migrations/120_organ_specialization_indexing.sql"
 MIGRATION_121="${SCRIPT_DIR}/migrations/121_task_proto_plan.sql"
+MIGRATION_122="${SCRIPT_DIR}/migrations/122_source_registration.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -69,6 +70,7 @@ echo "   - 118: Task outbox hardening (available_at, attempts, index)"
 echo "   - 119: Task router telemetry (OCPS signals, surprise scores, routing decisions)"
 echo "   - 120: Agent/organ specialization indexing (specialization column, unique constraints, indexes)"
 echo "   - 121: Task proto-plan (proto-plan payloads for downstream workers)"
+echo "   - 122: Source registration (registrations, artifacts, measurements, decisions)"
 
 find_pg_pod() {
   local sel pod
@@ -229,6 +231,11 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "⚙️  Running migration 121: Task proto-plan (proto-plan payloads for downstream workers)..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_121" "$POSTGRES_POD:/tmp/121_task_proto_plan.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/121_task_proto_plan.sql"
+
+# Migration 122 (Source Registration)
+echo "⚙️  Running migration 122: Source registration (registrations, artifacts, measurements, decisions)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_122" "$POSTGRES_POD:/tmp/122_source_registration.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/122_source_registration.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

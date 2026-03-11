@@ -47,6 +47,7 @@ def test_build_action_intent_maps_task_payload_contract():
             },
             "resource": {
                 "asset_id": "lot-9",
+                "source_registration_id": "reg-123",
             },
             "intent": "release",
         },
@@ -61,6 +62,7 @@ def test_build_action_intent_maps_task_payload_contract():
     assert intent.action.security_contract.version == "snapshot:42"
     assert intent.resource.asset_id == "lot-9"
     assert intent.resource.target_zone == "vault_a"
+    assert intent.resource.source_registration_id == "reg-123"
 
     issued_at = datetime.fromisoformat(intent.timestamp).astimezone(timezone.utc)
     valid_until = datetime.fromisoformat(intent.valid_until).astimezone(timezone.utc)
@@ -93,6 +95,102 @@ def test_evaluate_intent_denies_expired_contract():
 
     assert decision.allowed is False
     assert decision.deny_code == "expired_intent"
+
+
+def test_evaluate_intent_denies_release_without_source_registration():
+    intent = ActionIntent(
+        intent_id="intent-2",
+        timestamp="2026-03-10T00:00:10+00:00",
+        valid_until="2026-03-10T00:01:10+00:00",
+        principal=IntentPrincipal(
+            agent_id="agent-1",
+            role_profile="PACKING_OPERATOR",
+            session_token="session-2",
+        ),
+        action=IntentAction(
+            type="RELEASE",
+            parameters={},
+            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
+        ),
+        resource=IntentResource(
+            asset_id="asset-1",
+            target_zone="packing_line_a",
+            provenance_hash="prov-1",
+        ),
+    )
+
+    decision = evaluate_intent(intent, policy_snapshot="snapshot:5")
+
+    assert decision.allowed is False
+    assert decision.deny_code == "missing_source_registration"
+
+
+def test_evaluate_intent_denies_release_with_unapproved_source_registration():
+    intent = ActionIntent(
+        intent_id="intent-3",
+        timestamp="2026-03-10T00:00:10+00:00",
+        valid_until="2026-03-10T00:01:10+00:00",
+        principal=IntentPrincipal(
+            agent_id="agent-1",
+            role_profile="PACKING_OPERATOR",
+            session_token="session-3",
+        ),
+        action=IntentAction(
+            type="RELEASE",
+            parameters={},
+            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
+        ),
+        resource=IntentResource(
+            asset_id="asset-1",
+            target_zone="packing_line_a",
+            provenance_hash="prov-1",
+            source_registration_id="reg-1",
+            registration_decision_id="decision-1",
+        ),
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={},
+    )
+
+    assert decision.allowed is False
+    assert decision.deny_code == "unapproved_source_registration"
+
+
+def test_evaluate_intent_allows_release_with_approved_source_registration():
+    intent = ActionIntent(
+        intent_id="intent-4",
+        timestamp="2026-03-10T00:00:10+00:00",
+        valid_until="2026-03-10T00:01:10+00:00",
+        principal=IntentPrincipal(
+            agent_id="agent-1",
+            role_profile="PACKING_OPERATOR",
+            session_token="session-4",
+        ),
+        action=IntentAction(
+            type="RELEASE",
+            parameters={},
+            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
+        ),
+        resource=IntentResource(
+            asset_id="asset-1",
+            target_zone="packing_line_a",
+            provenance_hash="prov-1",
+            source_registration_id="reg-1",
+            registration_decision_id="decision-1",
+        ),
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={"reg-1": "decision-1"},
+    )
+
+    assert decision.allowed is True
+    assert decision.execution_token is not None
 
 
 @pytest.mark.asyncio
@@ -162,4 +260,3 @@ async def test_coordinator_handoff_injects_governance_context():
     assert governance["execution_token"]["contract_version"] == "snapshot:8"
     assert governance["policy_decision"]["allowed"] is True
     assert result["meta"]["governance"]["execution_token"]["intent_id"] == governance["action_intent"]["intent_id"]
-

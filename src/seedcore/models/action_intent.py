@@ -26,6 +26,8 @@ class IntentResource(BaseModel):
     asset_id: str
     target_zone: Optional[str] = None
     provenance_hash: str
+    source_registration_id: Optional[str] = None
+    registration_decision_id: Optional[str] = None
 
 
 class ActionIntent(BaseModel):
@@ -53,4 +55,3 @@ class PolicyDecision(BaseModel):
     reason: Optional[str] = None
     policy_snapshot: Optional[str] = None
     deny_code: Optional[str] = None
-

@@ -11,6 +11,14 @@ from .action_intent import ActionIntent, ExecutionToken, PolicyDecision
 from .evidence_bundle import EvidenceBundle, ExecutionReceipt
 from .task_payload import TaskPayload
 from .task_api import Task
+from .source_registration import (
+    SourceRegistration,
+    SourceRegistrationArtifact,
+    SourceRegistrationMeasurement,
+    SourceRegistrationStatus,
+    RegistrationDecision,
+    RegistrationDecisionStatus,
+)
 
 __all__ = [
     "DatabaseTask",
@@ -25,4 +33,10 @@ __all__ = [
     "PolicyDecision",
     "EvidenceBundle",
     "ExecutionReceipt",
+    "SourceRegistration",
+    "SourceRegistrationArtifact",
+    "SourceRegistrationMeasurement",
+    "SourceRegistrationStatus",
+    "RegistrationDecision",
+    "RegistrationDecisionStatus",
 ]
