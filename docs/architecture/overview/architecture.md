@@ -646,7 +646,7 @@ The SeedCore architecture is visualized through several key diagrams that illust
 
 ### System Architecture Overview
 
-![Architecture Overview](../architecture_overview.png)
+![Architecture Overview](../../archive/architecture_pngs/architecture_overview.png)
 
 The architecture overview diagram shows the complete Ray cluster structure, including:
 - **Serve Applications**: ml_service, cognitive, coordinator, state, energy, organism
@@ -656,7 +656,7 @@ The architecture overview diagram shows the complete Ray cluster structure, incl
 
 ### PKG Core Architecture
 
-![PKG Core Architecture](../architecture_pkg_core.png)
+![PKG Core Architecture](../../archive/architecture_pngs/architecture_pkg_core.png)
 
 The PKG core architecture diagram illustrates:
 - **Policy Snapshots**: Versioned policy management
@@ -666,7 +666,7 @@ The PKG core architecture diagram illustrates:
 
 ### Architecture Workflow
 
-![Architecture Workflow](../architecture_workflow.png)
+![Architecture Workflow](../../archive/architecture_pngs/architecture_workflow.png)
 
 The workflow diagram shows end-to-end task processing:
 - **Task Arrival**: Queue dispatcher and task claiming
