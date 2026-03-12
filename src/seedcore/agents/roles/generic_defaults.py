@@ -47,7 +47,7 @@ def create_default_registry() -> RoleRegistry:
     registry.register(RoleProfile(
         name=Specialization.USER_LIAISON,
         default_skills={"dialogue": 0.95, "empathy": 0.9, "compliance": 0.95},
-        allowed_tools={"chat.reply", "user.profile.read"},
+        allowed_tools={"chat.reply", "user.profile.read", "general_query"},
         # Behavior Plugin System: Default behaviors for USER_LIAISON
         # Can be overridden by organs.yaml or pkg_subtask_types.default_params
         default_behaviors=["chat_history", "tool_auto_injection"],
@@ -148,7 +148,7 @@ def create_default_registry() -> RoleRegistry:
     registry.register(RoleProfile(
         name=Specialization.GENERALIST,
         default_skills={"tool_usage": 0.8, "basic_reasoning": 0.6},
-        allowed_tools={"search.web", "memory.read", "utils.*"},
+        allowed_tools={"search.web", "memory.read", "utils.*", "general_query"},
         # Behavior Plugin System: GENERALIST has no default behaviors
         # Behaviors can be added via config or pkg_subtask_types
         default_behaviors=[],
@@ -183,4 +183,3 @@ def create_default_registry() -> RoleRegistry:
 # =====================================================================
 # This is what OrganismCore imports
 DEFAULT_ROLE_REGISTRY = create_default_registry()
-

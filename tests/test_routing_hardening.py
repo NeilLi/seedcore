@@ -11,6 +11,7 @@ import mock_ray_dependencies  # noqa: F401
 
 from seedcore.organs.organism_core import OrganismCore
 from seedcore.organs.router import HardRoutingFailure, RoutingDirectory
+from seedcore.agents.roles import create_default_registry, Specialization
 
 
 class _StubTunnelManager:
@@ -30,6 +31,7 @@ class _StubOrganism:
         self.organs = {}
         self.tunnel_manager = _StubTunnelManager()
         self.organ_specs = {}
+        self.role_registry = create_default_registry()
 
     async def execute_on_agent(self, organ_id, agent_id, payload):
         raise AssertionError(
@@ -79,6 +81,17 @@ async def test_route_and_execute_returns_halt_envelope_for_missing_required_spec
     assert result["decision_kind"] == "error"
     assert result["payload"]["halted"] is True
     assert result["meta"]["halted"] is True
+
+
+def test_router_allows_general_query_for_generalist_soft_routing():
+    router = RoutingDirectory(organism=_StubOrganism())
+
+    allowed = router._tools_allowed_for_spec(
+        Specialization.GENERALIST.value,
+        ["general_query"],
+    )
+
+    assert allowed is True
 
 
 @pytest.mark.asyncio

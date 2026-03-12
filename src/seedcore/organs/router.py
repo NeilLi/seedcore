@@ -51,6 +51,13 @@ logger = ensure_serve_logger("seedcore.organs.router", level="DEBUG")
 # Target namespace for Ray actors
 RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
+QUERY_TOOL_PREFIXES = (
+    "general_query",
+    "cognitive.",
+    "knowledge.",
+    "task.collaborative",
+)
+
 
 @dataclass
 class RouterDecision:
@@ -1454,6 +1461,12 @@ class RoutingDirectory:
         Returns True if unknown (non-blocking).
         """
         if not spec_str or not tools:
+            return True
+        if all(
+            isinstance(tool_name, str)
+            and any(tool_name.startswith(prefix) for prefix in QUERY_TOOL_PREFIXES)
+            for tool_name in tools
+        ):
             return True
         try:
             from seedcore.agents.roles.specialization import SpecializationManager
