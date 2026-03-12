@@ -30,9 +30,6 @@ sys.path.insert(0, '/app/src')
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.utils.ray_utils import ensure_ray_initialized
 
-# Import the ML service components
-from seedcore.ml.ml_service import MLService
-
 setup_logging(app_name="seedcore.ml_service.driver")
 logger = ensure_serve_logger("seedcore.ml_service", level="DEBUG")
 
@@ -85,6 +82,8 @@ def build_ml_service(args: Optional[dict] = None):
     
     if is_enabled:
         logger.info("✅ ENABLE_ML_SERVICE is 'true'. Building MLService...")
+        from seedcore.ml.ml_service import MLService
+
         return MLService.bind()
     else:
         logger.warning("🚫 ENABLE_ML_SERVICE is 'false' or not set. Building no-op MLService...")

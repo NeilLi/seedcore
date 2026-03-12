@@ -131,7 +131,7 @@ spec:
             - name: SERVE_SERVICE
               value: "stable"
             - name: ENABLE_ML_SERVICE
-              value: "true"
+              value: "false"
             - name: DGL_GRAPHBOLT_SKIP
               value: "1"
             - name: RAY_OVERRIDE_RESOURCES

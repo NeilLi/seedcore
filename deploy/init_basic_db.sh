@@ -116,7 +116,21 @@ CREATE TABLE IF NOT EXISTS flashbulb_incidents (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_flashbulb_created_at ON flashbulb_incidents(created_at);
+SET @idx_exists := (
+    SELECT COUNT(*)
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE()
+      AND table_name = 'flashbulb_incidents'
+      AND index_name = 'idx_flashbulb_created_at'
+);
+SET @idx_sql := IF(
+    @idx_exists = 0,
+    'CREATE INDEX idx_flashbulb_created_at ON flashbulb_incidents(created_at)',
+    'SELECT ''idx_flashbulb_created_at already exists'''
+);
+PREPARE stmt FROM @idx_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 SQL
 
   log "✅ MySQL initialized successfully."

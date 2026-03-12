@@ -29,6 +29,7 @@ HOST_DATA_DIR="${HOST_DATA_DIR:-/tmp/seedcore-data}"
 WAIT_FOR_RAY_S="${WAIT_FOR_RAY_S:-30}"
 BUILD_IMAGE="${BUILD_IMAGE:-true}"
 BUILD_ENABLE_ML="${BUILD_ENABLE_ML:-0}"
+DEPLOY_ENABLE_ML_SERVICE="${DEPLOY_ENABLE_ML_SERVICE:-${BUILD_ENABLE_ML}}"
 BUILD_NO_CACHE="${BUILD_NO_CACHE:-0}"
 BUILD_DOCKERFILE="${BUILD_DOCKERFILE:-docker/Dockerfile.optimize}"
 BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
@@ -51,7 +52,7 @@ Options:
       --worker-replicas <n>   Ray worker replicas (default: ${WORKER_REPLICAS})
       --host-data-dir <path>  HostPath data dir (default: ${HOST_DATA_DIR})
       --skip-build            Skip ./build.sh
-      --enable-ml             Build optional ML/local-AI layer
+      --enable-ml             Build optional ML/local-AI layer and enable ML services
       --no-cache             Build without Docker cache
       --skip-load            Skip kind image loads in downstream scripts
       --skip-ingress         Skip ingress deployment
@@ -99,7 +100,11 @@ while [[ $# -gt 0 ]]; do
     --worker-replicas) WORKER_REPLICAS="$2"; shift 2 ;;
     --host-data-dir) HOST_DATA_DIR="$2"; shift 2 ;;
     --skip-build) BUILD_IMAGE=false; shift ;;
-    --enable-ml) BUILD_ENABLE_ML=1; shift ;;
+    --enable-ml)
+      BUILD_ENABLE_ML=1
+      DEPLOY_ENABLE_ML_SERVICE=1
+      shift
+      ;;
     --no-cache) BUILD_NO_CACHE=1; shift ;;
     --skip-load) SKIP_KIND_LOAD=true; shift ;;
     --skip-ingress) DEPLOY_INGRESS_ENABLED=false; shift ;;
@@ -245,6 +250,7 @@ deploy_ray_services() {
   CLUSTER_NAME="${CLUSTER_NAME}" \
   NAMESPACE="${NAMESPACE}" \
   RAY_IMAGE="${RAY_IMAGE}" \
+  ENABLE_ML_SERVICE="${DEPLOY_ENABLE_ML_SERVICE}" \
   WORKER_REPLICAS="${WORKER_REPLICAS}" \
   RS_NAME="${RAYSERVICE_NAME}" \
   STABLE_SERVE_SVC_NAME="${STABLE_SERVICE_NAME}" \
@@ -361,6 +367,7 @@ main() {
   echo "Bootstrap image:  ${BOOTSTRAP_IMAGE}"
   echo "Build image:      ${BUILD_IMAGE}"
   echo "Enable ML build:  ${BUILD_ENABLE_ML}"
+  echo "Enable ML serve:  ${DEPLOY_ENABLE_ML_SERVICE}"
   check_disk_space "${PROJECT_ROOT}" 8388608
 
   build_docker_image

@@ -161,7 +161,7 @@ spec:
                 - name: SERVE_SERVICE
                   value: "stable"
                 - name: ENABLE_ML_SERVICE
-                  value: "true" # Set to "false" to disable ML service
+                  value: "false" # Default lean image keeps ML optional; set true for ML-enabled builds
                 - name: DGL_GRAPHBOLT_SKIP
                   value: "1"
                 - name: RAY_OVERRIDE_RESOURCES
@@ -199,7 +199,7 @@ spec:
                     [
                       "bash",
                       "-lc",
-                      "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                      "curl -fsS --max-time 2 http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
                     ]
                 periodSeconds: 5
                 timeoutSeconds: 3
@@ -210,7 +210,7 @@ spec:
                     [
                       "bash",
                       "-lc",
-                      "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                      "curl -fsS --max-time 2 http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
                     ]
                 periodSeconds: 5
                 timeoutSeconds: 2
@@ -221,7 +221,7 @@ spec:
                     [
                       "bash",
                       "-lc",
-                      "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                      "curl -fsS --max-time 2 http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
                     ]
                 periodSeconds: 5
                 timeoutSeconds: 2
@@ -280,7 +280,7 @@ spec:
                       [
                         "bash",
                         "-lc",
-                        "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                        "curl -fsS --max-time 2 http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
                       ]
                   periodSeconds: 5
                   timeoutSeconds: 2
@@ -291,7 +291,7 @@ spec:
                       [
                         "bash",
                         "-lc",
-                        "wget --tries=1 -T 2 -q -O- http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
+                        "curl -fsS --max-time 2 http://127.0.0.1:52365/api/local_raylet_healthz | grep -q success",
                       ]
                   periodSeconds: 5
                   timeoutSeconds: 2

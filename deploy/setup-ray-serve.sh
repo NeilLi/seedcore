@@ -73,6 +73,7 @@ NAMESPACE="${NAMESPACE:-seedcore-dev}"
 RAY_VERSION="${RAY_VERSION:-2.53.0}"
 RAY_IMAGE="${RAY_IMAGE:-seedcore:latest}"
 WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
+ENABLE_ML_SERVICE="${ENABLE_ML_SERVICE:-0}"
 RS_NAME="${RS_NAME:-seedcore-svc}"
 RAYSERVICE_FILE="${RAYSERVICE_FILE:-${SCRIPT_DIR}/rayservice.yaml}"
 STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-${SCRIPT_DIR}/ray-stable-svc.yaml}"
@@ -132,10 +133,22 @@ render_rayservice_manifest() {
   awk \
     -v ray_image="${RAY_IMAGE}" \
     -v ray_version="${RAY_VERSION}" \
-    -v worker_replicas="${WORKER_REPLICAS}" '
-    BEGIN { in_small_worker_group = 0 }
+    -v worker_replicas="${WORKER_REPLICAS}" \
+    -v enable_ml_service="${ENABLE_ML_SERVICE}" '
+    BEGIN { in_small_worker_group = 0; in_enable_ml_env = 0 }
     /^    rayVersion:[[:space:]]*/ {
       print "    rayVersion: \"" ray_version "\""
+      next
+    }
+    /^[[:space:]]*- name:[[:space:]]*ENABLE_ML_SERVICE[[:space:]]*$/ {
+      in_enable_ml_env = 1
+      print
+      next
+    }
+    in_enable_ml_env && /^[[:space:]]*value:[[:space:]]*/ {
+      match($0, /^[[:space:]]*/)
+      print substr($0, RSTART, RLENGTH) "value: \"" enable_ml_service "\""
+      in_enable_ml_env = 0
       next
     }
     /^([[:space:]]*)image:[[:space:]]*/ {

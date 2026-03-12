@@ -4,7 +4,6 @@
 # from the default path.
 
 # --- AI & NLP ---
-dspy-ai==2.4.9
 scikit-learn==1.4.2
 datasets==2.14.7
 fsspec==2023.10.0
