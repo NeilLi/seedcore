@@ -4,6 +4,23 @@ from seedcore.coordinator.core.plan_executor import PlanExecutor, PlanExecutionS
 from seedcore.models.task_payload import TaskPayload
 
 
+def test_plan_executor_dedupes_duplicate_dependencies():
+    async def organism_execute(_organ, _payload, _timeout_s, _cid):
+        return {"success": True}
+
+    executor = PlanExecutor(organism_execute=organism_execute)
+
+    plan = [
+        {"id": "a", "type": "action", "depends_on": []},
+        {"id": "b", "type": "action", "depends_on": ["a", "a", "a"]},
+    ]
+    normalized = executor.normalize_plan(plan)
+    graph_steps, _edges = executor._build_execution_graph(plan)
+
+    assert normalized[1]["depends_on"] == ["a"]
+    assert graph_steps["b"].depends_on == ["a"]
+
+
 @pytest.mark.asyncio
 async def test_plan_executor_executes_implicit_steps_in_order():
     calls = []

@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 EPS = 1e-12
+_ml_drift_404_logged = False
 
 
 def _clip01(x: float) -> float:
@@ -300,7 +301,18 @@ async def compute_drift_score(
                 return max(0.0, min(1.0, float(response.get("drift_score", 0.0))))
 
         except Exception as e:
-            logger.warning(f"ML drift computation failed: {e}")
+            global _ml_drift_404_logged
+            error_text = str(e)
+            if "404" in error_text and "/ml/drift/score" in error_text:
+                if not _ml_drift_404_logged:
+                    logger.warning(
+                        "ML drift endpoint unavailable (404). Falling back to local heuristic drift scoring."
+                    )
+                    _ml_drift_404_logged = True
+                else:
+                    logger.debug("ML drift endpoint still unavailable (404); using fallback drift.")
+            else:
+                logger.warning(f"ML drift computation failed: {e}")
 
     # 2. Fallback Heuristics (Local)
     return _compute_fallback_drift_score(task)

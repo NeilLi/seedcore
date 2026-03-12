@@ -252,6 +252,21 @@ def _clamp_timeout_s(x: float) -> float:
     return max(MIN_ORGAN_TIMEOUT_S, min(MAX_ORGAN_TIMEOUT_S, x))
 
 
+def _resolve_timeout_from_env(
+    env_name: str,
+    default: float,
+    *,
+    min_s: float,
+    max_s: float,
+) -> float:
+    raw = os.getenv(env_name, "").strip()
+    try:
+        value = float(raw) if raw else float(default)
+    except Exception:
+        value = float(default)
+    return max(min_s, min(max_s, value))
+
+
 async def _call_compute_drift_score(
     fn: Callable[..., Awaitable[float]],
     task_dict: Dict[str, Any],
@@ -394,22 +409,32 @@ async def _apply_cognitive_advisory_enrichment(
 
     client_timeout = getattr(exec_cfg.cognitive_client, "timeout", 15.0)
     try:
-        advisory_timeout = min(max(float(client_timeout), 5.0), 15.0)
+        client_timeout_s = max(0.5, float(client_timeout))
     except Exception:
-        advisory_timeout = 15.0
+        client_timeout_s = 15.0
+    advisory_timeout = min(
+        client_timeout_s,
+        _resolve_timeout_from_env(
+            "COORDINATOR_ADVISORY_TIMEOUT_S",
+            3.0,
+            min_s=0.5,
+            max_s=15.0,
+        ),
+    )
 
     try:
+        advisory_started = time.perf_counter()
         if hasattr(exec_cfg.cognitive_client, "advisory_async"):
-            advisory_res = await exec_cfg.cognitive_client.advisory_async(
-                task=task,
-                timeout=advisory_timeout,
+            advisory_call = exec_cfg.cognitive_client.advisory_async(
+                task=task, timeout=advisory_timeout
             )
         else:
-            advisory_res = await exec_cfg.cognitive_client.post(
+            advisory_call = exec_cfg.cognitive_client.post(
                 "/advisory",
                 json=task.model_dump(),
                 timeout=advisory_timeout,
             )
+        advisory_res = await asyncio.wait_for(advisory_call, timeout=advisory_timeout + 0.25)
 
         if not isinstance(advisory_res, dict) or not isinstance(
             advisory_res.get("advisory"), dict
@@ -417,17 +442,27 @@ async def _apply_cognitive_advisory_enrichment(
             return None
 
         advisory = advisory_res.get("advisory") or {}
+        advisory_latency_ms = (time.perf_counter() - advisory_started) * 1000.0
         logger.info(
             "[Coordinator] Applied cognitive advisory enrichment for task %s "
-            "(kind=%s, success=%s)",
+            "(kind=%s, success=%s, latency_ms=%.1f, timeout_s=%.2f)",
             ctx.task_id,
             advisory.get("kind"),
             advisory_res.get("success"),
+            advisory_latency_ms,
+            advisory_timeout,
         )
         return CoordinatorCognitiveReasoner.merge_advisory_into_task(
             task.model_dump(),
             advisory_res,
         )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[Coordinator] Cognitive advisory timed out for task %s after %.2fs",
+            ctx.task_id,
+            advisory_timeout,
+        )
+        return None
     except Exception as e:
         logger.warning(
             "[Coordinator] Cognitive advisory enrichment failed for task %s: %s",
@@ -993,16 +1028,32 @@ async def _handle_cognitive_path(
             payload_metadata.get("ocps") or payload_metadata.get("ocps_payload") or {}
         )
         planner_task = _build_stateless_cognitive_task(task)
+        planner_timeout = _resolve_timeout_from_env(
+            "COORDINATOR_PLANNER_TIMEOUT_S",
+            20.0,
+            min_s=2.0,
+            max_s=120.0,
+        )
 
         # 1) Ask cognitive service to refine / expand plan
         # Note: pkg_meta is embedded in proto_plan.metadata, no need to pass separately
-        plan_res = await config.cognitive_client.execute_async(
+        planner_started = time.perf_counter()
+        plan_call = config.cognitive_client.execute_async(
             agent_id="coordinator_service",
             cog_type=CognitiveType.TASK_PLANNING,
             decision_kind=decision_kind,
             task=planner_task,
+            timeout=planner_timeout,
             proto_plan=proto_plan_from_router or None,
             ocps=ocps_payload or None,
+        )
+        plan_res = await asyncio.wait_for(plan_call, timeout=planner_timeout + 0.5)
+        planner_latency_ms = (time.perf_counter() - planner_started) * 1000.0
+        logger.info(
+            "[Coordinator] Cognitive planner returned for task %s in %.1fms (timeout_s=%.2f)",
+            task.task_id,
+            planner_latency_ms,
+            planner_timeout,
         )
 
         # 2) Extract executable steps (before persistence)
@@ -1251,6 +1302,26 @@ async def _handle_cognitive_path(
             plan_status=plan_status,
         )
 
+    except asyncio.TimeoutError:
+        planner_timeout = _resolve_timeout_from_env(
+            "COORDINATOR_PLANNER_TIMEOUT_S",
+            20.0,
+            min_s=2.0,
+            max_s=120.0,
+        )
+        logger.error(
+            "[Coordinator] Cognitive planner timed out for task %s after %.2fs",
+            task.task_id,
+            planner_timeout,
+        )
+        return make_envelope(
+            task_id=task.task_id,
+            success=False,
+            error=f"cognitive planner timeout after {planner_timeout:.2f}s",
+            error_type="cognitive_timeout",
+            decision_kind=DecisionKind.ERROR.value,
+            path="coordinator_cognitive_path",
+        )
     except Exception as e:
         logger.error("[Coordinator] Cognitive Path failed: %s", e, exc_info=True)
         return make_envelope(
@@ -2362,7 +2433,7 @@ def _requires_planning(description: str, params: Dict[str, Any]) -> bool:
     Use Eventizer refined text (canonical_description) to ensure consistency.
     
     Multi-step indicators:
-    - Conjunction words (and, then, also, plus, after)
+    - Sequencing words (then, after, before, next, followed by)
     - Multiple tool calls already extracted
     - Multiple action verbs in description
     - Complex descriptions with multiple clauses
@@ -2381,15 +2452,14 @@ def _requires_planning(description: str, params: Dict[str, Any]) -> bool:
     # This ensures _requires_planning sees the same text as enrichment
     desc_lower = description.lower()
     
-    # Check for conjunction words (multi-step indicators)
-    CONJUNCTION_PATTERNS = [
-        r'\b(and|then|also|plus|after|before|next|followed by)\b',
-        r'\b(, and|, then|, also)\b',  # Comma-separated actions
-        r'\b(set|turn|change|adjust).*?(and|then|also).*?(set|turn|change|adjust)',  # Multiple actions
+    # Sequence markers are a strong planning signal. Plain "and" is not.
+    sequence_patterns = [
+        r"\b(then|after|before|next|followed by)\b",
+        r"\b(, then)\b",
     ]
-    
+
     import re
-    for pattern in CONJUNCTION_PATTERNS:
+    for pattern in sequence_patterns:
         if re.search(pattern, desc_lower):
             return True
     
@@ -2414,7 +2484,7 @@ def _requires_planning(description: str, params: Dict[str, Any]) -> bool:
         # Multiple numeric values might indicate multiple actions
         # But be careful - "72 degrees" is one value, not multiple actions
         # Only flag if we also have conjunction words
-        if any(re.search(pattern, desc_lower) for pattern in CONJUNCTION_PATTERNS[:2]):
+        if re.search(r"\b(and|also|plus|then|after|before|next|followed by)\b", desc_lower):
             return True
     
     return False

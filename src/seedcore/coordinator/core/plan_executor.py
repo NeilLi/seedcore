@@ -25,6 +25,17 @@ from seedcore.coordinator.core.condition_registry import (
 logger = ensure_serve_logger("seedcore.coordinator.core.plan_executor", level="DEBUG")
 
 
+def _dedupe_preserve_order(values: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
 class StepState(str, Enum):
     PENDING = "pending"
     READY = "ready"
@@ -108,7 +119,9 @@ class PlanExecutor:
                     {
                         "id": step_id,
                         "type": node.get("type") or "action",
-                        "depends_on": deps.get(step_id, []),
+                        "depends_on": _dedupe_preserve_order(
+                            [str(d) for d in deps.get(step_id, [])]
+                        ),
                     }
                 )
             return normalized
@@ -128,7 +141,9 @@ class PlanExecutor:
                     {
                         "id": str(step_id),
                         "type": step.get("type") or "action",
-                        "depends_on": depends_on,
+                        "depends_on": _dedupe_preserve_order(
+                            [str(d) for d in depends_on]
+                        ),
                     }
                 )
             return normalized_steps
@@ -173,7 +188,7 @@ class PlanExecutor:
                 steps[step_id] = ExecutionStep(
                     id=step_id,
                     raw=step,
-                    depends_on=[str(d) for d in depends_on],
+                    depends_on=_dedupe_preserve_order([str(d) for d in depends_on]),
                 )
             edges = [(d, s.id) for s in steps.values() for d in s.depends_on]
 
@@ -181,7 +196,8 @@ class PlanExecutor:
         if edges and steps:
             for from_id, to_id in edges:
                 if to_id in steps:
-                    steps[to_id].depends_on.append(from_id)
+                    if from_id not in steps[to_id].depends_on:
+                        steps[to_id].depends_on.append(from_id)
 
         return steps, edges
 

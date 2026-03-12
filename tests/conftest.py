@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 
 
 # ----------------------------------------------------------------------
@@ -77,22 +78,39 @@ def _safe_ray():
     
     import ray
 
-    # Only initialize real Ray if it's not already mocked
-    # Check if ray is a mock by seeing if it has __path__ attribute (package marker)
-    if hasattr(ray, '__path__') or not hasattr(ray, 'init'):
-        # Ray is mocked, skip initialization
-        yield
-        return
+    is_initialized = getattr(ray, "is_initialized", None)
+    init_fn = getattr(ray, "init", None)
+    shutdown_fn = getattr(ray, "shutdown", None)
 
-    if not ray.is_initialized():
-        ray.init(
-            local_mode=True,
-            ignore_reinit_error=True,
-            logging_level="ERROR",
-            include_dashboard=False,
-        )
+    try:
+        if callable(is_initialized) and callable(init_fn) and not is_initialized():
+            init_fn(
+                local_mode=True,
+                ignore_reinit_error=True,
+                logging_level="ERROR",
+                include_dashboard=False,
+            )
+    except Exception:
+        # Test suite should keep running even when Ray init is unavailable.
+        pass
 
     yield
 
-    if ray.is_initialized():
-        ray.shutdown()
+    # Always try to shut down at session end to avoid Ray atexit import-time errors.
+    try:
+        if callable(shutdown_fn):
+            shutdown_fn()
+    except Exception:
+        pass
+
+    # Ray registers its own atexit shutdown callback. In some environments this
+    # callback can fail during interpreter teardown due late import resolution.
+    # We explicitly unregister it after session shutdown to avoid noisy teardown.
+    try:
+        import ray._private.worker as ray_worker
+
+        atexit.unregister(ray_worker.shutdown)
+        if callable(shutdown_fn):
+            atexit.unregister(shutdown_fn)
+    except Exception:
+        pass

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import hashlib
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, List, Union
 from uuid import UUID
@@ -33,8 +34,11 @@ TASK_EMBED_BACKFILL_BATCH = int(os.getenv("TASK_EMBED_BACKFILL_BATCH", "250"))
 
 AGENT_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 LTM_EMBEDDER_ACTOR_NAME = os.getenv("TASK_EMBEDDER_ACTOR_NAME", "seedcore_ltm_embedder")
+LTM_EMBED_ACTOR_RETRY_S = float(os.getenv("TASK_EMBED_ACTOR_RETRY_S", "120"))
 
 VALID_TASK_EMBED_LABELS = frozenset({"task.primary", "task.output", "default"})
+_embedder_bootstrap_retry_after_s = 0.0
+_embedder_torch_missing_warned = False
 
 if TASK_EMBED_LABEL not in VALID_TASK_EMBED_LABELS:
     logger.warning(
@@ -83,6 +87,10 @@ def build_task_text(
 
 async def _get_embedder_handle():
     """Obtains the Ray Actor handle for the LTM Embedder."""
+    global _embedder_bootstrap_retry_after_s, _embedder_torch_missing_warned
+
+    if time.monotonic() < _embedder_bootstrap_retry_after_s:
+        return None
     if not ensure_ray_initialized():
         logger.warning("Ray not initialized; cannot obtain LTM embedder")
         return None
@@ -93,11 +101,35 @@ async def _get_embedder_handle():
     except ValueError:
         logger.debug("Creating LTMEmbedder actor '%s'", LTM_EMBEDDER_ACTOR_NAME)
         # In production, usually the bootstrap script starts this, but we provide a fallback
-        from seedcore.graph.ltm_embeddings import LTMEmbedder
+        try:
+            from seedcore.graph.ltm_embeddings import LTMEmbedder
+        except ModuleNotFoundError as exc:
+            if exc.name == "torch":
+                if not _embedder_torch_missing_warned:
+                    logger.warning(
+                        "Skipping LTM embedder bootstrap: optional dependency 'torch' is not installed. "
+                        "Embedding will continue via async fallback once runtime includes torch."
+                    )
+                    _embedder_torch_missing_warned = True
+                _embedder_bootstrap_retry_after_s = time.monotonic() + max(
+                    5.0, LTM_EMBED_ACTOR_RETRY_S
+                )
+                return None
+            raise
+        except Exception:
+            _embedder_bootstrap_retry_after_s = time.monotonic() + max(
+                5.0, LTM_EMBED_ACTOR_RETRY_S
+            )
+            raise
 
         return LTMEmbedder.options(
             name=LTM_EMBEDDER_ACTOR_NAME, namespace=AGENT_NAMESPACE, lifetime="detached"
         ).remote()
+    except Exception:
+        _embedder_bootstrap_retry_after_s = time.monotonic() + max(
+            5.0, LTM_EMBED_ACTOR_RETRY_S
+        )
+        raise
 
 
 # --- The "Coordinator" Direct Execution Function ---
