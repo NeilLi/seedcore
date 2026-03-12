@@ -66,42 +66,21 @@ dependencies = [
     # See docker/Dockerfile.api and docker/Dockerfile for container installation
     
     # Data Handling
+    "numpy==1.26.4",
     "pandas==2.2.2",
     "pyarrow==16.1.0",
-    # Align these two specifically for dspy-ai 2.4.9 compatibility
-    "datasets==2.14.7",
-    "fsspec==2023.10.0",
     
-    # Core ML / DL side deps
+    # Runtime Platform
     # Ray Serve routing stays at serve.run() / app config on 2.5x+.
     "ray==2.53.0",
-    "dgl>=2.1",
-    "numpy",
-    "torchdata==0.7.1",
-    
-    # AI & NLP
-    "dspy-ai==2.4.9",
-    "scikit-learn==1.4.2",
-    # transformers>=4.49.0 required for Gemma 3 architecture support (gemma3_text)
-    # tokenizers>=0.21.0 required by transformers>=4.49.0 (Gemma 3 compatibility)
-    "transformers>=4.49.0,<5.0",
-    "sentence-transformers==2.7.0",
-    "tokenizers>=0.21.0",
-    "safetensors==0.4.3",
-    "peft>=0.14.0",  # Required for LoRA adapters and FunctionGemma intent compiler (upgraded for Gemma 3 compatibility)
     "openai>=1.30.0",
     "google-generativeai>=0.8.0",  # Google Gemini API client for embeddings and generative AI
-    # "bitsandbytes>=0.43.0",  # Optional: Only needed for 4-bit quantization on CUDA GPUs
     
     # Privacy & Security
     "presidio-analyzer>=2.2.355",
     "presidio-anonymizer>=2.2.355",
     "pyahocorasick>=2.1.0",
-    
-    # XGBoost
-    "xgboost>=2.0.3",
-    "xgboost-ray>=0.1.19",
-    
+
     # Model Context Protocol (MCP)
     # Note: mcp-server is a separate package with different versioning (only 0.1.4 available)
     # fastmcp is a module within mcp, not a separate package (import: from mcp.server.fastmcp import FastMCP)
@@ -111,6 +90,40 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local-ai = [
+    "dspy-ai==2.4.9",
+    # transformers>=4.49.0 required for Gemma 3 architecture support (gemma3_text)
+    # tokenizers>=0.21.0 required by transformers>=4.49.0 (Gemma 3 compatibility)
+    "transformers>=4.49.0,<5.0",
+    "sentence-transformers==2.7.0",
+    "tokenizers>=0.21.0",
+    "safetensors==0.4.3",
+    "peft>=0.14.0",
+]
+ml = [
+    "datasets==2.14.7",
+    "fsspec==2023.10.0",
+    "scikit-learn==1.4.2",
+    "dgl>=2.1",
+    "torchdata==0.7.1",
+    "xgboost>=2.0.3",
+    "xgboost-ray>=0.1.19",
+]
+full = [
+    "dspy-ai==2.4.9",
+    "transformers>=4.49.0,<5.0",
+    "sentence-transformers==2.7.0",
+    "tokenizers>=0.21.0",
+    "safetensors==0.4.3",
+    "peft>=0.14.0",
+    "datasets==2.14.7",
+    "fsspec==2023.10.0",
+    "scikit-learn==1.4.2",
+    "dgl>=2.1",
+    "torchdata==0.7.1",
+    "xgboost>=2.0.3",
+    "xgboost-ray>=0.1.19",
+]
 dev = ["pytest>=8.2", "pytest-asyncio>=0.23.7", "black", "ruff", "mypy", "ipykernel"]
 
 [project.urls]

@@ -7,16 +7,17 @@ set -e
 
 # Resolve script directory for robust relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NAMESPACE="${NAMESPACE:-seedcore-dev}"
 
 echo "🚀 Deploying data stores to Kubernetes cluster..."
 
 # Create namespace if it doesn't exist
-kubectl create namespace seedcore-dev --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
 # Deploy PostgreSQL with pgvector (PgBouncer disabled)
 echo "📦 Deploying PostgreSQL with pgvector..."
 helm upgrade --install postgresql "${SCRIPT_DIR}/helm/postgresql" \
-  --namespace seedcore-dev \
+  --namespace "${NAMESPACE}" \
   --set pgbouncer.enabled=false \
   --wait \
   --timeout 20m \
@@ -25,7 +26,7 @@ helm upgrade --install postgresql "${SCRIPT_DIR}/helm/postgresql" \
 # Deploy MySQL
 echo "📦 Deploying MySQL..."
 helm upgrade --install mysql "${SCRIPT_DIR}/helm/mysql" \
-  --namespace seedcore-dev \
+  --namespace "${NAMESPACE}" \
   --wait \
   --timeout 10m
 
@@ -36,7 +37,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis
-  namespace: seedcore-dev
+  namespace: ${NAMESPACE}
 spec:
   replicas: 1
   selector:
@@ -68,7 +69,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: redis
-  namespace: seedcore-dev
+  namespace: ${NAMESPACE}
 spec:
   selector:
     app: redis
@@ -85,7 +86,7 @@ if ! helm repo list | grep -q neo4j; then
   helm repo update
 fi
 helm upgrade --install neo4j neo4j/neo4j \
-  --namespace seedcore-dev \
+  --namespace "${NAMESPACE}" \
   --wait \
   --timeout 10m \
   --set neo4j.name=neo4j \
@@ -114,15 +115,15 @@ helm upgrade --install neo4j neo4j/neo4j \
 echo "✅ All data stores and RAGFlow deployed successfully!"
 echo ""
 echo "🔍 Checking deployment status..."
-kubectl get pods -n seedcore-dev
+kubectl get pods -n "${NAMESPACE}"
 
 echo ""
 echo "🌐 Data store endpoints:"
-echo "  PostgreSQL: postgresql.seedcore-dev.svc.cluster.local:5432"
-echo "  MySQL: mysql.seedcore-dev.svc.cluster.local:3306"
-echo "  Redis: redis.seedcore-dev.svc.cluster.local:6379"
-echo "  Neo4j: neo4j.seedcore-dev.svc.cluster.local:7687"
-echo "  RAGFlow: ragflow.seedcore-dev.svc.cluster.local:8080"
+echo "  PostgreSQL: postgresql.${NAMESPACE}.svc.cluster.local:5432"
+echo "  MySQL: mysql.${NAMESPACE}.svc.cluster.local:3306"
+echo "  Redis: redis.${NAMESPACE}.svc.cluster.local:6379"
+echo "  Neo4j: neo4j.${NAMESPACE}.svc.cluster.local:7687"
+echo "  RAGFlow: ragflow.${NAMESPACE}.svc.cluster.local:8080"
 echo ""
 echo "🔑 Default credentials:"
 echo "  PostgreSQL: postgres/password"

@@ -1,0 +1,55 @@
+# --- Core API & Async ---
+fastapi==0.111.0
+uvicorn[standard]>=0.31.1,<0.33.0
+starlette==0.37.2
+pydantic>=2.11.0
+pydantic-settings==2.6.0
+sse-starlette==2.1.0
+
+# --- Database Drivers ---
+asyncpg==0.29.0
+psycopg[binary]==3.1.18
+psycopg2-binary==2.9.9
+pgvector==0.2.5
+sqlalchemy[asyncio]==2.0.30
+redis==5.0.4
+neo4j-driver==5.20.0
+aiomysql==0.2.0
+pymysql>=1.1
+
+# --- HTTP & Networking ---
+aiohttp==3.9.5
+httpx>=0.27.1,<0.28.0
+grpcio==1.63.0
+protobuf==4.25.3
+pyOpenSSL>=24.1.0
+cryptography>=42.0.5
+confluent-kafka>=2.0.0
+
+# --- Utilities ---
+pyyaml==6.0.1
+tqdm==4.66.4
+prometheus_client==0.20.0
+aiorwlock==1.4.0
+aiofiles>=23.2.0
+jsonschema>=4.22.0
+wasmtime==41.0.0
+
+# --- Data Handling ---
+numpy==1.26.4
+pandas==2.2.2
+pyarrow==16.1.0
+
+# --- Runtime Platform ---
+ray==2.53.0
+openai>=1.30.0
+google-generativeai>=0.8.0
+
+# --- Privacy & Security ---
+presidio-analyzer>=2.2.355
+presidio-anonymizer>=2.2.355
+pyahocorasick>=2.1.0
+
+# --- Model Context Protocol (MCP) ---
+mcp==1.24.0
+mcp-server==0.1.4

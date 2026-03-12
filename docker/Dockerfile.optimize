@@ -8,6 +8,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ARG BUILD_DATE
 ARG VCS_REF
+ARG ENABLE_ML=0
 LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.description="SeedCore Serve on Ray (Py3.11, native arm64/amd64)" \
       org.opencontainers.image.version="2.53.0-py311" \
@@ -73,56 +74,29 @@ for s in paths:
             shutil.rmtree(p, ignore_errors=True)
 PY
 
-# ---- Core Numerical Stack ----
-# Pin NumPy < 2.0.0 (good compatibility for Py3.11 + Torch 2.x)
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install "numpy==1.26.4"
-
-# ---- Torch & DGL (CPU Optimized) ----
-# NOTE:
-# - torch cpu wheels exist for linux/amd64 and linux/arm64
-# - Using torch==2.2.2 (without +cpu suffix) as the CPU index provides this version
-# - If you ever hit issues on arm64, consider bumping torch version accordingly.
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install \
-      torch==2.2.2 \
-      --index-url https://download.pytorch.org/whl/cpu
-
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install torchdata==0.7.1
-
-# Install SciPy explicitly (DGL dependency, not available in DGL wheel repo)
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install "scipy>=1.10,<2.0"
-
-# DGL wheels are platform-specific. With native arm64/amd64 base, pip will
-# automatically select the correct wheel for the target platform.
-# Note: Removed --no-index to allow pip to fetch SciPy and other deps from PyPI
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install \
-      -f https://data.dgl.ai/wheels/torch-2.2/repo.html \
-      dgl==2.2.1
-
-# ---- Validation: Verify DGL imports (GraphBolt can vary by arch) ----
-RUN python - <<'PY'
-import dgl
-print("DGL version:", dgl.__version__)
-try:
-    import inspect, pathlib
-    gb_dir = pathlib.Path(inspect.getfile(dgl)).parent / "graphbolt"
-    if gb_dir.exists():
-        libs = sorted([p.name for p in gb_dir.glob("libgraphbolt_pytorch_*")])
-        print("GraphBolt artifacts:", libs)
-    else:
-        print("No graphbolt directory found (may be OK depending on wheel/arch).")
-except Exception as e:
-    print("GraphBolt check warning:", e)
-PY
-
 # ---- Application Requirements ----
-COPY docker/requirements.txt /tmp/requirements.txt
+COPY docker/requirements.base.txt /tmp/requirements.base.txt
+COPY docker/requirements.optional-ml.txt /tmp/requirements.optional-ml.txt
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install -r /tmp/requirements.txt
+    python -m pip install -r /tmp/requirements.base.txt
+
+# ---- Optional ML / local-AI stack ----
+# Keep the default image lean. Opt into the CPU-only ML layer with ENABLE_ML=1.
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    if [[ "${ENABLE_ML}" == "1" ]]; then \
+      python -m pip install \
+        torch==2.2.2 \
+        --index-url https://download.pytorch.org/whl/cpu && \
+      python -m pip install torchdata==0.7.1 && \
+      python -m pip install "scipy>=1.10,<2.0" && \
+      python -m pip install \
+        -f https://data.dgl.ai/wheels/torch-2.2/repo.html \
+        dgl==2.2.1 && \
+      python -m pip install -r /tmp/requirements.optional-ml.txt && \
+      python -c 'import dgl, inspect, pathlib; print("DGL version:", dgl.__version__); gb_dir = pathlib.Path(inspect.getfile(dgl)).parent / "graphbolt"; print("GraphBolt artifacts:", sorted(p.name for p in gb_dir.glob("libgraphbolt_pytorch_*")) if gb_dir.exists() else [])' ; \
+    else \
+      echo "Skipping optional ML/local-AI dependency layer (ENABLE_ML=${ENABLE_ML})"; \
+    fi
 
 # ---- Application Code ----
 USER root
@@ -138,11 +112,14 @@ COPY --chown=ray:ray config/ ./config/
 USER ray
 
 # ---- Runtime Environment ----
+# DGL_GRAPHBOLT_SKIP stays on by default because the lean image does not ship
+# the graph runtime unless ENABLE_ML=1.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app:/app/src \
     PATH="/home/ray/.local/bin:${PATH}" \
     RAY_USAGE_STATS_ENABLED=0 \
+    SEEDCORE_OPTIONAL_ML=${ENABLE_ML} \
     DGL_GRAPHBOLT_SKIP=1 \
     RAY_NAMESPACE="seedcore-dev"
 

@@ -3,14 +3,19 @@ set -e
 
 # Resolve script directory for robust relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NAMESPACE="${NAMESPACE:-seedcore-dev}"
+SERVICE_NAME="${SERVICE_NAME:-seedcore-api}"
+INGRESS_HOST="${INGRESS_HOST:-localhost}"
+ORCHESTRATOR_HOST="${ORCHESTRATOR_HOST:-orchestrator.localhost}"
+RAY_STABLE_SERVICE_NAME="${RAY_STABLE_SERVICE_NAME:-seedcore-svc-stable-svc}"
 
 echo "🚀 Deploying SeedCore Ingress Routing Configuration..."
 
 # Set environment variables for the ingress configuration
-export NAMESPACE="seedcore-dev"
-export SERVICE_NAME="seedcore-api"
-export INGRESS_HOST="localhost"  # For Kind cluster
-export ORCHESTRATOR_HOST="orchestrator.localhost"  # For Kind cluster
+export NAMESPACE
+export SERVICE_NAME
+export INGRESS_HOST
+export ORCHESTRATOR_HOST
 
 echo "📋 Configuration:"
 echo "  Namespace: $NAMESPACE"
@@ -34,8 +39,8 @@ if ! kubectl get service $SERVICE_NAME -n $NAMESPACE >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! kubectl get service seedcore-svc-stable-svc -n $NAMESPACE >/dev/null 2>&1; then
-    echo "❌ Error: Service seedcore-svc-stable-svc not found in namespace $NAMESPACE"
+if ! kubectl get service "$RAY_STABLE_SERVICE_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
+    echo "❌ Error: Service $RAY_STABLE_SERVICE_NAME not found in namespace $NAMESPACE"
     exit 1
 fi
 
@@ -69,4 +74,4 @@ echo "  Pipeline: http://$INGRESS_HOST/pipeline/create-task"
 echo ""
 echo "📝 To set up port-forwarding for Kind cluster:"
 echo "  kubectl port-forward -n $NAMESPACE service/$SERVICE_NAME 8002:8002"
-echo "  kubectl port-forward -n $NAMESPACE service/seedcore-svc-stable-svc 8000:8000"
+echo "  kubectl port-forward -n $NAMESPACE service/$RAY_STABLE_SERVICE_NAME 8000:8000"

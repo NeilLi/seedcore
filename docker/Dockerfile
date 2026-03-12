@@ -6,6 +6,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ARG BUILD_DATE
 ARG VCS_REF
+ARG ENABLE_ML=0
 LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.description="SeedCore Serve on Ray (Py3.11)" \
       org.opencontainers.image.version="2.53.0-py311" \
@@ -23,7 +24,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       build-essential curl git ca-certificates \
       libglib2.0-0 libsm6 libxrender1 libxext6 \
       # Useful for debugging network issues inside pods
-      iputils-ping dnsutils
+      iputils-ping dnsutils \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install OPA (Open Policy Agent) binary for PKG WASM compilation
 RUN curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64 \
@@ -51,45 +53,30 @@ for s in paths:
             shutil.rmtree(p, ignore_errors=True)
 PY
 
-# ---- Core Numerical Stack ----
-# Pin NumPy < 2.0.0 (1.26.4 is the gold standard for Py3.11 + Torch 2.x compatibility)
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install "numpy==1.26.4"
-
-# ---- Torch & DGL (CPU Optimized) ----
-# 1. Install PyTorch CPU first from official index
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install \
-      torch==2.2.2+cpu \
-      --index-url https://download.pytorch.org/whl/cpu
-
-# 2. Install torchdata and DGL
-# Note: torchdata 0.7.1 is compatible with torch 2.2.x
-RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install torchdata==0.7.1 && \
-    python -m pip install --no-index \
-      -f https://data.dgl.ai/wheels/torch-2.2/repo.html \
-      dgl==2.2.1
-
-# 3. Validation: Verify DGL GraphBolt libraries loaded correctly
-RUN python - <<'PY'
-import dgl, inspect, pathlib, sys
-try:
-    gb = (pathlib.Path(inspect.getfile(dgl)).parent / "graphbolt").glob("libgraphbolt_pytorch_*.so")
-    libs = [p.name for p in gb]
-    print(f"Found GraphBolt libs: {libs}")
-    if not libs:
-        print("Error: Missing GraphBolt .so")
-        sys.exit(1)
-except Exception as e:
-    print(f"Validation failed: {e}")
-    sys.exit(1)
-PY
-
 # ---- Application Requirements ----
-COPY docker/requirements.txt /tmp/requirements.txt
+COPY docker/requirements.base.txt /tmp/requirements.base.txt
+COPY docker/requirements.optional-ml.txt /tmp/requirements.optional-ml.txt
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
-    python -m pip install -r /tmp/requirements.txt
+    python -m pip install -r /tmp/requirements.base.txt
+
+# ---- Optional ML / local-AI stack ----
+# Default builds stay lean and CPU-only. Set ENABLE_ML=1 to include the local
+# ML runtime (Torch/DGL/Transformers/XGBoost); CUDA-specific packages remain out
+# of scope unless you create a dedicated GPU image.
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=1000 \
+    if [[ "${ENABLE_ML}" == "1" ]]; then \
+      python -m pip install \
+        torch==2.2.2+cpu \
+        --index-url https://download.pytorch.org/whl/cpu && \
+      python -m pip install torchdata==0.7.1 && \
+      python -m pip install --no-index \
+        -f https://data.dgl.ai/wheels/torch-2.2/repo.html \
+        dgl==2.2.1 && \
+      python -m pip install -r /tmp/requirements.optional-ml.txt && \
+      python -c 'import dgl, inspect, pathlib, sys; libs = [p.name for p in (pathlib.Path(inspect.getfile(dgl)).parent / "graphbolt").glob("libgraphbolt_pytorch_*.so")]; print(f"Found GraphBolt libs: {libs}"); sys.exit(0 if libs else 1)' ; \
+    else \
+      echo "Skipping optional ML/local-AI dependency layer (ENABLE_ML=${ENABLE_ML})"; \
+    fi
 
 # ---- Application Code ----
 # Switch to root to copy files (preserves permissions), then switch back
@@ -108,14 +95,15 @@ COPY --chown=ray:ray config/ ./config/
 USER ray
 
 # ---- Runtime Environment ----
+# DGL_GRAPHBOLT_SKIP stays on by default because the lean image does not ship
+# the graph runtime unless ENABLE_ML=1.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app:/app/src \
     PATH="/home/ray/.local/bin:${PATH}" \
     RAY_USAGE_STATS_ENABLED=0 \
-    # Skip GraphBolt Defensively (Enable via K8s env var if needed for GNNs)
+    SEEDCORE_OPTIONAL_ML=${ENABLE_ML} \
     DGL_GRAPHBOLT_SKIP=1 \
-    # Standardize namespaces for our new bootstrap scripts
     RAY_NAMESPACE="seedcore-dev"
 
 # Ray Dashboard, Serve HTTP, Metrics
