@@ -54,6 +54,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_task_proto_plan_updated_at ON task_proto_plan;
 CREATE TRIGGER trigger_update_task_proto_plan_updated_at
     BEFORE UPDATE ON task_proto_plan
     FOR EACH ROW
