@@ -2784,7 +2784,17 @@ def _payload_has_substantive_summary_content(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    for key in ("summary", "answer", "response", "message", "output", "text"):
+    for key in (
+        "summary",
+        "answer",
+        "response",
+        "message",
+        "output",
+        "text",
+        "thought",
+        "report",
+        "explanation",
+    ):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return True
@@ -2818,7 +2828,7 @@ def _apply_operational_summary_postcondition(
         return result
     if not isinstance(result, dict) or not result.get("success"):
         return result
-    if _payload_has_substantive_summary_content(result.get("payload")):
+    if _payload_has_substantive_summary_content(result):
         return result
 
     logger.warning(

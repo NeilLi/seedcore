@@ -748,3 +748,145 @@ class TestExecuteTask:
         assert result["meta"]["postcondition_violations"] == [
             "operational_summary_missing_content"
         ]
+
+    async def test_operational_summary_string_result_counts_as_substantive(self):
+        task = TaskPayload(
+            task_id="task-operational-summary-string",
+            type="query",
+            description="Summarize system health and queue status",
+        )
+
+        route_config = RouteConfig(
+            surprise_computer=FakeSurpriseComputer(return_value={
+                "S": 0.1,
+                "x": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
+                "decision": "fast",
+                "decision_kind": "fast",
+                "ocps": {"S_t": 0.0, "h": 1.0, "flag_on": False},
+            }),
+            ocps_valve=NeuralCUSUMValve(
+                expected_baseline=0.1,
+                min_detectable_change=0.2,
+                threshold=2.5,
+                sigma=0.15,
+            ),
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={}),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        organism_execute = AsyncMock(return_value={
+            "task_id": "task-operational-summary-string",
+            "success": True,
+            "result": (
+                "SeedCore API verification target: http://127.0.0.1:8002\n"
+                "Summary: 15 passed, 1 failed"
+            ),
+            "error": None,
+            "error_type": None,
+            "retry": False,
+            "meta": {"exec": {"attempt": 1}},
+            "path": "agent",
+        })
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.0),
+            organism_execute=organism_execute,
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["success"] is True
+        assert result["error_type"] is None
+        assert "postcondition_violations" not in result.get("meta", {})
+
+    async def test_operational_summary_general_query_thought_counts_as_substantive(self):
+        task = TaskPayload(
+            task_id="task-operational-summary-thought",
+            type="query",
+            description="Summarize system health and queue status",
+        )
+
+        route_config = RouteConfig(
+            surprise_computer=FakeSurpriseComputer(return_value={
+                "S": 0.1,
+                "x": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
+                "decision": "fast",
+                "decision_kind": "fast",
+                "ocps": {"S_t": 0.0, "h": 1.0, "flag_on": False},
+            }),
+            ocps_valve=NeuralCUSUMValve(
+                expected_baseline=0.1,
+                min_detectable_change=0.2,
+                threshold=2.5,
+                sigma=0.15,
+            ),
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={}),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        organism_execute = AsyncMock(return_value={
+            "task_id": "task-operational-summary-thought",
+            "success": True,
+            "payload": {
+                "agent_id": "utility_organ_generalist_0",
+                "results": [
+                    {
+                        "tool": "general_query",
+                        "ok": True,
+                        "output": {
+                            "success": True,
+                            "query_type": "general_query",
+                            "query": "Summarize system health and queue status",
+                            "plan": [],
+                            "thought": "SeedCore API verification target: http://127.0.0.1:8002\nSummary: 15 passed, 1 failed",
+                            "meta": {},
+                        },
+                    }
+                ],
+                "errors": [],
+                "quality": 1.0,
+                "salience": 0.0,
+            },
+            "error": None,
+            "error_type": None,
+            "retry": False,
+            "meta": {"exec": {"attempt": 1}},
+            "path": "agent",
+        })
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.0),
+            organism_execute=organism_execute,
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["success"] is True
+        assert result["error_type"] is None
+        assert "postcondition_violations" not in result.get("meta", {})
