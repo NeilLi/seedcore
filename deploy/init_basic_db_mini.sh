@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# SeedCore Database Initialization (Kubernetes) - Mini Version
-# Portable: can be run from ANY directory
-# Only initializes PostgreSQL (no MySQL or Neo4j)
+# SeedCore PostgreSQL Preflight (Kubernetes) - Mini Version
+# Portable: can be run from any directory.
+# Full Postgres schema is owned by init_full_db.sh.
 
 set -Eeuo pipefail
 
 ############################
 # Config & CLI
 ############################
-NAMESPACE="${1:-seedcore-dev}"
+NAMESPACE="${1:-${NAMESPACE:-seedcore-dev}}"
 
 # Allow overriding credentials via environment variables
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
@@ -47,33 +47,9 @@ fi
 command -v kubectl >/dev/null 2>&1 || die "kubectl is not installed or not in PATH."
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || die "Namespace '$NAMESPACE' does not exist."
 
-############################
-# Locate repo root so paths work from anywhere
-############################
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT/docker/setup" ]; then
-  # Walk upward until we find docker/setup with our init files
-  try="$SCRIPT_DIR"
-  while [ "$try" != "/" ]; do
-    if [ -e "$try/docker/setup/init_pgvector.sql" ]; then
-      REPO_ROOT="$try"; break
-    fi
-    try="$(dirname "$try")"
-  done
-fi
-[ -z "$REPO_ROOT" ] && { echo "❌ Could not locate repo root containing docker/setup"; exit 1; }
-
-PG_SQL="$REPO_ROOT/docker/setup/init_pgvector.sql"
-echo "📂 Repo root: $REPO_ROOT"
-echo "📁 Setup dir: $REPO_ROOT/docker/setup"
-
-[[ -r "$PG_SQL" ]] || die "Missing: $PG_SQL"
-
-log "🔧 Initializing SeedCore PostgreSQL database in Kubernetes..."
+log "🔧 Preflighting SeedCore PostgreSQL in Kubernetes..."
 log "📋 Namespace: $NAMESPACE"
-log "📂 Repo root: $REPO_ROOT"
-log "📁 Setup dir: $REPO_ROOT/docker/setup"
+log "📦 Bootstrap mode: readiness check only; full schema lives in init_full_db.sh"
 
 ############################
 # K8s helpers
@@ -94,50 +70,35 @@ first_pod_name() {
 ############################
 # Initializers
 ############################
-init_postgresql() {
-  log "🐘 Initializing PostgreSQL..."
+ensure_postgresql_ready() {
+  log "🐘 Checking PostgreSQL readiness..."
   wait_for_pods_ready "$PG_SELECTOR"
   local pod; pod="$(first_pod_name "$PG_SELECTOR")"
   [[ -n "$pod" ]] || die "PostgreSQL pod not found."
 
-  # Create the database if it doesn't exist
-  log "🔧 Creating database: $POSTGRES_DB"
-  kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE $POSTGRES_DB;" 2>/dev/null || log "Database $POSTGRES_DB may already exist"
-
-  log "📝 Copying SQL to pod: $pod"
-  kubectl cp "$PG_SQL" "$NAMESPACE/$pod:/tmp/init_pgvector.sql" || die "Failed to copy SQL file"
-
-  log "🚀 Running SQL in database: $POSTGRES_DB"
-  if ! kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/init_pgvector.sql; then
-    log "❌ PostgreSQL initialization failed. Checking database connection..."
-    kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -l || true
-    die "PostgreSQL initialization failed"
+  if ! kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d postgres -c "SELECT 1;" >/dev/null; then
+    log "❌ PostgreSQL readiness check failed. Checking database connection..."
+    kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -l 2>&1 || true
+    die "PostgreSQL is reachable but not ready for migrations"
   fi
 
-  log "✅ PostgreSQL initialized successfully."
+  log "✅ PostgreSQL is ready. Full schema will be applied by init_full_db.sh."
 }
 
 ############################
 # Verification
 ############################
 verify_databases() {
-  log "🔍 Verifying database initialization..."
+  log "🔍 Verifying PostgreSQL readiness..."
 
-  # PostgreSQL
   log "🐘 Checking PostgreSQL..."
   local pg_pod; pg_pod="$(first_pod_name "$PG_SELECTOR")"
   if [[ -n "$pg_pod" ]]; then
-    local result
-    result=$(kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM holons;" 2>&1)
-    if [[ $? -eq 0 ]] && [[ -n "$result" ]]; then
-      local count=$(echo "$result" | tr -d ' ')
-      log "✅ PostgreSQL: holons table exists (count: $count)"
+    if kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      log "✅ PostgreSQL: ready for full migration step"
     else
-      log "❌ PostgreSQL: holons table missing or query failed"
-      log "Debug: Checking if database exists..."
+      log "❌ PostgreSQL: readiness query failed"
       kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -l 2>&1 || true
-      log "Debug: Checking if holons table exists..."
-      kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt" 2>&1 || true
     fi
   fi
 }
@@ -146,10 +107,10 @@ verify_databases() {
 # Main
 ############################
 main() {
-  log "🚀 Starting SeedCore PostgreSQL database initialization..."
-  init_postgresql
+  log "🚀 Starting SeedCore PostgreSQL preflight..."
+  ensure_postgresql_ready
   verify_databases
-  log "🎉 PostgreSQL database initialization completed!"
+  log "🎉 PostgreSQL preflight completed!"
 }
 
 main

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# SeedCore Database Initialization (Kubernetes)
-# Portable: can be run from ANY directory
+# SeedCore Auxiliary Database Initialization (Kubernetes)
+# Portable: can be run from any directory.
+# Postgres schema is owned by init_full_db.sh; this script only preflights
+# Postgres readiness and bootstraps auxiliary stores.
 
 set -Eeuo pipefail
 
 ############################
 # Config & CLI
 ############################
-NAMESPACE="${1:-seedcore-dev}"
+NAMESPACE="${1:-${NAMESPACE:-seedcore-dev}}"
 
 # Allow overriding credentials via environment variables
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
@@ -57,39 +59,9 @@ fi
 command -v kubectl >/dev/null 2>&1 || die "kubectl is not installed or not in PATH."
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || die "Namespace '$NAMESPACE' does not exist."
 
-############################
-# Locate repo root so paths work from anywhere
-############################
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT/docker/setup" ]; then
-  # Walk upward until we find docker/setup with our init files
-  try="$SCRIPT_DIR"
-  while [ "$try" != "/" ]; do
-    if [ -e "$try/docker/setup/init_pgvector.sql" ] && \
-       [ -e "$try/docker/setup/init_mysql.sql" ] && \
-       [ -e "$try/docker/setup/init_neo4j.cypher" ]; then
-      REPO_ROOT="$try"; break
-    fi
-    try="$(dirname "$try")"
-  done
-fi
-[ -z "$REPO_ROOT" ] && { echo "❌ Could not locate repo root containing docker/setup"; exit 1; }
-
-PG_SQL="$REPO_ROOT/docker/setup/init_pgvector.sql"
-MYSQL_SQL="$REPO_ROOT/docker/setup/init_mysql.sql"
-NEO4J_CQL="$REPO_ROOT/docker/setup/init_neo4j.cypher"
-echo "📂 Repo root: $REPO_ROOT"
-echo "📁 Setup dir: $REPO_ROOT/docker/setup"
-
-[[ -r "$PG_SQL"    ]] || die "Missing: $PG_SQL"
-[[ -r "$MYSQL_SQL" ]] || die "Missing: $MYSQL_SQL"
-[[ -r "$NEO4J_CQL" ]] || die "Missing: $NEO4J_CQL"
-
-log "🔧 Initializing SeedCore databases in Kubernetes..."
+log "🔧 Initializing SeedCore auxiliary databases in Kubernetes..."
 log "📋 Namespace: $NAMESPACE"
-log "📂 Repo root: $REPO_ROOT"
-log "📁 Setup dir: $REPO_ROOT/docker/setup"
+log "📦 Bootstrap mode: preflight Postgres + inline MySQL/Neo4j bootstrap"
 
 ############################
 # K8s helpers
@@ -110,27 +82,19 @@ first_pod_name() {
 ############################
 # Initializers
 ############################
-init_postgresql() {
-  log "🐘 Initializing PostgreSQL..."
+ensure_postgresql_ready() {
+  log "🐘 Checking PostgreSQL readiness..."
   wait_for_pods_ready "$PG_SELECTOR"
   local pod; pod="$(first_pod_name "$PG_SELECTOR")"
   [[ -n "$pod" ]] || die "PostgreSQL pod not found."
 
-  # Create the database if it doesn't exist
-  log "🔧 Creating database: $POSTGRES_DB"
-  kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE $POSTGRES_DB;" 2>/dev/null || log "Database $POSTGRES_DB may already exist"
-
-  log "📝 Copying SQL to pod: $pod"
-  kubectl cp "$PG_SQL" "$NAMESPACE/$pod:/tmp/init_pgvector.sql" || die "Failed to copy SQL file"
-
-  log "🚀 Running SQL in database: $POSTGRES_DB"
-  if ! kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/init_pgvector.sql; then
-    log "❌ PostgreSQL initialization failed. Checking database connection..."
-    kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -l || true
-    die "PostgreSQL initialization failed"
+  if ! kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -d postgres -c "SELECT 1;" >/dev/null; then
+    log "❌ PostgreSQL readiness check failed. Checking database connection..."
+    kubectl exec -n "$NAMESPACE" "$pod" -- psql -U "$POSTGRES_USER" -l 2>&1 || true
+    die "PostgreSQL is reachable but not ready for migrations"
   fi
 
-  log "✅ PostgreSQL initialized successfully."
+  log "✅ PostgreSQL is ready. Full schema will be applied by init_full_db.sh."
 }
 
 init_mysql() {
@@ -139,14 +103,21 @@ init_mysql() {
   local pod; pod="$(first_pod_name "$MYSQL_SELECTOR")"
   [[ -n "$pod" ]] || die "MySQL pod not found."
 
-  log "📝 Copying SQL to pod: $pod"
-  kubectl cp "$MYSQL_SQL" "$NAMESPACE/$pod:/tmp/init_mysql.sql"
+  log "🚀 Running inline MySQL bootstrap..."
+  kubectl exec -i -n "$NAMESPACE" "$pod" -- sh -c \
+    "mysql -u '$MYSQL_ROOT_USER' -p'$MYSQL_ROOT_PASSWORD'" <<'SQL'
+CREATE DATABASE IF NOT EXISTS seedcore CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE seedcore;
 
-  log "🚀 Running SQL (drop & recreate for idempotency)..."
-  kubectl exec -n "$NAMESPACE" "$pod" -- sh -c \
-    "mysql -u '$MYSQL_ROOT_USER' -p'$MYSQL_ROOT_PASSWORD' -e \"DROP DATABASE IF EXISTS seedcore; CREATE DATABASE seedcore;\""
-  kubectl exec -n "$NAMESPACE" "$pod" -- sh -c \
-    "mysql -u '$MYSQL_ROOT_USER' -p'$MYSQL_ROOT_PASSWORD' seedcore < /tmp/init_mysql.sql"
+CREATE TABLE IF NOT EXISTS flashbulb_incidents (
+    incident_id CHAR(36) PRIMARY KEY,
+    salience_score FLOAT NOT NULL,
+    event_data JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_flashbulb_created_at ON flashbulb_incidents(created_at);
+SQL
 
   log "✅ MySQL initialized successfully."
 }
@@ -178,13 +149,31 @@ init_neo4j() {
   log "📦 Using container: $NEO4J_CONTAINER"
   log "🛠  Using cypher-shell: $NEO4J_CYPHER_SHELL"
 
-  log "📝 Copying CQL to pod: $pod"
-  kubectl cp "$NEO4J_CQL" "$NAMESPACE/$pod:/tmp/init_neo4j.cypher" -c "$NEO4J_CONTAINER"
+  log "🚀 Running inline Neo4j bootstrap..."
+  kubectl exec -i -n "$NAMESPACE" -c "$NEO4J_CONTAINER" "$pod" -- \
+    "$NEO4J_CYPHER_SHELL" -a bolt://localhost:7687 -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" -d "$NEO4J_DB" --non-interactive <<'CYPHER'
+CREATE CONSTRAINT holon_uuid IF NOT EXISTS
+FOR (h:Holon) REQUIRE h.uuid IS UNIQUE;
 
-  log "🚀 Running CQL..."
-  # Explicitly target bolt on localhost and run non-interactively
-  kubectl exec -n "$NAMESPACE" -c "$NEO4J_CONTAINER" "$pod" -- \
-    "$NEO4J_CYPHER_SHELL" -a bolt://localhost:7687 -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" -d "$NEO4J_DB" -f /tmp/init_neo4j.cypher --non-interactive
+CREATE INDEX holon_created_at IF NOT EXISTS FOR (h:Holon) ON (h.created_at);
+CREATE INDEX holon_type IF NOT EXISTS FOR (h:Holon) ON (h.type);
+
+MERGE (h1:Holon {description: 'Bootstrap holon 1'})
+  ON CREATE SET
+    h1.uuid = randomUUID(),
+    h1.type = 'sample',
+    h1.created_at = datetime(),
+    h1.meta_source = 'bootstrap';
+
+MERGE (h2:Holon {description: 'Bootstrap holon 2'})
+  ON CREATE SET
+    h2.uuid = randomUUID(),
+    h2.type = 'sample',
+    h2.created_at = datetime(),
+    h2.meta_source = 'bootstrap';
+
+MERGE (h1)-[:RELATED_TO]->(h2);
+CYPHER
 
   log "✅ Neo4j initialized successfully."
 }
@@ -199,17 +188,11 @@ verify_databases() {
   log "🐘 Checking PostgreSQL..."
   local pg_pod; pg_pod="$(first_pod_name "$PG_SELECTOR")"
   if [[ -n "$pg_pod" ]]; then
-    local result
-    result=$(kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM holons;" 2>&1)
-    if [[ $? -eq 0 ]] && [[ -n "$result" ]]; then
-      local count=$(echo "$result" | tr -d ' ')
-      log "✅ PostgreSQL: holons table exists (count: $count)"
+    if kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      log "✅ PostgreSQL: ready for full migration step"
     else
-      log "❌ PostgreSQL: holons table missing or query failed"
-      log "Debug: Checking if database exists..."
+      log "❌ PostgreSQL: readiness query failed"
       kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -l 2>&1 || true
-      log "Debug: Checking if holons table exists..."
-      kubectl exec -n "$NAMESPACE" "$pg_pod" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt" 2>&1 || true
     fi
   fi
 
@@ -217,10 +200,10 @@ verify_databases() {
   log "🐬 Checking MySQL..."
   local my_pod; my_pod="$(first_pod_name "$MYSQL_SELECTOR")"
   if [[ -n "$my_pod" ]]; then
-    if kubectl exec -n "$NAMESPACE" "$my_pod" -- sh -c "mysql -u '$MYSQL_ROOT_USER' -p'$MYSQL_ROOT_PASSWORD' seedcore -e \"SHOW TABLES;\"" >/dev/null 2>&1; then
-      log "✅ MySQL: tables exist"
+    if kubectl exec -n "$NAMESPACE" "$my_pod" -- sh -c "mysql -u '$MYSQL_ROOT_USER' -p'$MYSQL_ROOT_PASSWORD' seedcore -e \"SHOW TABLES LIKE 'flashbulb_incidents';\"" | grep -q flashbulb_incidents; then
+      log "✅ MySQL: flashbulb_incidents table exists"
     else
-      log "❌ MySQL: tables missing or query failed"
+      log "❌ MySQL: flashbulb_incidents table missing or query failed"
     fi
   fi
 
@@ -228,9 +211,8 @@ verify_databases() {
   log "🟢 Checking Neo4j..."
   local neo_pod; neo_pod="$(first_pod_name "$NEO4J_SELECTOR")"
   if [ -n "$neo_pod" ]; then 
-    # This is the new, correct command
-    COUNT=$(kubectl exec -n $NAMESPACE $neo_pod -- bash -c 'echo "MATCH (h:Holon) RETURN COUNT(h) AS count;" | /var/lib/neo4j/bin/cypher-shell -u neo4j -p password -d neo4j --format plain | tail -n 1')
-    if [ "$COUNT" -gt 0 ]; then
+    COUNT="$(kubectl exec -n "$NAMESPACE" "$neo_pod" -- bash -lc 'echo "MATCH (h:Holon) RETURN COUNT(h) AS count;" | /var/lib/neo4j/bin/cypher-shell -u neo4j -p password -d neo4j --format plain | tail -n 1' 2>/dev/null || echo 0)"
+    if [[ "$COUNT" =~ ^[0-9]+$ ]] && [ "$COUNT" -gt 0 ]; then
       log "✅ Neo4j: Holon nodes exist (Count: $COUNT)"
     else
       log "❌ Neo4j: Holon nodes missing"
@@ -242,14 +224,14 @@ verify_databases() {
 # Main
 ############################
 main() {
-  log "🚀 Starting SeedCore database initialization..."
-  init_postgresql
+  log "🚀 Starting SeedCore auxiliary database initialization..."
+  ensure_postgresql_ready
   init_mysql
   init_neo4j
   verify_databases
-  log "🎉 Database initialization completed!"
+  log "🎉 Auxiliary database initialization completed!"
   printf "\nNext steps:\n"
-  printf "1) Restart your seedcore-api pod to pick up the new schema\n"
+  printf "1) Run init_full_db.sh (or deploy/init-databases.sh) to apply the PostgreSQL schema\n"
   printf "2) Check logs for database errors\n"
   printf "3) Verify the application end-to-end\n"
 }
