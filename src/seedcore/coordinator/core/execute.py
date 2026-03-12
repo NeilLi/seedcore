@@ -2621,6 +2621,31 @@ def _get_intent_authority(task: TaskPayload) -> str:
     return auth if auth in ("HIGH", "MEDIUM", "LOW") else "LOW"
 
 
+def _is_read_only_query_task(task: TaskPayload) -> bool:
+    """
+    Identify query tasks that are safe to keep on the fast path.
+
+    This carve-out is intentionally narrow: only read-only queries without
+    explicit tool emission or action routing hints qualify.
+    """
+    if str(task.type or "").lower() != TaskType.QUERY.value:
+        return False
+
+    params = task.params if isinstance(task.params, dict) else {}
+    tool_calls = params.get("tool_calls") or []
+    if isinstance(tool_calls, list) and tool_calls:
+        return False
+
+    routing = params.get("routing") or {}
+    if isinstance(routing, dict) and any(
+        routing.get(key)
+        for key in ("required_specialization", "specialization", "target_organ_hint")
+    ):
+        return False
+
+    return True
+
+
 async def _process_drift_signals(
     ctx: TaskContext,
     task: TaskPayload,
@@ -2774,8 +2799,12 @@ async def _evaluate_policy_layer(
         
         # PKG is only "escalated" if it's empty AND we lack authority/grounding
         auth = _get_intent_authority(task)
+        allow_read_only_query_fast_fallback = (
+            _is_read_only_query_task(task) and not requires_planning
+        )
         is_pkg_escalated = is_empty and not (
-            auth in ("HIGH", "MEDIUM") and not requires_planning
+            (auth in ("HIGH", "MEDIUM") and not requires_planning)
+            or allow_read_only_query_fast_fallback
         )
         
         return proto_plan, is_pkg_escalated
@@ -2920,6 +2949,12 @@ def _determine_decision_kind(
     
     # Final override: LOW authority cannot force FAST
     if enrichment_auth == "LOW":
+        if _is_read_only_query_task(task):
+            logger.info(
+                f"[Coordinator] Preserving FAST path for low-authority read-only query {task_id}. "
+                "No hard gates or escalation signals remain after PKG evaluation."
+            )
+            return DecisionKind.FAST_PATH.value
         logger.info(
             f"[Coordinator] Overriding LOW authority FAST path for task {task_id}. "
             f"LOW authority cannot force FAST - routing to cognitive path."

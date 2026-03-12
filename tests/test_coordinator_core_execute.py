@@ -605,3 +605,65 @@ class TestExecuteTask:
 
         assert result["success"] is False
         assert result.get("error_type") == "pkg_mode_violation"
+
+    async def test_low_authority_read_only_query_stays_fast_when_pkg_is_empty(self):
+        """Read-only summary queries should not escalate just because PKG returned an empty plan."""
+        task = TaskPayload(
+            task_id="task-readonly-query",
+            type="query",
+            description="summarize system health and queue status",
+            params={
+                "cognitive": {
+                    "metadata": {"intent_class": {"authority": "LOW"}},
+                },
+            },
+        )
+
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.27,
+            "x": [0.0, 0.0, 0.0, 0.0, 0.3, 0.0],
+            "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
+            "decision": "fast",
+            "decision_kind": "fast",
+            "ocps": {"S_t": 0.1, "h": 0.5, "flag_on": False},
+        })
+
+        route_config = RouteConfig(
+            surprise_computer=surprise_computer,
+            ocps_valve=NeuralCUSUMValve(
+                expected_baseline=0.1,
+                min_detectable_change=0.2,
+                threshold=2.5,
+                sigma=0.15,
+            ),
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={}),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        organism_execute = AsyncMock(return_value={
+            "success": True,
+            "result": {"summary": "system healthy, queue nominal"},
+        })
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.0),
+            organism_execute=organism_execute,
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["success"] is True
+        assert result["decision_kind"] == DecisionKind.FAST_PATH.value
+        organism_execute.assert_awaited_once()
