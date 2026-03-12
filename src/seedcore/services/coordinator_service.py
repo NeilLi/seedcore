@@ -1424,20 +1424,21 @@ class Coordinator:
         if not getattr(self, "cognitive_client", None):
             return {"status": "skipped", "reason": "cognitive_client_unavailable"}
 
-        cognitive_task = {
-            "task_id": str(task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4()),
-            "type": "general_query",
-            "description": summary_text,
-            "domain": task_dict.get("domain") or "provenance",
-            "correlation_id": correlation_id,
-            "params": {
-                "source_registration": registration,
-                "cognitive": {
-                    "skip_retrieval": True,
-                    "disable_memory_write": True,
+        cognitive_task = self._build_stateless_cognitive_task_dict(
+            {
+                "task_id": str(task_dict.get("task_id") or task_dict.get("id") or uuid.uuid4()),
+                "type": "general_query",
+                "description": summary_text,
+                "domain": task_dict.get("domain") or "provenance",
+                "correlation_id": correlation_id,
+                "params": {
+                    "source_registration": registration,
                 },
             },
-        }
+            extra_cognitive={
+                "skip_retrieval": True,
+            },
+        )
 
         try:
             timeout_s = float(max(5.0, min(float(getattr(self, "timeout_s", 10.0)), 20.0)))
@@ -2316,11 +2317,22 @@ class Coordinator:
         if should_escalate:
             logger.info(f"[Triage] Escalating {agent_id} (Score: {drift_score:.2f})")
             try:
+                cognitive_task = self._build_stateless_cognitive_task_dict(
+                    {
+                        "task_id": f"triage_{agent_id}",
+                        "type": "anomaly_triage",
+                        "description": f"Triage for {agent_id}",
+                        "params": {"hgnn": {"embedding": payload.series}},
+                    },
+                    extra_cognitive={
+                        "skip_retrieval": True,
+                    },
+                )
                 cog_res = await self.cognitive_client.execute_async(
                     agent_id=agent_id,
                     cog_type=CognitiveType.PROBLEM_SOLVING,
                     decision_kind=DecisionKind.COGNITIVE,
-                    task={"params": {"hgnn": {"embedding": payload.series}}},
+                    task=cognitive_task,
                 )
                 reason = cog_res.get("result", {})
             except Exception as e:
@@ -2421,30 +2433,70 @@ class Coordinator:
             metrics=metrics or self.metrics,
         )
 
+    def _build_stateless_cognitive_task_dict(
+        self,
+        task: Dict[str, Any],
+        *,
+        extra_cognitive: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Normalize coordinator-owned cognitive requests as stateless."""
+        payload = dict(task or {})
+        params = dict(payload.get("params") or {})
+        cognitive = dict(params.get("cognitive") or {})
+        cognitive["disable_memory_write"] = True
+        if extra_cognitive:
+            cognitive.update(extra_cognitive)
+        params["cognitive"] = cognitive
+        payload["params"] = params
+        return payload
+
     async def _fire_and_forget_memory_synthesis(
         self, agent_id, anomalies, reason, decision_kind, cid, retention_policy
     ):
+        started = asyncio.get_running_loop().time()
         try:
             if retention_policy == RetentionPolicy.DROP:
+                self.metrics.record_memory_synthesis("dropped", 0.0)
                 return
 
             if retention_policy == RetentionPolicy.SUMMARY_ONLY:
                 anomalies = self._prune_heavy_content(anomalies)
 
-            payload = {
-                "agent_id": agent_id,
-                "memory_fragments": [
-                    {"anomalies": redact_sensitive_data(anomalies)},
-                    {"reason": redact_sensitive_data(reason)},
-                    {"decision": str(decision_kind)},
-                ],
-                "synthesis_goal": "incident_summary",
-            }
+            synthesis_task = self._build_stateless_cognitive_task_dict(
+                {
+                    "task_id": f"memory-synthesis-{cid}",
+                    "type": "memory_synthesis",
+                    "description": "Summarize anomaly triage findings for coordinator telemetry.",
+                    "params": {
+                        "memory_fragments": [
+                            {"anomalies": redact_sensitive_data(anomalies)},
+                            {"reason": redact_sensitive_data(reason)},
+                            {"decision": str(decision_kind)},
+                        ],
+                        "synthesis_goal": "incident_summary",
+                    },
+                },
+                extra_cognitive={
+                    "skip_retrieval": True,
+                    "advisory_mode": True,
+                },
+            )
 
-            await self.cognitive_client.post(
-                "/synthesize-memory", json=payload, headers={"X-Correlation-ID": cid}
+            await self.cognitive_client.execute_async(
+                agent_id=agent_id,
+                cog_type=CognitiveType.MEMORY_SYNTHESIS,
+                decision_kind=DecisionKind.COGNITIVE,
+                task=synthesis_task,
+            )
+            self.metrics.record_memory_synthesis(
+                "ok",
+                asyncio.get_running_loop().time() - started,
             )
         except Exception as e:
+            self.metrics.record_memory_synthesis(
+                "err",
+                asyncio.get_running_loop().time() - started,
+            )
             logger.warning(f"Memory synthesis failed: {e}")
 
     def _prune_heavy_content(self, data: Any) -> Any:

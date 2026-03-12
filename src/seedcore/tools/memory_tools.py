@@ -53,9 +53,9 @@ class MwWriteTool:
         else:
             fn = getattr(self.mw_manager, "set_item_async", None)
             if callable(fn):
-                await fn(item_id, value)
+                await fn(item_id, value, ttl_s=ttl_s)
             else:
-                self.mw_manager.set_item(item_id, value)
+                self.mw_manager.set_item(item_id, value, ttl_s=ttl_s)
 
         return {"status": "success", "item_id": item_id}
 
@@ -132,8 +132,8 @@ class LtmQueryTool:
 
     def schema(self):
         return {
-            "name": "memory.ltm.query",
-            "description": "Query LTM holon by ID.",
+            "name": "memory.holon.query",
+            "description": "Query a holon by ID.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -169,8 +169,8 @@ class LtmSearchTool:
 
     def schema(self):
         return {
-            "name": "memory.ltm.search",
-            "description": "Vector similarity search in LTM.",
+            "name": "memory.holon.search",
+            "description": "Vector similarity search across holons.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -228,8 +228,8 @@ class LtmStoreTool:
 
     def schema(self):
         return {
-            "name": "memory.ltm.store",
-            "description": "Store holon into LTM.",
+            "name": "memory.holon.store",
+            "description": "Store a holon in the unified memory fabric.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -255,8 +255,8 @@ class LtmRelationshipsTool:
 
     def schema(self):
         return {
-            "name": "memory.graph.relationships",
-            "description": "Get holon relationships from graph store.",
+            "name": "memory.holon.relationships",
+            "description": "Get holon relationships from the graph store.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -265,4 +265,3 @@ class LtmRelationshipsTool:
                 "required": ["holon_id"],
             }
         }
-

@@ -932,7 +932,13 @@ class OrganismCore:
         threshold = self.config.get("agent_threshold_for_shards", 100)
 
         if num_agents < threshold:
-            self.tool_manager = ToolManager(skill_store=self.skill_store)
+            self.tool_manager = ToolManager(
+                skill_store=self.skill_store,
+                mw_manager=self.mw_manager,
+                holon_fabric=self.holon_fabric,
+                cognitive_client=self.cognitive_client,
+                ml_client=self.ml_client,
+            )
             self.tool_handler = self.tool_manager
             logger.info("🔧 ToolManager initialized (Single Mode)")
 

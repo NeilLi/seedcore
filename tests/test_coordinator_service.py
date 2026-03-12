@@ -759,4 +759,66 @@ async def test_handle_source_registration_task_applies_normalization_and_cogniti
         "seal integrity consistent"
     ]
     coordinator.cognitive_client.execute_async.assert_awaited_once()
+    enrichment_task = coordinator.cognitive_client.execute_async.await_args.kwargs["task"]
+    assert enrichment_task["params"]["cognitive"]["disable_memory_write"] is True
+    assert enrichment_task["params"]["cognitive"]["skip_retrieval"] is True
     coordinator._persist_source_registration_decision.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fire_and_forget_memory_synthesis_uses_stateless_cognitive_contract():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator.metrics = StubMetrics()
+    coordinator.cognitive_client = SimpleNamespace(
+        execute_async=AsyncMock(return_value={"success": True, "result": {"summary": "ok"}})
+    )
+
+    await coordinator._fire_and_forget_memory_synthesis(
+        agent_id="agent-telemetry",
+        anomalies={"series": [0.1, 0.2], "score": 0.88},
+        reason={"drift_score": 0.88},
+        decision_kind=DecisionKind.COGNITIVE.value,
+        cid="corr-memory",
+        retention_policy=cs.RetentionPolicy.SUMMARY_ONLY,
+    )
+
+    coordinator.cognitive_client.execute_async.assert_awaited_once()
+    call = coordinator.cognitive_client.execute_async.await_args
+    task = call.kwargs["task"]
+    assert call.kwargs["agent_id"] == "agent-telemetry"
+    assert call.kwargs["cog_type"] == cs.CognitiveType.MEMORY_SYNTHESIS
+    assert task["params"]["cognitive"]["disable_memory_write"] is True
+    assert task["params"]["cognitive"]["advisory_mode"] is True
+    assert task["params"]["cognitive"]["skip_retrieval"] is True
+    assert task["params"]["synthesis_goal"] == "incident_summary"
+
+
+@pytest.mark.asyncio
+async def test_handle_anomaly_triage_marks_cognitive_probe_stateless():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator.metrics = StubMetrics()
+    coordinator.ocps_valve = SimpleNamespace(update=lambda _: SimpleNamespace(is_breached=True))
+    coordinator.cognitive_client = SimpleNamespace(
+        execute_async=AsyncMock(return_value={"success": True, "result": {"status": "checked"}})
+    )
+    coordinator._compute_drift_score = AsyncMock(return_value=0.9)
+    fire_and_forget_calls = []
+
+    async def _fake_fire_and_forget(*args, **kwargs):
+        fire_and_forget_calls.append((args, kwargs))
+
+    coordinator._fire_and_forget_memory_synthesis = _fake_fire_and_forget
+
+    payload = cs.AnomalyTriageRequest(agent_id="agent-risk", series=[0.2, 0.5], context={})
+    await coordinator._handle_anomaly_triage(payload)
+    await asyncio.sleep(0)
+
+    coordinator.cognitive_client.execute_async.assert_awaited_once()
+    probe_task = coordinator.cognitive_client.execute_async.await_args.kwargs["task"]
+    assert probe_task["params"]["cognitive"]["disable_memory_write"] is True
+    assert probe_task["params"]["cognitive"]["skip_retrieval"] is True
+    assert len(fire_and_forget_calls) == 1

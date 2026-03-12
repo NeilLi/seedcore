@@ -992,6 +992,7 @@ async def _handle_cognitive_path(
         ocps_payload = (
             payload_metadata.get("ocps") or payload_metadata.get("ocps_payload") or {}
         )
+        planner_task = _build_stateless_cognitive_task(task)
 
         # 1) Ask cognitive service to refine / expand plan
         # Note: pkg_meta is embedded in proto_plan.metadata, no need to pass separately
@@ -999,7 +1000,7 @@ async def _handle_cognitive_path(
             agent_id="coordinator_service",
             cog_type=CognitiveType.TASK_PLANNING,
             decision_kind=decision_kind,
-            task=task,
+            task=planner_task,
             proto_plan=proto_plan_from_router or None,
             ocps=ocps_payload or None,
         )
@@ -3657,6 +3658,28 @@ async def _consolidate_result_embedding(
             f"[Memory] Failed to prepare consolidation for {task_id_str}: {e}",
             exc_info=True,
         )
+
+
+def _build_stateless_cognitive_task(
+    task: TaskPayload,
+    *,
+    extra_cognitive: Optional[Dict[str, Any]] = None,
+) -> TaskPayload:
+    """Clone a task with coordinator-safe cognitive flags.
+
+    Coordinator-issued cognitive requests should remain stateless so the
+    control plane does not create overlapping memory writes with the
+    cognitive/organism execution planes.
+    """
+    payload = task.model_dump() if hasattr(task, "model_dump") else dict(task)
+    params = dict(payload.get("params") or {})
+    cognitive = dict(params.get("cognitive") or {})
+    cognitive["disable_memory_write"] = True
+    if extra_cognitive:
+        cognitive.update(extra_cognitive)
+    params["cognitive"] = cognitive
+    payload["params"] = params
+    return TaskPayload.from_db(payload)
 
 
 # ---------------------------------------------------------------------------

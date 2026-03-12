@@ -496,6 +496,8 @@ class MwManager:
     TASK_TTL_CANCELLED = int(os.getenv("MW_TASK_TTL_CANCELLED_S", "300"))  # 5 minutes
     TASK_TTL_DEFAULT = int(os.getenv("MW_TASK_TTL_DEFAULT_S", "30"))
     TASK_TTL_NEGATIVE = int(os.getenv("MW_TASK_TTL_NEGATIVE_S", "30"))
+    RECENT_EPISODE_TTL = int(os.getenv("MW_RECENT_EPISODE_TTL_S", "3600"))
+    RECENT_EPISODE_LIMIT = int(os.getenv("MW_RECENT_EPISODE_LIMIT", "50"))
 
     # ---- async APIs ----
     async def get_item_async(self, item_id: str, is_global: bool = False) -> Optional[Any]:
@@ -664,9 +666,24 @@ class MwManager:
             )
             return []
 
-    def set_item(self, item_id: str, value: Any) -> None:
-        """Set an organ-local cached value (not visible to other organs)."""
+    def set_item(self, item_id: str, value: Any, ttl_s: Optional[int] = None) -> None:
+        """Set an organ-local cached value.
+
+        When ``ttl_s`` is provided, the write is also mirrored to the shared
+        cache hierarchy so upstream/downstream services (agents, cognition,
+        tool manager) can observe the same short-lived state.
+        """
         self._cache[self._organ_key(item_id)] = value
+        if ttl_s is not None:
+            try:
+                self.set_global_item(item_id, value, ttl_s=ttl_s)
+            except Exception as e:
+                logger.debug(
+                    "Shared write-through skipped for set_item(%s): %s",
+                    item_id,
+                    e,
+                    extra={"organ": self.organ_id, "namespace": self.namespace},
+                )
 
     def clear(self) -> None:
         """Clear all L0 entries for this organ."""
@@ -736,6 +753,67 @@ class MwManager:
         # Fallback to organ-local
         organ_key = self._build_organ_key(kind, item_id)
         return await self.get_item_async(organ_key)
+
+    async def append_episode_async(
+        self,
+        *,
+        agent_id: str,
+        episode: Any,
+        ttl_s: Optional[int] = None,
+        max_items: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Append a normalized recent episode entry for agent-scoped hydration."""
+        max_items = max_items or self.RECENT_EPISODE_LIMIT
+        ttl_s = ttl_s or self.RECENT_EPISODE_TTL
+
+        global_key = self._build_global_key("episode", "agent", agent_id)
+        existing = await self.get_item_async(global_key, is_global=True)
+        entries = self._coerce_episode_entries(existing)
+        entry = self._normalize_episode_entry(episode)
+        if entry is not None:
+            entries.append(entry)
+        entries = entries[-max_items:]
+
+        self.set_global_item_typed("episode", "agent", agent_id, entries, ttl_s=ttl_s)
+        self.set_item(f"episode:{agent_id}", entries)
+        return entries
+
+    async def get_recent_episode(
+        self,
+        *,
+        organ_id: Optional[str],
+        agent_id: str,
+        k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Return the most recent episodic/chat entries for an agent.
+
+        Preference order:
+        1. Agent-scoped recent episode log created by ``append_episode_async``
+        2. Shared chat history persisted with TTL
+        3. Local chat history cache
+        4. Local recent episode log
+        """
+        del organ_id  # Scope is encoded into the MwManager instance / typed keys.
+
+        global_episode_key = self._build_global_key("episode", "agent", agent_id)
+        entries = self._coerce_episode_entries(
+            await self.get_item_async(global_episode_key, is_global=True)
+        )
+        if entries:
+            return entries[-k:]
+
+        shared_chat = await self.get_item_async(f"chat_history:{agent_id}", is_global=True)
+        chat_entries = self._coerce_chat_entries(shared_chat)
+        if chat_entries:
+            return chat_entries[-k:]
+
+        local_chat = self.get_item(f"chat_history:{agent_id}")
+        chat_entries = self._coerce_chat_entries(local_chat)
+        if chat_entries:
+            return chat_entries[-k:]
+
+        local_entries = self._coerce_episode_entries(self.get_item(f"episode:{agent_id}"))
+        return local_entries[-k:]
 
     def set_negative_cache(self, kind: str, scope: str, item_id: str, ttl_s: int = 30) -> None:
         """Set a negative cache entry to prevent cache stampedes"""
@@ -959,6 +1037,102 @@ class MwManager:
             return result
         organ_key = self._build_organ_key(kind, item_id)
         return self._get_item_sync(organ_key)
+
+    def _coerce_chat_entries(self, payload: Any) -> List[Dict[str, Any]]:
+        if not isinstance(payload, list):
+            return []
+
+        entries: List[Dict[str, Any]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "system")
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            normalized = {"role": role, "content": content}
+            if item.get("timestamp") is not None:
+                normalized["timestamp"] = item.get("timestamp")
+            entries.append(normalized)
+        return entries
+
+    def _coerce_episode_entries(self, payload: Any) -> List[Dict[str, Any]]:
+        if not isinstance(payload, list):
+            return []
+
+        entries: List[Dict[str, Any]] = []
+        for item in payload:
+            normalized = self._normalize_episode_entry(item)
+            if normalized is not None:
+                entries.append(normalized)
+        return entries
+
+    def _normalize_episode_entry(self, episode: Any) -> Optional[Dict[str, Any]]:
+        if episode is None:
+            return None
+
+        if isinstance(episode, dict) and {"role", "content"} <= set(episode.keys()):
+            content = str(episode.get("content") or "").strip()
+            if not content:
+                return None
+            normalized = {
+                "role": str(episode.get("role") or "system"),
+                "content": content,
+            }
+            if episode.get("timestamp") is not None:
+                normalized["timestamp"] = episode.get("timestamp")
+            return normalized
+
+        if isinstance(episode, dict):
+            task = episode.get("task") if isinstance(episode.get("task"), dict) else {}
+            outcome = (
+                episode.get("outcome") if isinstance(episode.get("outcome"), dict) else {}
+            )
+            description = (
+                task.get("description")
+                or episode.get("task_description")
+                or task.get("task_type")
+                or episode.get("task_type")
+                or "task event"
+            )
+            result_preview = (
+                outcome.get("result_preview")
+                or episode.get("result_preview")
+                or self._preview_value(episode.get("result"))
+            )
+            success = outcome.get("success", episode.get("success"))
+            state = "succeeded" if success is True else "failed" if success is False else "recorded"
+            content = f"{description}: {state}"
+            if result_preview:
+                content = f"{content}. {result_preview}"
+
+            normalized = {
+                "role": "system",
+                "content": content,
+            }
+            timestamp = episode.get("ts") or episode.get("timestamp") or episode.get("recorded_at")
+            if timestamp is not None:
+                normalized["timestamp"] = timestamp
+            task_id = task.get("id") or episode.get("id")
+            if task_id:
+                normalized["task_id"] = task_id
+            return normalized
+
+        if isinstance(episode, str):
+            content = episode.strip()
+            if not content:
+                return None
+            return {"role": "system", "content": content}
+
+        return None
+
+    def _preview_value(self, value: Any, limit: int = 160) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        return text[:limit]
 
     # ---- CAS operations ----
     async def try_set_inflight(self, key: str, ttl_s: int = 5) -> bool:

@@ -198,6 +198,9 @@ class TestExecuteTask:
         )
         
         assert result["decision_kind"] == DecisionKind.COGNITIVE.value
+        cognitive_client.execute_async.assert_awaited_once()
+        planner_task = cognitive_client.execute_async.await_args.kwargs["task"]
+        assert planner_task.params["cognitive"]["disable_memory_write"] is True
     
     async def test_pkg_mandatory_never_routes_when_pkg_invalid(self):
         """PKG-mandatory action tasks should complete as policy_noop if PKG returns valid empty."""
@@ -343,6 +346,8 @@ class TestExecuteTask:
         
         # When OCPS is breached, should route to cognitive path
         assert result["decision_kind"] == DecisionKind.COGNITIVE.value
+        planner_task = cognitive_client.execute_async.await_args.kwargs["task"]
+        assert planner_task.params["cognitive"]["disable_memory_write"] is True
 
     async def test_pkg_mandatory_action_fails_when_routing_is_noncanonical(self):
         """PKG-mandatory action tasks must fail when PKG output lacks canonical routing hints."""

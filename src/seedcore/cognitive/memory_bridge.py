@@ -63,9 +63,10 @@ class CognitiveRetrieval(Protocol):
 
 
 class MwManager(Protocol):
-    def set_item(self, key: str, value: str) -> None: ...
+    def set_item(self, key: str, value: Any, ttl_s: Optional[int] = None) -> None: ...
     def set_global_item_typed(self, kind: str, scope: str, item_id: str, payload: Any, ttl_s: Optional[int] = None) -> None: ...
-    def get_recent_episode(self, *, organ_id: Optional[str], agent_id: str, k: int = 10) -> List[Dict[str, Any]]: ...
+    async def get_recent_episode(self, *, organ_id: Optional[str], agent_id: str, k: int = 10) -> List[Dict[str, Any]]: ...
+    async def append_episode_async(self, *, agent_id: str, episode: Any, ttl_s: Optional[int] = None, max_items: Optional[int] = None) -> List[Dict[str, Any]]: ...
 
 
 class HolonClient(Protocol):
@@ -242,7 +243,7 @@ class CognitiveMemoryBridge:
                 holons = raw_context[: self.default_hydration_limit]
 
         # Episodic memory (chat history) — CognitiveCore can source from Mw centrally
-        chat_history = self._load_recent_chat(k=self.default_chat_k)
+        chat_history = await self._load_recent_chat(k=self.default_chat_k)
 
         token_budget = self._suggest_token_budget(ocps=ocps, holon_count=len(holons), chat_k=len(chat_history))
 
@@ -309,6 +310,7 @@ class CognitiveMemoryBridge:
         # Episodic write — Mw controls TTL/policy mapping by kind/scope
         self._mw_put_local(artifact_key, asdict(event))
         self._mw_put_global(kind="task_artifact", scope="global", item_id=artifact_key, payload=asdict(event))
+        await self._mw_append_episode(asdict(event))
 
         # Fact sanitization & conflict checks — hook points
         sanitized = self._sanitize_event(event)
@@ -328,9 +330,16 @@ class CognitiveMemoryBridge:
     # Internals — Policy & Hooks
     # ------------------------------------------------------------------
 
-    def _load_recent_chat(self, *, k: int) -> List[Dict[str, Any]]:
+    async def _load_recent_chat(self, *, k: int) -> List[Dict[str, Any]]:
         try:
-            return self.mw.get_recent_episode(organ_id=self.organ_id, agent_id=self.agent_id, k=k) or []
+            result = self.mw.get_recent_episode(
+                organ_id=self.organ_id,
+                agent_id=self.agent_id,
+                k=k,
+            )
+            if hasattr(result, "__await__"):
+                result = await result  # type: ignore[assignment]
+            return result or []
         except Exception as e:
             self.log.warning(f"Mw.get_recent_episode failed: {e}")
             return []
@@ -432,7 +441,7 @@ class CognitiveMemoryBridge:
 
     def _mw_put_local(self, key: str, payload: Dict[str, Any]) -> None:
         try:
-            self.mw.set_item(key, json.dumps(payload))
+            self.mw.set_item(key, payload)
         except Exception as e:
             self.log.warning(f"Mw.set_item failed: {e}")
 
@@ -441,6 +450,19 @@ class CognitiveMemoryBridge:
             self.mw.set_global_item_typed(kind, scope, item_id, payload, ttl_s=ttl_s)
         except Exception as e:
             self.log.warning(f"Mw.set_global_item_typed failed: {e}")
+
+    async def _mw_append_episode(self, payload: Dict[str, Any], ttl_s: Optional[int] = None) -> None:
+        append_episode = getattr(self.mw, "append_episode_async", None)
+        if not callable(append_episode):
+            return
+        try:
+            await append_episode(
+                agent_id=self.agent_id,
+                episode=payload,
+                ttl_s=ttl_s,
+            )
+        except Exception as e:
+            self.log.warning(f"Mw.append_episode_async failed: {e}")
 
     # ----------------------------------------------------------------------------------
     # Small helpers

@@ -4,6 +4,7 @@
 from __future__ import annotations
 from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
 import asyncio
+import inspect
 import time
 from datetime import datetime, timezone
 import uuid
@@ -186,7 +187,7 @@ class ToolManager:
         
         Checks in order:
         1. Internal registered tools
-        2. Memory tools (memory.mw.*, memory.ltm.*, memory.holon.*)
+        2. Memory tools (memory.mw.*, memory.ltm.*, memory.holon.*, memory.graph.*)
         3. Cognitive service tools (cog.*, reason.*)
         4. HAL tools (reachy.*)
         5. MCP tools (if mcp_client is available)
@@ -197,7 +198,12 @@ class ToolManager:
                 return True
         
         # 2. Check memory tools
-        if name.startswith("memory.mw.") or name.startswith("memory.ltm.") or name.startswith("memory.holon."):
+        if (
+            name.startswith("memory.mw.")
+            or name.startswith("memory.ltm.")
+            or name.startswith("memory.holon.")
+            or name.startswith("memory.graph.")
+        ):
             return True
         
         # 3. Check cognitive service tools
@@ -282,19 +288,52 @@ class ToolManager:
         if not self.mw_manager:
             raise ToolError(name, "MW manager not configured")
         try:
-            method = name.split(".", 2)[-1]
-            handler = getattr(self.mw_manager, method, None)
-            if not handler:
-                raise ToolError(name, f"Unknown MW method '{method}'")
-            return await handler(**args)
+            if name == "memory.mw.read":
+                result = self.mw_manager.get_item_async(
+                    args["item_id"],
+                    is_global=bool(args.get("is_global", False)),
+                )
+                return await result if inspect.isawaitable(result) else result
+
+            if name == "memory.mw.write":
+                item_id = args["item_id"]
+                value = args["value"]
+                ttl_s = args.get("ttl_s")
+                is_global = bool(args.get("is_global", False))
+
+                if is_global:
+                    handler = getattr(self.mw_manager, "set_global_item_async", None)
+                    if callable(handler):
+                        result = handler(item_id, value, ttl_s)
+                        if inspect.isawaitable(result):
+                            await result
+                    else:
+                        self.mw_manager.set_global_item(item_id, value, ttl_s)
+                else:
+                    handler = getattr(self.mw_manager, "set_item_async", None)
+                    if callable(handler):
+                        result = handler(item_id, value, ttl_s=ttl_s)
+                        if inspect.isawaitable(result):
+                            await result
+                    else:
+                        self.mw_manager.set_item(item_id, value, ttl_s=ttl_s)
+
+                return {"status": "success", "item_id": item_id}
+
+            if name == "memory.mw.hot_items":
+                result = self.mw_manager.get_hot_items_async(args.get("top_n", 5))
+                items = await result if inspect.isawaitable(result) else result
+                return [{"item_id": item, "count": count} for item, count in items]
+
+            raise ToolError(name, f"Unknown MW tool '{name}'")
         except Exception as e:
             raise ToolError(name, "MW execute failed", e)
 
     async def _execute_holon(self, name: str, args: Dict[str, Any], agent_id: str):
         """Execute HolonFabric operations.
 
-        Note: LongTermMemoryManager is deprecated. Use HolonFabric instead.
-        This method provides backward compatibility for memory.ltm.* tool calls.
+        Supports canonical ``memory.holon.*`` tools and legacy
+        ``memory.ltm.*`` aliases.
         """
         if not self.holon_fabric:
             raise ToolError(name, "HolonFabric not configured")
@@ -403,7 +442,7 @@ class ToolManager:
         Full routing logic:
         1. Internal tools (including query tools: general_query, knowledge.find, task.collaborative, cognitive.*)
         2. Memory MW (memory.mw.*)
-        3. Memory LTM (memory.ltm.*)
+        3. Memory holon tools (memory.holon.* + legacy memory.ltm.*)
         4. Cognitive service (cog.*, reason.*)
         5. External MCP
         """
@@ -467,7 +506,11 @@ class ToolManager:
                 return await self._execute_mw(name, safe_args, agent_id)
 
             # 3. HolonFabric tools (replaces legacy LTM tools)
-            if name.startswith("memory.ltm.") or name.startswith("memory.holon."):
+            if (
+                name.startswith("memory.ltm.")
+                or name.startswith("memory.holon.")
+                or name.startswith("memory.graph.")
+            ):
                 return await self._execute_holon(name, safe_args, agent_id)
 
             # 4. Cognitive service tools (direct cognitive service calls)
@@ -674,8 +717,33 @@ class ToolManager:
             except Exception as e:
                 logger.error(f"Failed to fetch MCP tool list: {e}")
 
-        # Memory router virtual tools?
-        # Could list them here later.
+        if self.mw_manager:
+            from .memory_tools import MwReadTool, MwWriteTool, MwHotItemsTool
+
+            for tool in (
+                MwReadTool(self.mw_manager),
+                MwWriteTool(self.mw_manager),
+                MwHotItemsTool(self.mw_manager),
+            ):
+                schema = tool.schema()
+                out.setdefault(schema["name"], schema)
+
+        if self.holon_fabric:
+            from .memory_tools import (
+                LtmQueryTool,
+                LtmSearchTool,
+                LtmStoreTool,
+                LtmRelationshipsTool,
+            )
+
+            for tool in (
+                LtmQueryTool(self.holon_fabric),
+                LtmSearchTool(self.holon_fabric),
+                LtmStoreTool(self.holon_fabric),
+                LtmRelationshipsTool(self.holon_fabric),
+            ):
+                schema = tool.schema()
+                out.setdefault(schema["name"], schema)
 
         return out
 
