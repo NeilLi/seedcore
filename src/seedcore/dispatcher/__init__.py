@@ -17,14 +17,18 @@ Dispatcher implementations for SeedCore.
 """
 
 # Dispatchers
-# from .queue_dispatcher import Dispatcher, Reaper
 from .queue_dispatcher import Dispatcher
 from .reaper import Reaper
-from .graph_dispatcher import GraphDispatcher
 
-__all__ = [
-    'Dispatcher',
-    'Reaper', 
-    'GraphDispatcher',
-]
+GRAPH_DISPATCHER_IMPORT_ERROR: Exception | None = None
 
+try:
+    from .graph_dispatcher import GraphDispatcher
+except ImportError as exc:
+    GraphDispatcher = None
+    GRAPH_DISPATCHER_IMPORT_ERROR = exc
+
+__all__ = ["Dispatcher", "Reaper"]
+
+if GraphDispatcher is not None:
+    __all__.append("GraphDispatcher")

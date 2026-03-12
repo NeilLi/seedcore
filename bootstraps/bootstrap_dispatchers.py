@@ -18,7 +18,12 @@ from seedcore.utils.ray_utils import (
     get_ray_cluster_info,
     shutdown_ray,
 )
-from seedcore.dispatcher import Reaper, Dispatcher, GraphDispatcher
+from seedcore.dispatcher import (
+    Dispatcher,
+    GRAPH_DISPATCHER_IMPORT_ERROR,
+    GraphDispatcher,
+    Reaper,
+)
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
 # Setup Logging
@@ -83,7 +88,16 @@ def bootstrap_dispatchers() -> bool:
 
     # B. Graph Dispatchers (Pool)
     if ENABLE_GRAPH:
-        if not _ensure_actor_pool(
+        if GraphDispatcher is None:
+            message = (
+                "GraphDispatcher unavailable; skipping graph dispatcher bootstrap. "
+                f"Root cause: {GRAPH_DISPATCHER_IMPORT_ERROR}"
+            )
+            if STRICT_GRAPH:
+                logger.error("❌ %s", message)
+                return False
+            logger.warning("⚠️ %s", message)
+        elif not _ensure_actor_pool(
             actor_cls=GraphDispatcher,
             base_name="graph_dispatcher",
             count=GRAPH_COUNT,
