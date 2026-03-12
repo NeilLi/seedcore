@@ -319,6 +319,7 @@ class BaseAgent:
                 f"BaseAgent {agent_id} initialized without tool handler (will create local fallback)."
             )
             self.tool_handler = None
+        self._query_tools_registered = False
 
         # 5. State & Memory Initialization
         self.skills = SkillVector()
@@ -819,6 +820,39 @@ class BaseAgent:
             except Exception as e:
                 # Reachy tools are optional - log but don't fail if HAL is unavailable
                 logger.debug(f"[{self.agent_id}] Could not register Reachy tools in local ToolManager: {e}")
+
+        await self._ensure_query_tools_registered()
+
+    async def _ensure_query_tools_registered(self) -> None:
+        """Register query tools once for agent-managed tool handlers."""
+        handler = self.tool_handler
+        if handler is None or self._query_tools_registered:
+            return
+
+        try:
+            if not isinstance(handler, list) and hasattr(handler, "has"):
+                has_result = handler.has("general_query")
+                if inspect.isawaitable(has_result):
+                    has_result = await has_result
+                if has_result:
+                    self._query_tools_registered = True
+                    return
+        except Exception:
+            # Fall through to explicit registration if probing fails.
+            pass
+
+        try:
+            from .bridges.tool_registrar import QueryToolRegistrar
+
+            await QueryToolRegistrar(self).register(max_retries=1, initial_delay=0.0)
+            self._query_tools_registered = True
+            logger.debug(f"✅ [{self.agent_id}] Query tools registered for agent execution")
+        except Exception as exc:
+            logger.warning(
+                "[%s] Query tool registration failed; continuing without local query tools: %s",
+                self.agent_id,
+                exc,
+            )
 
     def _get_mcp_client(self) -> Optional["MCPServiceClient"]:
         """Lazily create MCPServiceClient from config to avoid serialization issues."""
@@ -1874,6 +1908,7 @@ class BaseAgent:
                 await self._ensure_tool_handler()
 
             if not isinstance(self.tool_handler, list):
+                await self._ensure_query_tools_registered()
                 if not self.tool_handler or not hasattr(self.tool_handler, "has"):
                     error_msg = "tool_handler_missing"
                     tool_errors.append(
@@ -3070,24 +3105,31 @@ class BaseAgent:
         """
         out: list[float] = []
         for f in feature_batches:
-            risk = float(f.get("task_risk", 0.5))
-            sev = float(f.get("failure_severity", 1.0))
-            imp = float(f.get("user_impact", 0.5))
-            crit = float(f.get("business_criticality", 0.5))
-            agent_load = float(f.get("agent_load", 0.0))
-            agent_error_rate = float(f.get("agent_error_rate", 0.0))
+            risk = self._coerce_salience_scalar(f.get("task_risk", 0.5), default=0.5)
+            sev = self._coerce_salience_scalar(
+                f.get("failure_severity", 1.0), default=1.0
+            )
+            imp = self._coerce_salience_scalar(f.get("user_impact", 0.5), default=0.5)
+            crit = self._coerce_salience_scalar(
+                f.get("business_criticality", 0.5), default=0.5
+            )
+            agent_load = self._coerce_salience_scalar(
+                f.get("agent_load", 0.0), default=0.0
+            )
+            agent_error_rate = self._coerce_salience_scalar(
+                f.get("agent_error_rate", 0.0), default=0.0
+            )
             sys = 0.25 * agent_load + 0.25 * agent_error_rate
 
             # Factor in agent capability: low capability increases salience score
             # (higher salience may lead to local_flag_high_risk intent, but BaseAgent does not escalate)
-            agent_capability = float(f.get("agent_capability", self.state.c))
+            agent_capability = self._coerce_salience_scalar(
+                f.get("agent_capability", self.state.c), default=self.state.c
+            )
             capability_penalty = 0.1 * (1.0 - agent_capability)  # 0.0 to 0.1
 
             # Add privmem allocation signal (weak signal for memory saturation)
-            try:
-                privmem_norm = self._privmem.telemetry().get("allocation") or 0.0
-            except Exception:
-                privmem_norm = 0.0
+            privmem_norm = self._privmem_saturation_signal()
 
             score = (
                 0.30 * risk
@@ -3101,3 +3143,56 @@ class BaseAgent:
             score = max(0.0, min(1.0, score))
             out.append(score)
         return out
+
+    @staticmethod
+    def _coerce_salience_scalar(value: Any, *, default: float) -> float:
+        """Convert salience inputs to numeric values without failing on nested telemetry payloads."""
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, dict):
+            numeric_values = [
+                float(item)
+                for item in value.values()
+                if isinstance(item, (int, float)) and not isinstance(item, bool)
+            ]
+            if numeric_values:
+                return float(sum(numeric_values) / len(numeric_values))
+            return float(default)
+        if isinstance(value, (list, tuple, set)):
+            numeric_values = [
+                float(item)
+                for item in value
+                if isinstance(item, (int, float)) and not isinstance(item, bool)
+            ]
+            if numeric_values:
+                return float(sum(numeric_values) / len(numeric_values))
+            return float(default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _privmem_saturation_signal(self) -> float:
+        """Reduce private-memory telemetry into a weak, bounded saturation signal."""
+        try:
+            allocation = (self._privmem.telemetry() or {}).get("allocation") or 0.0
+        except Exception:
+            return 0.0
+
+        if isinstance(allocation, dict):
+            numeric_values = [
+                float(item)
+                for item in allocation.values()
+                if isinstance(item, (int, float)) and not isinstance(item, bool)
+            ]
+            total = sum(numeric_values)
+            if total <= 0.0:
+                return 0.0
+            return max(0.0, min(1.0, max(numeric_values) / total))
+
+        return max(
+            0.0,
+            min(1.0, self._coerce_salience_scalar(allocation, default=0.0)),
+        )

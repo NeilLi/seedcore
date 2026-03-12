@@ -169,6 +169,62 @@ async def test_calculate_ml_salience_score_prefers_ml_response(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_ensure_tool_handler_registers_general_query_locally(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    agent = BaseAgent(agent_id="agent-query-tools")
+
+    async def fake_ensure_holon_fabric():
+        return None
+
+    monkeypatch.setattr(agent, "_ensure_holon_fabric", fake_ensure_holon_fabric)
+
+    await agent._ensure_tool_handler()
+
+    assert agent.tool_handler is not None
+    assert agent._query_tools_registered is True
+    assert await agent.tool_handler.has("general_query") is True
+
+
+@pytest.mark.asyncio
+async def test_calculate_ml_salience_score_fallback_handles_dict_privmem_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    agent = BaseAgent(agent_id="agent-ml-fallback")
+
+    async def fake_extract(task_info: Dict[str, Any], error_context: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "task_risk": 0.9,
+            "failure_severity": 1.0,
+            "user_impact": 0.8,
+            "business_criticality": 0.7,
+            "agent_capability": 0.5,
+            "agent_load": 0.2,
+            "agent_error_rate": 0.01,
+        }
+
+    class FailingMlClient:
+        async def compute_salience_score(self, *, text: str, context: Dict[str, Any]) -> Dict[str, Any]:
+            raise RuntimeError("ml endpoint unavailable")
+
+    monkeypatch.setattr(agent, "_extract_salience_features", fake_extract)
+    monkeypatch.setattr(agent, "_get_ml_client", lambda: FailingMlClient())
+    monkeypatch.setattr(
+        agent._privmem,
+        "telemetry",
+        lambda: {"allocation": {"T": 32, "S": 32, "P": 48, "F": 16}},
+    )
+
+    salience = await agent._calculate_ml_salience_score(
+        task_info={"task": "status summary"},
+        error_context={"reason": "ml service 404"},
+    )
+
+    assert 0.0 <= salience <= 1.0
+    assert salience != 0.5
+
+
+@pytest.mark.asyncio
 async def test_base_agent_with_behaviors():
     """
     Test that BaseAgent initializes behaviors correctly from RoleProfile defaults.
@@ -392,4 +448,3 @@ async def test_base_agent_shutdown_behaviors():
     # Behavior should have been shut down
     assert shutdown_behavior.shutdown_called
     assert len(agent._behaviors) == 0
-
