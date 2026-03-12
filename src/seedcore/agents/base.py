@@ -1655,7 +1655,7 @@ class BaseAgent:
         # Coerce to V2 TaskView (use original_task, which may have been modified by behaviors)
         tv = self._coerce_task_view(original_task)
         logger.debug(
-            f"[{self.agent_id}] TaskView coerced: task_id={tv.task_id}, type={getattr(task, 'type', 'unknown')}, "
+            f"[{self.agent_id}] TaskView coerced: task_id={tv.task_id}, type={tv.task_type}, "
             f"tools_count={len(tv.tools)}"
         )
 
@@ -2627,6 +2627,7 @@ class BaseAgent:
 
         __slots__ = (
             "task_id",
+            "task_type",
             "prompt",
             "interaction_mode",  # NEW: Critical for agent behavior
             "embedding",
@@ -2653,6 +2654,7 @@ class BaseAgent:
 
         # 1. Identity & Core
         tv.task_id = payload.task_id
+        tv.task_type = str(getattr(payload, "type", None) or merged.get("type") or "unknown")
 
         # 2. Extract Params & Envelopes safely
         # 'merged' is the dict representation, 'payload' is the Pydantic model

@@ -899,6 +899,22 @@ class TestToolAutoInjectionBehavior:
         assert "general_query" in tools
 
 
+class TestTaskViewNormalization:
+    """Tests for TaskView normalization details."""
+
+    def test_coerce_task_view_preserves_query_type(self, real_agent):
+        """TaskView should preserve task_type so query semantics survive the handoff."""
+        task = TaskPayload(
+            task_id="task-query-type",
+            type="query",
+            description="Summarize system health and queue status",
+        )
+
+        tv = real_agent._coerce_task_view(task)
+
+        assert tv.task_type == "query"
+
+
 # ============================================================================
 # Integration Tests
 # ============================================================================

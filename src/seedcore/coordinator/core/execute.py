@@ -877,6 +877,7 @@ async def execute_task(
         final_result = normalize_envelope(result, task_id=ctx.task_id, path="coordinator_fast_path")
         if final_result.get("decision_kind") is None:
             final_result["decision_kind"] = DecisionKind.FAST_PATH.value
+        final_result = _apply_operational_summary_postcondition(task, final_result)
         
         # PHASE 2: RESULT CONSOLIDATION (Asynchronous)
         # Architecture: Gate memory writes for actuator commands
@@ -911,6 +912,7 @@ async def execute_task(
         final_result = normalize_envelope(result, task_id=ctx.task_id, path="coordinator_cognitive_path")
         if final_result.get("decision_kind") is None:
             final_result["decision_kind"] = DecisionKind.COGNITIVE.value
+        final_result = _apply_operational_summary_postcondition(task, final_result)
         
         # PHASE 2: RESULT CONSOLIDATION (Asynchronous)
         if final_result and execution_config.enable_consolidation and execution_config.coordinator:
@@ -976,6 +978,8 @@ async def _handle_fast_path(
         interaction["mode"] = interaction_mode
     else:
         params["interaction"] = {"mode": interaction_mode}
+
+    _inject_operational_summary_hint(task, task_payload_dict)
 
     timeout = _clamp_timeout_s((config.fast_path_latency_slo_ms / 1000.0) * 2.0)
 
@@ -2644,6 +2648,211 @@ def _is_read_only_query_task(task: TaskPayload) -> bool:
         return False
 
     return True
+
+
+def _task_query_text(task: TaskPayload) -> str:
+    """Collect user-facing query text from the task description and chat envelope."""
+    params = task.params if isinstance(task.params, dict) else {}
+    chat = params.get("chat") or {}
+    candidates = [
+        task.description,
+        chat.get("message") if isinstance(chat, dict) else None,
+        params.get("task_description"),
+    ]
+    return " ".join(
+        part.strip()
+        for part in candidates
+        if isinstance(part, str) and part.strip()
+    ).lower()
+
+
+def _is_operational_summary_query(task: TaskPayload) -> bool:
+    """
+    Detect narrow operational summary queries that should fetch live status data.
+
+    This intentionally matches a small class of read-only health/queue prompts so we
+    can strengthen fast-path execution without broadening coordinator behavior.
+    """
+    if str(task.type or "").lower() != TaskType.QUERY.value:
+        return False
+
+    text = _task_query_text(task)
+    if not text:
+        return False
+
+    explicit_phrases = (
+        "system health and queue status",
+        "system health",
+        "system status",
+        "service health",
+        "cluster health",
+        "queue status",
+        "queue health",
+        "queue depth",
+        "queue backlog",
+        "worker status",
+    )
+    if any(phrase in text for phrase in explicit_phrases):
+        return True
+
+    summary_terms = ("summarize", "summary", "report", "overview", "status")
+    mentions_summary = any(term in text for term in summary_terms)
+    mentions_health = "health" in text and any(
+        scope in text for scope in ("system", "service", "runtime", "cluster", "worker")
+    )
+    mentions_queue = any(term in text for term in ("queue", "queues", "backlog"))
+    return mentions_summary and (mentions_health or mentions_queue)
+
+
+def _build_operational_query_tool_call(task_payload_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the same narrow general_query call shape used by tool auto-injection."""
+    params = task_payload_dict.get("params")
+    if not isinstance(params, dict):
+        params = {}
+
+    task_data = {
+        "task_id": task_payload_dict.get("task_id") or task_payload_dict.get("id"),
+        "type": task_payload_dict.get("type"),
+        "description": task_payload_dict.get("description") or "",
+        "params": dict(params),
+    }
+    return {
+        "name": "general_query",
+        "args": {
+            "description": task_payload_dict.get("description") or "",
+            "task_data": task_data,
+        },
+    }
+
+
+def _inject_operational_summary_hint(
+    task: TaskPayload,
+    task_payload_dict: Dict[str, Any],
+) -> bool:
+    """
+    Add a narrow general_query tool hint for operational summary queries.
+
+    This preserves fast-path routing while preventing the baseline generalist fallback
+    from devolving into a no-op success.
+    """
+    if not _is_operational_summary_query(task):
+        return False
+
+    params = task_payload_dict.setdefault("params", {})
+    if not isinstance(params, dict):
+        params = {}
+        task_payload_dict["params"] = params
+
+    existing_tool_calls = params.get("tool_calls") or []
+    if isinstance(existing_tool_calls, list) and existing_tool_calls:
+        return False
+
+    routing = params.get("routing")
+    if not isinstance(routing, dict):
+        routing = {}
+        params["routing"] = routing
+
+    routing_tools = routing.get("tools")
+    if not isinstance(routing_tools, list):
+        routing_tools = []
+    if "general_query" not in routing_tools:
+        routing_tools.append("general_query")
+    routing["tools"] = routing_tools
+
+    if not routing.get("required_specialization") and not routing.get("specialization"):
+        routing["specialization"] = Specialization.GENERALIST.value
+
+    params["tool_calls"] = [_build_operational_query_tool_call(task_payload_dict)]
+    logger.info(
+        "[Coordinator] Injected operational summary fast-path hint for task %s: "
+        "specialization=%s, tools=%s",
+        task.task_id,
+        routing.get("specialization") or routing.get("required_specialization") or "generalist",
+        routing_tools,
+    )
+    return True
+
+
+def _payload_has_substantive_summary_content(payload: Any) -> bool:
+    """Heuristic content check for summary/status query outputs."""
+    if payload is None:
+        return False
+    if isinstance(payload, str):
+        return bool(payload.strip())
+    if isinstance(payload, list):
+        return any(_payload_has_substantive_summary_content(item) for item in payload)
+    if not isinstance(payload, dict):
+        return False
+
+    for key in ("summary", "answer", "response", "message", "output", "text"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+
+    results = payload.get("results")
+    if isinstance(results, list) and results:
+        for item in results:
+            if isinstance(item, dict):
+                if item.get("ok") and _payload_has_substantive_summary_content(item.get("output")):
+                    return True
+                if _payload_has_substantive_summary_content(item.get("result")):
+                    return True
+            elif _payload_has_substantive_summary_content(item):
+                return True
+
+    for nested_key in ("result", "payload"):
+        if _payload_has_substantive_summary_content(payload.get(nested_key)):
+            return True
+
+    return False
+
+
+def _apply_operational_summary_postcondition(
+    task: TaskPayload,
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Prevent empty operational status summaries from surfacing as clean success.
+    """
+    if not _is_operational_summary_query(task):
+        return result
+    if not isinstance(result, dict) or not result.get("success"):
+        return result
+    if _payload_has_substantive_summary_content(result.get("payload")):
+        return result
+
+    logger.warning(
+        "[Coordinator] Operational summary query %s completed without substantive content; "
+        "downgrading result to failure.",
+        task.task_id,
+    )
+
+    payload = result.get("payload")
+    if isinstance(payload, dict):
+        payload["quality"] = 0.0
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            errors.append({"error": "operational_summary_missing_content"})
+        else:
+            payload["errors"] = [{"error": "operational_summary_missing_content"}]
+
+    meta = result.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        result["meta"] = meta
+    violations = meta.get("postcondition_violations")
+    if not isinstance(violations, list):
+        violations = []
+    marker = "operational_summary_missing_content"
+    if marker not in violations:
+        violations.append(marker)
+    meta["postcondition_violations"] = violations
+
+    result["success"] = False
+    result["error"] = "Operational summary query completed without summary content"
+    result["error_type"] = "empty_operational_summary"
+    result["retry"] = False
+    return result
 
 
 async def _process_drift_signals(
