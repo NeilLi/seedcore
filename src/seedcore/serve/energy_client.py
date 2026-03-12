@@ -68,9 +68,21 @@ class EnergyServiceClient(BaseServiceClient):
         """Fetch the latest cached energy metrics (fast path)."""
         return await self.get("/ops/energy/metrics")
 
+    async def get_current_energy(self) -> Dict[str, Any]:
+        """Backward-compatible alias used by older cognitive helpers."""
+        return await self.get_metrics()
+
     async def health(self) -> Dict[str, Any]:
         """Ping EnergyService health via OpsGateway."""
         return await self.get("/ops/energy/health")
+
+    async def get_status(self) -> Dict[str, Any]:
+        """Fetch runtime readiness and mode details."""
+        return await self.get("/ops/energy/status")
+
+    async def get_meta(self) -> Dict[str, Any]:
+        """Fetch promotion/contractivity metadata."""
+        return await self.get("/ops/energy/meta")
 
     async def is_healthy(self) -> bool:
         try:
@@ -163,3 +175,11 @@ class EnergyServiceClient(BaseServiceClient):
             beta_mem=beta_mem,
         )
         return await self.post("/ops/flywheel/result", json=body.model_dump())
+
+    async def log_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Log an operational energy event."""
+        return await self.post("/ops/energy/log", json=payload)
+
+    async def get_logs(self, limit: int = 100) -> Dict[str, Any]:
+        """Fetch recent operational energy events."""
+        return await self.get("/ops/energy/logs", params={"limit": limit})

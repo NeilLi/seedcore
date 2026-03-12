@@ -1338,8 +1338,7 @@ async def _get_energy_meta() -> Dict[str, Any]:
     try:
         from seedcore.serve.energy_client import EnergyServiceClient
         from seedcore.utils.ray_utils import SERVE_GATEWAY
-        base_url = f"{SERVE_GATEWAY}/ops/energy/meta"
-        client = EnergyServiceClient(base_url, timeout=3.0)
+        client = EnergyServiceClient(base_url=SERVE_GATEWAY, timeout=3.0)
         return await client.get_meta()
     except Exception as e:
         logger.error(f"Failed to fetch /energy/meta: {e}")

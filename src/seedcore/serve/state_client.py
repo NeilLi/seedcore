@@ -77,6 +77,10 @@ class StateServiceClient(BaseServiceClient):
         # The underlying self.get should handle the HTTP call
         return await self.get("/ops/state/system-metrics")
 
+    async def get_unified_state(self) -> Dict[str, Any]:
+        """Fetch the full unified state snapshot for planner/debug workloads."""
+        return await self.get("/ops/state/unified-state")
+
     # ----------------------------------------------------------------------
     # COLD PATH (Debugging / Offline Analysis)
     # ----------------------------------------------------------------------
@@ -107,6 +111,10 @@ class StateServiceClient(BaseServiceClient):
             A dictionary indicating success or updated mode.
         """
         return await self.post("/ops/state/config/w_mode", json=new_config)
+
+    async def get_status(self) -> Dict[str, Any]:
+        """Get readiness/details for the state runtime."""
+        return await self.get("/ops/state/status")
 
     # ----------------------------------------------------------------------
     # HEALTH
