@@ -1,356 +1,408 @@
-#!/bin/bash
-# SKIP_LOAD=true ./setup-ray-serve.sh
+#!/usr/bin/env bash
+# SeedCore RayService deployment helper for local Kind clusters.
 
 set -euo pipefail
+trap 'echo "🛑 Interrupted"; exit 1' INT TERM
 
-# Resolve script directory for robust relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TMP_DIR="$(mktemp -d)"
 
-echo "🚀 Setting up Kind Cluster with RayService and Data Stores"
+cleanup() {
+  rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
 
-# ---------- Pretty printing ----------
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
 print_status() {
-  local status=$1; local message=$2
-  if [ "$status" = "OK" ]; then echo -e "${GREEN}✅ $message${NC}"
-  elif [ "$status" = "WARN" ]; then echo -e "${YELLOW}⚠️  $message${NC}"
-  elif [ "$status" = "INFO" ]; then echo -e "${BLUE}ℹ️  $message${NC}"
-  else echo -e "${RED}❌ $message${NC}"; fi
+  local status="$1"
+  local message="$2"
+  case "${status}" in
+    OK) echo -e "${GREEN}✅ ${message}${NC}" ;;
+    WARN) echo -e "${YELLOW}⚠️  ${message}${NC}" ;;
+    INFO) echo -e "${BLUE}ℹ️  ${message}${NC}" ;;
+    *) echo -e "${RED}❌ ${message}${NC}" ;;
+  esac
 }
 
-# ---------- Config (overridable via env or CLI) ----------
+die() {
+  print_status "ERROR" "$1"
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "'$1' is not installed or not on PATH"
+}
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  local stable_service_default="${STABLE_SERVE_SVC_NAME:-${RS_NAME}-stable-svc}"
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Options:
+  -n, --namespace <ns>          Kubernetes namespace (default: ${NAMESPACE:-seedcore-dev})
+  -c, --cluster <name>          Kind cluster name (default: ${CLUSTER_NAME:-seedcore-dev})
+  -i, --image <img:tag>         Ray image to deploy (default: ${RAY_IMAGE:-seedcore:latest})
+  -r, --rayservice <path>       RayService manifest path
+      --rayservice-name <name>  RayService metadata.name override
+      --stable-service <name>   Stable head/serve service name override (default: ${stable_service_default})
+      --env-file <path>         Env file used to create/update the secret
+      --secret-name <name>      Secret name for env injection
+      --worker-replicas <n>     Worker replica count override
+      --skip-load               Skip loading the Docker image into Kind
+      --skip-host-data-setup    Skip preparing the hostPath data directory
+      --host-data-dir <path>    HostPath data directory (default: /tmp/seedcore-data)
+  -h, --help                    Show this help
+EOF
+}
+
 CLUSTER_NAME="${CLUSTER_NAME:-seedcore-dev}"
 NAMESPACE="${NAMESPACE:-seedcore-dev}"
 RAY_VERSION="${RAY_VERSION:-2.53.0}"
-RAY_IMAGE="${RAY_IMAGE:-seedcore:latest}"   # your image (already built locally)
+RAY_IMAGE="${RAY_IMAGE:-seedcore:latest}"
 WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
-
-# RayService bits
-RAYSERVICE_FILE="${RAYSERVICE_FILE:-${SCRIPT_DIR}/rayservice.yaml}"  # path to your RayService YAML
-RS_NAME="${RS_NAME:-seedcore-svc}"                      # metadata.name inside rayservice.yaml
-# ✅ ADDED: Path to your new stable service definition
+RS_NAME="${RS_NAME:-seedcore-svc}"
+RAYSERVICE_FILE="${RAYSERVICE_FILE:-${SCRIPT_DIR}/rayservice.yaml}"
 STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-${SCRIPT_DIR}/ray-stable-svc.yaml}"
-
-# Optional CLI: setup-kind-ray.sh [namespace] [cluster_name] [image] [rayservice_file] [rayservice_name]
-if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
-if [[ $# -ge 2 ]]; then CLUSTER_NAME="$2"; fi
-if [[ $# -ge 3 ]]; then RAY_IMAGE="$3"; fi
-if [[ $# -ge 4 ]]; then RAYSERVICE_FILE="$4"; fi
-if [[ $# -ge 5 ]]; then RS_NAME="$5"; fi
-
-# .env → Secret
+STABLE_SERVE_SVC_NAME="${STABLE_SERVE_SVC_NAME:-}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-${SCRIPT_DIR}/../docker/.env}"
 SECRET_NAME="${SECRET_NAME:-seedcore-env-secret}"
+HOST_DATA_DIR="${HOST_DATA_DIR:-/tmp/seedcore-data}"
+SKIP_LOAD="${SKIP_LOAD:-false}"
+SKIP_HOST_DATA_SETUP="${SKIP_HOST_DATA_SETUP:-false}"
 
-# ---------- Tool checks ----------
-command -v kind >/dev/null || { print_status "ERROR" "kind is not installed."; exit 1; }
-command -v kubectl >/dev/null || { print_status "ERROR" "kubectl is not installed."; exit 1; }
-command -v helm >/dev/null || { print_status "ERROR" "helm is not installed."; exit 1; }
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--namespace) NAMESPACE="$2"; shift 2 ;;
+    -c|--cluster) CLUSTER_NAME="$2"; shift 2 ;;
+    -i|--image) RAY_IMAGE="$2"; shift 2 ;;
+    -r|--rayservice) RAYSERVICE_FILE="$2"; shift 2 ;;
+    --rayservice-name) RS_NAME="$2"; shift 2 ;;
+    --stable-service) STABLE_SERVE_SVC_NAME="$2"; shift 2 ;;
+    --env-file) ENV_FILE_PATH="$2"; shift 2 ;;
+    --secret-name) SECRET_NAME="$2"; shift 2 ;;
+    --worker-replicas) WORKER_REPLICAS="$2"; shift 2 ;;
+    --skip-load) SKIP_LOAD=true; shift ;;
+    --skip-host-data-setup) SKIP_HOST_DATA_SETUP=true; shift ;;
+    --host-data-dir) HOST_DATA_DIR="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown argument: $1" ;;
+  esac
+done
 
-# ---------- Kind cluster ----------
-if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
-  print_status "INFO" "Creating Kind cluster '$CLUSTER_NAME'..."
-  kind create cluster --name "$CLUSTER_NAME"
+if [[ -z "${STABLE_SERVE_SVC_NAME}" ]]; then
+  STABLE_SERVE_SVC_NAME="${RS_NAME}-stable-svc"
+fi
+
+render_top_level_metadata() {
+  local src="$1"
+  local dst="$2"
+  local rendered_name="$3"
+  local rendered_namespace="$4"
+
+  awk -v name="${rendered_name}" -v namespace="${rendered_namespace}" '
+    BEGIN { in_metadata = 0; metadata_done = 0 }
+    !metadata_done && /^metadata:[[:space:]]*$/ { in_metadata = 1; print; next }
+    in_metadata && /^  name:[[:space:]]*/ { print "  name: " name; next }
+    in_metadata && /^  namespace:[[:space:]]*/ { print "  namespace: " namespace; next }
+    in_metadata && /^spec:[[:space:]]*$/ { in_metadata = 0; metadata_done = 1; print; next }
+    { print }
+  ' "${src}" > "${dst}"
+}
+
+render_rayservice_manifest() {
+  local src="$1"
+  local dst="$2"
+  local meta_tmp="${TMP_DIR}/rayservice-meta.yaml"
+
+  render_top_level_metadata "${src}" "${meta_tmp}" "${RS_NAME}" "${NAMESPACE}"
+
+  awk \
+    -v ray_image="${RAY_IMAGE}" \
+    -v ray_version="${RAY_VERSION}" \
+    -v worker_replicas="${WORKER_REPLICAS}" '
+    BEGIN { in_small_worker_group = 0 }
+    /^    rayVersion:[[:space:]]*/ {
+      print "    rayVersion: \"" ray_version "\""
+      next
+    }
+    /^([[:space:]]*)image:[[:space:]]*/ {
+      match($0, /^[[:space:]]*/)
+      print substr($0, RSTART, RLENGTH) "image: " ray_image
+      next
+    }
+    /^      - groupName:[[:space:]]*small[[:space:]]*$/ {
+      in_small_worker_group = 1
+      print
+      next
+    }
+    in_small_worker_group && /^        replicas:[[:space:]]*[0-9]+[[:space:]]*$/ {
+      print "        replicas: " worker_replicas
+      in_small_worker_group = 0
+      next
+    }
+    { print }
+  ' "${meta_tmp}" > "${dst}"
+}
+
+ensure_kind_cluster() {
+  if kind get clusters 2>/dev/null | grep -Fxq "${CLUSTER_NAME}"; then
+    print_status "OK" "Kind cluster '${CLUSTER_NAME}' already exists"
+    return 0
+  fi
+
+  print_status "INFO" "Creating Kind cluster '${CLUSTER_NAME}' with project mount..."
+  CLUSTER_NAME="${CLUSTER_NAME}" "${SCRIPT_DIR}/setup-kind-only.sh"
   print_status "OK" "Kind cluster created"
-else
-  print_status "OK" "Kind cluster '$CLUSTER_NAME' already exists"
-fi
+}
 
-# Set context
-print_status "INFO" "Setting kubectl context..."
-kubectl cluster-info --context "kind-$CLUSTER_NAME" >/dev/null
+ensure_namespace() {
+  print_status "INFO" "Creating namespace '${NAMESPACE}' (if missing)..."
+  kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  print_status "OK" "Namespace ready"
+}
 
-# ---------- Namespace ----------
-print_status "INFO" "Creating namespace $NAMESPACE (if missing)..."
-kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-print_status "OK" "Namespace ready"
+ensure_local_image() {
+  docker image inspect "${RAY_IMAGE}" >/dev/null 2>&1 || die "Image ${RAY_IMAGE} not found locally. Build it first."
 
-# ---------- Load your image into Kind (digest-aware, avoid unnecessary reloads) ----------
-print_status "INFO" "Checking if image ${RAY_IMAGE} already exists in Kind nodes..."
+  local image_platform
+  image_platform="$(docker image inspect "${RAY_IMAGE}" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || echo "unknown")"
+  if [[ "${image_platform}" != "amd64/linux" && "${image_platform}" != "unknown" ]]; then
+    print_status "WARN" "Image platform is ${image_platform}; Kind nodes usually expect amd64/linux"
+  fi
+}
 
-# Verify image exists locally first
-if ! docker image inspect "${RAY_IMAGE}" >/dev/null 2>&1; then
-  print_status "ERROR" "Image ${RAY_IMAGE} not found locally. Please build it first:"
-  echo "   ./build.sh"
-  echo "   or"
-  echo "   docker build --platform linux/amd64 -f docker/Dockerfile -t ${RAY_IMAGE} ."
-  exit 1
-fi
+load_image_into_kind() {
+  local node
+  local nodes
+  local alt_image="${RAY_IMAGE}"
+  local node_has_image=true
 
-# Check image platform (Kind nodes typically run linux/amd64)
-IMAGE_PLATFORM=$(docker image inspect "${RAY_IMAGE}" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || echo "unknown")
-if [[ "${IMAGE_PLATFORM}" != "amd64/linux" ]] && [[ "${IMAGE_PLATFORM}" != "unknown" ]]; then
-  print_status "WARN" "Image platform is ${IMAGE_PLATFORM}, but Kind nodes expect linux/amd64"
-  print_status "INFO" "Rebuilding image for correct platform..."
-  if [ -f "${SCRIPT_DIR}/../build.sh" ]; then
-    "${SCRIPT_DIR}/../build.sh"
+  if is_true "${SKIP_LOAD}"; then
+    print_status "WARN" "Skipping image load (requested via SKIP_LOAD)"
+    return 0
+  fi
+
+  ensure_local_image
+
+  if [[ "${RAY_IMAGE}" != */* ]]; then
+    alt_image="docker.io/library/${RAY_IMAGE}"
+  fi
+
+  nodes="$(kind get nodes --name "${CLUSTER_NAME}" 2>/dev/null || true)"
+  if [[ -z "${nodes}" ]]; then
+    node_has_image=false
   else
-    docker build --platform linux/amd64 -f "${SCRIPT_DIR}/../docker/Dockerfile" -t "${RAY_IMAGE}" "${SCRIPT_DIR}/.."
+    for node in ${nodes}; do
+      if ! docker exec "${node}" sh -lc "
+        refs=\$(ctr -n k8s.io images ls -q 2>/dev/null || true)
+        echo \"\$refs\" | grep -Fxq '${alt_image}' || echo \"\$refs\" | grep -Fxq '${RAY_IMAGE}'
+      " >/dev/null 2>&1; then
+        node_has_image=false
+        break
+      fi
+    done
   fi
-fi
 
-# Get actual Kind node names dynamically (works regardless of naming scheme)
-NODES=$(kind get nodes --name "${CLUSTER_NAME}" 2>/dev/null || true)
-
-# Prepare alternative image name (kind/containerd often uses docker.io/library/ prefix)
-ALT_IMAGE="${RAY_IMAGE}"
-if [[ "${RAY_IMAGE}" != */* ]]; then
-  ALT_IMAGE="docker.io/library/${RAY_IMAGE}"
-fi
-
-# Check if image exists on all nodes using ctr (always available in kindest/node)
-NODE_HAS_IMAGE=true
-if [[ -z "$NODES" ]]; then
-  NODE_HAS_IMAGE=false
-else
-  for node in $NODES; do
-    if docker exec "$node" sh -lc "
-      refs=\$(ctr -n k8s.io images ls -q 2>/dev/null || true)
-      echo \"\$refs\" | grep -Fxq '${ALT_IMAGE}' || echo \"\$refs\" | grep -Fxq '${RAY_IMAGE}'
-    " >/dev/null 2>&1; then
-      : # present
-    else
-      NODE_HAS_IMAGE=false
-      break
-    fi
-  done
-fi
-
-# 1. Check for manual skip flag first
-if [ "${SKIP_LOAD:-false}" = "true" ]; then
-  print_status "WARN" "Skipping image load (manually requested via SKIP_LOAD=true)"
-# 2. Check if image already exists on all nodes
-elif [[ "$NODE_HAS_IMAGE" == "true" ]]; then
-  print_status "OK" "Image ${RAY_IMAGE} already present on all Kind nodes, skipping load"
-# 3. If neither, load the image
-else
-  print_status "INFO" "Loading image ${RAY_IMAGE} into Kind nodes (${CLUSTER_NAME})..."
-  if ! kind load docker-image "${RAY_IMAGE}" --name "${CLUSTER_NAME}" 2>&1; then
-    print_status "ERROR" "Failed to load image into Kind cluster"
-    echo ""
-    echo "This is often caused by a platform mismatch. Try rebuilding the image:"
-    echo "   ./build.sh"
-    echo "   or"
-    echo "   docker build --platform linux/amd64 -f docker/Dockerfile -t ${RAY_IMAGE} ."
-    echo ""
-    echo "Then retry the deployment."
-    exit 1
+  if [[ "${node_has_image}" == "true" ]]; then
+    print_status "OK" "Image ${RAY_IMAGE} already present on all Kind nodes"
+    return 0
   fi
+
+  print_status "INFO" "Loading image ${RAY_IMAGE} into Kind cluster ${CLUSTER_NAME}..."
+  kind load docker-image "${RAY_IMAGE}" --name "${CLUSTER_NAME}"
   print_status "OK" "Image loaded into Kind nodes"
-fi
+}
 
-# ---------- Host data dir (mounted via hostPath for pods) ----------
-print_status "INFO" "Setting up /tmp/seedcore-data on host..."
-sudo mkdir -p /tmp/seedcore-data
-sudo chown -R 1000:1000 /tmp/seedcore-data
-sudo chmod -R 755 /tmp/seedcore-data
-print_status "OK" "Host data directory /tmp/seedcore-data ready"
-
-# ---------- KubeRay operator ----------
-print_status "INFO" "Installing/Upgrading KubeRay operator..."
-helm repo add kuberay https://ray-project.github.io/kuberay-helm/ >/dev/null 2>&1 || true
-helm repo update >/dev/null
-if ! kubectl get namespace kuberay-system >/dev/null 2>&1; then
-  helm install kuberay-operator kuberay/kuberay-operator \
-    --namespace kuberay-system --create-namespace --wait
-  print_status "OK" "KubeRay operator installed"
-else
-  if ! kubectl get pods -n kuberay-system -l app.kubernetes.io/name=kuberay-operator --no-headers | grep -q Running; then
-    helm upgrade kuberay-operator kuberay/kuberay-operator --namespace kuberay-system --wait
+ensure_host_data_dir() {
+  if is_true "${SKIP_HOST_DATA_SETUP}"; then
+    print_status "WARN" "Skipping host data directory setup"
+    return 0
   fi
-  print_status "OK" "KubeRay operator is running"
-fi
 
-print_status "INFO" "Waiting for KubeRay operator to be ready..."
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kuberay-operator -n kuberay-system --timeout=300s
+  local sudo_cmd=()
+  if [[ ! -d "${HOST_DATA_DIR}" || ! -w "${HOST_DATA_DIR}" ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo_cmd=(sudo)
+    elif [[ ! -w "$(dirname "${HOST_DATA_DIR}")" ]]; then
+      die "Need sudo access or a writable HOST_DATA_DIR to prepare ${HOST_DATA_DIR}"
+    fi
+  fi
 
-# ---------- .env → Secret ----------
-if [ -f "$ENV_FILE_PATH" ]; then
-  print_status "INFO" "Creating/Updating Secret '${SECRET_NAME}' from ${ENV_FILE_PATH}..."
+  print_status "INFO" "Preparing host data directory ${HOST_DATA_DIR}..."
+  "${sudo_cmd[@]}" mkdir -p "${HOST_DATA_DIR}"
+  "${sudo_cmd[@]}" chown -R 1000:1000 "${HOST_DATA_DIR}" >/dev/null 2>&1 || true
+  "${sudo_cmd[@]}" chmod -R 755 "${HOST_DATA_DIR}" >/dev/null 2>&1 || true
+  print_status "OK" "Host data directory ready"
+}
+
+install_kuberay() {
+  print_status "INFO" "Installing/upgrading KubeRay operator..."
+  helm repo add kuberay https://ray-project.github.io/kuberay-helm/ >/dev/null 2>&1 || true
+  helm repo update >/dev/null
+
+  if ! kubectl get namespace kuberay-system >/dev/null 2>&1; then
+    helm install kuberay-operator kuberay/kuberay-operator \
+      --namespace kuberay-system \
+      --create-namespace \
+      --wait
+  else
+    helm upgrade kuberay-operator kuberay/kuberay-operator \
+      --namespace kuberay-system \
+      --wait >/dev/null
+  fi
+
+  kubectl wait --for=condition=ready pod \
+    -l app.kubernetes.io/name=kuberay-operator \
+    -n kuberay-system \
+    --timeout=300s >/dev/null
+  print_status "OK" "KubeRay operator ready"
+}
+
+create_env_secret() {
+  if [[ ! -f "${ENV_FILE_PATH}" ]]; then
+    print_status "WARN" "${ENV_FILE_PATH} not found. Skipping secret creation."
+    return 0
+  fi
+
+  print_status "INFO" "Creating/updating secret '${SECRET_NAME}' from ${ENV_FILE_PATH}..."
   kubectl -n "${NAMESPACE}" create secret generic "${SECRET_NAME}" \
     --from-env-file="${ENV_FILE_PATH}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-  print_status "OK" "Secret ${SECRET_NAME} created/updated"
-else
-  print_status "WARN" "${ENV_FILE_PATH} not found. Skipping secret creation."
-fi
+    --dry-run=client \
+    -o yaml | kubectl apply -f - >/dev/null
 
-# ---------- PKG WASM Path Fix ----------
-print_status "INFO" "Configuring PKG WASM path in secret..."
-# Update PKG_WASM_PATH to point to accessible location in Ray pods (using writable /app/data mount)
-kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o json 2>/dev/null | \
-  jq --arg val "$(echo -n '/app/data/opt/pkg/policy_rules.wasm' | base64)" \
-     '.data.PKG_WASM_PATH = $val' | \
-  kubectl apply -f - >/dev/null 2>&1 || print_status "WARN" "Could not update PKG_WASM_PATH (secret may not exist yet)"
-print_status "OK" "PKG WASM path configured"
+  local encoded_pkg_path
+  encoded_pkg_path="$(printf '%s' '/app/data/opt/pkg/policy_rules.wasm' | base64 | tr -d '\n')"
+  kubectl -n "${NAMESPACE}" patch secret "${SECRET_NAME}" \
+    --type merge \
+    -p "{\"data\":{\"PKG_WASM_PATH\":\"${encoded_pkg_path}\"}}" >/dev/null
+  print_status "OK" "Secret '${SECRET_NAME}' ready"
+}
 
-# ---------- Deploy RayService (manages its own RayCluster) ----------
-if [ ! -f "${RAYSERVICE_FILE}" ]; then
-  print_status "ERROR" "RayService file '${RAYSERVICE_FILE}' not found. Set RAYSERVICE_FILE or pass as 4th arg."
-  exit 1
-fi
+apply_rendered_manifests() {
+  [[ -f "${RAYSERVICE_FILE}" ]] || die "RayService file not found: ${RAYSERVICE_FILE}"
+  [[ -f "${STABLE_SERVE_SVC_FILE}" ]] || die "Stable service file not found: ${STABLE_SERVE_SVC_FILE}"
 
-print_status "INFO" "Applying RayService from ${RAYSERVICE_FILE}..."
-kubectl apply -n "${NAMESPACE}" -f "${RAYSERVICE_FILE}"
+  local rendered_rayservice="${TMP_DIR}/rayservice.rendered.yaml"
+  local rendered_stable_svc="${TMP_DIR}/ray-stable-svc.rendered.yaml"
 
-# ---------- Wait for RayService-managed head/worker pods ----------
-print_status "INFO" "Confirming RayService exists..."
-kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}"
+  render_rayservice_manifest "${RAYSERVICE_FILE}" "${rendered_rayservice}"
+  render_top_level_metadata "${STABLE_SERVE_SVC_FILE}" "${rendered_stable_svc}" "${STABLE_SERVE_SVC_NAME}" "${NAMESPACE}"
 
-print_status "INFO" "Waiting for RayService head pod to be created..."
-for i in {1..120}; do
-  COUNT=$(kubectl -n "${NAMESPACE}" get pods \
-    -l "ray.io/node-type=head" \
-    --no-headers 2>/dev/null | grep -c "${RS_NAME}" || echo "0")
-  if [ "$COUNT" -ge 1 ]; then break; fi
-  sleep 5
-done
-if [ "${COUNT:-0}" -lt 1 ]; then
-  print_status "ERROR" "Head pod not created in time."
-  kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" -o yaml | sed -n '/^status:/,$p' | head -n 120 || true
-  exit 1
-fi
+  print_status "INFO" "Applying RayService manifest..."
+  kubectl apply -f "${rendered_rayservice}" >/dev/null
 
-print_status "INFO" "Waiting for RayService head pod to be Ready..."
-# Get the actual cluster name from the pod labels
-CLUSTER_NAME_FROM_POD=$(kubectl -n "${NAMESPACE}" get pods \
-  -l "ray.io/node-type=head" \
-  --no-headers | grep "${RS_NAME}" | head -n1 | awk '{print $1}' | sed 's/-head-.*$//')
-if [ -n "${CLUSTER_NAME_FROM_POD}" ]; then
-  kubectl -n "${NAMESPACE}" wait --for=condition=ready pod \
-    -l "ray.io/node-type=head,ray.io/cluster=${CLUSTER_NAME_FROM_POD}" --timeout=900s
-else
-  print_status "ERROR" "Could not determine cluster name from pods"
-  exit 1
-fi
+  print_status "INFO" "Applying stable Ray head/serve service..."
+  kubectl apply -f "${rendered_stable_svc}" >/dev/null
+}
 
-# ---------- Setup PKG WASM File ----------
-print_status "INFO" "Setting up PKG WASM file in Ray head pod..."
-HEAD_POD=$(kubectl -n "${NAMESPACE}" get pods -l "ray.io/node-type=head" --no-headers | head -n1 | awk '{print $1}')
-if [ -n "${HEAD_POD}" ]; then
-  # Wait for Ray services to be fully ready before attempting file operations
-  print_status "INFO" "Waiting for Ray services to be fully ready (30s)..."
-  sleep 30
-  
-  # Retry logic for WASM file creation
-  WASM_CREATED=false
+wait_for_head_pod() {
+  local head_pod=""
+  local attempt
+
+  print_status "INFO" "Waiting for RayService '${RS_NAME}'..."
+  kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" >/dev/null
+
+  for attempt in $(seq 1 120); do
+    head_pod="$(kubectl -n "${NAMESPACE}" get pods \
+      -l ray.io/node-type=head \
+      --no-headers 2>/dev/null | awk -v name="${RS_NAME}" '$1 ~ name {print $1; exit}')"
+    if [[ -n "${head_pod}" ]]; then
+      break
+    fi
+    sleep 5
+  done
+
+  [[ -n "${head_pod}" ]] || die "Ray head pod for ${RS_NAME} was not created in time"
+
+  print_status "INFO" "Waiting for head pod '${head_pod}' to become Ready..."
+  kubectl -n "${NAMESPACE}" wait --for=condition=ready "pod/${head_pod}" --timeout=900s >/dev/null
+  echo "${head_pod}"
+}
+
+setup_pkg_wasm_placeholder() {
+  local head_pod="$1"
+  local attempt
+
+  print_status "INFO" "Ensuring PKG WASM placeholder exists in ${head_pod}..."
+  sleep 15
   for attempt in 1 2 3; do
-    print_status "INFO" "Creating PKG WASM file (attempt $attempt/3)..."
-    
-    if kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- bash -c '
+    if kubectl exec -n "${NAMESPACE}" "${head_pod}" -- bash -lc '
       mkdir -p /app/data/opt/pkg
       cat > /app/data/opt/pkg/policy_rules.wasm << "WASM_EOF"
 # Dummy PKG WASM for testing
-# Version: rules@1.3.0+ontology@0.9.1
-# This is a placeholder - replace with real WASM binary in production
-# To replace: kubectl cp policy_rules.wasm <namespace>/<head-pod>:/app/data/opt/pkg/policy_rules.wasm
+# Replace with a real WASM binary in production.
 WASM_EOF
       chmod 644 /app/data/opt/pkg/policy_rules.wasm
-      echo "PKG WASM placeholder created at /app/data/opt/pkg/policy_rules.wasm"
-    '; then
-      WASM_CREATED=true
-      break
-    else
-      print_status "WARN" "Attempt $attempt failed - pod may not be ready yet"
-      if [ $attempt -lt 3 ]; then
-        sleep 15
-      fi
+    ' >/dev/null 2>&1; then
+      print_status "OK" "PKG WASM placeholder created"
+      return 0
     fi
+    sleep 10
   done
-  
-  # Verify WASM file creation
-  if [ "$WASM_CREATED" = true ] && kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- test -f /app/data/opt/pkg/policy_rules.wasm; then
-    WASM_SIZE=$(kubectl exec -n "${NAMESPACE}" "${HEAD_POD}" -- stat -c%s /app/data/opt/pkg/policy_rules.wasm 2>/dev/null || echo "unknown")
-    print_status "OK" "PKG WASM placeholder created (${WASM_SIZE} bytes) - replace with real WASM for production"
-  else
-    print_status "WARN" "PKG WASM file not created - coordinator will report PKG as not loaded"
-    print_status "INFO" "Troubleshooting: Check pod logs with 'kubectl logs -n ${NAMESPACE} ${HEAD_POD}'"
-  fi
-else
-  print_status "WARN" "Could not find Ray head pod to setup PKG WASM"
-fi
 
-# Optional: wait for at least one worker if replicas > 0
-print_status "INFO" "Waiting for RayService worker pod(s) to be Ready (if any)..."
-if [ -n "${CLUSTER_NAME_FROM_POD}" ]; then
-  kubectl wait --for=condition=ready pod \
-    -l "ray.io/node-type=worker,ray.io/cluster=${CLUSTER_NAME_FROM_POD}" \
-    -n "${NAMESPACE}" --timeout=600s || true
-fi
+  print_status "WARN" "Could not create PKG WASM placeholder in ${head_pod}"
+}
 
-# ✅ ADDED: ---------- Deploy user-managed stable Serve Service ----------
-if [ -f "${STABLE_SERVE_SVC_FILE}" ]; then
-  print_status "INFO" "Applying stable Serve Service from ${STABLE_SERVE_SVC_FILE}..."
-  kubectl apply -n "${NAMESPACE}" -f "${STABLE_SERVE_SVC_FILE}"
-else
-  print_status "WARN" "Stable Serve Service file '${STABLE_SERVE_SVC_FILE}' not found. Skipping."
-fi
+print_summary() {
+  local head_pod="$1"
 
+  print_status "INFO" "RayService status summary:"
+  kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" -o yaml | sed -n '/^status:/,$p' | head -n 120 || true
 
-# Discover the generated RayCluster name
-print_status "INFO" "Discovering generated RayCluster name..."
-kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" \
-  -o jsonpath='{.status.activeServiceStatus.rayClusterName}{"\n"}{.status.pendingServiceStatus.rayClusterName}{"\n"}' || true
+  print_status "INFO" "Relevant services:"
+  kubectl -n "${NAMESPACE}" get svc "${STABLE_SERVE_SVC_NAME}" "${RS_NAME}-head-svc" "${RS_NAME}-serve-svc" 2>/dev/null || true
 
-# ---------- Status & objects ----------
-print_status "INFO" "RayService status (summary):"
-kubectl -n "${NAMESPACE}" get rayservice "${RS_NAME}" -o yaml | sed -n '/^status:/,$p' | head -n 120 || true
+  echo
+  print_status "OK" "Ray deployment complete"
+  echo "   Kind cluster:      ${CLUSTER_NAME}"
+  echo "   Namespace:         ${NAMESPACE}"
+  echo "   RayService:        ${RS_NAME}"
+  echo "   Ray image:         ${RAY_IMAGE}"
+  echo "   Stable service:    ${STABLE_SERVE_SVC_NAME}"
+  echo "   Head pod:          ${head_pod}"
+  echo "   Host data dir:     ${HOST_DATA_DIR}"
+  echo
+  echo "   Dashboard:         kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC_NAME} 8265:8265"
+  echo "   Ray client:        kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC_NAME} 10001:10001"
+  echo "   Serve HTTP:        kubectl -n ${NAMESPACE} port-forward svc/${STABLE_SERVE_SVC_NAME} 8000:8000"
+  echo "   Replace PKG WASM:  kubectl cp policy_rules.wasm ${NAMESPACE}/${head_pod}:/app/data/opt/pkg/policy_rules.wasm"
+}
 
-print_status "INFO" "Pods (selector: ray.io/cluster=${CLUSTER_NAME_FROM_POD}):"
-kubectl get pods -n "${NAMESPACE}" -l ray.io/cluster="${CLUSTER_NAME_FROM_POD}"
+main() {
+  require_cmd kind
+  require_cmd kubectl
+  require_cmd helm
+  require_cmd docker
+  require_cmd base64
 
-print_status "INFO" "Services (selector: ray.io/cluster=${CLUSTER_NAME_FROM_POD}):"
-kubectl get svc -n "${NAMESPACE}" -l ray.io/cluster="${CLUSTER_NAME_FROM_POD}"
+  print_status "INFO" "Setting up Kind + KubeRay + RayService"
 
-# ✅ UPDATED: --- Discover Services ---
-# The operator creates these services automatically
-OPERATOR_HEAD_SVC="${RS_NAME}-head-svc"
-OPERATOR_SERVE_SVC="${RS_NAME}-serve-svc" # This one has the selector issue
+  ensure_kind_cluster
+  kubectl cluster-info --context "kind-${CLUSTER_NAME}" >/dev/null
+  ensure_namespace
+  load_image_into_kind
+  ensure_host_data_dir
+  install_kuberay
+  create_env_secret
+  apply_rendered_manifests
 
-# This is our user-managed, truly stable service. The name comes from your serve-svc.yaml
-USER_STABLE_SERVE_SVC="seedcore-svc-serve-svc"
+  local head_pod
+  head_pod="$(wait_for_head_pod)"
+  setup_pkg_wasm_placeholder "${head_pod}"
+  print_summary "${head_pod}"
+}
 
-# For dashboard and client, the operator-managed head service is fine
-if kubectl -n "${NAMESPACE}" get svc "${OPERATOR_HEAD_SVC}" >/dev/null 2>&1; then
-  HEAD_SVC="${OPERATOR_HEAD_SVC}"
-else
-  # Fallback: cluster-specific head svc (during early init)
-  HEAD_SVC="$(kubectl -n "${NAMESPACE}" get svc \
-    -l "ray.io/cluster=${CLUSTER_NAME_FROM_POD}",ray.io/node-type=head \
-    -o jsonpath='{.items[0].metadata.name}')"
-fi
-
-echo
-print_status "OK" "Head service (for dashboard/client): ${HEAD_SVC}"
-print_status "WARN" "Operator-managed Serve service (unstable selector): ${OPERATOR_SERVE_SVC}"
-print_status "OK" "User-managed stable Serve service (recommended): ${USER_STABLE_SERVE_SVC}"
-
-# ✅ UPDATED: --- Port-forwards ---
-echo "🔌 Port-forward (run in separate terminals):"
-echo "  - Dashboard: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 8265:8265"
-echo "  - Ray Client: kubectl -n ${NAMESPACE} port-forward svc/${HEAD_SVC} 10001:10001"
-echo "  - Serve HTTP (use the stable service): kubectl -n ${NAMESPACE} port-forward svc/${USER_STABLE_SERVE_SVC} 8000:8000"
-
-# ---------- Final summary ----------
-echo
-print_status "OK" "🎉 Kind + KubeRay operator + RayService (${RS_NAME}) deployed!"
-echo
-echo "📊 Cluster Info:"
-echo "   - Kind Cluster: ${CLUSTER_NAME}"
-echo "   - Namespace:    ${NAMESPACE}"
-echo "   - RayService:   ${RS_NAME}"
-echo "   - Image:        ${RAY_IMAGE}"
-echo "   - Data Dir:     /tmp/seedcore-data (hostPath)"
-echo
-echo "🔧 Useful:"
-echo "   - List pods:        kubectl get pods -n ${NAMESPACE} -w"
-echo "   - RayService YAML:  kubectl -n ${NAMESPACE} get rayservice ${RS_NAME} -o yaml"
-echo "   - Stable Serve SVC: kubectl -n ${NAMESPACE} describe svc ${USER_STABLE_SERVE_SVC}"
-echo "   - Delete cluster:   kind delete cluster --name ${CLUSTER_NAME}"
-echo
-echo "📦 PKG Configuration:"
-echo "   - Check PKG status: kubectl -n ${NAMESPACE} port-forward svc/${USER_STABLE_SERVE_SVC} 8000:8000"
-echo "                       curl http://localhost:8000/pipeline/health | jq .pkg"
-echo "   - Replace dummy WASM with real binary:"
-echo "                       kubectl cp policy_rules.wasm ${NAMESPACE}/${HEAD_POD}:/app/data/opt/pkg/policy_rules.wasm"
-echo "                       kubectl delete pod -n ${NAMESPACE} -l ray.io/node-type=head  # Restart to reload"
+main "$@"

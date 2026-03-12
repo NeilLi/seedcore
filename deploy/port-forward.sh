@@ -4,7 +4,9 @@
 
 set -euo pipefail
 
-NAMESPACE=${1:-seedcore-dev}
+NAMESPACE="${1:-${NAMESPACE:-seedcore-dev}}"
+RAYSERVICE_NAME="${RAYSERVICE_NAME:-seedcore-svc}"
+STABLE_RAY_SVC="${STABLE_RAY_SVC:-${RAYSERVICE_NAME}-stable-svc}"
 
 echo "🔗 Checking existing port-forwards in namespace: $NAMESPACE"
 
@@ -32,8 +34,7 @@ start_forward() {
 
 # Define all port-forwards
 start_forward "seedcore-api" "8002:8002"
-start_forward "seedcore-svc-stable-svc" "8265:8265 10001:10001"
-start_forward "seedcore-svc-serve-svc" "8000:8000"
+start_forward "${STABLE_RAY_SVC}" "8000:8000 8265:8265 10001:10001"
 start_forward "postgresql" "5432:5432"
 start_forward "mysql" "3306:3306"
 start_forward "neo4j" "7474:7474 7687:7687"
