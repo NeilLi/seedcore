@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any, List
 
 import pytest
 
 from seedcore.models.source_registration import (
+    SourceRegistrationMeasurement,
     SourceRegistration,
     SourceRegistrationStatus,
     TrackingEvent,
@@ -142,10 +144,12 @@ async def test_project_tracking_event_creates_measurement_projection_with_gps_me
             "measurement_type": "gps",
             "value": 2438.7,
             "unit": "meters",
-            "lat": 18.801,
-            "lon": 98.921,
-            "altitude_meters": 2438.7,
             "sensor_id": "gps-7",
+            "metadata": {
+                "lat": 18.801,
+                "lon": 98.921,
+                "altitude_meters": 2438.7,
+            },
         },
         sha256="gpshash",
         captured_at=datetime(2026, 3, 11, 10, 2, tzinfo=timezone.utc),
@@ -162,3 +166,71 @@ async def test_project_tracking_event_creates_measurement_projection_with_gps_me
     assert measurement.meta_data["lat"] == pytest.approx(18.801)
     assert measurement.meta_data["lon"] == pytest.approx(98.921)
     assert measurement.meta_data["altitude_meters"] == pytest.approx(2438.7)
+
+
+@pytest.mark.asyncio
+async def test_project_tracking_event_skips_duplicate_measurement_projection() -> None:
+    registration = _make_registration()
+    existing_measurement = SourceRegistrationMeasurement(
+        registration_id=registration.id,
+        source_event_id=uuid.uuid4(),
+        measurement_type="humidity",
+        value=67.2,
+        unit="percent",
+        measured_at=datetime(2026, 3, 11, 10, 2, tzinfo=timezone.utc),
+        sensor_id="humid-1",
+        quality_score=0.98,
+        meta_data={"channel": "storage"},
+    )
+    session = FakeAsyncSession(
+        execute_results=[
+            _ScalarResult(all_items=[]),
+            _ScalarResult(all_items=[existing_measurement]),
+        ]
+    )
+    event = TrackingEvent(
+        registration_id=registration.id,
+        event_type=TrackingEventType.ENVIRONMENTAL_READING_RECORDED,
+        source_kind=TrackingEventSourceKind.TELEMETRY,
+        payload={
+            "measurement_type": "humidity",
+            "value": 67.2,
+            "unit": "percent",
+            "measured_at": "2026-03-11T10:02:00+00:00",
+            "sensor_id": "humid-1",
+            "quality_score": 0.98,
+            "metadata": {"channel": "storage"},
+        },
+        sha256="humidity-hash",
+        captured_at=datetime(2026, 3, 11, 10, 2, tzinfo=timezone.utc),
+    )
+
+    await project_tracking_event(session, event, registration=registration)
+
+    assert not any(
+        item.__class__.__name__ == "SourceRegistrationMeasurement"
+        for item in session.added
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_tracking_event_submit_request_sets_verifying_and_task_link() -> None:
+    registration = _make_registration()
+    session = FakeAsyncSession()
+    task_id = uuid.uuid4()
+    event = TrackingEvent(
+        registration_id=registration.id,
+        event_type=TrackingEventType.OPERATOR_REQUEST_RECEIVED,
+        source_kind=TrackingEventSourceKind.OPERATOR_REQUEST,
+        payload={
+            "command": "submit_for_decision",
+            "task_id": str(task_id),
+        },
+        sha256="submit-hash",
+        captured_at=datetime(2026, 3, 11, 10, 5, tzinfo=timezone.utc),
+    )
+
+    await project_tracking_event(session, event, registration=registration)
+
+    assert registration.status == SourceRegistrationStatus.VERIFYING
+    assert registration.submitted_task_id == task_id

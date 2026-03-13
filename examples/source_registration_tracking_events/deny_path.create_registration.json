@@ -1,0 +1,16 @@
+{
+  "source_claim_id": "claim-deny-001",
+  "lot_id": "lot-deny-001",
+  "producer_id": "producer-deny-001",
+  "rare_grade_profile_id": "rare-grade-gold",
+  "claimed_origin": {
+    "zone_id": "vault_alpha",
+    "country": "TH",
+    "altitude_meters": 2430
+  },
+  "collection_site": {
+    "site_id": "site-deny-001",
+    "name": "Deny Path Collection Site"
+  },
+  "collected_at": "2026-03-13T11:00:00Z"
+}

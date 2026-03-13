@@ -71,6 +71,8 @@ async def project_tracking_event(
         raise ValueError(f"SourceRegistration {event.registration_id} not found")
 
     payload = event.payload or {}
+    if registration.snapshot_id is None and event.snapshot_id is not None:
+        registration.snapshot_id = event.snapshot_id
 
     if event.event_type == TrackingEventType.SOURCE_CLAIM_DECLARED:
         if payload.get("source_claim_id") is not None:
@@ -82,9 +84,15 @@ async def project_tracking_event(
         if payload.get("rare_grade_profile_id") is not None:
             registration.rare_grade_profile_id = payload.get("rare_grade_profile_id")
         if isinstance(payload.get("claimed_origin"), dict) and payload.get("claimed_origin"):
-            registration.claimed_origin = dict(payload["claimed_origin"])
+            registration.claimed_origin = {
+                **dict(registration.claimed_origin or {}),
+                **dict(payload["claimed_origin"]),
+            }
         if isinstance(payload.get("collection_site"), dict) and payload.get("collection_site"):
-            registration.collection_site = dict(payload["collection_site"])
+            registration.collection_site = {
+                **dict(registration.collection_site or {}),
+                **dict(payload["collection_site"]),
+            }
         if payload.get("collected_at") is not None:
             registration.collected_at = _coerce_datetime(payload.get("collected_at"))
         if registration.status == SourceRegistrationStatus.DRAFT:
@@ -108,6 +116,10 @@ async def project_tracking_event(
 
     elif event.event_type == TrackingEventType.OPERATOR_REQUEST_RECEIVED:
         command = str(payload.get("command") or payload.get("request_type") or "").strip().lower()
+        if payload.get("task_id") is not None:
+            task_id = _coerce_optional_uuid(payload.get("task_id"))
+            if task_id is not None:
+                registration.submitted_task_id = task_id
         if command in {"submit", "submit_for_decision"}:
             registration.status = SourceRegistrationStatus.VERIFYING
         elif registration.status == SourceRegistrationStatus.DRAFT:
@@ -178,7 +190,31 @@ async def _project_measurement_event(
     if existing_rows:
         return
 
+    seen_projection_keys: set[str] = set()
     for measurement in _iter_measurements(event.payload or {}):
+        measured_at = measurement["measured_at"] or event.captured_at
+        projection_key = _measurement_projection_key(
+            measurement,
+            measured_at=measured_at,
+        )
+        if projection_key in seen_projection_keys:
+            continue
+        seen_projection_keys.add(projection_key)
+
+        duplicate_rows = (
+            await session.execute(
+                select(SourceRegistrationMeasurement).where(
+                    SourceRegistrationMeasurement.registration_id == registration.id,
+                    SourceRegistrationMeasurement.measurement_type
+                    == str(measurement["measurement_type"]),
+                )
+            )
+        ).scalars().all()
+        if any(
+            _measurement_projection_key_for_row(row) == projection_key for row in duplicate_rows
+        ):
+            continue
+
         session.add(
             SourceRegistrationMeasurement(
                 registration_id=registration.id,
@@ -186,7 +222,7 @@ async def _project_measurement_event(
                 measurement_type=str(measurement["measurement_type"]),
                 value=float(measurement["value"]),
                 unit=str(measurement["unit"]),
-                measured_at=measurement["measured_at"] or event.captured_at,
+                measured_at=measured_at,
                 sensor_id=measurement["sensor_id"],
                 raw_artifact_id=measurement["raw_artifact_id"],
                 quality_score=measurement["quality_score"],
@@ -225,9 +261,9 @@ def _normalize_measurement_dict(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]
         return None
 
     metadata = dict(raw.get("metadata") or {})
-    lat = raw.get("lat")
-    lon = raw.get("lon")
-    altitude = raw.get("altitude_meters")
+    lat = raw.get("lat", metadata.get("lat"))
+    lon = raw.get("lon", metadata.get("lon"))
+    altitude = raw.get("altitude_meters", metadata.get("altitude_meters"))
     if lat is not None:
         metadata.setdefault("lat", lat)
     if lon is not None:
@@ -251,6 +287,41 @@ def _normalize_measurement_dict(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "raw_artifact_id": _coerce_optional_uuid(raw.get("raw_artifact_id")),
         "metadata": metadata,
     }
+
+
+def _measurement_projection_key(
+    measurement: Dict[str, Any],
+    *,
+    measured_at: Optional[datetime],
+) -> str:
+    normalized = {
+        "measurement_type": str(measurement["measurement_type"]),
+        "value": float(measurement["value"]),
+        "unit": str(measurement["unit"]),
+        "measured_at": measured_at.astimezone(timezone.utc).isoformat() if measured_at is not None else None,
+        "sensor_id": measurement["sensor_id"],
+        "raw_artifact_id": str(measurement["raw_artifact_id"]) if measurement["raw_artifact_id"] is not None else None,
+        "quality_score": measurement["quality_score"],
+        "metadata": dict(measurement["metadata"] or {}),
+    }
+    return hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _measurement_projection_key_for_row(row: SourceRegistrationMeasurement) -> str:
+    return _measurement_projection_key(
+        {
+            "measurement_type": row.measurement_type,
+            "value": row.value,
+            "unit": row.unit,
+            "sensor_id": row.sensor_id,
+            "raw_artifact_id": row.raw_artifact_id,
+            "quality_score": row.quality_score,
+            "metadata": dict(row.meta_data or {}),
+        },
+        measured_at=row.measured_at,
+    )
 
 
 def _coerce_datetime(value: Any) -> Optional[datetime]:

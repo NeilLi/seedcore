@@ -1,0 +1,147 @@
+[
+  {
+    "event_type": "provenance_scan_captured",
+    "source_kind": "provenance_scan",
+    "captured_at": "2026-03-13T10:01:00Z",
+    "device_id": "cam-happy-01",
+    "correlation_id": "happy-artifact-1",
+    "payload": {
+      "artifact_type": "honeycomb_macro_image",
+      "uri": "s3://seedcore-demo/happy/honeycomb_macro.jpg",
+      "sha256": "happy-honeycomb-sha256",
+      "captured_at": "2026-03-13T10:01:00Z",
+      "captured_by": "operator-demo",
+      "device_id": "cam-happy-01",
+      "content_type": "image/jpeg",
+      "metadata": {
+        "lens": "macro"
+      }
+    }
+  },
+  {
+    "event_type": "seal_check_captured",
+    "source_kind": "provenance_scan",
+    "captured_at": "2026-03-13T10:02:00Z",
+    "device_id": "cam-happy-02",
+    "correlation_id": "happy-artifact-2",
+    "payload": {
+      "artifact_type": "seal_macro_image",
+      "uri": "s3://seedcore-demo/happy/seal_macro.jpg",
+      "sha256": "happy-seal-sha256",
+      "captured_at": "2026-03-13T10:02:00Z",
+      "captured_by": "operator-demo",
+      "device_id": "cam-happy-02",
+      "content_type": "image/jpeg",
+      "metadata": {
+        "lens": "macro"
+      }
+    }
+  },
+  {
+    "event_type": "environmental_reading_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T10:03:00Z",
+    "device_id": "humid-happy-01",
+    "correlation_id": "happy-measurement-1",
+    "payload": {
+      "measurement_type": "humidity",
+      "value": 67.2,
+      "unit": "percent",
+      "measured_at": "2026-03-13T10:03:00Z",
+      "sensor_id": "humid-happy-01",
+      "quality_score": 0.98,
+      "metadata": {
+        "channel": "storage"
+      }
+    }
+  },
+  {
+    "event_type": "environmental_reading_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T10:04:00Z",
+    "device_id": "oxygen-happy-01",
+    "correlation_id": "happy-measurement-2",
+    "payload": {
+      "measurement_type": "oxygen_level",
+      "value": 18.4,
+      "unit": "percent",
+      "measured_at": "2026-03-13T10:04:00Z",
+      "sensor_id": "oxygen-happy-01",
+      "quality_score": 0.97,
+      "metadata": {
+        "channel": "storage"
+      }
+    }
+  },
+  {
+    "event_type": "environmental_reading_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T10:05:00Z",
+    "device_id": "gps-happy-01",
+    "correlation_id": "happy-measurement-3",
+    "payload": {
+      "measurement_type": "gps",
+      "value": 2438.7,
+      "unit": "meters",
+      "measured_at": "2026-03-13T10:05:00Z",
+      "sensor_id": "gps-happy-01",
+      "quality_score": 0.99,
+      "lat": 18.801,
+      "lon": 98.921,
+      "altitude_meters": 2438.7,
+      "metadata": {
+        "lat": 18.801,
+        "lon": 98.921,
+        "altitude_meters": 2438.7
+      }
+    }
+  },
+  {
+    "event_type": "bio_signature_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T10:06:00Z",
+    "device_id": "lab-happy-01",
+    "correlation_id": "happy-measurement-4",
+    "payload": {
+      "measurement_type": "pollen_count",
+      "value": 184000,
+      "unit": "ppm",
+      "measured_at": "2026-03-13T10:06:00Z",
+      "sensor_id": "lab-happy-01",
+      "quality_score": 0.95,
+      "metadata": {}
+    }
+  },
+  {
+    "event_type": "bio_signature_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T10:07:00Z",
+    "device_id": "lab-happy-02",
+    "correlation_id": "happy-measurement-5",
+    "payload": {
+      "measurement_type": "purity_score",
+      "value": 0.992,
+      "unit": "ratio",
+      "measured_at": "2026-03-13T10:07:00Z",
+      "sensor_id": "lab-happy-02",
+      "quality_score": 0.97,
+      "metadata": {}
+    }
+  },
+  {
+    "event_type": "bio_signature_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T10:08:00Z",
+    "device_id": "spec-happy-01",
+    "correlation_id": "happy-measurement-6",
+    "payload": {
+      "measurement_type": "spectral_match_score",
+      "value": 0.961,
+      "unit": "ratio",
+      "measured_at": "2026-03-13T10:08:00Z",
+      "sensor_id": "spec-happy-01",
+      "quality_score": 0.96,
+      "metadata": {}
+    }
+  }
+]

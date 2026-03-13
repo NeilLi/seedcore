@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -179,6 +179,155 @@ def _measurement_event_type(measurement_type: str) -> TrackingEventType:
     return TrackingEventType.ENVIRONMENTAL_READING_RECORDED
 
 
+def _datetime_sort_value(value: Optional[datetime]) -> tuple[int, str]:
+    if value is None:
+        return (0, "")
+    normalized = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return (1, normalized.isoformat())
+
+
+def _serialize_tracking_event(event: TrackingEvent) -> Dict[str, Any]:
+    return {
+        "id": str(event.id),
+        "event_type": event.event_type.value,
+        "source_kind": event.source_kind.value,
+        "payload": event.payload or {},
+        "captured_at": event.captured_at.isoformat() if event.captured_at is not None else None,
+        "producer_id": event.producer_id,
+        "device_id": event.device_id,
+        "operator_id": event.operator_id,
+        "correlation_id": event.correlation_id,
+        "snapshot_id": event.snapshot_id,
+    }
+
+
+def _serialize_artifact(artifact: SourceRegistrationArtifact) -> Dict[str, Any]:
+    return {
+        "artifact_id": str(artifact.id),
+        "artifact_type": artifact.artifact_type,
+        "uri": artifact.uri,
+        "sha256": artifact.sha256,
+        "captured_at": artifact.captured_at.isoformat() if artifact.captured_at is not None else None,
+        "captured_by": artifact.captured_by,
+        "device_id": artifact.device_id,
+        "content_type": artifact.content_type,
+        "metadata": artifact.meta_data or {},
+    }
+
+
+def _serialize_measurement(measurement: SourceRegistrationMeasurement) -> Dict[str, Any]:
+    metadata = dict(measurement.meta_data or {})
+    serialized = {
+        "measurement_id": str(measurement.id),
+        "value": measurement.value,
+        "unit": measurement.unit,
+        "measured_at": measurement.measured_at.isoformat() if measurement.measured_at is not None else None,
+        "sensor_id": measurement.sensor_id,
+        "quality_score": measurement.quality_score,
+        "raw_artifact_id": (
+            str(measurement.raw_artifact_id)
+            if measurement.raw_artifact_id is not None
+            else None
+        ),
+        "metadata": metadata,
+    }
+    if measurement.measurement_type == "gps":
+        for key in ("lat", "lon", "altitude_meters"):
+            if metadata.get(key) is not None:
+                serialized[key] = metadata.get(key)
+    return serialized
+
+
+def _measurement_payload_for_tracking_event(measurement: MeasurementCreate) -> Dict[str, Any]:
+    payload = {
+        "measurement_type": measurement.measurement_type,
+        "value": measurement.value,
+        "unit": measurement.unit,
+        "measured_at": (
+            measurement.measured_at.isoformat()
+            if measurement.measured_at is not None
+            else None
+        ),
+        "sensor_id": measurement.sensor_id,
+        "quality_score": measurement.quality_score,
+        "raw_artifact_id": (
+            str(measurement.raw_artifact_id)
+            if measurement.raw_artifact_id is not None
+            else None
+        ),
+        "metadata": measurement.metadata,
+    }
+    if measurement.measurement_type == "gps":
+        for key in ("lat", "lon", "altitude_meters"):
+            if measurement.metadata.get(key) is not None:
+                payload[key] = measurement.metadata.get(key)
+    return payload
+
+
+def _build_raw_source_registration(
+    registration: SourceRegistration,
+    *,
+    artifacts: List[SourceRegistrationArtifact],
+    measurements: List[SourceRegistrationMeasurement],
+    tracking_events: List[TrackingEvent],
+) -> Dict[str, Any]:
+    ordered_artifacts = sorted(
+        artifacts,
+        key=lambda row: (
+            _datetime_sort_value(row.captured_at),
+            _datetime_sort_value(row.created_at),
+            str(row.id),
+        ),
+    )
+    ordered_measurements = sorted(
+        measurements,
+        key=lambda row: (
+            str(row.measurement_type),
+            _datetime_sort_value(row.measured_at),
+            _datetime_sort_value(row.created_at),
+            str(row.id),
+        ),
+    )
+    latest_measurements: Dict[str, Dict[str, Any]] = {}
+    for measurement in ordered_measurements:
+        latest_measurements[str(measurement.measurement_type)] = _serialize_measurement(measurement)
+
+    ordered_tracking_events = sorted(
+        tracking_events,
+        key=lambda row: (
+            _datetime_sort_value(row.captured_at),
+            _datetime_sort_value(row.created_at),
+            str(row.id),
+        ),
+    )
+    return {
+        "registration_id": str(registration.id),
+        "source_claim_id": registration.source_claim_id,
+        "lot_id": registration.lot_id,
+        "producer_id": registration.producer_id,
+        "rare_grade_profile_id": registration.rare_grade_profile_id,
+        "status": registration.status.value,
+        "claimed_origin": registration.claimed_origin or {},
+        "collection_site": registration.collection_site or {},
+        "collected_at": (
+            registration.collected_at.isoformat()
+            if registration.collected_at is not None
+            else None
+        ),
+        "snapshot_id": registration.snapshot_id,
+        "submitted_task_id": (
+            str(registration.submitted_task_id)
+            if registration.submitted_task_id is not None
+            else None
+        ),
+        "artifacts": [_serialize_artifact(artifact) for artifact in ordered_artifacts],
+        "measurements": latest_measurements,
+        "tracking_events": [
+            _serialize_tracking_event(event) for event in ordered_tracking_events
+        ],
+    }
+
+
 async def _build_registration_read(
     session: AsyncSession,
     registration: SourceRegistration,
@@ -187,6 +336,10 @@ async def _build_registration_read(
         await session.execute(
             select(SourceRegistrationArtifact).where(
                 SourceRegistrationArtifact.registration_id == registration.id
+            ).order_by(
+                SourceRegistrationArtifact.captured_at.asc(),
+                SourceRegistrationArtifact.created_at.asc(),
+                SourceRegistrationArtifact.id.asc(),
             )
         )
     ).scalars().all()
@@ -194,6 +347,10 @@ async def _build_registration_read(
         await session.execute(
             select(SourceRegistrationMeasurement).where(
                 SourceRegistrationMeasurement.registration_id == registration.id
+            ).order_by(
+                SourceRegistrationMeasurement.measured_at.asc(),
+                SourceRegistrationMeasurement.created_at.asc(),
+                SourceRegistrationMeasurement.id.asc(),
             )
         )
     ).scalars().all()
@@ -330,24 +487,7 @@ async def create_source_registration(
             registration=registration,
             event_type=_measurement_event_type(measurement.measurement_type),
             source_kind=TrackingEventSourceKind.TELEMETRY,
-            payload={
-                "measurement_type": measurement.measurement_type,
-                "value": measurement.value,
-                "unit": measurement.unit,
-                "measured_at": (
-                    measurement.measured_at.isoformat()
-                    if measurement.measured_at is not None
-                    else None
-                ),
-                "sensor_id": measurement.sensor_id,
-                "quality_score": measurement.quality_score,
-                "raw_artifact_id": (
-                    str(measurement.raw_artifact_id)
-                    if measurement.raw_artifact_id is not None
-                    else None
-                ),
-                "metadata": measurement.metadata,
-            },
+            payload=_measurement_payload_for_tracking_event(measurement),
             captured_at=measurement.measured_at,
             device_id=measurement.sensor_id,
         )
@@ -418,6 +558,10 @@ async def submit_source_registration(
         await session.execute(
             select(SourceRegistrationArtifact).where(
                 SourceRegistrationArtifact.registration_id == registration.id
+            ).order_by(
+                SourceRegistrationArtifact.captured_at.asc(),
+                SourceRegistrationArtifact.created_at.asc(),
+                SourceRegistrationArtifact.id.asc(),
             )
         )
     ).scalars().all()
@@ -425,93 +569,32 @@ async def submit_source_registration(
         await session.execute(
             select(SourceRegistrationMeasurement).where(
                 SourceRegistrationMeasurement.registration_id == registration.id
+            ).order_by(
+                SourceRegistrationMeasurement.measurement_type.asc(),
+                SourceRegistrationMeasurement.measured_at.asc(),
+                SourceRegistrationMeasurement.created_at.asc(),
+                SourceRegistrationMeasurement.id.asc(),
             )
         )
     ).scalars().all()
     tracking_events = (
         await session.execute(
-            select(TrackingEvent).where(TrackingEvent.registration_id == registration.id)
+            select(TrackingEvent)
+            .where(TrackingEvent.registration_id == registration.id)
+            .order_by(
+                TrackingEvent.captured_at.asc(),
+                TrackingEvent.created_at.asc(),
+                TrackingEvent.id.asc(),
+            )
         )
     ).scalars().all()
 
-    raw_source_registration = {
-        "registration_id": str(registration.id),
-        "source_claim_id": registration.source_claim_id,
-        "lot_id": registration.lot_id,
-        "producer_id": registration.producer_id,
-        "rare_grade_profile_id": registration.rare_grade_profile_id,
-        "claimed_origin": registration.claimed_origin or {},
-        "collection_site": registration.collection_site or {},
-        "collected_at": (
-            registration.collected_at.isoformat()
-            if registration.collected_at is not None
-            else None
-        ),
-        "artifacts": [
-            {
-                "artifact_id": str(artifact.id),
-                "artifact_type": artifact.artifact_type,
-                "uri": artifact.uri,
-                "sha256": artifact.sha256,
-                "captured_at": (
-                    artifact.captured_at.isoformat()
-                    if artifact.captured_at is not None
-                    else None
-                ),
-                "device_id": artifact.device_id,
-                "content_type": artifact.content_type,
-                "metadata": artifact.meta_data or {},
-            }
-            for artifact in artifacts
-        ],
-        "measurements": {
-            measurement.measurement_type: (
-                {
-                    "measurement_id": str(measurement.id),
-                    "value": measurement.value,
-                    "unit": measurement.unit,
-                    "measured_at": (
-                        measurement.measured_at.isoformat()
-                        if measurement.measured_at is not None
-                        else None
-                    ),
-                    "sensor_id": measurement.sensor_id,
-                    "quality_score": measurement.quality_score,
-                    "raw_artifact_id": (
-                        str(measurement.raw_artifact_id)
-                        if measurement.raw_artifact_id is not None
-                        else None
-                    ),
-                    "metadata": measurement.meta_data or {},
-                    **(
-                        {
-                            "lat": (measurement.meta_data or {}).get("lat"),
-                            "lon": (measurement.meta_data or {}).get("lon"),
-                            "altitude_meters": (measurement.meta_data or {}).get("altitude_meters"),
-                        }
-                        if measurement.measurement_type == "gps"
-                        else {}
-                    ),
-                }
-            )
-            for measurement in measurements
-        },
-        "tracking_events": [
-            {
-                "id": str(event.id),
-                "event_type": event.event_type.value,
-                "source_kind": event.source_kind.value,
-                "payload": event.payload or {},
-                "captured_at": event.captured_at.isoformat() if event.captured_at is not None else None,
-                "producer_id": event.producer_id,
-                "device_id": event.device_id,
-                "operator_id": event.operator_id,
-                "correlation_id": event.correlation_id,
-                "snapshot_id": event.snapshot_id,
-            }
-            for event in tracking_events
-        ],
-    }
+    raw_source_registration = _build_raw_source_registration(
+        registration,
+        artifacts=artifacts,
+        measurements=measurements,
+        tracking_events=tracking_events,
+    )
     raw_multimodal = {
         "artifacts": [
             {
@@ -567,20 +650,7 @@ async def submit_source_registration(
         },
     )
     refreshed_tracking_events = list(raw_source_registration["tracking_events"])
-    refreshed_tracking_events.append(
-        {
-            "id": str(submit_event.id),
-            "event_type": submit_event.event_type.value,
-            "source_kind": submit_event.source_kind.value,
-            "payload": submit_event.payload or {},
-            "captured_at": submit_event.captured_at.isoformat() if submit_event.captured_at is not None else None,
-            "producer_id": submit_event.producer_id,
-            "device_id": submit_event.device_id,
-            "operator_id": submit_event.operator_id,
-            "correlation_id": submit_event.correlation_id,
-            "snapshot_id": submit_event.snapshot_id,
-        }
-    )
+    refreshed_tracking_events.append(_serialize_tracking_event(submit_event))
     normalized_context = normalize_source_registration_context(
         {
             **raw_source_registration,

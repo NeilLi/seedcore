@@ -1,0 +1,60 @@
+[
+  {
+    "event_type": "provenance_scan_captured",
+    "source_kind": "provenance_scan",
+    "captured_at": "2026-03-13T11:01:00Z",
+    "device_id": "cam-deny-01",
+    "correlation_id": "deny-artifact-1",
+    "payload": {
+      "artifact_type": "honeycomb_macro_image",
+      "uri": "s3://seedcore-demo/deny/honeycomb_macro.jpg",
+      "sha256": "deny-honeycomb-sha256",
+      "captured_at": "2026-03-13T11:01:00Z",
+      "captured_by": "operator-demo",
+      "device_id": "cam-deny-01",
+      "content_type": "image/jpeg",
+      "metadata": {
+        "lens": "macro"
+      }
+    }
+  },
+  {
+    "event_type": "environmental_reading_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T11:02:00Z",
+    "device_id": "gps-deny-01",
+    "correlation_id": "deny-measurement-1",
+    "payload": {
+      "measurement_type": "gps",
+      "value": 2432.2,
+      "unit": "meters",
+      "measured_at": "2026-03-13T11:02:00Z",
+      "sensor_id": "gps-deny-01",
+      "quality_score": 0.98,
+      "lat": 18.801,
+      "lon": 98.921,
+      "altitude_meters": 2432.2,
+      "metadata": {
+        "lat": 18.801,
+        "lon": 98.921,
+        "altitude_meters": 2432.2
+      }
+    }
+  },
+  {
+    "event_type": "bio_signature_recorded",
+    "source_kind": "telemetry",
+    "captured_at": "2026-03-13T11:03:00Z",
+    "device_id": "lab-deny-01",
+    "correlation_id": "deny-measurement-2",
+    "payload": {
+      "measurement_type": "purity_score",
+      "value": 0.932,
+      "unit": "ratio",
+      "measured_at": "2026-03-13T11:03:00Z",
+      "sensor_id": "lab-deny-01",
+      "quality_score": 0.93,
+      "metadata": {}
+    }
+  }
+]
