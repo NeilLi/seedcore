@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,6 +23,40 @@ from seedcore.models.action_intent import (
 )
 from seedcore.models.task_payload import TaskPayload
 import seedcore.services.coordinator_service as cs
+
+
+def _iso_utc(delta_seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=delta_seconds)).isoformat()
+
+
+def _build_release_intent(
+    *,
+    source_registration_id: str | None = None,
+    registration_decision_id: str | None = None,
+    agent_id: str = "agent-1",
+) -> ActionIntent:
+    return ActionIntent(
+        intent_id="intent-test",
+        timestamp=_iso_utc(-30),
+        valid_until=_iso_utc(120),
+        principal=IntentPrincipal(
+            agent_id=agent_id,
+            role_profile="PACKING_OPERATOR",
+            session_token="session-test",
+        ),
+        action=IntentAction(
+            type="RELEASE",
+            parameters={},
+            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
+        ),
+        resource=IntentResource(
+            asset_id="asset-1",
+            target_zone="packing_line_a",
+            provenance_hash="prov-1",
+            source_registration_id=source_registration_id,
+            registration_decision_id=registration_decision_id,
+        ),
+    )
 
 
 def test_build_action_intent_maps_task_payload_contract():
@@ -69,27 +103,72 @@ def test_build_action_intent_maps_task_payload_contract():
     assert int((valid_until - issued_at).total_seconds()) == 45
 
 
-def test_evaluate_intent_denies_expired_contract():
-    expired = ActionIntent(
-        intent_id="intent-1",
-        timestamp="2026-03-10T00:00:10+00:00",
-        valid_until="2026-03-10T00:00:09+00:00",
-        principal=IntentPrincipal(
-            agent_id="agent-1",
-            role_profile="VAULT_OPERATOR",
-            session_token="session-1",
-        ),
-        action=IntentAction(
-            type="RELEASE",
-            parameters={},
-            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
-        ),
-        resource=IntentResource(
-            asset_id="asset-1",
-            target_zone="vault_a",
-            provenance_hash="prov-1",
-        ),
-    )
+def test_build_action_intent_stable_schema_and_deterministic_policy_fields():
+    payload_one = {
+        "type": "action",
+        "description": "release payload one",
+        "params": {
+            "routing": {"required_specialization": "PACKING_OPERATOR"},
+            "interaction": {"assigned_agent_id": "agent-11"},
+            "multimodal": {"location_context": "zone_a"},
+            "intent": "release",
+            "custom_b": "b",
+            "custom_a": "a",
+        },
+    }
+    payload_two = {
+        "description": "release payload one",
+        "type": "action",
+        "params": {
+            "intent": "release",
+            "custom_a": "a",
+            "custom_b": "b",
+            "multimodal": {"location_context": "zone_a"},
+            "interaction": {"assigned_agent_id": "agent-11"},
+            "routing": {"required_specialization": "PACKING_OPERATOR"},
+        },
+    }
+    fixed_now = datetime(2026, 3, 13, 10, 0, tzinfo=timezone.utc)
+
+    with patch("seedcore.coordinator.core.governance._utcnow", return_value=fixed_now):
+        intent_one = build_action_intent(payload_one)
+        intent_two = build_action_intent(payload_two)
+
+    dumped = intent_one.model_dump(mode="json")
+    assert list(dumped.keys()) == [
+        "intent_id",
+        "timestamp",
+        "valid_until",
+        "principal",
+        "action",
+        "resource",
+    ]
+    assert list(dumped["principal"].keys()) == [
+        "agent_id",
+        "role_profile",
+        "session_token",
+    ]
+    assert list(dumped["action"].keys()) == ["type", "parameters", "security_contract"]
+    assert list(dumped["resource"].keys()) == [
+        "asset_id",
+        "target_zone",
+        "provenance_hash",
+        "source_registration_id",
+        "registration_decision_id",
+    ]
+
+    assert intent_one.principal.agent_id == intent_two.principal.agent_id
+    assert intent_one.principal.role_profile == intent_two.principal.role_profile
+    assert intent_one.principal.session_token == intent_two.principal.session_token
+    assert intent_one.resource.asset_id == intent_two.resource.asset_id
+    assert intent_one.action.parameters == intent_two.action.parameters
+    assert list(intent_one.action.parameters.keys()) == ["custom_a", "custom_b", "intent"]
+
+
+def test_evaluate_intent_denies_expired_ttl():
+    expired = _build_release_intent(source_registration_id="reg-1", registration_decision_id="decision-1")
+    expired.timestamp = _iso_utc(-300)
+    expired.valid_until = _iso_utc(-10)
 
     decision = evaluate_intent(expired, policy_snapshot="snapshot:5")
 
@@ -98,26 +177,7 @@ def test_evaluate_intent_denies_expired_contract():
 
 
 def test_evaluate_intent_denies_release_without_source_registration():
-    intent = ActionIntent(
-        intent_id="intent-2",
-        timestamp="2026-03-10T00:00:10+00:00",
-        valid_until="2026-03-10T00:01:10+00:00",
-        principal=IntentPrincipal(
-            agent_id="agent-1",
-            role_profile="PACKING_OPERATOR",
-            session_token="session-2",
-        ),
-        action=IntentAction(
-            type="RELEASE",
-            parameters={},
-            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
-        ),
-        resource=IntentResource(
-            asset_id="asset-1",
-            target_zone="packing_line_a",
-            provenance_hash="prov-1",
-        ),
-    )
+    intent = _build_release_intent()
 
     decision = evaluate_intent(intent, policy_snapshot="snapshot:5")
 
@@ -126,27 +186,9 @@ def test_evaluate_intent_denies_release_without_source_registration():
 
 
 def test_evaluate_intent_denies_release_with_unapproved_source_registration():
-    intent = ActionIntent(
-        intent_id="intent-3",
-        timestamp="2026-03-10T00:00:10+00:00",
-        valid_until="2026-03-10T00:01:10+00:00",
-        principal=IntentPrincipal(
-            agent_id="agent-1",
-            role_profile="PACKING_OPERATOR",
-            session_token="session-3",
-        ),
-        action=IntentAction(
-            type="RELEASE",
-            parameters={},
-            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
-        ),
-        resource=IntentResource(
-            asset_id="asset-1",
-            target_zone="packing_line_a",
-            provenance_hash="prov-1",
-            source_registration_id="reg-1",
-            registration_decision_id="decision-1",
-        ),
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
     )
 
     decision = evaluate_intent(
@@ -159,28 +201,43 @@ def test_evaluate_intent_denies_release_with_unapproved_source_registration():
     assert decision.deny_code == "unapproved_source_registration"
 
 
+def test_evaluate_intent_denies_release_with_mismatched_decision_id():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-2",
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={"reg-1": "decision-1"},
+    )
+
+    assert decision.allowed is False
+    assert decision.deny_code == "mismatched_registration_decision"
+
+
+def test_evaluate_intent_denies_missing_principal():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
+        agent_id="",
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={"reg-1": "decision-1"},
+    )
+
+    assert decision.allowed is False
+    assert decision.deny_code == "missing_principal"
+
+
 def test_evaluate_intent_allows_release_with_approved_source_registration():
-    intent = ActionIntent(
-        intent_id="intent-4",
-        timestamp="2026-03-10T00:00:10+00:00",
-        valid_until="2026-03-10T00:01:10+00:00",
-        principal=IntentPrincipal(
-            agent_id="agent-1",
-            role_profile="PACKING_OPERATOR",
-            session_token="session-4",
-        ),
-        action=IntentAction(
-            type="RELEASE",
-            parameters={},
-            security_contract=SecurityContract(hash="abc", version="snapshot:5"),
-        ),
-        resource=IntentResource(
-            asset_id="asset-1",
-            target_zone="packing_line_a",
-            provenance_hash="prov-1",
-            source_registration_id="reg-1",
-            registration_decision_id="decision-1",
-        ),
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
     )
 
     decision = evaluate_intent(
@@ -191,6 +248,26 @@ def test_evaluate_intent_allows_release_with_approved_source_registration():
 
     assert decision.allowed is True
     assert decision.execution_token is not None
+    assert decision.reason == "allow_release_with_approved_source_registration"
+
+    token = decision.execution_token.model_dump(mode="json")
+    assert list(token.keys()) == [
+        "token_id",
+        "intent_id",
+        "issued_at",
+        "valid_until",
+        "contract_version",
+        "signature",
+        "constraints",
+    ]
+    assert list(token["constraints"].keys()) == [
+        "action_type",
+        "target_zone",
+        "asset_id",
+        "principal_agent_id",
+        "source_registration_id",
+        "registration_decision_id",
+    ]
 
 
 @pytest.mark.asyncio

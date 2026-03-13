@@ -23,10 +23,14 @@ from seedcore.models.task_payload import TaskPayload
 SYSTEM_PARAM_KEYS = {
     "routing",
     "interaction",
+    "multimodal",
     "cognitive",
     "chat",
     "graph",
     "tool_calls",
+    "resource",
+    "executor",
+    "source_registration",
     "governance",
     "policy",
     "_router",
@@ -38,6 +42,19 @@ SYSTEM_PARAM_KEYS = {
 }
 
 PACKING_ACTION_TYPES = {"PACK", "RELEASE"}
+SOURCE_REGISTRATION_REQUIRED_DENY_CODE = "missing_source_registration"
+SOURCE_REGISTRATION_UNAPPROVED_DENY_CODE = "unapproved_source_registration"
+SOURCE_REGISTRATION_MISMATCH_DENY_CODE = "mismatched_registration_decision"
+EXPLICIT_ALLOW_RULE = "allow_release_with_approved_source_registration"
+EXPLICIT_DENY_RULE = "deny_release_without_approved_source_registration"
+EXECUTION_TOKEN_CONSTRAINT_KEYS = (
+    "action_type",
+    "target_zone",
+    "asset_id",
+    "principal_agent_id",
+    "source_registration_id",
+    "registration_decision_id",
+)
 
 
 def requires_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> bool:
@@ -86,12 +103,13 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
         or payload.get("agent_id")
         or "coordinator_service"
     )
+    fallback_entropy = _stable_fallback_entropy(payload)
     session_token = (
         interaction.get("session_token")
         or interaction.get("conversation_id")
         or payload.get("correlation_id")
         or payload.get("task_id")
-        or uuid.uuid4().hex
+        or f"session_{fallback_entropy}"
     )
 
     target_zone = (
@@ -104,7 +122,7 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
         or params.get("asset_id")
         or multimodal.get("asset_id")
         or payload.get("task_id")
-        or uuid.uuid4().hex
+        or f"asset_{fallback_entropy}"
     )
     provenance_hash = (
         resource.get("provenance_hash")
@@ -196,6 +214,7 @@ def evaluate_intent(
     policy_snapshot: str | None = None,
     approved_source_registrations: Mapping[str, str | None] | None = None,
 ) -> PolicyDecision:
+    now = _utcnow()
     try:
         issued_at = _parse_iso8601(action_intent.timestamp)
         valid_until = _parse_iso8601(action_intent.valid_until)
@@ -210,7 +229,14 @@ def evaluate_intent(
     if valid_until <= issued_at:
         return PolicyDecision(
             allowed=False,
-            reason="ActionIntent TTL is expired or non-positive.",
+            reason="ActionIntent TTL is non-positive.",
+            deny_code="expired_intent",
+            policy_snapshot=policy_snapshot,
+        )
+    if valid_until <= now:
+        return PolicyDecision(
+            allowed=False,
+            reason="ActionIntent TTL is expired.",
             deny_code="expired_intent",
             policy_snapshot=policy_snapshot,
         )
@@ -239,55 +265,37 @@ def evaluate_intent(
             policy_snapshot=policy_snapshot,
         )
 
-    if _requires_approved_source_registration(action_intent):
-        source_registration_id = (
-            action_intent.resource.source_registration_id or ""
-        ).strip()
-        if not source_registration_id:
-            return PolicyDecision(
-                allowed=False,
-                reason=(
-                    "Physical packing actions must reference an approved "
-                    "SourceRegistration."
-                ),
-                deny_code="missing_source_registration",
-                policy_snapshot=policy_snapshot,
-            )
-        if not _is_approved_source_registration(
-            action_intent,
-            approved_source_registrations or {},
-        ):
-            return PolicyDecision(
-                allowed=False,
-                reason=(
-                    "Physical packing actions require an approved "
-                    "SourceRegistration decision."
-                ),
-                deny_code="unapproved_source_registration",
-                policy_snapshot=policy_snapshot,
-            )
+    registration_deny_code = _source_registration_deny_code(
+        action_intent,
+        approved_source_registrations or {},
+    )
+    if registration_deny_code is not None:
+        return PolicyDecision(
+            allowed=False,
+            reason=_source_registration_deny_reason(registration_deny_code),
+            deny_code=registration_deny_code,
+            policy_snapshot=policy_snapshot,
+        )
 
     token_payload = {
         "token_id": str(uuid.uuid4()),
         "intent_id": action_intent.intent_id,
-        "issued_at": _isoformat(_utcnow()),
+        "issued_at": _isoformat(now),
         "valid_until": action_intent.valid_until,
         "contract_version": action_intent.action.security_contract.version,
-        "constraints": {
-            "action_type": action_intent.action.type,
-            "target_zone": action_intent.resource.target_zone,
-            "asset_id": action_intent.resource.asset_id,
-            "principal_agent_id": action_intent.principal.agent_id,
-            "source_registration_id": action_intent.resource.source_registration_id,
-            "registration_decision_id": action_intent.resource.registration_decision_id,
-        },
+        "constraints": _build_execution_constraints(action_intent),
     }
     signature = _sign_payload(token_payload)
     token = ExecutionToken(signature=signature, **token_payload)
+    allow_reason = (
+        EXPLICIT_ALLOW_RULE
+        if _requires_approved_source_registration(action_intent)
+        else "allowed"
+    )
     return PolicyDecision(
         allowed=True,
         execution_token=token,
-        reason="allowed",
+        reason=allow_reason,
         policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
     )
 
@@ -335,15 +343,23 @@ def _derive_action_type(payload: Dict[str, Any], params: Dict[str, Any]) -> str:
 def _derive_action_parameters(params: Dict[str, Any]) -> Dict[str, Any]:
     explicit_action = params.get("action")
     if isinstance(explicit_action, dict) and explicit_action:
-        return {
+        action_parameters = {
             k: v
             for k, v in explicit_action.items()
             if k != "type"
         }
-    return {
+        return {
+            key: action_parameters[key]
+            for key in sorted(action_parameters)
+        }
+    action_parameters = {
         key: value
         for key, value in params.items()
         if key not in SYSTEM_PARAM_KEYS and not key.startswith("_")
+    }
+    return {
+        key: action_parameters[key]
+        for key in sorted(action_parameters)
     }
 
 
@@ -359,20 +375,56 @@ def _requires_approved_source_registration(action_intent: ActionIntent) -> bool:
     return bool(parameters.get("requires_approved_source_registration"))
 
 
-def _is_approved_source_registration(
+def _source_registration_deny_code(
     action_intent: ActionIntent,
     approved_source_registrations: Mapping[str, str | None],
-) -> bool:
-    registration_id = action_intent.resource.source_registration_id
+) -> str | None:
+    if not _requires_approved_source_registration(action_intent):
+        return None
+
+    registration_id = (action_intent.resource.source_registration_id or "").strip()
     if not registration_id:
-        return False
+        return SOURCE_REGISTRATION_REQUIRED_DENY_CODE
     if registration_id not in approved_source_registrations:
-        return False
-    required_decision_id = action_intent.resource.registration_decision_id
+        return SOURCE_REGISTRATION_UNAPPROVED_DENY_CODE
+
+    required_decision_id = (action_intent.resource.registration_decision_id or "").strip()
     approved_decision_id = approved_source_registrations.get(registration_id)
-    if required_decision_id:
-        return approved_decision_id == required_decision_id
-    return True
+    if required_decision_id and approved_decision_id != required_decision_id:
+        return SOURCE_REGISTRATION_MISMATCH_DENY_CODE
+    return None
+
+
+def _source_registration_deny_reason(deny_code: str) -> str:
+    if deny_code == SOURCE_REGISTRATION_REQUIRED_DENY_CODE:
+        return (
+            f"{EXPLICIT_DENY_RULE}: physical packing actions must reference "
+            "an approved SourceRegistration."
+        )
+    if deny_code == SOURCE_REGISTRATION_MISMATCH_DENY_CODE:
+        return (
+            f"{EXPLICIT_DENY_RULE}: registration_decision_id must match the "
+            "approved SourceRegistration decision."
+        )
+    return (
+        f"{EXPLICIT_DENY_RULE}: physical packing actions require an approved "
+        "SourceRegistration decision."
+    )
+
+
+def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
+    values = {
+        "action_type": action_intent.action.type,
+        "target_zone": action_intent.resource.target_zone,
+        "asset_id": action_intent.resource.asset_id,
+        "principal_agent_id": action_intent.principal.agent_id,
+        "source_registration_id": action_intent.resource.source_registration_id,
+        "registration_decision_id": action_intent.resource.registration_decision_id,
+    }
+    return {
+        key: values[key]
+        for key in EXECUTION_TOKEN_CONSTRAINT_KEYS
+    }
 
 
 def _derive_ttl_seconds(
@@ -419,6 +471,10 @@ def _sha256_hex(value: str) -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _stable_fallback_entropy(payload: Dict[str, Any]) -> str:
+    return _sha256_hex(_canonical_json(payload))[:12]
 
 
 def _utcnow() -> datetime:
