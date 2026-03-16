@@ -5,7 +5,10 @@ set -euo pipefail
 # Builds the HAL Docker image, loads it into Kind, and deploys to Kubernetes
 
 CLUSTER_NAME="${CLUSTER_NAME:-seedcore-dev}"
+NAMESPACE="${NAMESPACE:-seedcore-dev}"
 IMAGE_NAME="${IMAGE_NAME:-seedcore-hal:latest}"
+HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
+HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -49,6 +52,8 @@ echo ""
 echo "🔨 Step 1: Building HAL Docker image..."
 echo "   Image: ${IMAGE_NAME}"
 echo "   Dockerfile: docker/Dockerfile.hal"
+echo "   HAL_DRIVER_MODE: ${HAL_DRIVER_MODE}"
+echo "   HAL_SIM_BACKEND: ${HAL_SIM_BACKEND}"
 echo ""
 
 cd "${PROJECT_ROOT}"
@@ -97,8 +102,21 @@ if [[ ! -f "${DEPLOYMENT_FILE}" ]]; then
     exit 1
 fi
 
-if ! kubectl apply -f "${DEPLOYMENT_FILE}"; then
+if ! kubectl apply -n "${NAMESPACE}" -f "${DEPLOYMENT_FILE}"; then
     echo "❌ ERROR: Failed to apply deployment"
+    exit 1
+fi
+
+# Ensure rollout always uses caller-provided image and driver configuration.
+if ! kubectl -n "${NAMESPACE}" set image deployment/seedcore-hal-bridge "hal-bridge=${IMAGE_NAME}"; then
+    echo "❌ ERROR: Failed to set HAL bridge image to ${IMAGE_NAME}"
+    exit 1
+fi
+
+if ! kubectl -n "${NAMESPACE}" set env deployment/seedcore-hal-bridge \
+    "HAL_DRIVER_MODE=${HAL_DRIVER_MODE}" \
+    "HAL_SIM_BACKEND=${HAL_SIM_BACKEND}"; then
+    echo "❌ ERROR: Failed to set HAL runtime environment"
     exit 1
 fi
 
@@ -111,20 +129,20 @@ echo ""
 echo "⏳ Waiting for HAL Bridge to be ready..."
 echo ""
 
-if kubectl wait --for=condition=available --timeout=120s deployment/seedcore-hal-bridge -n seedcore-dev 2>/dev/null; then
+if kubectl wait --for=condition=available --timeout=120s deployment/seedcore-hal-bridge -n "${NAMESPACE}" 2>/dev/null; then
     echo "✅ HAL Bridge is ready!"
 else
     echo "⚠️  Deployment may still be starting. Check status with:"
-    echo "   kubectl get pods -n seedcore-dev -l app=hal-bridge"
-    echo "   kubectl logs -n seedcore-dev -l app=hal-bridge"
+    echo "   kubectl get pods -n ${NAMESPACE} -l app=hal-bridge"
+    echo "   kubectl logs -n ${NAMESPACE} -l app=hal-bridge"
 fi
 
 echo ""
 echo "🎉 HAL Bridge setup complete!"
 echo ""
 echo "📊 Useful commands:"
-echo "   Check status:    kubectl get pods -n seedcore-dev -l app=hal-bridge"
-echo "   View logs:       kubectl logs -n seedcore-dev -l app=hal-bridge -f"
-echo "   Port forward:     kubectl port-forward -n seedcore-dev svc/seedcore-hal-bridge 8001:8001"
+echo "   Check status:    kubectl get pods -n ${NAMESPACE} -l app=hal-bridge"
+echo "   View logs:       kubectl logs -n ${NAMESPACE} -l app=hal-bridge -f"
+echo "   Port forward:    kubectl port-forward -n ${NAMESPACE} svc/seedcore-hal-bridge 8001:8001"
 echo "   Test endpoint:   curl http://localhost:8001/status"
 echo ""

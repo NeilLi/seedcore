@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: seedcore-hal-bridge
-  namespace: seedcore-dev
   labels:
     app: hal-bridge
 spec:
@@ -47,6 +46,8 @@ spec:
             # Mode switch
             - name: HAL_DRIVER_MODE
               value: "simulation"   # simulation | physical
+            - name: HAL_SIM_BACKEND
+              value: "robot_sim"    # robot_sim | reachy_grpc
 
             # Physical robot (only used if HAL_DRIVER_MODE=physical)
             - name: ROBOT_HOST
@@ -68,24 +69,28 @@ spec:
               set -e
 
               if [ "${HAL_DRIVER_MODE}" = "simulation" ]; then
-                echo "🧪 Starting RobotSim gRPC server on :50055 ..."
-                # Run sim server in background
-                python /app/apps/mini/robot_sim_server.py &
-                SIM_PID=$!
+                if [ "${HAL_SIM_BACKEND}" = "robot_sim" ]; then
+                  echo "🧪 Robot simulation backend set to robot_sim; skipping gRPC sim server startup"
+                else
+                  echo "🧪 Starting RobotSim gRPC server on :50055 ..."
+                  # Run sim server in background
+                  python /app/apps/mini/robot_sim_server.py &
+                  SIM_PID=$!
 
-                echo "⏳ Waiting for RobotSim gRPC port 50055 ..."
-                for i in $(seq 1 60); do
-                  if python3 -c "import socket; s=socket.socket(); s.settimeout(0.5); result=s.connect_ex(('127.0.0.1', 50055)); s.close(); exit(0 if result == 0 else 1)" 2>/dev/null; then
-                    echo "✅ RobotSim is ready"
-                    break
-                  fi
-                  if [ $i -eq 60 ]; then
-                    echo "❌ RobotSim did not become ready"
-                    kill ${SIM_PID} 2>/dev/null || true
-                    exit 1
-                  fi
-                  sleep 1
-                done
+                  echo "⏳ Waiting for RobotSim gRPC port 50055 ..."
+                  for i in $(seq 1 60); do
+                    if python3 -c "import socket; s=socket.socket(); s.settimeout(0.5); result=s.connect_ex(('127.0.0.1', 50055)); s.close(); exit(0 if result == 0 else 1)" 2>/dev/null; then
+                      echo "✅ RobotSim is ready"
+                      break
+                    fi
+                    if [ $i -eq 60 ]; then
+                      echo "❌ RobotSim did not become ready"
+                      kill ${SIM_PID} 2>/dev/null || true
+                      exit 1
+                    fi
+                    sleep 1
+                  done
+                fi
               else
                 echo "🤖 Physical mode: skipping RobotSim startup"
               fi
@@ -148,7 +153,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: seedcore-hal-bridge
-  namespace: seedcore-dev
 spec:
   # ✅ Default to ClusterIP to avoid node port conflicts
   type: ClusterIP

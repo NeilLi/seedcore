@@ -36,6 +36,10 @@ BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
 SKIP_KIND_LOAD="${SKIP_KIND_LOAD:-false}"
 TAIL_BOOTSTRAP_LOGS="${TAIL_BOOTSTRAP_LOGS:-false}"
 DEPLOY_INGRESS_ENABLED="${DEPLOY_INGRESS_ENABLED:-true}"
+DEPLOY_HAL_BRIDGE="${DEPLOY_HAL_BRIDGE:-true}"
+HAL_IMAGE="${HAL_IMAGE:-seedcore-hal:latest}"
+HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
+HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
 
 usage() {
   cat <<EOF
@@ -55,6 +59,7 @@ Options:
       --enable-ml             Build optional ML/local-AI layer and enable ML services
       --no-cache             Build without Docker cache
       --skip-load            Skip kind image loads in downstream scripts
+      --skip-hal             Skip HAL bridge deployment
       --skip-ingress         Skip ingress deployment
   -h, --help                  Show this help
 EOF
@@ -107,6 +112,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-cache) BUILD_NO_CACHE=1; shift ;;
     --skip-load) SKIP_KIND_LOAD=true; shift ;;
+    --skip-hal) DEPLOY_HAL_BRIDGE=false; shift ;;
     --skip-ingress) DEPLOY_INGRESS_ENABLED=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: Unknown argument '$1'"; usage; exit 1 ;;
@@ -325,6 +331,21 @@ deploy_seedcore_api() {
   "${DEPLOY_DIR}/deploy-seedcore-api.sh"
 }
 
+deploy_hal_bridge() {
+  log "Deploying HAL bridge"
+  if ! is_true "${DEPLOY_HAL_BRIDGE}"; then
+    echo "ℹ️  Skipping HAL bridge deployment (DEPLOY_HAL_BRIDGE=${DEPLOY_HAL_BRIDGE})"
+    return 0
+  fi
+
+  CLUSTER_NAME="${CLUSTER_NAME}" \
+  NAMESPACE="${NAMESPACE}" \
+  IMAGE_NAME="${HAL_IMAGE}" \
+  HAL_DRIVER_MODE="${HAL_DRIVER_MODE}" \
+  HAL_SIM_BACKEND="${HAL_SIM_BACKEND}" \
+  "${DEPLOY_DIR}/setup-hal.sh"
+}
+
 deploy_ingress() {
   log "Deploying ingress configuration"
 
@@ -368,6 +389,10 @@ main() {
   echo "Build image:      ${BUILD_IMAGE}"
   echo "Enable ML build:  ${BUILD_ENABLE_ML}"
   echo "Enable ML serve:  ${DEPLOY_ENABLE_ML_SERVICE}"
+  echo "Deploy HAL:       ${DEPLOY_HAL_BRIDGE}"
+  echo "HAL image:        ${HAL_IMAGE}"
+  echo "HAL mode:         ${HAL_DRIVER_MODE}"
+  echo "HAL sim backend:  ${HAL_SIM_BACKEND}"
   check_disk_space "${PROJECT_ROOT}" 8388608
 
   build_docker_image
@@ -384,6 +409,7 @@ main() {
 
   bootstrap_components
   deploy_seedcore_api
+  deploy_hal_bridge
   if is_true "${DEPLOY_INGRESS_ENABLED}"; then
     deploy_ingress
   else
