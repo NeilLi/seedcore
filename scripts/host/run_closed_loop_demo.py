@@ -59,12 +59,12 @@ def run_demo():
         print(f"   ⚠️ Artifact attach failed (expected if mock): {res.text}")
 
     # 3. Submit for Decision (Policy Gate)
-    log_step("Submitting for Policy Decision (PDP)")
+    log_step("Policy Engine: The action is submitted to SeedCore's policy engine")
     res = requests.post(f"{API_URL}/source-registrations/{reg_id}/submit")
     # For demo purposes, we'll parse the ActionIntent/Token if provided, 
     # or fallback to our simulated mock token for the HAL bridge.
     decision = res.json() if res.status_code == 200 else {}
-    print(f"   ✅ Policy Gate Triggered. Status: {res.status_code}")
+    print(f"   ✅ Policy Evaluation: The policy engine evaluates the action against predefined rules and the current state of relevant digital twins. Status: {res.status_code}")
     save_artifact("2_policy_decision.json", decision)
     
     # Attempt to extract token, otherwise use a valid mock token to prove the HAL gate
