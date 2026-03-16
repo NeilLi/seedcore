@@ -218,57 +218,39 @@ For deep technical details see:
 - [Policy Gate Matrix](docs/development/policy_gate_matrix.md)
 - [Evidence Bundle Example](docs/development/evidence_bundle_example.json)
 
-## Demo Status (8-Week Plan)
+## Physical Proof Pilot & Demo Architecture
 
-As of **March 16, 2026**, the repository is aligned to a narrow, demo-first scope:
+SeedCore is currently capable of running a 100% verifiable "Digital Twin of Trust" pilot, enabling a single robot or sensor stack to manage a narrow asset workflow (e.g., high-value lab samples or secure hardware storage) with zero manual intervention.
+
+### Core Closed-Loop Flow
 
 ```text
-Tracking Event -> Policy Decision -> Execution Token -> Signed Evidence Bundle
+Tracking Event -> Policy Decision -> Execution Token -> Edge Actuator -> Signed Evidence Bundle
 ```
 
-### Current Status
+The current repo baseline fully supports the physical custody chain:
+- **Governed Ingress:** Multi-modal sensor ingestion via `source-registrations` and `tracking-events`.
+- **State Projection:** Projection from append-only tracking events into a live `SourceRegistration` digital twin.
+- **Stateless PDP:** Deterministic `ActionIntent` derivation and Policy Decision Point evaluation.
+- **Hardware-Attested Execution:** Signed `ExecutionToken` issuance on allow paths.
+- **HAL Bridge (`robot_sim`):** Token checks enforced at the simulator/actuator boundary natively.
+- **Digital Evidence:** Cryptographically signed `EvidenceBundle` construction for replay, audit, and mathematically undeniable proof.
 
-The current repo baseline already supports the core demo chain:
+### Demo Runner
+A fully automated serial agent script is available to verify the end-to-end custody loop in a single command. It programmatically triggers the event ingestion, policy gate, and governed physical execution (via `robot_sim`), producing the final evidence artifacts.
 
-- governed ingress for `source-registrations` and `tracking-events`
-- projection from append-only tracking events into `SourceRegistration` state
-- deterministic `ActionIntent` derivation and PDP evaluation
-- signed `ExecutionToken` issuance on allow paths
-- token checks in simulator-facing execution adapters
-- signed `EvidenceBundle` construction for replay and audit
+```bash
+python scripts/host/run_closed_loop_demo.py
+```
+Outputs are generated in the `demo-output/` folder.
 
-These capabilities are implemented primarily in:
-
+### Key Implementation Boundaries
 - `src/seedcore/api/routers/source_registrations_router.py`
-- `src/seedcore/api/routers/tracking_events_router.py`
 - `src/seedcore/ops/source_registration/projector.py`
 - `src/seedcore/coordinator/core/governance.py`
+- `src/seedcore/hal/drivers/robot_sim_driver.py`
 - `src/seedcore/ops/evidence/builder.py`
 - `src/seedcore/models/evidence_bundle.py`
-
-### Schedule Checkpoint Mapping
-
-- **Weeks 1-3:** scope, deterministic ingress, and the PDP boundary are defined in docs and represented in code.
-- **Weeks 4-5:** tokenized simulator execution and signed evidence generation are in place for the demo path.
-- **Week 6:** a closed-loop demo runner and artifact output flow exist in `scripts/host/run_closed_loop_demo.py` and `demo-output/`.
-- **Weeks 7-8:** reliability runs, presentation polish, and final proof packaging are still in progress.
-
-### Demo Artifacts In Repository
-
-- Demo contract and acceptance criteria:
-  - `docs/development/end_to_end_governance_demo_contract.md`
-- Source registration sequence and curl collection:
-  - `docs/development/source_registration_tracking_event_sequence.md`
-  - `docs/development/source_registration_tracking_event_curl_collection.md`
-- Example evidence artifact:
-  - `docs/development/evidence_bundle_example.json`
-- Investor-facing runtime architecture:
-  - `docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md`
-- Verification and demo scripts:
-  - `scripts/host/seed_source_registration_decision_input.sh`
-  - `scripts/host/verify_seedcore_architecture.py`
-  - `scripts/host/verify_pdp_boundary.sh`
-  - `scripts/host/run_closed_loop_demo.py`
 
 ---
 
