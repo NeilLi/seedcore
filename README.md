@@ -4,9 +4,9 @@ Unit-test workflow is currently set to manual runs only.
 
 ## Zero-Trust Runtime for Governed Agents and Robotic Endpoints
 
-SeedCore is the zero-trust runtime that sits between AI judgment, Governed Agents, actuator endpoints, operators, and high-value physical assets. Every action is denied by default until identity, policy, provenance, custody, and execution conditions are verified.
+SeedCore is a zero-trust runtime for governed AI-assisted operations. It sits between AI judgment, accountable agents, controlled endpoints, operators, and high-value physical or commercial assets. Actions that can affect custody, release, or external systems are denied by default until identity, policy, provenance, and execution conditions are verified.
 
-It is designed for sealed inventory, high-value lots, vault workflows, lab handling, and partner handoffs where chain-of-custody matters as much as automation speed.
+The current focus is narrow and practical: prove one governed end-to-end workflow for release-style custody actions, with clear policy decisions, tokenized execution, and replayable evidence.
 
 **Execution boundary**
 
@@ -16,11 +16,11 @@ AI Judgment -> Agent Accountability -> Zero-Trust Policy -> Robotic Embodiment -
 
 ## What SeedCore Is
 
-SeedCore is not a chatbot wrapper and not a tool-calling shortcut for a model. It is the governed runtime that turns advisory AI output into controlled enterprise execution.
+SeedCore is not a chatbot wrapper or a generic tool-calling layer. It is a governed runtime that converts advisory AI output into policy-checked execution.
 
-In the current baseline, **AI judgment** executes on the cognitive core and coordinator planning stack. That layer can interpret, reason, and route, but it is not an authorizer.
+In the current repository baseline, **AI judgment** lives in the cognitive and coordinator planning stack. That layer can interpret, enrich, and route work, but it does not authorize high-stakes execution.
 
-It provides:
+The current baseline is being shaped to provide:
 
 - deny-by-default authorization before movement or release
 - governed dispatch through accountable agents
@@ -30,18 +30,18 @@ It provides:
 
 ## Judgment and Accountability Split
 
-SeedCore now treats orchestration and authorization as separate layers:
+SeedCore separates orchestration from authorization:
 
-- **`TaskPayload`** is the judgment envelope. It carries AI/cognitive routing, multimodal context, and execution planning inputs.
-- **`ActionIntent`** is the accountability contract. It is the narrow policy object submitted by the accountable Agent to the PDP.
-- The router may select an Agent, but it does not authorize execution.
-- Physical or high-stakes actions remain deny-by-default until the PDP returns a signed `ExecutionToken`.
+- **`TaskPayload`** is the judgment envelope. It carries routing, multimodal context, and planning inputs.
+- **`ActionIntent`** is the accountability contract. It is the narrower policy object submitted to the PDP by the accountable agent.
+- Routing may select an agent, but routing does not grant authority.
+- Physical or otherwise high-stakes actions remain deny-by-default until the PDP returns a signed `ExecutionToken`.
 
 ## Who This Repository Is For
 
-- **Evaluators / Reviewers**: read *Why SeedCore Exists*, *Next-Stage Architecture*, and *Runtime Surfaces*
+- **Evaluators / Reviewers**: read *Why SeedCore Exists*, *Target Architecture*, and *Runtime Surfaces*
 - **System Builders / Contributors**: read *Repository Upgrade Path*, *Quick Start*, and *Architecture Overview*
-- **Researchers / Architects**: read *Next-Stage Architecture*, *Design Notes*, and *Advanced Architecture*
+- **Researchers / Architects**: read *Target Architecture*, *Design Notes*, and *Advanced Architecture*
 
 ## Why SeedCore Exists
 
@@ -53,28 +53,28 @@ Most AI systems are built to generate text, images, or recommendations. Physical
 - provenance and custody evidence must survive failures and disputes
 - exception paths must default to quarantine rather than graceful drift into execution
 
-SeedCore fills that gap. AI remains advisory. The runtime governs whether anything is allowed to happen at all.
+SeedCore fills that gap by keeping AI advisory and moving execution authority into explicit runtime policy.
 
-## Next-Stage Architecture
+## Target Architecture
 
-The next stage of SeedCore is a zero-trust custody runtime with one strict principle:
+The target direction for SeedCore is a zero-trust custody runtime built around one strict principle:
 
 > The model can propose. The Agent is accountable. The PDP decides. The robot executes. The evidence closes the loop.
 
-This revision formalizes four contracts.
+This direction depends on five core contracts.
 
 ### 1. Actor Authority and the Stateless PDP
 
-- The **Policy Decision Point (PDP)** must be stateless and synchronous.
-- `evaluate_intent` must return either a signed `ExecutionToken` or a deny result in a single call.
-- The PDP must not store per-intent state.
-- The PDP validates the incoming `ActionIntent` only against the active Policy Knowledge Graph (PKG) snapshot and its current policy contract.
-- AI is advisory only. In the current baseline this judgment runs on the cognitive core and coordinator planning stack. It may produce an `AdvisoryPlan`, but it does not authorize execution.
-- The Agent is the accountable actor that formulates `ActionIntent`, presents evidence, receives `EvidenceBundle`, and closes the custody loop.
+- The **Policy Decision Point (PDP)** should remain stateless and synchronous.
+- `evaluate_intent` should return either a signed `ExecutionToken` or a deny result in one call.
+- The PDP should not store per-intent state.
+- The PDP should validate each `ActionIntent` against the active Policy Knowledge Graph (PKG) snapshot and policy contract.
+- AI remains advisory. In the current baseline, judgment runs in the cognitive and coordinator planning stack, but that layer does not authorize execution.
+- The accountable agent formulates `ActionIntent`, presents evidence, receives `EvidenceBundle`, and closes the custody loop.
 
 ### 2. Updated `ActionIntent` Contract
 
-To prevent replay attacks and keep execution bound to the active policy contract, every action intent must include a TTL and contract version.
+To reduce replay risk and bind execution to an explicit policy contract, each action intent should include a TTL and contract version.
 
 ```jsonc
 {
@@ -114,14 +114,14 @@ To prevent replay attacks and keep execution bound to the active policy contract
 
 ### 3. Enhanced `EvidenceBundle` Telemetry
 
-To support playback and black-box forensics, the execution evidence envelope must include:
+For playback and black-box forensics, the execution evidence envelope should include:
 
 - `intent_ref`: link to the authorized `ActionIntent`
 - `executed_at`: precise ISO-8601 timestamp of physical completion
 - `telemetry_snapshot`: multimodal state from vision, sensors, GPS, and zone checks
 - `execution_receipt`: cryptographic proof from the actuator or controlled endpoint
 
-This is the minimum evidence required to explain why a custody transition was proposed, what policy allowed it, who or what executed it, and what state the asset was in at completion.
+This is the minimum evidence needed to explain why a custody transition was proposed, what policy allowed it, who or what executed it, and what state the asset was in at completion.
 
 ### 4. Corrected State Transition Flow
 
@@ -133,15 +133,15 @@ Actuation: ExecutionToken -> Robot -> EvidenceBundle
 Validation and Closing: EvidenceBundle -> Agent -> Validation -> Custody_Ledger_Updated
 ```
 
-The Agent remains the central point of accountability for closing the custody loop.
+The accountable agent remains the central actor for closing the custody loop.
 
 ### 5. TaskPayload to ActionIntent Mapping
 
-For governed physical execution, the accountable Agent derives `ActionIntent` from `TaskPayload` using the following minimum mapping:
+For governed physical execution, the accountable agent derives `ActionIntent` from `TaskPayload` using the following minimum mapping:
 
 - `interaction.assigned_agent_id` is the source for `principal.agent_id`
 - `multimodal.location_context` maps to `resource.target_zone`
-- the Agent injects `action.security_contract.version` from its own `RoleProfile`
+- the accountable agent injects `action.security_contract.version` from its own `RoleProfile`
 - optional `ttl_seconds` hints must be converted into a mandatory absolute `valid_until`
 
 `TaskPayload` remains the judgment envelope. `ActionIntent` remains the authorization contract.
@@ -152,15 +152,15 @@ SeedCore is organized around five governed surfaces that keep AI useful without 
 
 ### Event Ingress
 
-Telemetry, provenance scans, operator requests, voice, images, and sensor signals enter as control inputs rather than side channels around the model.
+Telemetry, provenance scans, operator requests, images, voice, and sensor signals enter as governed inputs rather than side channels around the runtime.
 
 ### Policy Layer
 
-The policy layer decides what is allowed before the runtime touches inventory, vaults, zones, or actuators. Role boundaries, release windows, provenance rules, seal status, and lockouts are runtime policy, not prompt hints.
+The policy layer decides what is allowed before the runtime touches inventory, zones, vaults, or controlled endpoints. Role boundaries, release windows, provenance rules, seal status, and lockouts are runtime policy, not prompt hints.
 
 ### Execution Routing
 
-SeedCore routes work to the right Governed Agent based on privilege, capability, and risk. The Agent translates approved intent into verified contracts for robotic endpoints, edge systems, or human approvers.
+SeedCore routes work to the right governed agent based on privilege, capability, and risk. The accountable agent translates approved intent into verified contracts for robotic endpoints, edge systems, or human approvers.
 
 ### Playback and Audit
 
@@ -172,13 +172,13 @@ Broken seals, identity mismatches, out-of-zone movement, or missing evidence sho
 
 ## Repository Upgrade Path
 
-The revised architecture can reuse most of the current SeedCore building blocks. The main change is tightening contracts between them.
+The target architecture can reuse most of the current SeedCore building blocks. The main change is tightening the contracts between them.
 
 | Next-stage contract | Existing components to reuse | Upgrade direction |
 | --- | --- | --- |
 | Event ingress | `EventizerService`, `OpsGateway` | Normalize telemetry, source claims, and operator input into governed ingress events |
-| Advisory planning | Cognitive services, coordinator planning flow | Keep AI advisory and emit `AdvisoryPlan` rather than implicit authority |
-| Stateless PDP | PKG evaluation path, coordinator policy logic, `src/seedcore/coordinator/core/execute.py` | Refactor policy evaluation into a synchronous `evaluate_intent` boundary that returns `ExecutionToken` or deny without persisting intent state |
+| Advisory planning | Cognitive services, coordinator planning flow | Keep AI advisory and emit a plan or decision input rather than implicit authority |
+| Stateless PDP | PKG evaluation path, coordinator policy logic, `src/seedcore/coordinator/core/execute.py` | Tighten policy evaluation around a synchronous `evaluate_intent` boundary that returns `ExecutionToken` or deny without persisting intent state |
 | Governed execution | `PlanExecutor`, `OrganismService`, routing layer | Dispatch only tokenized actions to robotic or controlled endpoints |
 | Evidence and custody | `FactManagerService`, `StateService`, telemetry stack | Persist `EvidenceBundle`, enable playback, and update custody ledger only after validation |
 
@@ -200,7 +200,7 @@ SeedCore currently uses:
 - **Ray Actors** for governed agent and execution runtime behavior
 - **Postgres / Redis / Neo4j** for state, memory, telemetry, and policy foundations
 
-The current repository already contains most of the primitives needed for the next-stage design:
+The current repository already contains many of the primitives needed for that target design:
 
 - coordinator services for planning and policy gating
 - PKG infrastructure for active policy evaluation
@@ -212,19 +212,77 @@ For deep technical details see:
 - *Advanced Architecture*
 - *Design Notes*
 - *Architecture Migration Summary*
+- [Zero-Trust Custody and Digital-Twin Runtime](docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md)
+- [Source Registration Architecture](docs/development/source_registration_architecture.md)
+- [End-to-End Governance Demo Contract](docs/development/end_to_end_governance_demo_contract.md)
+- [Policy Gate Matrix](docs/development/policy_gate_matrix.md)
+- [Evidence Bundle Example](docs/development/evidence_bundle_example.json)
+
+## Demo Status (8-Week Plan)
+
+As of **March 16, 2026**, the repository is aligned to a narrow, demo-first scope:
+
+```text
+Tracking Event -> Policy Decision -> Execution Token -> Signed Evidence Bundle
+```
+
+### Current Status
+
+The current repo baseline already supports the core demo chain:
+
+- governed ingress for `source-registrations` and `tracking-events`
+- projection from append-only tracking events into `SourceRegistration` state
+- deterministic `ActionIntent` derivation and PDP evaluation
+- signed `ExecutionToken` issuance on allow paths
+- token checks in simulator-facing execution adapters
+- signed `EvidenceBundle` construction for replay and audit
+
+These capabilities are implemented primarily in:
+
+- `src/seedcore/api/routers/source_registrations_router.py`
+- `src/seedcore/api/routers/tracking_events_router.py`
+- `src/seedcore/ops/source_registration/projector.py`
+- `src/seedcore/coordinator/core/governance.py`
+- `src/seedcore/ops/evidence/builder.py`
+- `src/seedcore/models/evidence_bundle.py`
+
+### Schedule Checkpoint Mapping
+
+- **Weeks 1-3:** scope, deterministic ingress, and the PDP boundary are defined in docs and represented in code.
+- **Weeks 4-5:** tokenized simulator execution and signed evidence generation are in place for the demo path.
+- **Week 6:** a closed-loop demo runner and artifact output flow exist in `scripts/host/run_closed_loop_demo.py` and `demo-output/`.
+- **Weeks 7-8:** reliability runs, presentation polish, and final proof packaging are still in progress.
+
+### Demo Artifacts In Repository
+
+- Demo contract and acceptance criteria:
+  - `docs/development/end_to_end_governance_demo_contract.md`
+- Source registration sequence and curl collection:
+  - `docs/development/source_registration_tracking_event_sequence.md`
+  - `docs/development/source_registration_tracking_event_curl_collection.md`
+- Example evidence artifact:
+  - `docs/development/evidence_bundle_example.json`
+- Investor-facing runtime architecture:
+  - `docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md`
+- Verification and demo scripts:
+  - `scripts/host/seed_source_registration_decision_input.sh`
+  - `scripts/host/verify_seedcore_architecture.py`
+  - `scripts/host/verify_pdp_boundary.sh`
+  - `scripts/host/run_closed_loop_demo.py`
 
 ---
 
-## Quick Start (Kubernetes + KubeRay)
+## Quick Start (Kind + Kubernetes)
 
 ### Prerequisites
 
 - Kubernetes tooling: `kubectl`, `kind`, `helm`
 - Docker
+- `envsubst` available in your shell (`gettext` on macOS)
 - 16GB+ RAM, 4+ CPU cores recommended
-- Linux with Docker support
+- macOS or Linux with Docker support
 
-### Option 1: Automated Deployment (Recommended)
+### Full Local Deploy (Recommended)
 
 ```bash
 git clone https://github.com/NeilLi/seedcore.git
@@ -235,36 +293,89 @@ cp docker/env.example docker/.env
 ./deploy/deploy-all.sh
 ```
 
+`deploy/deploy-all.sh` orchestrates the standard local stack in this order:
+
+- builds the SeedCore image unless `--skip-build` is used
+- creates or reuses a local `kind` cluster
+- deploys PostgreSQL, MySQL, Redis, and Neo4j
+- applies database migrations, including source registration and tracking-event tables
+- deploys Ray, the SeedCore API, bootstrap jobs, ingress, and the HAL bridge
+
+Useful flags from the deploy script:
+
+- `./deploy/deploy-all.sh --skip-build`
+- `./deploy/deploy-all.sh --skip-hal`
+- `./deploy/deploy-all.sh --skip-ingress`
+- `./deploy/deploy-all.sh --worker-replicas 2`
+
+### Expose Services Locally
+
+After the cluster is up, forward the main services:
+
+```bash
+./deploy/port-forward.sh
+```
+
+That script forwards the default local ports for:
+
+- SeedCore API: `8002`
+- Ray Serve: `8000`
+- Ray Dashboard: `8265`
+- PostgreSQL: `5432`
+- MySQL: `3306`
+- Redis: `6379`
+- Neo4j: `7474` and `7687`
+
+If you also want local access to the HAL bridge, forward it separately:
+
+```bash
+kubectl -n seedcore-dev port-forward svc/seedcore-hal-bridge 8001:8001
+```
+
 ### Verify Installation
 
 ```bash
-# Ray dashboard
-curl http://localhost:8265/api/version
-
 # API health
 curl http://localhost:8002/health
+curl http://localhost:8002/readyz
 
-# Ray Serve services
-curl http://localhost:8000/cognitive/health
-curl http://localhost:8000/pipeline/health
-curl http://localhost:8000/organism/health
+# Ray Serve and dashboard
+curl http://localhost:8000/-/healthz
+curl http://localhost:8265/api/version
+
+# PKG status
+curl http://localhost:8002/api/v1/pkg/status
+```
+
+### Demo-Focused Setup Checks
+
+For the governed demo path, these scripts are the fastest sanity checks after deployment:
+
+```bash
+python scripts/host/verify_seedcore_architecture.py
+bash scripts/host/verify_pdp_boundary.sh
+bash scripts/host/seed_source_registration_decision_input.sh
 ```
 
 ---
 
-## 🔧 Configuration (Key)
+## Configuration (Key)
 
 ```env
-SEEDCORE_STAGE=dev
-RAY_ADDRESS=ray://seedcore-svc-stable-svc:10001
+PG_DSN=postgresql://postgres:password@postgresql:5432/seedcore
 POSTGRES_HOST=postgresql
-REDIS_HOST=redis-master
+REDIS_HOST=redis
+REDIS_URL=redis://redis:6379/0
 NEO4J_HOST=neo4j
+RAY_HOST=seedcore-svc-stable-svc
+RAY_PORT=10001
+RAY_SERVE_URL=http://seedcore-svc-stable-svc:8000
+API_PORT=8002
 ```
 
 ---
 
-## 📊 Monitoring
+## Monitoring
 
 - Ray Dashboard: `localhost:8265`
 - Logs:
@@ -275,22 +386,64 @@ kubectl logs -l app=seedcore-api -n seedcore-dev -f
 
 ---
 
-## 📚 API Summary
+## API Summary
 
-### Ray Serve (Port 8000)
+### SeedCore API (`http://localhost:8002`)
 
-| Service     | Path         | Role                 | Stability |
-| ----------- | ------------ | -------------------- | --------- |
-| Cognitive   | `/cognitive` | Reasoning / Planning | Alpha     |
-| Coordinator | `/pipeline`  | Control Plane        | Alpha     |
-| Organism    | `/organism`  | Execution Plane      | Alpha     |
-| State       | `/ops/state` | State aggregation    | Stable    |
+Core health and root endpoints:
 
-### Standalone API (Port 8002)
+- `GET /`
+- `GET /health`
+- `GET /readyz`
 
-- `/health`
-- `/readyz`
-- `/healthz/runtime`
+Versioned governed API surface under `/api/v1`:
+
+- `Tasks`
+  - `POST /api/v1/tasks`
+  - `GET /api/v1/tasks`
+  - `GET /api/v1/tasks/{task_id}`
+  - `POST /api/v1/tasks/{task_id}/cancel`
+  - `GET /api/v1/tasks/{task_id}/logs`
+- `Source Registrations`
+  - `POST /api/v1/source-registrations`
+  - `GET /api/v1/source-registrations/{registration_id}`
+  - `POST /api/v1/source-registrations/{registration_id}/artifacts`
+  - `POST /api/v1/source-registrations/{registration_id}/submit`
+  - `GET /api/v1/source-registrations/{registration_id}/verdict`
+- `Tracking Events`
+  - `POST /api/v1/tracking-events`
+  - `GET /api/v1/tracking-events`
+  - `GET /api/v1/tracking-events/{event_id}`
+  - `GET /api/v1/source-registrations/{registration_id}/tracking-events`
+- `Facts / Control`
+  - `GET /api/v1/facts`
+  - `GET /api/v1/facts/{fact_id}`
+  - `POST /api/v1/facts`
+  - `DELETE /api/v1/facts/{fact_id}`
+- `Advisory`
+  - `POST /api/v1/advisory`
+- `PKG`
+  - `GET /api/v1/pkg/status`
+  - `POST /api/v1/pkg/reload`
+  - `POST /api/v1/pkg/evaluate_async`
+  - `POST /api/v1/pkg/snapshots/compare`
+  - `POST /api/v1/pkg/snapshots/{snapshot_id}/compile-rules`
+- `Capabilities`
+  - `POST /api/v1/capabilities/register`
+
+### HAL Bridge (`http://localhost:8001` in-cluster)
+
+The HAL bridge is deployed separately from the main API and exposes the controlled actuator surface:
+
+- `GET /status`
+- `GET /state`
+- `POST /actuate`
+- `GET /vision/frame`
+
+### Ray Serve and Dashboard
+
+- Ray Serve base URL: `http://localhost:8000`
+- Ray Dashboard: `http://localhost:8265`
 
 ---
 
@@ -304,19 +457,6 @@ The unit-test workflow is configured for manual runs only (no automatic push/PR 
 ```bash
 pytest -q
 ```
-
----
-
-## 🔗 Related Projects & Reference Implementations
-
-SeedCore is the core reasoning-and-execution infrastructure. The following repositories are optional companion projects used for demonstration, testing, and policy development:
-
-- **Hotel Simulator** — [github.com/NeilLi/hotel-simulator](https://github.com/NeilLi/hotel-simulator)  
-  A physical-world environment simulator used to demonstrate closed-loop reasoning, telemetry feedback, and replanning with SeedCore.
-- **PKG Simulator** — [github.com/NeilLi/pkg-simulator](https://github.com/NeilLi/pkg-simulator)  
-  A standalone Policy Knowledge Graph (PKG) simulator used to author and test execution policies enforced by SeedCore.
-
-These projects are not required to run SeedCore, but they illustrate how SeedCore integrates with real domains and policy systems.
 
 ---
 
