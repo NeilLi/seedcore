@@ -8,6 +8,7 @@ from ..models.advisory import (
     AdvisoryContractResponse,
     AdvisoryPlan,
     AmbiguityAssessment,
+    PolicyCaseAssessment,
     ProposedRouting,
     RiskSummary,
 )
@@ -117,6 +118,20 @@ class CognitiveAdvisoryContractBuilder:
         metadata: Dict[str, Any],
     ) -> AdvisoryContractResponse:
         params = request.params or {}
+        governance = params.get("governance", {}) if isinstance(params, dict) else {}
+        policy_case = (
+            governance.get("policy_case")
+            if isinstance(governance, dict) and isinstance(governance.get("policy_case"), dict)
+            else {}
+        )
+        if policy_case:
+            return cls.build_policy_case_contract(
+                request=request,
+                policy_case=policy_case,
+                cognitive_result=cognitive_result,
+                metadata=metadata,
+            )
+
         cognitive = params.get("cognitive", {}) if isinstance(params, dict) else {}
         proto_plan = cognitive.get("proto_plan") if isinstance(cognitive, dict) else {}
         if not isinstance(proto_plan, dict):
@@ -253,6 +268,120 @@ class CognitiveAdvisoryContractBuilder:
             advisory=plan,
             metadata={
                 "contract": "advisory_plan",
+                "source": "cognitive_service",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "stateless": True,
+                **(metadata or {}),
+            },
+        )
+
+    @classmethod
+    def build_policy_case_contract(
+        cls,
+        *,
+        request: TaskPayload,
+        policy_case: Dict[str, Any],
+        cognitive_result: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> AdvisoryContractResponse:
+        ambiguity = cls.estimate_ambiguity(request, cognitive_result)
+        risk_score, _, risk_factors = cls.derive_risk(request, ambiguity)
+
+        twins = (
+            policy_case.get("relevant_twin_snapshot")
+            if isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        )
+        cognitive_overrides = (
+            cognitive_result.get("policy_assessment")
+            if isinstance(cognitive_result.get("policy_assessment"), dict)
+            else {}
+        )
+
+        stale_twins: List[str] = []
+        policy_conflicts: List[str] = []
+        missing_evidence: List[str] = []
+        required_approvals: List[str] = []
+
+        for twin_key, raw_twin in twins.items():
+            if not isinstance(raw_twin, dict):
+                continue
+            freshness = raw_twin.get("freshness") if isinstance(raw_twin.get("freshness"), dict) else {}
+            if str(freshness.get("status") or "").lower() == "stale":
+                stale_twins.append(str(raw_twin.get("twin_id") or twin_key))
+            policy_conflicts.extend([str(item) for item in raw_twin.get("conflicts") or []])
+            policy_conflicts.extend([f"{twin_key}:{item}" for item in raw_twin.get("lockouts") or []])
+            if bool((raw_twin.get("delegation") or {}).get("revoked")):
+                policy_conflicts.append(f"{twin_key}:delegation_revoked")
+            if bool((raw_twin.get("custody") or {}).get("quarantined")):
+                policy_conflicts.append(f"{twin_key}:quarantined")
+
+        evidence = (
+            policy_case.get("evidence_summary")
+            if isinstance(policy_case.get("evidence_summary"), dict)
+            else {}
+        )
+        required = evidence.get("required") if isinstance(evidence.get("required"), list) else []
+        available = evidence.get("available") if isinstance(evidence.get("available"), list) else []
+        missing_evidence.extend([str(item) for item in required if item not in available])
+        telemetry_required = evidence.get("telemetry_required") if isinstance(evidence.get("telemetry_required"), list) else []
+        telemetry_summary = (
+            policy_case.get("telemetry_summary")
+            if isinstance(policy_case.get("telemetry_summary"), dict)
+            else {}
+        )
+        missing_evidence.extend([str(item) for item in telemetry_required if item not in telemetry_summary])
+
+        required_approvals.extend([str(item) for item in cognitive_overrides.get("required_approvals") or []])
+        missing_evidence.extend([str(item) for item in cognitive_overrides.get("missing_evidence") or []])
+        policy_conflicts.extend([str(item) for item in cognitive_overrides.get("policy_conflicts") or []])
+        risk_factors.extend([f"stale_twin={item}" for item in stale_twins])
+        risk_factors.extend([str(item) for item in cognitive_overrides.get("risk_factors") or []])
+
+        recommended_disposition = "allow"
+        if policy_conflicts or stale_twins:
+            recommended_disposition = "escalate"
+            risk_score = max(risk_score, 0.8)
+        if missing_evidence:
+            recommended_disposition = "escalate"
+            risk_score = max(risk_score, 0.7)
+        if cognitive_overrides.get("recommended_disposition") in {"allow", "deny", "escalate"}:
+            recommended_disposition = str(cognitive_overrides["recommended_disposition"])
+        if recommended_disposition == "deny":
+            risk_score = max(risk_score, 0.75)
+
+        explanation = cognitive_overrides.get("explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            if policy_conflicts:
+                explanation = "Policy case contains conflicts that require human or deterministic review."
+            elif missing_evidence:
+                explanation = "Policy case is missing required evidence for safe automatic approval."
+            else:
+                explanation = "Policy case is consistent with the current digital twin state."
+
+        assessment = PolicyCaseAssessment(
+            task_id=request.task_id,
+            recommended_disposition=recommended_disposition,  # type: ignore[arg-type]
+            risk_score=cls.clamp01(risk_score),
+            risk_factors=sorted(set(risk_factors)),
+            missing_evidence=sorted(set(missing_evidence)),
+            policy_conflicts=sorted(set(policy_conflicts)),
+            required_approvals=sorted(set(required_approvals)),
+            explanation=explanation,
+            confidence=cls.clamp01(float(cognitive_overrides.get("confidence", 1.0 - ambiguity.score))),
+            ambiguity=ambiguity,
+            structured_interpretation={
+                "task_type": request.type,
+                "policy_snapshot": policy_case.get("policy_snapshot"),
+                "twin_keys": sorted(twins.keys()),
+                "stale_twins": stale_twins,
+            },
+        )
+        return AdvisoryContractResponse(
+            success=True,
+            advisory=assessment,
+            metadata={
+                "contract": "policy_case_assessment",
                 "source": "cognitive_service",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "stateless": True,

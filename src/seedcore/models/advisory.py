@@ -60,7 +60,27 @@ class RiskSummary(BaseModel):
     structured_interpretation: Dict[str, Any] = Field(default_factory=dict)
 
 
-AdvisoryPayload = Union[AdvisoryPlan, RiskSummary]
+class PolicyCaseAssessment(BaseModel):
+    kind: Literal["policy_case_assessment"] = "policy_case_assessment"
+    advisory_id: str = Field(default_factory=lambda: str(uuid4()))
+    task_id: str
+    generated_at: str = Field(default_factory=utc_now_iso)
+    baseline: str = "cognitive_core_policy"
+    stateless: bool = True
+    recommended_disposition: Literal["allow", "deny", "escalate"] = "escalate"
+    risk_score: float = Field(0.0, ge=0.0, le=1.0)
+    risk_factors: List[str] = Field(default_factory=list)
+    missing_evidence: List[str] = Field(default_factory=list)
+    policy_conflicts: List[str] = Field(default_factory=list)
+    required_approvals: List[str] = Field(default_factory=list)
+    explanation: str = ""
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    ambiguity: AmbiguityAssessment = Field(default_factory=AmbiguityAssessment)
+    structured_interpretation: Dict[str, Any] = Field(default_factory=dict)
+    next_action: str = "policy_evaluate_case"
+
+
+AdvisoryPayload = Union[AdvisoryPlan, RiskSummary, PolicyCaseAssessment]
 
 
 class AdvisoryContractResponse(BaseModel):
@@ -68,4 +88,3 @@ class AdvisoryContractResponse(BaseModel):
     advisory: Optional[AdvisoryPayload] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-

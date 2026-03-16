@@ -12,7 +12,9 @@ import pytest
 
 from seedcore.coordinator.core.governance import (
     build_action_intent,
+    build_governance_context,
     evaluate_intent,
+    prepare_policy_case,
 )
 from seedcore.models.action_intent import (
     ActionIntent,
@@ -247,6 +249,7 @@ def test_evaluate_intent_allows_release_with_approved_source_registration():
     )
 
     assert decision.allowed is True
+    assert decision.disposition == "allow"
     assert decision.execution_token is not None
     assert decision.reason == "allow_release_with_approved_source_registration"
 
@@ -270,6 +273,110 @@ def test_evaluate_intent_allows_release_with_approved_source_registration():
     ]
 
 
+def test_prepare_policy_case_builds_default_twin_snapshot():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
+    )
+
+    policy_case = prepare_policy_case(
+        intent,
+        approved_source_registrations={"reg-1": "decision-1"},
+    )
+
+    assert policy_case.action_intent.intent_id == intent.intent_id
+    assert set(policy_case.relevant_twin_snapshot.keys()) == {
+        "owner",
+        "assistant",
+        "asset",
+        "edge",
+        "transaction",
+    }
+
+
+def test_evaluate_intent_denies_stale_twin_state():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={"reg-1": "decision-1"},
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_id": "asset:1",
+                "freshness": {"status": "stale"},
+            }
+        },
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "deny"
+    assert decision.deny_code == "stale_twin_state"
+
+
+def test_evaluate_intent_escalates_on_cognitive_policy_conflict():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={"reg-1": "decision-1"},
+        cognitive_assessment={
+            "recommended_disposition": "escalate",
+            "risk_score": 0.91,
+            "policy_conflicts": ["owner_delegate_conflict"],
+            "required_approvals": ["human_policy_review"],
+            "explanation": "Owner and agent delegation states disagree.",
+            "trace_ref": "trace-1",
+        },
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "escalate"
+    assert decision.deny_code == "policy_escalation_required"
+    assert decision.cognitive_trace_ref == "trace-1"
+    assert decision.required_approvals == ["human_policy_review"]
+
+
+def test_build_governance_context_carries_policy_case_and_cognitive_assessment():
+    payload = {
+        "task_id": "task-policy-1",
+        "type": "action",
+        "description": "Release approved lot",
+        "params": {
+            "interaction": {"assigned_agent_id": "agent-1"},
+            "routing": {"required_specialization": "PACKING_OPERATOR"},
+            "resource": {
+                "asset_id": "asset-1",
+                "source_registration_id": "reg-1",
+                "registration_decision_id": "decision-1",
+            },
+            "intent": "release",
+        },
+    }
+
+    governance = build_governance_context(
+        payload,
+        approved_source_registrations={"reg-1": "decision-1"},
+        cognitive_assessment={
+            "recommended_disposition": "allow",
+            "risk_score": 0.22,
+            "risk_factors": ["fresh_twin_state"],
+            "explanation": "Twins are fresh and policy-aligned.",
+            "trace_ref": "trace-allow-1",
+        },
+    )
+
+    assert governance["policy_case"]["cognitive_assessment"]["trace_ref"] == "trace-allow-1"
+    assert governance["policy_decision"]["disposition"] == "allow"
+
+
 @pytest.mark.asyncio
 async def test_coordinator_handoff_injects_governance_context():
     with patch.object(cs.Coordinator, "__init__", return_value=None):
@@ -289,6 +396,9 @@ async def test_coordinator_handoff_injects_governance_context():
     coordinator.organism_timeout_s = 12
     coordinator.organism_client = SimpleNamespace(post=organism_post)
     coordinator._compute_drift_score = AsyncMock(return_value=0.0)
+    coordinator._resolve_approved_source_registrations = AsyncMock(
+        return_value={"reg-1": "decision-1"}
+    )
     coordinator.graph_task_repo = None
     coordinator.ml_client = None
     coordinator.metrics = MagicMock()
@@ -336,4 +446,85 @@ async def test_coordinator_handoff_injects_governance_context():
     assert governance["action_intent"]["principal"]["role_profile"] == "ROBOT_OPERATOR"
     assert governance["execution_token"]["contract_version"] == "snapshot:8"
     assert governance["policy_decision"]["allowed"] is True
+    assert governance["policy_case"]["action_intent"]["intent_id"] == governance["action_intent"]["intent_id"]
     assert result["meta"]["governance"]["execution_token"]["intent_id"] == governance["action_intent"]["intent_id"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_handoff_reuses_cognitive_policy_advisory():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    organism_post = AsyncMock(
+        return_value={
+            "success": True,
+            "payload": {"status": "ok"},
+            "error": None,
+            "error_type": None,
+            "meta": {},
+            "path": "organism_service",
+        }
+    )
+
+    coordinator.organism_timeout_s = 12
+    coordinator.organism_client = SimpleNamespace(post=organism_post)
+    coordinator._compute_drift_score = AsyncMock(return_value=0.0)
+    coordinator._resolve_approved_source_registrations = AsyncMock(
+        return_value={"reg-1": "decision-1"}
+    )
+    coordinator.graph_task_repo = None
+    coordinator.ml_client = None
+    coordinator.metrics = MagicMock()
+    coordinator.cognitive_client = SimpleNamespace(
+        timeout=5.0,
+        advisory_async=AsyncMock(
+            return_value={
+                "success": True,
+                "advisory": {
+                    "kind": "policy_case_assessment",
+                    "advisory_id": "adv-1",
+                    "task_id": "task-555",
+                    "recommended_disposition": "escalate",
+                    "risk_score": 0.88,
+                    "policy_conflicts": ["owner_delegate_conflict"],
+                    "required_approvals": ["human_policy_review"],
+                    "explanation": "Delegation conflict detected.",
+                },
+            }
+        ),
+    )
+    coordinator._persist_proto_plan = AsyncMock()
+    coordinator._record_router_telemetry = AsyncMock()
+    coordinator._session_factory = MagicMock()
+    coordinator.fast_path_latency_slo_ms = 1000.0
+    coordinator._run_eventizer = MagicMock()
+
+    exec_cfg = coordinator._build_execution_config("cid-555")
+
+    result = await exec_cfg.organism_execute(
+        "organism",
+        {
+            "task_id": "task-555",
+            "type": "action",
+            "snapshot_id": 8,
+            "params": {
+                "interaction": {"assigned_agent_id": "agent-99"},
+                "routing": {"required_specialization": "ROBOT_OPERATOR"},
+                "resource": {
+                    "asset_id": "asset-22",
+                    "source_registration_id": "reg-1",
+                    "registration_decision_id": "decision-1",
+                },
+                "intent": "release",
+            },
+        },
+        1.0,
+        "cid-555",
+    )
+
+    assert coordinator.cognitive_client.advisory_async.await_count == 1
+    assert result["success"] is False
+    assert result["error_type"] == "policy_denied"
+    governance = result["meta"]["governance"]
+    assert governance["policy_decision"]["disposition"] == "escalate"
+    assert governance["policy_decision"]["required_approvals"] == ["human_policy_review"]

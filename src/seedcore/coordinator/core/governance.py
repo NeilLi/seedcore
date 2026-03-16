@@ -14,8 +14,11 @@ from seedcore.models.action_intent import (
     IntentAction,
     IntentPrincipal,
     IntentResource,
+    PolicyCase,
+    PolicyCaseAssessment,
     PolicyDecision,
     SecurityContract,
+    TwinSnapshot,
 )
 from seedcore.models.task_payload import TaskPayload
 
@@ -47,6 +50,12 @@ SOURCE_REGISTRATION_UNAPPROVED_DENY_CODE = "unapproved_source_registration"
 SOURCE_REGISTRATION_MISMATCH_DENY_CODE = "mismatched_registration_decision"
 EXPLICIT_ALLOW_RULE = "allow_release_with_approved_source_registration"
 EXPLICIT_DENY_RULE = "deny_release_without_approved_source_registration"
+STALE_TWIN_DENY_CODE = "stale_twin_state"
+REVOKED_DELEGATION_DENY_CODE = "revoked_delegation"
+FORBIDDEN_TWIN_STATE_DENY_CODE = "forbidden_twin_state"
+MISSING_MANDATORY_EVIDENCE_DENY_CODE = "missing_mandatory_evidence"
+COGNITIVE_DENY_CODE = "cognitive_policy_denied"
+POLICY_ESCALATION_CODE = "policy_escalation_required"
 EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "action_type",
     "target_zone",
@@ -208,74 +217,222 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
     )
 
 
-def evaluate_intent(
-    action_intent: ActionIntent,
+def prepare_policy_case(
+    task: TaskPayload | Mapping[str, Any] | Dict[str, Any] | ActionIntent,
     *,
     policy_snapshot: str | None = None,
     approved_source_registrations: Mapping[str, str | None] | None = None,
+    relevant_twin_snapshot: Mapping[str, Any] | None = None,
+    telemetry_summary: Mapping[str, Any] | None = None,
+    cognitive_assessment: Mapping[str, Any] | PolicyCaseAssessment | None = None,
+    evidence_summary: Mapping[str, Any] | None = None,
+) -> PolicyCase:
+    action_intent = task if isinstance(task, ActionIntent) else build_action_intent(task)
+    resolved_snapshot = (
+        policy_snapshot
+        or action_intent.action.security_contract.version
+    )
+    resolved_twins = dict(relevant_twin_snapshot or {}) or build_twin_snapshot(task)
+    resolved_cognitive = _coerce_policy_case_assessment(cognitive_assessment)
+    return PolicyCase(
+        action_intent=action_intent,
+        policy_snapshot=resolved_snapshot,
+        relevant_twin_snapshot={
+            key: _coerce_twin_snapshot(key, value)
+            for key, value in resolved_twins.items()
+        },
+        approved_source_registrations=dict(approved_source_registrations or {}),
+        telemetry_summary=dict(telemetry_summary or {}),
+        cognitive_assessment=resolved_cognitive,
+        evidence_summary=dict(evidence_summary or {}),
+    )
+
+
+def build_twin_snapshot(
+    task: TaskPayload | Mapping[str, Any] | Dict[str, Any] | ActionIntent,
+) -> Dict[str, TwinSnapshot]:
+    if isinstance(task, ActionIntent):
+        intent = task
+        payload: Dict[str, Any] = {}
+        params: Dict[str, Any] = {}
+    else:
+        payload = _task_to_dict(task)
+        params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        intent = build_action_intent(payload)
+
+    governance = params.get("governance") if isinstance(params.get("governance"), dict) else {}
+    twin_inputs = governance.get("digital_twins") if isinstance(governance.get("digital_twins"), dict) else {}
+    multimodal = params.get("multimodal") if isinstance(params.get("multimodal"), dict) else {}
+
+    def _snapshot(
+        twin_key: str,
+        twin_id: str,
+        *,
+        identity: Mapping[str, Any] | None = None,
+        delegation: Mapping[str, Any] | None = None,
+        risk: Mapping[str, Any] | None = None,
+        custody: Mapping[str, Any] | None = None,
+        provenance: Mapping[str, Any] | None = None,
+        telemetry: Mapping[str, Any] | None = None,
+    ) -> TwinSnapshot:
+        source = twin_inputs.get(twin_key) if isinstance(twin_inputs.get(twin_key), dict) else {}
+        freshness = source.get("freshness") if isinstance(source.get("freshness"), dict) else {}
+        return TwinSnapshot(
+            twin_type=twin_key,
+            twin_id=str(source.get("twin_id") or twin_id),
+            freshness={
+                "status": source.get("freshness_status") or freshness.get("status") or "unknown",
+                "observed_at": source.get("observed_at") or freshness.get("observed_at"),
+                "max_age_seconds": source.get("max_age_seconds") or freshness.get("max_age_seconds"),
+            },
+            identity=dict(identity or source.get("identity") or {}),
+            delegation=dict(delegation or source.get("delegation") or {}),
+            risk=dict(risk or source.get("risk") or {}),
+            custody=dict(custody or source.get("custody") or {}),
+            provenance=dict(provenance or source.get("provenance") or {}),
+            telemetry=dict(telemetry or source.get("telemetry") or {}),
+            pending_exceptions=list(source.get("pending_exceptions") or []),
+            lockouts=list(source.get("lockouts") or []),
+            conflicts=list(source.get("conflicts") or []),
+        )
+
+    target_zone = intent.resource.target_zone or multimodal.get("location_context")
+    snapshots = {
+        "owner": _snapshot(
+            "owner",
+            f"owner:{intent.resource.asset_id}",
+            identity={"asset_id": intent.resource.asset_id},
+            delegation={"principal_agent_id": intent.principal.agent_id},
+        ),
+        "assistant": _snapshot(
+            "assistant",
+            f"assistant:{intent.principal.agent_id}",
+            identity={"agent_id": intent.principal.agent_id},
+            delegation={"role_profile": intent.principal.role_profile},
+        ),
+        "asset": _snapshot(
+            "asset",
+            f"asset:{intent.resource.asset_id}",
+            custody={"asset_id": intent.resource.asset_id, "target_zone": target_zone},
+            provenance={"provenance_hash": intent.resource.provenance_hash},
+        ),
+        "edge": _snapshot(
+            "edge",
+            f"edge:{target_zone or 'unknown'}",
+            telemetry={"target_zone": target_zone},
+        ),
+        "transaction": _snapshot(
+            "transaction",
+            f"transaction:{intent.intent_id}",
+            custody={"intent_id": intent.intent_id},
+            telemetry={"session_token": intent.principal.session_token},
+        ),
+    }
+    return snapshots
+
+
+def evaluate_intent(
+    action_intent: ActionIntent | PolicyCase,
+    *,
+    policy_snapshot: str | None = None,
+    approved_source_registrations: Mapping[str, str | None] | None = None,
+    relevant_twin_snapshot: Mapping[str, Any] | None = None,
+    telemetry_summary: Mapping[str, Any] | None = None,
+    cognitive_assessment: Mapping[str, Any] | PolicyCaseAssessment | None = None,
+    evidence_summary: Mapping[str, Any] | None = None,
 ) -> PolicyDecision:
+    policy_case = (
+        action_intent
+        if isinstance(action_intent, PolicyCase)
+        else prepare_policy_case(
+            action_intent,
+            policy_snapshot=policy_snapshot,
+            approved_source_registrations=approved_source_registrations,
+            relevant_twin_snapshot=relevant_twin_snapshot,
+            telemetry_summary=telemetry_summary,
+            cognitive_assessment=cognitive_assessment,
+            evidence_summary=evidence_summary,
+        )
+    )
+    action_intent = policy_case.action_intent
+    policy_snapshot = policy_case.policy_snapshot
     now = _utcnow()
     try:
         issued_at = _parse_iso8601(action_intent.timestamp)
         valid_until = _parse_iso8601(action_intent.valid_until)
     except ValueError:
-        return PolicyDecision(
-            allowed=False,
-            reason="ActionIntent contains invalid timestamps.",
-            deny_code="invalid_timestamp",
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            "ActionIntent contains invalid timestamps.",
+            "invalid_timestamp",
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
 
     if valid_until <= issued_at:
-        return PolicyDecision(
-            allowed=False,
-            reason="ActionIntent TTL is non-positive.",
-            deny_code="expired_intent",
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            "ActionIntent TTL is non-positive.",
+            "expired_intent",
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
     if valid_until <= now:
-        return PolicyDecision(
-            allowed=False,
-            reason="ActionIntent TTL is expired.",
-            deny_code="expired_intent",
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            "ActionIntent TTL is expired.",
+            "expired_intent",
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
 
     if not action_intent.principal.agent_id.strip():
-        return PolicyDecision(
-            allowed=False,
-            reason="ActionIntent is missing principal.agent_id.",
-            deny_code="missing_principal",
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            "ActionIntent is missing principal.agent_id.",
+            "missing_principal",
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
 
     if not action_intent.principal.role_profile.strip():
-        return PolicyDecision(
-            allowed=False,
-            reason="ActionIntent is missing principal.role_profile.",
-            deny_code="missing_role_profile",
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            "ActionIntent is missing principal.role_profile.",
+            "missing_role_profile",
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
 
     if not action_intent.action.security_contract.version.strip():
-        return PolicyDecision(
-            allowed=False,
-            reason="ActionIntent is missing action.security_contract.version.",
-            deny_code="missing_contract_version",
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            "ActionIntent is missing action.security_contract.version.",
+            "missing_contract_version",
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
 
     registration_deny_code = _source_registration_deny_code(
         action_intent,
-        approved_source_registrations or {},
+        policy_case.approved_source_registrations,
     )
     if registration_deny_code is not None:
-        return PolicyDecision(
-            allowed=False,
-            reason=_source_registration_deny_reason(registration_deny_code),
-            deny_code=registration_deny_code,
-            policy_snapshot=policy_snapshot,
+        return _deny_decision(
+            _source_registration_deny_reason(registration_deny_code),
+            registration_deny_code,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
         )
+
+    twin_violation = _evaluate_twin_policy(policy_case)
+    if twin_violation is not None:
+        return twin_violation
+
+    cognitive_violation = _evaluate_cognitive_policy(policy_case)
+    if cognitive_violation is not None:
+        return cognitive_violation
 
     token_payload = {
         "token_id": str(uuid.uuid4()),
@@ -297,6 +454,24 @@ def evaluate_intent(
         execution_token=token,
         reason=allow_reason,
         policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
+        disposition="allow",
+        risk_score=_policy_case_risk_score(policy_case),
+        explanations=_policy_case_explanations(policy_case, allow_reason),
+        required_approvals=(
+            policy_case.cognitive_assessment.required_approvals
+            if policy_case.cognitive_assessment is not None
+            else []
+        ),
+        evidence_gaps=(
+            policy_case.cognitive_assessment.missing_evidence
+            if policy_case.cognitive_assessment is not None
+            else []
+        ),
+        cognitive_trace_ref=(
+            policy_case.cognitive_assessment.trace_ref
+            if policy_case.cognitive_assessment is not None
+            else None
+        ),
     )
 
 
@@ -304,15 +479,24 @@ def build_governance_context(
     task: TaskPayload | Mapping[str, Any] | Dict[str, Any],
     *,
     approved_source_registrations: Mapping[str, str | None] | None = None,
+    relevant_twin_snapshot: Mapping[str, Any] | None = None,
+    telemetry_summary: Mapping[str, Any] | None = None,
+    cognitive_assessment: Mapping[str, Any] | PolicyCaseAssessment | None = None,
+    evidence_summary: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    intent = build_action_intent(task)
-    decision = evaluate_intent(
-        intent,
-        policy_snapshot=intent.action.security_contract.version,
+    policy_case = prepare_policy_case(
+        task,
         approved_source_registrations=approved_source_registrations,
+        relevant_twin_snapshot=relevant_twin_snapshot,
+        telemetry_summary=telemetry_summary,
+        cognitive_assessment=cognitive_assessment,
+        evidence_summary=evidence_summary,
     )
+    intent = policy_case.action_intent
+    decision = evaluate_intent(policy_case)
     context = {
         "action_intent": intent.model_dump(mode="json"),
+        "policy_case": policy_case.model_dump(mode="json"),
         "policy_decision": decision.model_dump(mode="json"),
     }
     if decision.execution_token is not None:
@@ -410,6 +594,238 @@ def _source_registration_deny_reason(deny_code: str) -> str:
         f"{EXPLICIT_DENY_RULE}: physical packing actions require an approved "
         "SourceRegistration decision."
     )
+
+
+def _evaluate_twin_policy(policy_case: PolicyCase) -> PolicyDecision | None:
+    twins = policy_case.relevant_twin_snapshot
+    stale_twins = [
+        f"{key}:{twin.twin_id}"
+        for key, twin in twins.items()
+        if twin.freshness.status == "stale"
+    ]
+    if stale_twins:
+        return _deny_decision(
+            "Digital twin state is stale for policy evaluation.",
+            STALE_TWIN_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.7),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[f"stale_twins={','.join(stale_twins)}"],
+        )
+
+    for twin in twins.values():
+        if bool(twin.delegation.get("revoked")):
+            return _deny_decision(
+                "Delegation is revoked for this action.",
+                REVOKED_DELEGATION_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case, floor=0.8),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=[f"revoked_twin={twin.twin_type}:{twin.twin_id}"],
+            )
+        if twin.lockouts or twin.pending_exceptions or bool(twin.custody.get("quarantined")):
+            return _deny_decision(
+                "Digital twin state blocks execution.",
+                FORBIDDEN_TWIN_STATE_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case, floor=0.75),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=[
+                    f"blocked_twin={twin.twin_type}:{twin.twin_id}",
+                    *[f"lockout={item}" for item in twin.lockouts],
+                    *[f"pending_exception={item}" for item in twin.pending_exceptions],
+                ],
+            )
+
+    evidence_gaps = _missing_mandatory_evidence(policy_case)
+    if evidence_gaps:
+        return _deny_decision(
+            "Mandatory policy evidence is missing.",
+            MISSING_MANDATORY_EVIDENCE_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.65),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            evidence_gaps=evidence_gaps,
+        )
+    return None
+
+
+def _evaluate_cognitive_policy(policy_case: PolicyCase) -> PolicyDecision | None:
+    assessment = policy_case.cognitive_assessment
+    if assessment is None:
+        return None
+    if assessment.policy_conflicts:
+        return _escalate_decision(
+            assessment.explanation or "Policy conflicts require escalation.",
+            policy_case.policy_snapshot,
+            cognitive_assessment=assessment,
+            explanations=[f"policy_conflict={item}" for item in assessment.policy_conflicts],
+        )
+    if assessment.missing_evidence:
+        return _escalate_decision(
+            assessment.explanation or "Missing evidence requires escalation.",
+            policy_case.policy_snapshot,
+            cognitive_assessment=assessment,
+        )
+    if assessment.recommended_disposition == "deny":
+        return _deny_decision(
+            assessment.explanation or "Cognitive policy assessment denied execution.",
+            COGNITIVE_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=assessment.risk_score),
+            cognitive_assessment=assessment,
+        )
+    if assessment.recommended_disposition == "escalate":
+        return _escalate_decision(
+            assessment.explanation or "Cognitive policy assessment requires escalation.",
+            policy_case.policy_snapshot,
+            cognitive_assessment=assessment,
+        )
+    return None
+
+
+def _missing_mandatory_evidence(policy_case: PolicyCase) -> list[str]:
+    evidence = policy_case.evidence_summary
+    required = evidence.get("required") if isinstance(evidence.get("required"), list) else []
+    available = evidence.get("available") if isinstance(evidence.get("available"), list) else []
+    missing = [str(item) for item in required if item not in available]
+    telemetry_required = evidence.get("telemetry_required") if isinstance(evidence.get("telemetry_required"), list) else []
+    for item in telemetry_required:
+        if item not in policy_case.telemetry_summary:
+            missing.append(str(item))
+    return sorted(set(missing))
+
+
+def _policy_case_risk_score(
+    policy_case: PolicyCase,
+    *,
+    floor: float | None = None,
+) -> float | None:
+    risk_score = None
+    if policy_case.cognitive_assessment is not None:
+        risk_score = policy_case.cognitive_assessment.risk_score
+    for twin in policy_case.relevant_twin_snapshot.values():
+        twin_score = twin.risk.get("score")
+        if isinstance(twin_score, (int, float)):
+            risk_score = max(float(risk_score or 0.0), float(twin_score))
+    if floor is not None:
+        risk_score = max(float(risk_score or 0.0), floor)
+    return round(max(0.0, min(1.0, float(risk_score))), 3) if risk_score is not None else None
+
+
+def _policy_case_explanations(policy_case: PolicyCase, base_reason: str) -> list[str]:
+    explanations = [base_reason]
+    assessment = policy_case.cognitive_assessment
+    if assessment is not None:
+        if assessment.explanation:
+            explanations.append(assessment.explanation)
+        explanations.extend([f"risk_factor={item}" for item in assessment.risk_factors])
+    return explanations
+
+
+def _deny_decision(
+    reason: str,
+    deny_code: str,
+    policy_snapshot: str | None,
+    *,
+    risk_score: float | None = None,
+    cognitive_assessment: PolicyCaseAssessment | None = None,
+    explanations: list[str] | None = None,
+    evidence_gaps: list[str] | None = None,
+) -> PolicyDecision:
+    return PolicyDecision(
+        allowed=False,
+        reason=reason,
+        policy_snapshot=policy_snapshot,
+        deny_code=deny_code,
+        disposition="deny",
+        risk_score=risk_score,
+        explanations=(explanations or _decision_explanations(reason, cognitive_assessment)),
+        required_approvals=(
+            cognitive_assessment.required_approvals if cognitive_assessment is not None else []
+        ),
+        evidence_gaps=(
+            evidence_gaps
+            if evidence_gaps is not None
+            else (cognitive_assessment.missing_evidence if cognitive_assessment is not None else [])
+        ),
+        cognitive_trace_ref=(
+            cognitive_assessment.trace_ref if cognitive_assessment is not None else None
+        ),
+    )
+
+
+def _escalate_decision(
+    reason: str,
+    policy_snapshot: str | None,
+    *,
+    cognitive_assessment: PolicyCaseAssessment | None = None,
+    explanations: list[str] | None = None,
+) -> PolicyDecision:
+    return PolicyDecision(
+        allowed=False,
+        reason=reason,
+        policy_snapshot=policy_snapshot,
+        deny_code=POLICY_ESCALATION_CODE,
+        disposition="escalate",
+        risk_score=_coerce_risk_score(cognitive_assessment.risk_score if cognitive_assessment is not None else None),
+        explanations=(explanations or _decision_explanations(reason, cognitive_assessment)),
+        required_approvals=(
+            cognitive_assessment.required_approvals if cognitive_assessment is not None else []
+        ),
+        evidence_gaps=(
+            cognitive_assessment.missing_evidence if cognitive_assessment is not None else []
+        ),
+        cognitive_trace_ref=(
+            cognitive_assessment.trace_ref if cognitive_assessment is not None else None
+        ),
+    )
+
+
+def _decision_explanations(
+    reason: str,
+    cognitive_assessment: PolicyCaseAssessment | None,
+) -> list[str]:
+    explanations = [reason]
+    if cognitive_assessment is not None:
+        if cognitive_assessment.explanation:
+            explanations.append(cognitive_assessment.explanation)
+        explanations.extend([f"risk_factor={item}" for item in cognitive_assessment.risk_factors])
+    return explanations
+
+
+def _coerce_twin_snapshot(key: str, value: Any) -> TwinSnapshot:
+    if isinstance(value, TwinSnapshot):
+        return value
+    if isinstance(value, Mapping):
+        payload = dict(value)
+        payload.setdefault("twin_type", key)
+        payload.setdefault("twin_id", str(payload.get("twin_id") or key))
+        return TwinSnapshot(**payload)
+    return TwinSnapshot(twin_type=key, twin_id=str(value))
+
+
+def _coerce_policy_case_assessment(
+    value: Mapping[str, Any] | PolicyCaseAssessment | None,
+) -> PolicyCaseAssessment | None:
+    if value is None:
+        return None
+    if isinstance(value, PolicyCaseAssessment):
+        return value
+    if isinstance(value, Mapping):
+        payload = dict(value)
+        if isinstance(payload.get("advisory"), Mapping):
+            payload = dict(payload["advisory"])
+        if payload.get("kind") == "policy_case_assessment" or "recommended_disposition" in payload:
+            payload.setdefault("trace_ref", payload.get("advisory_id"))
+            return PolicyCaseAssessment(**payload)
+    return None
+
+
+def _coerce_risk_score(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return round(max(0.0, min(1.0, float(value))), 3)
 
 
 def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:

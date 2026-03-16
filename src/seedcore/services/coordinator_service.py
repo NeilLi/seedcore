@@ -66,6 +66,7 @@ from ..coordinator.core.execute import (
 )
 from ..coordinator.core.governance import (
     build_governance_context,
+    prepare_policy_case,
     requires_action_intent,
 )
 from ..coordinator.core.advisory import CoordinatorAdvisoryCore
@@ -2142,9 +2143,77 @@ class Coordinator:
                 approved_source_registrations = await self._resolve_approved_source_registrations(
                     payload
                 )
+                telemetry_summary = (
+                    dict(existing_governance.get("telemetry_summary"))
+                    if isinstance(existing_governance.get("telemetry_summary"), dict)
+                    else (
+                        dict(params.get("telemetry"))
+                        if isinstance(params.get("telemetry"), dict)
+                        else {}
+                    )
+                )
+                evidence_summary = (
+                    dict(existing_governance.get("evidence_summary"))
+                    if isinstance(existing_governance.get("evidence_summary"), dict)
+                    else {}
+                )
+                relevant_twin_snapshot = (
+                    dict(existing_governance.get("digital_twins"))
+                    if isinstance(existing_governance.get("digital_twins"), dict)
+                    else None
+                )
+                policy_case = prepare_policy_case(
+                    payload,
+                    approved_source_registrations=approved_source_registrations,
+                    relevant_twin_snapshot=relevant_twin_snapshot,
+                    telemetry_summary=telemetry_summary,
+                    evidence_summary=evidence_summary,
+                )
+                cognitive_assessment = None
+                if getattr(self, "cognitive_client", None) and hasattr(self.cognitive_client, "advisory_async"):
+                    advisory_payload = payload.copy()
+                    advisory_params = dict(advisory_payload.get("params") or {})
+                    advisory_governance = dict(existing_governance)
+                    advisory_governance["policy_case"] = policy_case.model_dump(mode="json")
+                    advisory_params["governance"] = advisory_governance
+                    advisory_payload["params"] = advisory_params
+                    try:
+                        advisory_response = await self.cognitive_client.advisory_async(
+                            task=advisory_payload,
+                            timeout=min(float(getattr(self.cognitive_client, "timeout", 15.0)), 8.0),
+                        )
+                    except Exception as exc:
+                        advisory_response = {
+                            "success": False,
+                            "error": str(exc),
+                        }
+
+                    advisory = (
+                        advisory_response.get("advisory")
+                        if isinstance(advisory_response, dict) and isinstance(advisory_response.get("advisory"), dict)
+                        else {}
+                    )
+                    if advisory.get("kind") == "policy_case_assessment":
+                        cognitive_assessment = advisory
+                    elif advisory_response.get("success") is False:
+                        cognitive_assessment = {
+                            "recommended_disposition": "escalate",
+                            "risk_score": 0.85,
+                            "risk_factors": ["cognitive_policy_assessment_failed"],
+                            "missing_evidence": [],
+                            "policy_conflicts": [],
+                            "required_approvals": ["human_policy_review"],
+                            "explanation": advisory_response.get("error")
+                            or "Cognitive policy assessment failed.",
+                            "trace_ref": "cognitive_policy_assessment_failed",
+                        }
                 governance = build_governance_context(
                     payload,
                     approved_source_registrations=approved_source_registrations,
+                    relevant_twin_snapshot=relevant_twin_snapshot,
+                    telemetry_summary=telemetry_summary,
+                    cognitive_assessment=cognitive_assessment,
+                    evidence_summary=evidence_summary,
                 )
                 params["governance"] = {**existing_governance, **governance}
                 policy_decision = governance.get("policy_decision", {})
