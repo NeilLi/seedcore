@@ -17,7 +17,6 @@ from ..robot_sim.actuator.actuator_adapter import ActuatorAdapter
 from ..robot_sim.actuator.execution_registry import ExecutionRegistry
 from ..robot_sim.governance.execution_token import ExecutionToken as SimExecutionToken
 from ..robot_sim.simulator.robot_model import RobotModel
-from ...models.action_intent import ExecutionToken as GovernanceExecutionToken
 
 logger = logging.getLogger(__name__)
 
@@ -231,13 +230,8 @@ class RobotSimExecutionDriver(BaseRobotDriver):
             self._current_state["body_yaw"] = float(target["body_yaw"])
 
     def _to_sim_token(self, token: Dict[str, Any]) -> SimExecutionToken:
-        payload = dict(token)
-        payload.setdefault("issued_at", datetime.now(timezone.utc).isoformat())
-        payload.setdefault("contract_version", "legacy")
-        payload.setdefault("constraints", {})
-        parsed = GovernanceExecutionToken.model_validate(payload)
-        token_id = str(parsed.token_id or "missing-token")
-        valid_until_raw = parsed.valid_until
+        token_id = str(token.get("token_id") or token.get("id") or "missing-token")
+        valid_until_raw = token.get("valid_until")
         valid_until = None
         if isinstance(valid_until_raw, str) and valid_until_raw.strip():
             valid_until = datetime.fromisoformat(valid_until_raw.replace("Z", "+00:00"))

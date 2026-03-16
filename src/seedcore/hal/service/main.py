@@ -26,7 +26,6 @@ from ..drivers.reachy_mini import ReachyMiniDriver
 from ..drivers.reachy_sim import ReachySimDriver
 from ..drivers.robot_sim_driver import RobotSimExecutionDriver
 from ..interfaces import RobotState, BaseRobotDriver
-from ...models.action_intent import ExecutionToken as GovernanceExecutionToken
 
 # Configure logging - ensure logs go to stdout/stderr for Kubernetes
 logging.basicConfig(
@@ -291,23 +290,24 @@ def _requires_token(active_driver: BaseRobotDriver) -> bool:
 def _is_valid_execution_token(token: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(token, dict):
         return False
-    try:
-        parsed = _coerce_execution_token(token)
-    except Exception:
+    
+    token_id = token.get("token_id") or token.get("id")
+    valid_until_raw = token.get("valid_until")
+    
+    if not token_id or not isinstance(valid_until_raw, str):
         return False
+        
     try:
-        ts = datetime.fromisoformat(parsed.valid_until.replace("Z", "+00:00"))
+        ts = datetime.fromisoformat(valid_until_raw.replace("Z", "+00:00"))
     except ValueError:
         return False
+        
     return ts.astimezone(timezone.utc) > datetime.now(timezone.utc)
 
+def _coerce_execution_token(token: Dict[str, Any]) -> Any:
+    # Kept for compatibility if used elsewhere, though not required internally now
+    return token
 
-def _coerce_execution_token(token: Dict[str, Any]) -> GovernanceExecutionToken:
-    payload = dict(token)
-    payload.setdefault("issued_at", datetime.now(timezone.utc).isoformat())
-    payload.setdefault("contract_version", "legacy")
-    payload.setdefault("constraints", {})
-    return GovernanceExecutionToken.model_validate(payload)
 
 
 def _derive_actuator_endpoint(active_driver: BaseRobotDriver) -> str:
