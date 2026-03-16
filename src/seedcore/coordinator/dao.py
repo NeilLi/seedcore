@@ -4,12 +4,17 @@ import inspect
 import json
 import logging
 import os
+import uuid
 from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
 
 MAX_PROTO_PLAN_BYTES = int(os.getenv("MAX_PROTO_PLAN_BYTES", str(256 * 1024)))
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 class TaskRouterTelemetryDAO:
@@ -371,3 +376,169 @@ class TaskProtoPlanDAO:
         }
 
 
+class GovernedExecutionAuditDAO:
+    """Append-only persistence helper for governed execution audit records."""
+
+    _TABLE_NAME = "governed_execution_audit"
+
+    async def append_record(
+        self,
+        session,
+        *,
+        task_id: str,
+        record_type: str,
+        intent_id: str,
+        token_id: Optional[str] = None,
+        policy_snapshot: Optional[str] = None,
+        policy_decision: Optional[Dict[str, Any]] = None,
+        action_intent: Optional[Dict[str, Any]] = None,
+        policy_case: Optional[Dict[str, Any]] = None,
+        evidence_bundle: Optional[Dict[str, Any]] = None,
+        actor_agent_id: Optional[str] = None,
+        actor_organ_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(action_intent or {})
+        case = dict(policy_case or {})
+        decision = dict(policy_decision or {})
+        evidence = dict(evidence_bundle or {}) if isinstance(evidence_bundle, dict) else {}
+        input_hash = self._sha256_hex(
+            _canonical_json(
+                {
+                    "action_intent": payload,
+                    "policy_case": case,
+                    "policy_decision": decision,
+                }
+            )
+        )
+        evidence_hash = (
+            self._sha256_hex(_canonical_json(evidence))
+            if evidence
+            else None
+        )
+
+        stmt = text(
+            f"""
+            INSERT INTO {self._TABLE_NAME}
+            (
+                task_id,
+                record_type,
+                intent_id,
+                token_id,
+                policy_snapshot,
+                policy_decision,
+                action_intent,
+                policy_case,
+                evidence_bundle,
+                actor_agent_id,
+                actor_organ_id,
+                input_hash,
+                evidence_hash
+            )
+            VALUES (
+                CAST(:task_id AS uuid),
+                :record_type,
+                :intent_id,
+                :token_id,
+                :policy_snapshot,
+                CAST(:policy_decision AS jsonb),
+                CAST(:action_intent AS jsonb),
+                CAST(:policy_case AS jsonb),
+                CAST(:evidence_bundle AS jsonb),
+                :actor_agent_id,
+                :actor_organ_id,
+                :input_hash,
+                :evidence_hash
+            )
+            RETURNING id, recorded_at
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {
+                "task_id": str(uuid.UUID(str(task_id))),
+                "record_type": record_type,
+                "intent_id": intent_id,
+                "token_id": token_id,
+                "policy_snapshot": policy_snapshot,
+                "policy_decision": _canonical_json(decision),
+                "action_intent": _canonical_json(payload),
+                "policy_case": _canonical_json(case),
+                "evidence_bundle": _canonical_json(evidence),
+                "actor_agent_id": actor_agent_id,
+                "actor_organ_id": actor_organ_id,
+                "input_hash": input_hash,
+                "evidence_hash": evidence_hash,
+            },
+        )
+        row = result.mappings().one()
+        return {
+            "entry_id": str(row["id"]),
+            "recorded_at": row["recorded_at"].isoformat() if row["recorded_at"] else None,
+            "input_hash": input_hash,
+            "evidence_hash": evidence_hash,
+        }
+
+    async def list_for_task(
+        self,
+        session,
+        *,
+        task_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        stmt = text(
+            f"""
+            SELECT
+                id,
+                task_id,
+                record_type,
+                intent_id,
+                token_id,
+                policy_snapshot,
+                policy_decision,
+                action_intent,
+                policy_case,
+                evidence_bundle,
+                actor_agent_id,
+                actor_organ_id,
+                input_hash,
+                evidence_hash,
+                recorded_at
+            FROM {self._TABLE_NAME}
+            WHERE task_id = CAST(:task_id AS uuid)
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT :limit
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {"task_id": str(uuid.UUID(str(task_id))), "limit": max(1, min(int(limit), 500))},
+        )
+        return [self._mapping_to_dict(row) for row in result.mappings().all()]
+
+    async def get_latest_for_task(self, session, *, task_id: str) -> Optional[Dict[str, Any]]:
+        rows = await self.list_for_task(session, task_id=task_id, limit=1)
+        return rows[0] if rows else None
+
+    def _mapping_to_dict(self, row: Any) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "task_id": str(row["task_id"]),
+            "record_type": row["record_type"],
+            "intent_id": row["intent_id"],
+            "token_id": row["token_id"],
+            "policy_snapshot": row["policy_snapshot"],
+            "policy_decision": dict(row["policy_decision"] or {}),
+            "action_intent": dict(row["action_intent"] or {}),
+            "policy_case": dict(row["policy_case"] or {}),
+            "evidence_bundle": dict(row["evidence_bundle"] or {}),
+            "actor_agent_id": row["actor_agent_id"],
+            "actor_organ_id": row["actor_organ_id"],
+            "input_hash": row["input_hash"],
+            "evidence_hash": row["evidence_hash"],
+            "recorded_at": row["recorded_at"].isoformat() if row["recorded_at"] else None,
+        }
+
+    def _sha256_hex(self, payload: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()

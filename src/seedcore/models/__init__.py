@@ -16,6 +16,7 @@ from .action_intent import (
     TwinSnapshot,
 )
 from .evidence_bundle import EvidenceBundle, ExecutionReceipt
+from .governance_audit import GovernedExecutionAudit
 from .task_payload import TaskPayload
 from .task_api import Task
 from .source_registration import (
@@ -46,6 +47,7 @@ __all__ = [
     "TwinSnapshot",
     "EvidenceBundle",
     "ExecutionReceipt",
+    "GovernedExecutionAudit",
     "SourceRegistration",
     "SourceRegistrationArtifact",
     "SourceRegistrationMeasurement",

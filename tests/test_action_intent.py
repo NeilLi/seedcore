@@ -405,7 +405,25 @@ async def test_coordinator_handoff_injects_governance_context():
     coordinator.cognitive_client = None
     coordinator._persist_proto_plan = AsyncMock()
     coordinator._record_router_telemetry = AsyncMock()
-    coordinator._session_factory = MagicMock()
+    audit_session = AsyncMock()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return audit_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _BeginCtx:
+        async def __aenter__(self):
+            return audit_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    coordinator._session_factory = MagicMock(return_value=_SessionCtx())
+    audit_session.begin.return_value = _BeginCtx()
+    coordinator.governance_audit_dao = SimpleNamespace(append_record=AsyncMock())
     coordinator.fast_path_latency_slo_ms = 1000.0
     coordinator._run_eventizer = MagicMock()
 
@@ -448,6 +466,7 @@ async def test_coordinator_handoff_injects_governance_context():
     assert governance["policy_decision"]["allowed"] is True
     assert governance["policy_case"]["action_intent"]["intent_id"] == governance["action_intent"]["intent_id"]
     assert result["meta"]["governance"]["execution_token"]["intent_id"] == governance["action_intent"]["intent_id"]
+    coordinator.governance_audit_dao.append_record.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -528,3 +547,65 @@ async def test_coordinator_handoff_reuses_cognitive_policy_advisory():
     governance = result["meta"]["governance"]
     assert governance["policy_decision"]["disposition"] == "escalate"
     assert governance["policy_decision"]["required_approvals"] == ["human_policy_review"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_handoff_denied_action_skips_organism_and_records_audit():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    organism_post = AsyncMock()
+    coordinator.organism_timeout_s = 12
+    coordinator.organism_client = SimpleNamespace(post=organism_post)
+    coordinator._compute_drift_score = AsyncMock(return_value=0.0)
+    coordinator._resolve_approved_source_registrations = AsyncMock(return_value={})
+    coordinator.graph_task_repo = None
+    coordinator.ml_client = None
+    coordinator.metrics = MagicMock()
+    coordinator.cognitive_client = None
+    coordinator._persist_proto_plan = AsyncMock()
+    coordinator._record_router_telemetry = AsyncMock()
+    audit_session = AsyncMock()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return audit_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _BeginCtx:
+        async def __aenter__(self):
+            return audit_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    coordinator._session_factory = MagicMock(return_value=_SessionCtx())
+    audit_session.begin.return_value = _BeginCtx()
+    coordinator.governance_audit_dao = SimpleNamespace(append_record=AsyncMock())
+    coordinator.fast_path_latency_slo_ms = 1000.0
+    coordinator._run_eventizer = MagicMock()
+
+    exec_cfg = coordinator._build_execution_config("cid-deny")
+    result = await exec_cfg.organism_execute(
+        "organism",
+        {
+            "task_id": "task-deny-1",
+            "type": "action",
+            "snapshot_id": 8,
+            "params": {
+                "interaction": {"assigned_agent_id": "agent-99"},
+                "routing": {"required_specialization": "ROBOT_OPERATOR"},
+                "resource": {"asset_id": "asset-22"},
+                "intent": "release",
+            },
+        },
+        1.0,
+        "cid-deny",
+    )
+
+    assert result["success"] is False
+    assert result["error_type"] == "policy_denied"
+    assert organism_post.await_count == 0
+    coordinator.governance_audit_dao.append_record.assert_awaited_once()

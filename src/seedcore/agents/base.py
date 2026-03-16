@@ -2377,6 +2377,7 @@ class BaseAgent:
 
         ledger_entry = {
             "task_id": result.get("task_id"),
+            "record_type": "execution_receipt",
             "intent_ref": evidence.get("intent_ref"),
             "agent_id": self.agent_id,
             "organ_id": self.organ_id,
@@ -2384,6 +2385,7 @@ class BaseAgent:
             "validated_at": self._utc_now_iso(),
             "execution_token": governance.get("execution_token"),
             "policy_decision": governance.get("policy_decision"),
+            "policy_case": governance.get("policy_case"),
             "evidence_bundle": evidence,
         }
         try:

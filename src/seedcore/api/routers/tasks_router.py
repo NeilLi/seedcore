@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissing
 from sqlalchemy import select, String, text  # pyright: ignore[reportMissingImports]
 
 from ...database import get_async_pg_session
+from ...coordinator.dao import GovernedExecutionAuditDAO
 from ...models import DatabaseTask as Task, TaskStatus
 
 # --- Configuration ---
@@ -22,6 +23,7 @@ RUN_NOW_ENSURE_NODE = os.getenv("RUN_NOW_ENSURE_NODE", "true").lower() in ("1","
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+governance_audit_dao = GovernedExecutionAuditDAO()
 
 # --- Observability ---
 GNM_ENSURE_TASK_NODE_SUCCESS = Counter("gnm_ensure_task_node_success_total", "Success count", ["call_site"])
@@ -59,6 +61,13 @@ class TaskRead(BaseModel):
 class TaskListResponse(BaseModel):
     total: int
     items: List[TaskRead]
+
+
+class TaskGovernanceRead(BaseModel):
+    task_id: uuid.UUID
+    latest: Dict[str, Any] | None
+    entries: List[Dict[str, Any]]
+    task_governance: Dict[str, Any] | None = None
 
 # --- Helpers ---
 async def _ensure_task_node_mapping(session: AsyncSession, task_id: uuid.UUID, call_site: str) -> int:
@@ -206,6 +215,37 @@ async def get_task(
     task = await session.get(Task, uid)
     if not task: raise HTTPException(404, "Task not found")  # noqa: E701
     return _task_to_task_read(task)
+
+
+@router.get("/tasks/{task_id}/governance", response_model=TaskGovernanceRead)
+async def get_task_governance(
+    task_id: str,
+    session: AsyncSession = Depends(get_async_pg_session),
+    limit: int = 20,
+) -> TaskGovernanceRead:
+    uid = await _resolve_task_id(session, task_id)
+    task = await session.get(Task, uid)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    entries = await governance_audit_dao.list_for_task(
+        session,
+        task_id=str(uid),
+        limit=limit,
+    )
+    latest = entries[0] if entries else None
+    task_governance = None
+    if task.result and isinstance(task.result, dict):
+        meta = task.result.get("meta")
+        if isinstance(meta, dict) and isinstance(meta.get("governance"), dict):
+            task_governance = meta.get("governance")
+
+    return TaskGovernanceRead(
+        task_id=uid,
+        latest=latest,
+        entries=entries,
+        task_governance=task_governance,
+    )
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskRead)

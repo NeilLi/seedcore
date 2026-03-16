@@ -81,7 +81,12 @@ from ..coordinator.utils import (
 )
 
 # DAOs
-from ..coordinator.dao import TaskOutboxDAO, TaskProtoPlanDAO, TaskRouterTelemetryDAO
+from ..coordinator.dao import (
+    GovernedExecutionAuditDAO,
+    TaskOutboxDAO,
+    TaskProtoPlanDAO,
+    TaskRouterTelemetryDAO,
+)
 from ..graph.task_metadata_repository import TaskMetadataRepository
 
 # Predicates (Policy)
@@ -336,6 +341,7 @@ class Infrastructure:
     telemetry_dao: TaskRouterTelemetryDAO
     outbox_dao: TaskOutboxDAO
     proto_plan_dao: TaskProtoPlanDAO
+    governance_audit_dao: GovernedExecutionAuditDAO
 
     @classmethod
     def setup(cls) -> "Infrastructure":
@@ -352,6 +358,7 @@ class Infrastructure:
         telemetry_dao = TaskRouterTelemetryDAO()
         outbox_dao = TaskOutboxDAO()
         proto_plan_dao = TaskProtoPlanDAO()
+        governance_audit_dao = GovernedExecutionAuditDAO()
 
         return cls(
             metrics=metrics,
@@ -360,6 +367,7 @@ class Infrastructure:
             telemetry_dao=telemetry_dao,
             outbox_dao=outbox_dao,
             proto_plan_dao=proto_plan_dao,
+            governance_audit_dao=governance_audit_dao,
         )
 
 
@@ -432,6 +440,7 @@ class Coordinator:
         self.telemetry_dao = self.infra.telemetry_dao
         self.outbox_dao = self.infra.outbox_dao
         self.proto_plan_dao = self.infra.proto_plan_dao
+        self.governance_audit_dao = self.infra.governance_audit_dao
         # Background task storage for async processing of planning tasks
         self._async_processing_tasks: Dict[str, asyncio.Task] = {}
 
@@ -2217,6 +2226,11 @@ class Coordinator:
                 )
                 params["governance"] = {**existing_governance, **governance}
                 policy_decision = governance.get("policy_decision", {})
+                await self._record_governance_audit(
+                    task_id=payload.get("task_id"),
+                    governance=params["governance"],
+                    record_type="policy_decision",
+                )
                 if not policy_decision.get("allowed"):
                     return make_envelope(
                         task_id=payload.get("task_id") or "unknown",
@@ -2349,6 +2363,81 @@ class Coordinator:
             coordinator=self,  # Pass coordinator reference for embedding enqueue
             enable_consolidation=True,  # Enable Phase 2 result consolidation
         )
+
+    async def _record_governance_audit(
+        self,
+        *,
+        task_id: str | None,
+        governance: Dict[str, Any],
+        record_type: str,
+        actor_agent_id: str | None = None,
+        actor_organ_id: str | None = None,
+        evidence_bundle: Dict[str, Any] | None = None,
+    ) -> None:
+        if not task_id or not self._session_factory:
+            return
+        action_intent = (
+            dict(governance.get("action_intent"))
+            if isinstance(governance.get("action_intent"), dict)
+            else {}
+        )
+        if not action_intent:
+            return
+        policy_decision = (
+            dict(governance.get("policy_decision"))
+            if isinstance(governance.get("policy_decision"), dict)
+            else {}
+        )
+        policy_case = (
+            dict(governance.get("policy_case"))
+            if isinstance(governance.get("policy_case"), dict)
+            else {}
+        )
+        execution_token = (
+            dict(governance.get("execution_token"))
+            if isinstance(governance.get("execution_token"), dict)
+            else {}
+        )
+        dao = getattr(self, "governance_audit_dao", None)
+        if dao is None:
+            try:
+                dao = GovernedExecutionAuditDAO()
+            except Exception:
+                return
+        try:
+            async with self._session_factory() as session:
+                begin_ctx = session.begin()
+                if asyncio.iscoroutine(begin_ctx):
+                    begin_ctx = await begin_ctx
+                async with begin_ctx:
+                    await dao.append_record(
+                        session,
+                        task_id=str(task_id),
+                        record_type=record_type,
+                        intent_id=str(action_intent.get("intent_id") or "unknown_intent"),
+                        token_id=(
+                            str(execution_token.get("token_id"))
+                            if execution_token.get("token_id") is not None
+                            else None
+                        ),
+                        policy_snapshot=(
+                            str(policy_decision.get("policy_snapshot"))
+                            if policy_decision.get("policy_snapshot") is not None
+                            else None
+                        ),
+                        policy_decision=policy_decision,
+                        action_intent=action_intent,
+                        policy_case=policy_case,
+                        evidence_bundle=evidence_bundle,
+                        actor_agent_id=actor_agent_id,
+                        actor_organ_id=actor_organ_id,
+                    )
+        except Exception:
+            logger.warning(
+                "Failed to append governance audit record for task %s",
+                task_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # 3. Workflows (Triage, Callbacks)

@@ -36,11 +36,23 @@ async def test_tool_manager_requires_execution_token_for_actuation():
     assert "missing_execution_token" in str(exc.value)
 
     governance = {
+        "action_intent": {
+            "intent_id": "intent-1",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "MOVE"},
+            "resource": {"asset_id": "asset-1", "target_zone": "zone-a"},
+        },
         "execution_token": {
             "token_id": "tok-1",
             "intent_id": "intent-1",
             "valid_until": "2099-01-01T00:00:00+00:00",
             "signature": "sig-1",
+            "constraints": {
+                "action_type": "MOVE",
+                "target_zone": "zone-a",
+                "asset_id": "asset-1",
+                "principal_agent_id": "agent-1",
+            },
         }
     }
     out = await manager.execute(
@@ -60,6 +72,36 @@ async def test_tool_manager_requires_execution_token_for_actuation():
     rows = await manager.execute("custody.ledger.list", {"limit": 10}, agent_id="agent-1")
     assert rows["ok"] is True
     assert len(rows["entries"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_manager_rejects_mismatched_execution_token_constraints():
+    manager = ToolManager()
+    await manager.register_internal(DummyReachyMotionTool())
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-1",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "MOVE"},
+            "resource": {"asset_id": "asset-1", "target_zone": "zone-a"},
+        },
+        "execution_token": {
+            "token_id": "tok-1",
+            "intent_id": "intent-1",
+            "valid_until": "2099-01-01T00:00:00+00:00",
+            "signature": "sig-1",
+            "constraints": {"target_zone": "zone-b"},
+        },
+    }
+
+    with pytest.raises(ToolError) as exc:
+        await manager.execute(
+            "reachy.motion",
+            {"head": {"yaw": 0.2}, "_governance": governance},
+            agent_id="agent-1",
+        )
+    assert "execution_token_constraint_mismatch:target_zone" in str(exc.value)
 
 
 @pytest.mark.asyncio

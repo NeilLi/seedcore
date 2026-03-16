@@ -129,6 +129,8 @@ class ToolManager:
         # Custody ledger (append-only in-process store)
         self._custody_ledger: List[Dict[str, Any]] = []
         self._custody_lock = asyncio.Lock()
+        self._governance_audit_dao = None
+        self._db_session_factory = None
 
         logger.info("🔧 ToolManager initialized (v2.1+)")
 
@@ -474,7 +476,12 @@ class ToolManager:
         try:
             # 0. Built-in custody ledger tools
             if name.startswith("custody.ledger."):
-                return await self._execute_custody(name, safe_args, agent_id)
+                return await self._execute_custody(
+                    name,
+                    safe_args,
+                    agent_id,
+                    governance_ctx=governance_ctx,
+                )
 
             # 0.5 Governance gate for actuation tools
             if self._is_actuation_tool(name):
@@ -598,8 +605,39 @@ class ToolManager:
             raise ToolError(tool_name, "invalid_execution_token")
         if valid_until_ts < datetime.now(timezone.utc).timestamp():
             raise ToolError(tool_name, "execution_token_expired")
+        action_intent = governance_ctx.get("action_intent", {})
+        if not isinstance(action_intent, dict):
+            return
+        expected_intent_id = action_intent.get("intent_id")
+        if expected_intent_id and str(expected_intent_id) != str(intent_id):
+            raise ToolError(tool_name, "execution_token_intent_mismatch")
+        constraints = token.get("constraints", {})
+        if not isinstance(constraints, dict):
+            return
+        principal = action_intent.get("principal", {})
+        resource = action_intent.get("resource", {})
+        action = action_intent.get("action", {})
+        expected_pairs = {
+            "action_type": action.get("type"),
+            "target_zone": resource.get("target_zone"),
+            "asset_id": resource.get("asset_id"),
+            "principal_agent_id": principal.get("agent_id"),
+            "source_registration_id": resource.get("source_registration_id"),
+            "registration_decision_id": resource.get("registration_decision_id"),
+        }
+        for key, expected in expected_pairs.items():
+            actual = constraints.get(key)
+            if expected is not None and actual is not None and str(expected) != str(actual):
+                raise ToolError(tool_name, f"execution_token_constraint_mismatch:{key}")
 
-    async def _execute_custody(self, name: str, args: Dict[str, Any], agent_id: Optional[str]):
+    async def _execute_custody(
+        self,
+        name: str,
+        args: Dict[str, Any],
+        agent_id: Optional[str],
+        *,
+        governance_ctx: Any = None,
+    ):
         if name == "custody.ledger.record":
             entry = args.get("entry")
             if not isinstance(entry, dict):
@@ -609,9 +647,20 @@ class ToolManager:
             record.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
             if agent_id and not record.get("agent_id"):
                 record["agent_id"] = agent_id
+            persisted = False
+            try:
+                persisted = await self._persist_governance_audit_record(
+                    record,
+                    governance_ctx,
+                )
+            except Exception:
+                logger.warning(
+                    "Governance audit persistence failed; retaining in-process ledger",
+                    exc_info=True,
+                )
             async with self._custody_lock:
                 self._custody_ledger.append(record)
-            return {"ok": True, "entry_id": record["entry_id"]}
+            return {"ok": True, "entry_id": record["entry_id"], "persisted": persisted}
 
         if name == "custody.ledger.list":
             limit = args.get("limit", 50)
@@ -619,11 +668,114 @@ class ToolManager:
                 limit = max(1, min(int(limit), 500))
             except Exception:
                 limit = 50
+            task_id = args.get("task_id")
+            db_rows = await self._list_governance_audit_records(
+                task_id=str(task_id) if task_id is not None else None,
+                limit=limit,
+            )
+            if db_rows is not None:
+                return {"ok": True, "entries": db_rows}
             async with self._custody_lock:
                 rows = list(self._custody_ledger[-limit:])
+            rows.reverse()
             return {"ok": True, "entries": rows}
 
         raise ToolError(name, "tool_not_found")
+
+    async def _persist_governance_audit_record(
+        self,
+        record: Dict[str, Any],
+        governance_ctx: Any,
+    ) -> bool:
+        if not isinstance(governance_ctx, dict):
+            return False
+        action_intent = governance_ctx.get("action_intent", {})
+        if not isinstance(action_intent, dict) or not action_intent.get("intent_id"):
+            return False
+        task_id = record.get("task_id")
+        if task_id is None:
+            return False
+
+        session_factory = self._get_db_session_factory()
+        dao = self._get_governance_audit_dao()
+        if session_factory is None or dao is None:
+            return False
+
+        execution_token = governance_ctx.get("execution_token", {})
+        policy_decision = governance_ctx.get("policy_decision", {})
+        policy_case = governance_ctx.get("policy_case", {})
+        evidence_bundle = record.get("evidence_bundle")
+
+        async with session_factory() as session:
+            async with session.begin():
+                persisted = await dao.append_record(
+                    session,
+                    task_id=str(task_id),
+                    record_type=str(record.get("record_type") or "execution_receipt"),
+                    intent_id=str(action_intent.get("intent_id")),
+                    token_id=(
+                        str(execution_token.get("token_id"))
+                        if isinstance(execution_token, dict) and execution_token.get("token_id") is not None
+                        else None
+                    ),
+                    policy_snapshot=(
+                        str(policy_decision.get("policy_snapshot"))
+                        if isinstance(policy_decision, dict) and policy_decision.get("policy_snapshot") is not None
+                        else None
+                    ),
+                    policy_decision=policy_decision if isinstance(policy_decision, dict) else {},
+                    action_intent=action_intent,
+                    policy_case=policy_case if isinstance(policy_case, dict) else {},
+                    evidence_bundle=evidence_bundle if isinstance(evidence_bundle, dict) else {},
+                    actor_agent_id=str(record.get("agent_id")) if record.get("agent_id") is not None else None,
+                    actor_organ_id=str(record.get("organ_id")) if record.get("organ_id") is not None else None,
+                )
+        record["entry_id"] = persisted["entry_id"]
+        if persisted.get("recorded_at"):
+            record["recorded_at"] = persisted["recorded_at"]
+        record["input_hash"] = persisted.get("input_hash")
+        record["evidence_hash"] = persisted.get("evidence_hash")
+        return True
+
+    async def _list_governance_audit_records(
+        self,
+        *,
+        task_id: Optional[str],
+        limit: int,
+    ) -> Optional[List[Dict[str, Any]]]:
+        session_factory = self._get_db_session_factory()
+        dao = self._get_governance_audit_dao()
+        if session_factory is None or dao is None or task_id is None:
+            return None
+        try:
+            async with session_factory() as session:
+                return await dao.list_for_task(session, task_id=task_id, limit=limit)
+        except Exception:
+            logger.warning(
+                "Governance audit read failed; falling back to in-process ledger",
+                exc_info=True,
+            )
+            return None
+
+    def _get_governance_audit_dao(self):
+        if self._governance_audit_dao is None:
+            try:
+                from seedcore.coordinator.dao import GovernedExecutionAuditDAO
+
+                self._governance_audit_dao = GovernedExecutionAuditDAO()
+            except Exception:
+                return None
+        return self._governance_audit_dao
+
+    def _get_db_session_factory(self):
+        if self._db_session_factory is None:
+            try:
+                from seedcore.database import get_async_pg_session_factory
+
+                self._db_session_factory = get_async_pg_session_factory()
+            except Exception:
+                return None
+        return self._db_session_factory
 
     def _iso_to_ts(self, iso: str) -> Optional[float]:
         try:

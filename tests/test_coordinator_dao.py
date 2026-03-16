@@ -12,6 +12,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from seedcore.coordinator.dao import (
+    GovernedExecutionAuditDAO,
     TaskRouterTelemetryDAO,
     TaskOutboxDAO,
     TaskProtoPlanDAO,
@@ -268,3 +269,79 @@ class TestTaskProtoPlanDAO:
         
         assert result is None
 
+
+class TestGovernedExecutionAuditDAO:
+    @pytest.mark.asyncio
+    async def test_append_record_computes_hashes_and_returns_entry(self):
+        dao = GovernedExecutionAuditDAO()
+        session = AsyncMock()
+
+        mock_result = MagicMock()
+        mappings = MagicMock()
+        mappings.one.return_value = {
+            "id": "audit-1",
+            "recorded_at": MagicMock(isoformat=MagicMock(return_value="2026-03-16T10:00:00+00:00")),
+        }
+        mock_result.mappings.return_value = mappings
+        session.execute = AsyncMock(return_value=mock_result)
+
+        result = await dao.append_record(
+            session,
+            task_id="123e4567-e89b-12d3-a456-426614174000",
+            record_type="execution_receipt",
+            intent_id="intent-1",
+            token_id="token-1",
+            policy_snapshot="snapshot:1",
+            policy_decision={"allowed": True},
+            action_intent={"intent_id": "intent-1"},
+            policy_case={"action_intent": {"intent_id": "intent-1"}},
+            evidence_bundle={"intent_ref": "governance://action-intent/intent-1"},
+            actor_agent_id="agent-1",
+            actor_organ_id="organ-1",
+        )
+
+        assert result["entry_id"] == "audit-1"
+        assert result["recorded_at"] == "2026-03-16T10:00:00+00:00"
+        assert isinstance(result["input_hash"], str)
+        assert len(result["input_hash"]) == 64
+        assert isinstance(result["evidence_hash"], str)
+        assert len(result["evidence_hash"]) == 64
+
+    @pytest.mark.asyncio
+    async def test_list_for_task_returns_normalized_rows(self):
+        dao = GovernedExecutionAuditDAO()
+        session = AsyncMock()
+
+        mock_result = MagicMock()
+        mappings = MagicMock()
+        mappings.all.return_value = [
+            {
+                "id": "audit-1",
+                "task_id": "123e4567-e89b-12d3-a456-426614174000",
+                "record_type": "policy_decision",
+                "intent_id": "intent-1",
+                "token_id": "token-1",
+                "policy_snapshot": "snapshot:1",
+                "policy_decision": {"allowed": True},
+                "action_intent": {"intent_id": "intent-1"},
+                "policy_case": {"action_intent": {"intent_id": "intent-1"}},
+                "evidence_bundle": {},
+                "actor_agent_id": None,
+                "actor_organ_id": None,
+                "input_hash": "a" * 64,
+                "evidence_hash": None,
+                "recorded_at": MagicMock(isoformat=MagicMock(return_value="2026-03-16T10:00:00+00:00")),
+            }
+        ]
+        mock_result.mappings.return_value = mappings
+        session.execute = AsyncMock(return_value=mock_result)
+
+        rows = await dao.list_for_task(
+            session,
+            task_id="123e4567-e89b-12d3-a456-426614174000",
+            limit=10,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["record_type"] == "policy_decision"
+        assert rows[0]["intent_id"] == "intent-1"
