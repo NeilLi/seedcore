@@ -6,6 +6,7 @@ This document provides a comprehensive overview of the SeedCore system architect
 
 - [System Overview](#system-overview)
 - [Architecture Diagrams](#architecture-diagrams)
+- [Investor Runtime Architecture](#investor-runtime-architecture)
 - [Runtime Registry and Actor Lifecycle](#runtime-registry-and-actor-lifecycle)
 - [Serve Applications (Logical Apps)](#serve-applications-logical-apps)
 - [Serve Deployments → Ray Actors](#serve-deployments--ray-actors)
@@ -673,6 +674,12 @@ The workflow diagram shows end-to-end task processing:
 - **Routing Flow**: Fast-path vs escalation decision making
 - **Execution Path**: Organ selection and agent execution
 - **Memory Integration**: Multi-tier memory access patterns
+
+### Investor Runtime Architecture
+
+For the zero-trust custody and digital-twin runtime view used in investor and partner materials, see:
+
+- [Zero-Trust Custody and Digital-Twin Runtime](./zero_trust_custody_digital_twin_runtime.md)
 
 ### Text-Based Architecture Diagram
 
