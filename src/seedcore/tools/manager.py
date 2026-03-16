@@ -479,6 +479,11 @@ class ToolManager:
             # 0.5 Governance gate for actuation tools
             if self._is_actuation_tool(name):
                 self._validate_execution_token(name, governance_ctx)
+                if isinstance(governance_ctx, dict):
+                    token = governance_ctx.get("execution_token")
+                    if isinstance(token, dict) and "execution_token" not in safe_args:
+                        # Forward token to actuator endpoints for governed execution.
+                        safe_args["execution_token"] = dict(token)
 
             # 1. Internal tools (includes all query tools registered via register_query_tools)
             # Query tools are registered as internal tools with names like:

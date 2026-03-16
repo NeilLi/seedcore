@@ -19,7 +19,11 @@ class DummyReachyMotionTool(ToolBase):
     description = "Dummy actuation tool for tests"
 
     async def run(self, **kwargs):
-        return {"status": "ok", "robot_state": {"head": kwargs.get("head", {})}}
+        return {
+            "status": "ok",
+            "robot_state": {"head": kwargs.get("head", {})},
+            "execution_token_id": (kwargs.get("execution_token") or {}).get("token_id"),
+        }
 
 
 @pytest.mark.asyncio
@@ -45,6 +49,7 @@ async def test_tool_manager_requires_execution_token_for_actuation():
         agent_id="agent-1",
     )
     assert out["status"] == "ok"
+    assert out["execution_token_id"] == "tok-1"
 
     rec = await manager.execute(
         "custody.ledger.record",

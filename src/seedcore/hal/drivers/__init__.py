@@ -74,6 +74,12 @@ try:
 except ImportError as e:
     logger.debug(f"Drone driver not available: {e}")
 
+try:
+    from .robot_sim_driver import RobotSimExecutionDriver
+except ImportError as e:
+    logger.debug(f"RobotSim execution driver not available: {e}")
+    RobotSimExecutionDriver = None
+
 # IoT device drivers (not registered in robot registry, accessed directly)
 try:
     from .tuya_driver import TuyaDriver
@@ -86,5 +92,6 @@ __all__ = [
     "get_driver",
     "ReachyMiniDriver",
     "DroneDriver",
+    "RobotSimExecutionDriver",
     "TuyaDriver",
 ]

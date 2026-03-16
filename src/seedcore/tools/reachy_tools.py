@@ -95,6 +95,18 @@ class ReachyMotionTool(ToolBase):
                         "type": "number",
                         "description": "Motion duration in seconds",
                         "default": 0.5
+                    },
+                    "execution_token": {
+                        "type": "object",
+                        "description": "Optional governance execution token for controlled actuation"
+                    },
+                    "behavior_name": {
+                        "type": "string",
+                        "description": "Optional robot_sim behavior name (e.g., move_forward, rotate)"
+                    },
+                    "behavior_params": {
+                        "type": "object",
+                        "description": "Optional behavior parameters for robot_sim backend"
                     }
                 }
             },
@@ -108,6 +120,9 @@ class ReachyMotionTool(ToolBase):
         body_yaw: Optional[float] = None,
         duration: float = 0.5,
         instant: bool = False,
+        execution_token: Optional[Dict[str, Any]] = None,
+        behavior_name: Optional[str] = None,
+        behavior_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any
     ) -> Dict[str, Any]:
         """
@@ -149,6 +164,9 @@ class ReachyMotionTool(ToolBase):
                     "pose_type": pose_type,
                     "target": target,
                     "instant": instant,
+                    "execution_token": execution_token,
+                    "behavior_name": behavior_name,
+                    "behavior_params": behavior_params or {},
                 }
             )
             response.raise_for_status()
@@ -157,7 +175,12 @@ class ReachyMotionTool(ToolBase):
             
             return {
                 "status": result.get("status", "success"),
+                "actuator_ack": result.get("actuator_ack", False),
+                "actuator_endpoint": result.get("actuator_endpoint"),
+                "result_hash": result.get("result_hash"),
+                "execution_token_id": result.get("execution_token_id"),
                 "robot_state": result.get("robot_state"),
+                "endpoint_response": result.get("endpoint_response"),
                 "head": head,
                 "antennas": antennas,
                 "body_yaw": body_yaw,

@@ -179,7 +179,9 @@ def _build_execution_receipt(
     intent_id: str,
 ) -> ExecutionReceipt:
     actuator_entries = _extract_actuator_entries(envelope)
-    actuator_result_hash = _sha256_hex(_canonical_json(actuator_entries)) if actuator_entries else None
+    actuator_result_hash = _extract_actuator_result_hash(actuator_entries)
+    if actuator_result_hash is None and actuator_entries:
+        actuator_result_hash = _sha256_hex(_canonical_json(actuator_entries))
     actuator_endpoint = _extract_actuator_endpoint(task_dict, actuator_entries)
     token_id = execution_token.get("token_id") if isinstance(execution_token, dict) else None
 
@@ -229,22 +231,50 @@ def _extract_actuator_endpoint(task_dict: Dict[str, Any], actuator_entries: List
             continue
         resp = item.get("resp")
         if isinstance(resp, dict):
+            if isinstance(resp.get("actuator_endpoint"), str) and resp.get("actuator_endpoint"):
+                return str(resp.get("actuator_endpoint"))
             if resp.get("device_id"):
                 return f"tuya://{resp.get('device_id')}"
             if resp.get("robot_state") is not None:
                 return "hal://reachy"
         output = item.get("output")
         if isinstance(output, dict):
+            if isinstance(output.get("actuator_endpoint"), str) and output.get("actuator_endpoint"):
+                return str(output.get("actuator_endpoint"))
             if output.get("device_id"):
                 return f"tool://{item.get('tool')}/{output.get('device_id')}"
             if output.get("robot_state") is not None:
                 return f"tool://{item.get('tool') or 'hal'}"
+            endpoint_response = output.get("endpoint_response")
+            if isinstance(endpoint_response, dict):
+                endpoint = endpoint_response.get("actuator_endpoint")
+                if isinstance(endpoint, str) and endpoint.strip():
+                    return endpoint
 
     params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
     routing = params.get("routing", {}) if isinstance(params.get("routing"), dict) else {}
     hint = routing.get("target_organ_hint")
     if isinstance(hint, str) and hint.strip():
         return f"organ://{hint}"
+    return None
+
+
+def _extract_actuator_result_hash(actuator_entries: List[Dict[str, Any]]) -> str | None:
+    for item in actuator_entries:
+        if not isinstance(item, dict):
+            continue
+        for key in ("resp", "output"):
+            payload = item.get(key)
+            if not isinstance(payload, dict):
+                continue
+            result_hash = payload.get("result_hash")
+            if isinstance(result_hash, str) and result_hash.strip():
+                return result_hash
+            endpoint_response = payload.get("endpoint_response")
+            if isinstance(endpoint_response, dict):
+                nested_hash = endpoint_response.get("result_hash")
+                if isinstance(nested_hash, str) and nested_hash.strip():
+                    return nested_hash
     return None
 
 
@@ -263,4 +293,3 @@ def _sha256_hex(raw: str) -> str:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-
