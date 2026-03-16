@@ -1,0 +1,83 @@
+{
+  "intent_ref": "governance://action-intent/intent-investor-demo-1",
+  "executed_at": "2026-03-16T09:30:10+00:00",
+  "telemetry_snapshot": {
+    "executed_by": {
+      "organ_id": "physical_actuation_organ",
+      "agent_id": "reachy_executor_7"
+    },
+    "captured_at": "2026-03-16T09:30:10+00:00",
+    "vision": [
+      {
+        "label": "sealed_box",
+        "confidence": 0.97
+      }
+    ],
+    "sensors": [
+      {
+        "source": "imu",
+        "value": "stable"
+      },
+      {
+        "source": "tool",
+        "tool": "reachy.motion",
+        "device_id": "sim-device-9",
+        "status": "accepted"
+      }
+    ],
+    "gps": {
+      "lat": 18.801,
+      "lon": 98.921
+    },
+    "zone_checks": {
+      "target_zone": "vault_alpha",
+      "current_zone": "vault_alpha"
+    },
+    "multimodal": {
+      "location_context": "vault_alpha",
+      "detections": [
+        {
+          "label": "sealed_box",
+          "confidence": 0.97
+        }
+      ],
+      "gps": {
+        "lat": 18.801,
+        "lon": 98.921
+      }
+    },
+    "endpoint_responses": [
+      {
+        "source": "output",
+        "tool": "reachy.motion",
+        "endpoint_response": {
+          "actuator_endpoint": "robot_sim://reachy/move_forward",
+          "status": "accepted",
+          "device_id": "sim-device-9",
+          "result_hash": "f9d0266f5e2279c2e1947c29f4d95a907cf6f7eb3d5dd02fe6f5107b859f97cf",
+          "actuator_ack": true
+        }
+      }
+    ]
+  },
+  "execution_receipt": {
+    "receipt_id": "fa1c5fa0-8db8-4d6e-9761-4a6db345e7fd",
+    "proof_type": "hmac_sha256",
+    "signature": "8c8080f8c6dadf19885c40f8266fefc6c8d1d7a052bafca7545b2300a5eb8ab4",
+    "payload_hash": "cf98609066cd16bf28c9ca2c1f06df6d3388f537e9ff8bc679c17d54d8a408f4",
+    "signed_payload": {
+      "intent_id": "intent-investor-demo-1",
+      "task_id": "task-investor-demo-1",
+      "executed_at": "2026-03-16T09:30:10+00:00",
+      "token_id": "tok-investor-demo-1",
+      "actuator_result_hash": "f9d0266f5e2279c2e1947c29f4d95a907cf6f7eb3d5dd02fe6f5107b859f97cf",
+      "actuator_endpoint": "robot_sim://reachy/move_forward",
+      "policy_decision": {
+        "allowed": true,
+        "reason": "approved_source_registration"
+      }
+    },
+    "actuator_endpoint": "robot_sim://reachy/move_forward",
+    "actuator_result_hash": "f9d0266f5e2279c2e1947c29f4d95a907cf6f7eb3d5dd02fe6f5107b859f97cf"
+  }
+}

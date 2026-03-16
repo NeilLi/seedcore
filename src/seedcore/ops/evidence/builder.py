@@ -96,6 +96,7 @@ def _build_telemetry_snapshot(
     result_data = payload.get("result", {}) if isinstance(payload.get("result"), dict) else {}
     enqueued = result_data.get("enqueued") if isinstance(result_data.get("enqueued"), list) else []
     tool_results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    actuator_entries = _extract_actuator_entries(envelope)
 
     sensors: List[Dict[str, Any]] = []
     vision: List[Dict[str, Any]] = []
@@ -156,6 +157,8 @@ def _build_telemetry_snapshot(
                 }
             )
 
+    endpoint_responses = _extract_endpoint_responses(actuator_entries)
+
     return {
         "executed_by": {
             "organ_id": organ_id,
@@ -167,6 +170,7 @@ def _build_telemetry_snapshot(
         "gps": gps,
         "zone_checks": zone_checks,
         "multimodal": multimodal,
+        "endpoint_responses": endpoint_responses,
     }
 
 
@@ -178,6 +182,9 @@ def _build_execution_receipt(
     executed_at: str,
     intent_id: str,
 ) -> ExecutionReceipt:
+    params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
+    governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
+    policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
     actuator_entries = _extract_actuator_entries(envelope)
     actuator_result_hash = _extract_actuator_result_hash(actuator_entries)
     if actuator_result_hash is None and actuator_entries:
@@ -192,6 +199,7 @@ def _build_execution_receipt(
         "token_id": token_id,
         "actuator_result_hash": actuator_result_hash,
         "actuator_endpoint": actuator_endpoint,
+        "policy_decision": policy_decision,
     }
     payload_hash = _sha256_hex(_canonical_json(signed_payload))
     signature = _sign_payload(payload_hash)
@@ -200,6 +208,7 @@ def _build_execution_receipt(
         receipt_id=str(uuid.uuid4()),
         signature=signature,
         payload_hash=payload_hash,
+        signed_payload=signed_payload,
         actuator_endpoint=actuator_endpoint,
         actuator_result_hash=actuator_result_hash,
     )
@@ -276,6 +285,45 @@ def _extract_actuator_result_hash(actuator_entries: List[Dict[str, Any]]) -> str
                 if isinstance(nested_hash, str) and nested_hash.strip():
                     return nested_hash
     return None
+
+
+def _extract_endpoint_responses(actuator_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    endpoint_responses: List[Dict[str, Any]] = []
+    for item in actuator_entries:
+        if not isinstance(item, dict):
+            continue
+
+        tool_name = item.get("tool")
+        for key in ("resp", "output"):
+            payload = item.get(key)
+            if not isinstance(payload, dict):
+                continue
+
+            nested_endpoint_response = payload.get("endpoint_response")
+            if isinstance(nested_endpoint_response, dict) and nested_endpoint_response:
+                endpoint_responses.append(
+                    {
+                        "source": key,
+                        "tool": tool_name,
+                        "endpoint_response": nested_endpoint_response,
+                    }
+                )
+                continue
+
+            endpoint_like = {}
+            for field in ("actuator_endpoint", "status", "device_id", "result_hash", "actuator_ack"):
+                if payload.get(field) is not None:
+                    endpoint_like[field] = payload.get(field)
+            if endpoint_like:
+                endpoint_responses.append(
+                    {
+                        "source": key,
+                        "tool": tool_name,
+                        "endpoint_response": endpoint_like,
+                    }
+                )
+
+    return endpoint_responses
 
 
 def _sign_payload(payload_hash: str) -> str:

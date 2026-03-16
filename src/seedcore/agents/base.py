@@ -2497,13 +2497,25 @@ class BaseAgent:
             return False, "invalid_execution_receipt"
         if not receipt.get("payload_hash") or not receipt.get("signature"):
             return False, "invalid_execution_receipt"
+        signed_payload = receipt.get("signed_payload")
+        if not isinstance(signed_payload, dict) or not signed_payload:
+            return False, "missing_signed_payload"
+        if signed_payload.get("intent_id") != intent_id:
+            return False, "receipt_intent_mismatch"
 
         execution_token = governance.get("execution_token", {})
         if isinstance(execution_token, dict):
+            token_id = execution_token.get("token_id")
+            if token_id and signed_payload.get("token_id") != token_id:
+                return False, "receipt_token_mismatch"
             valid_until = execution_token.get("valid_until")
             valid_until_ts = self._iso_to_ts(str(valid_until)) if valid_until else None
             if valid_until_ts is not None and executed_ts > valid_until_ts:
                 return False, "executed_after_token_expiry"
+        policy_decision = governance.get("policy_decision")
+        if isinstance(policy_decision, dict):
+            if signed_payload.get("policy_decision") != policy_decision:
+                return False, "receipt_policy_decision_mismatch"
 
         return True, "ok"
 

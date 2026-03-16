@@ -4,5 +4,5 @@ nodes:
   - role: control-plane
     image: kindest/node:v1.30.0
     extraMounts:
-      - hostPath: /Users/ningli/project/seedcore
+      - hostPath: /home/neil/project/seedcore
         containerPath: /project

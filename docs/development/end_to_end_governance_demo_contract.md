@@ -137,10 +137,14 @@ The demo must show these fields in the final task result or result metadata:
 - `telemetry_snapshot.vision`
 - `telemetry_snapshot.sensors`
 - `telemetry_snapshot.gps`
+- `telemetry_snapshot.endpoint_responses`
 - `execution_receipt.receipt_id`
 - `execution_receipt.proof_type`
 - `execution_receipt.signature`
 - `execution_receipt.payload_hash`
+- `execution_receipt.signed_payload.intent_id`
+- `execution_receipt.signed_payload.token_id`
+- `execution_receipt.signed_payload.policy_decision`
 - `execution_receipt.actuator_endpoint`
 - `execution_receipt.actuator_result_hash`
 
@@ -438,13 +442,36 @@ The final evidence document should resemble:
     "zone_checks": {
       "target_zone": "vault_alpha",
       "current_zone": null
-    }
+    },
+    "endpoint_responses": [
+      {
+        "source": "output",
+        "tool": "iot.release",
+        "endpoint_response": {
+          "actuator_endpoint": "tool://iot.release/mock-release-001",
+          "status": "ok",
+          "device_id": "mock-release-001",
+          "result_hash": "{actuator_result_hash}"
+        }
+      }
+    ]
   },
   "execution_receipt": {
     "receipt_id": "{receipt_id}",
     "proof_type": "hmac_sha256",
     "signature": "{receipt_signature}",
     "payload_hash": "{payload_hash}",
+    "signed_payload": {
+      "intent_id": "{intent_id}",
+      "task_id": "{task_id}",
+      "executed_at": "{executed_at}",
+      "token_id": "{token_id}",
+      "actuator_result_hash": "{actuator_result_hash}",
+      "actuator_endpoint": "tool://iot.release/mock-release-001",
+      "policy_decision": {
+        "allowed": true
+      }
+    },
     "actuator_endpoint": "tool://iot.release/mock-release-001",
     "actuator_result_hash": "{actuator_result_hash}"
   }

@@ -10,6 +10,7 @@ class ExecutionReceipt(BaseModel):
     proof_type: str = "hmac_sha256"
     signature: str
     payload_hash: str
+    signed_payload: Dict[str, Any] = Field(default_factory=dict)
     actuator_endpoint: Optional[str] = None
     actuator_result_hash: Optional[str] = None
 
@@ -19,4 +20,3 @@ class EvidenceBundle(BaseModel):
     executed_at: str
     telemetry_snapshot: Dict[str, Any] = Field(default_factory=dict)
     execution_receipt: ExecutionReceipt
-
