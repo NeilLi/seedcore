@@ -29,7 +29,7 @@ def compute_tracking_event_sha256(payload: Dict[str, Any]) -> str:
 async def record_tracking_event(
     session: AsyncSession,
     *,
-    registration: SourceRegistration,
+    registration: Optional[SourceRegistration] = None,
     event_type: TrackingEventType,
     source_kind: TrackingEventSourceKind,
     payload: Dict[str, Any],
@@ -38,11 +38,13 @@ async def record_tracking_event(
     device_id: Optional[str] = None,
     operator_id: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    subject_type: Optional[str] = None,
+    subject_id: Optional[str] = None,
     snapshot_id: Optional[int] = None,
     sha256: Optional[str] = None,
 ) -> TrackingEvent:
     event = TrackingEvent(
-        registration_id=registration.id,
+        registration_id=registration.id if registration is not None else None,
         event_type=event_type,
         source_kind=source_kind,
         payload=payload or {},
@@ -52,11 +54,14 @@ async def record_tracking_event(
         device_id=device_id,
         operator_id=operator_id,
         correlation_id=correlation_id,
-        snapshot_id=snapshot_id or registration.snapshot_id,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        snapshot_id=snapshot_id or (registration.snapshot_id if registration is not None else None),
     )
     session.add(event)
     await session.flush()
-    await project_tracking_event(session, event, registration=registration)
+    if registration is not None:
+        await project_tracking_event(session, event, registration=registration)
     return event
 
 

@@ -132,6 +132,76 @@ def test_create_tracking_event_returns_projected_event(monkeypatch) -> None:
     session.refresh.assert_awaited_once()
 
 
+def test_create_tracking_event_accepts_app_scoped_policy_log(monkeypatch) -> None:
+    session = FakeAsyncSession(registration=None)
+    client = _make_app(session)
+
+    external_event = TrackingEvent(
+        id=uuid.uuid4(),
+        registration_id=None,
+        event_type=TrackingEventType.POLICY_IMPLEMENTATION_REPORTED,
+        source_kind=TrackingEventSourceKind.APPLICATION_LOG,
+        payload={"status": "blocked", "policy": "deny_non_compliant_release"},
+        sha256="policy-hash",
+        captured_at=datetime(2026, 3, 17, 7, 0, tzinfo=timezone.utc),
+        producer_id="pkg-simulator",
+        correlation_id="pkg-run-42",
+        subject_type="application",
+        subject_id="pkg-simulator",
+        created_at=datetime(2026, 3, 17, 7, 0, tzinfo=timezone.utc),
+    )
+
+    async def fake_record_tracking_event(*args, **kwargs):
+        return external_event
+
+    monkeypatch.setattr(
+        tracking_events_router_module,
+        "record_tracking_event",
+        fake_record_tracking_event,
+    )
+
+    response = client.post(
+        "/tracking-events",
+        json={
+            "event_type": "policy_implementation_reported",
+            "source_kind": "application_log",
+            "payload": {"status": "blocked", "policy": "deny_non_compliant_release"},
+            "producer_id": "pkg-simulator",
+            "correlation_id": "pkg-run-42",
+            "subject_type": "application",
+            "subject_id": "pkg-simulator",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["registration_id"] is None
+    assert body["event_type"] == "policy_implementation_reported"
+    assert body["source_kind"] == "application_log"
+    assert body["subject_type"] == "application"
+    assert body["subject_id"] == "pkg-simulator"
+    assert body["producer_id"] == "pkg-simulator"
+    session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once()
+
+
+def test_create_tracking_event_requires_registration_or_app_scope() -> None:
+    session = FakeAsyncSession(registration=None)
+    client = _make_app(session)
+
+    response = client.post(
+        "/tracking-events",
+        json={
+            "event_type": "runtime_incident_detected",
+            "source_kind": "system",
+            "payload": {"severity": "high"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "registration_id or an app-scoped identifier" in response.json()["detail"]
+
+
 def test_list_registration_tracking_events_returns_scoped_events() -> None:
     registration = _make_registration()
     matching_event = TrackingEvent(

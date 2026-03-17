@@ -35,6 +35,9 @@ class TrackingEventType(str, enum.Enum):
     ENVIRONMENTAL_READING_RECORDED = "environmental_reading_recorded"
     BIO_SIGNATURE_RECORDED = "bio_signature_recorded"
     OPERATOR_REQUEST_RECEIVED = "operator_request_received"
+    RUNTIME_INCIDENT_DETECTED = "runtime_incident_detected"
+    POLICY_IMPLEMENTATION_REPORTED = "policy_implementation_reported"
+    POLICY_DECISION_RECORDED = "policy_decision_recorded"
 
 
 class TrackingEventSourceKind(str, enum.Enum):
@@ -43,6 +46,8 @@ class TrackingEventSourceKind(str, enum.Enum):
     TELEMETRY = "telemetry"
     OPERATOR_REQUEST = "operator_request"
     SYSTEM = "system"
+    APPLICATION_LOG = "application_log"
+    POLICY_MONITOR = "policy_monitor"
 
 
 class SourceRegistration(Base):
@@ -103,10 +108,10 @@ class TrackingEvent(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    registration_id: Mapped[uuid.UUID] = mapped_column(
+    registration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("source_registrations.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     event_type: Mapped[TrackingEventType] = mapped_column(
         SQLAlchemyEnum(
@@ -137,6 +142,8 @@ class TrackingEvent(Base):
     device_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     operator_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     correlation_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    subject_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    subject_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     snapshot_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     projected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -150,6 +157,7 @@ class TrackingEvent(Base):
         Index("ix_tracking_events_event_type", "event_type"),
         Index("ix_tracking_events_captured_at", "captured_at"),
         Index("ix_tracking_events_registration_captured_at", "registration_id", "captured_at"),
+        Index("ix_tracking_events_subject", "subject_type", "subject_id"),
     )
 
 

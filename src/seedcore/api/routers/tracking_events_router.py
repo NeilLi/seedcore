@@ -23,7 +23,7 @@ router = APIRouter()
 
 
 class TrackingEventCreate(BaseModel):
-    registration_id: uuid.UUID
+    registration_id: Optional[uuid.UUID] = None
     event_type: TrackingEventType
     source_kind: TrackingEventSourceKind
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -32,18 +32,22 @@ class TrackingEventCreate(BaseModel):
     device_id: Optional[str] = None
     operator_id: Optional[str] = None
     correlation_id: Optional[str] = None
+    subject_type: Optional[str] = None
+    subject_id: Optional[str] = None
     snapshot_id: Optional[int] = None
     sha256: Optional[str] = None
 
 
 class TrackingEventRead(BaseModel):
     id: uuid.UUID
-    registration_id: uuid.UUID
+    registration_id: Optional[uuid.UUID] = None
     event_type: str
     source_kind: str
     payload: Dict[str, Any] = Field(default_factory=dict)
     sha256: str
     captured_at: datetime
+    subject_type: Optional[str] = None
+    subject_id: Optional[str] = None
     producer_id: Optional[str] = None
     device_id: Optional[str] = None
     operator_id: Optional[str] = None
@@ -64,6 +68,8 @@ def _to_read(event: TrackingEvent) -> TrackingEventRead:
         payload=event.payload or {},
         sha256=event.sha256,
         captured_at=event.captured_at,
+        subject_type=event.subject_type,
+        subject_id=event.subject_id,
         producer_id=event.producer_id,
         device_id=event.device_id,
         operator_id=event.operator_id,
@@ -79,9 +85,16 @@ async def create_tracking_event(
     payload: TrackingEventCreate,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> TrackingEventRead:
-    registration = await session.get(SourceRegistration, payload.registration_id)
-    if registration is None:
-        raise HTTPException(status_code=404, detail="SourceRegistration not found")
+    registration: SourceRegistration | None = None
+    if payload.registration_id is not None:
+        registration = await session.get(SourceRegistration, payload.registration_id)
+        if registration is None:
+            raise HTTPException(status_code=404, detail="SourceRegistration not found")
+    elif not (payload.subject_id or payload.producer_id):
+        raise HTTPException(
+            status_code=422,
+            detail="TrackingEvent requires registration_id or an app-scoped identifier",
+        )
 
     event = await record_tracking_event(
         session,
@@ -94,6 +107,8 @@ async def create_tracking_event(
         device_id=payload.device_id,
         operator_id=payload.operator_id,
         correlation_id=payload.correlation_id,
+        subject_type=payload.subject_type,
+        subject_id=payload.subject_id,
         snapshot_id=payload.snapshot_id,
         sha256=payload.sha256,
     )
@@ -105,6 +120,11 @@ async def create_tracking_event(
 @router.get("/tracking-events", response_model=List[TrackingEventRead])
 async def list_tracking_events(
     registration_id: Optional[uuid.UUID] = None,
+    producer_id: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    subject_type: Optional[str] = None,
+    subject_id: Optional[str] = None,
+    event_type: Optional[List[TrackingEventType]] = None,
     limit: int = 50,
     offset: int = 0,
     session: AsyncSession = Depends(get_async_pg_session),
@@ -112,6 +132,16 @@ async def list_tracking_events(
     stmt = select(TrackingEvent).order_by(TrackingEvent.captured_at.desc()).limit(limit).offset(offset)
     if registration_id is not None:
         stmt = stmt.where(TrackingEvent.registration_id == registration_id)
+    if producer_id is not None:
+        stmt = stmt.where(TrackingEvent.producer_id == producer_id)
+    if correlation_id is not None:
+        stmt = stmt.where(TrackingEvent.correlation_id == correlation_id)
+    if subject_type is not None:
+        stmt = stmt.where(TrackingEvent.subject_type == subject_type)
+    if subject_id is not None:
+        stmt = stmt.where(TrackingEvent.subject_id == subject_id)
+    if event_type:
+        stmt = stmt.where(TrackingEvent.event_type.in_(event_type))
     rows = (await session.execute(stmt)).scalars().all()
     return [_to_read(row) for row in rows]
 
