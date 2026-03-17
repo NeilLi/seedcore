@@ -30,7 +30,7 @@ spec:
 
           ports:
             - name: http
-              containerPort: 8001
+              containerPort: 8003
             - name: grpc-sim
               containerPort: 50055
               protocol: TCP
@@ -95,13 +95,13 @@ spec:
                 echo "🤖 Physical mode: skipping RobotSim startup"
               fi
 
-              echo "🚀 Starting SeedCore HAL service on :8001 ..."
+              echo "🚀 Starting SeedCore HAL service on :8003 ..."
               exec python -m seedcore.hal.service.main
 
           readinessProbe:
             httpGet:
               path: /status
-              port: 8001
+              port: 8003
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -110,7 +110,7 @@ spec:
           startupProbe:
             httpGet:
               path: /status
-              port: 8001
+              port: 8003
             # Give Python app time to boot
             failureThreshold: 30
             periodSeconds: 2
@@ -119,7 +119,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /status
-              port: 8001
+              port: 8003
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
@@ -160,5 +160,5 @@ spec:
     app: hal-bridge
   ports:
     - name: http
-      port: 8001
-      targetPort: 8001
+      port: 8003
+      targetPort: 8003

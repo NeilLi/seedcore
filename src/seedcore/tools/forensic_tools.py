@@ -104,7 +104,7 @@ async def register_forensic_tools(tool_manager: Any, hal_base_url: Optional[str]
         base_url = (
             hal_base_url 
             or os.getenv("HAL_BASE_URL") 
-            or "http://seedcore-hal-bridge:8001"
+            or "http://seedcore-hal-bridge:8003"
         )
         
         seal_tool = ForensicSealTool(hal_base_url=base_url)

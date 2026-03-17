@@ -240,7 +240,7 @@ class ToolManagerShard:
         They should only be used by agents with appropriate RBAC permissions.
         
         Args:
-            hal_base_url: Optional HAL service base URL (default: http://localhost:8001)
+            hal_base_url: Optional HAL service base URL (default: http://localhost:8003)
         """
         try:
             import os
@@ -251,7 +251,7 @@ class ToolManagerShard:
             from seedcore.tools.forensic_tools import ForensicSealTool
             
             # Use provided URL or default from environment
-            base_url = hal_base_url or os.getenv("HAL_BASE_URL", "http://localhost:8001")
+            base_url = hal_base_url or os.getenv("HAL_BASE_URL", "http://localhost:8003")
             
             motion_tool = ReachyMotionTool(hal_base_url=base_url)
             get_state_tool = ReachyGetStateTool(hal_base_url=base_url)

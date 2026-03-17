@@ -13,7 +13,7 @@ class HALClient:
 
     def __init__(self, base_url: Optional[str] = None):
         # Default to K8s service name or localhost for dev
-        self.base_url = base_url or os.getenv("HAL_BASE_URL", "http://seedcore-hal-bridge:8001")
+        self.base_url = base_url or os.getenv("HAL_BASE_URL", "http://seedcore-hal-bridge:8003")
         self.client = httpx.AsyncClient(timeout=10.0)
 
     async def request_forensic_seal(

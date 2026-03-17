@@ -183,7 +183,7 @@ async def register_reachy_tools(tool_manager: Any) -> bool:
     This function:
     - Registers reachy.motion and reachy.get_state tools
     - Handles both single ToolManager and ToolManagerShard instances
-    - Connects to HAL FastAPI service (default: http://localhost:8001)
+    - Connects to HAL FastAPI service (default: http://localhost:8003)
 
     Note: Reachy tools are designed for robot actuation (domain="physical").
     They should only be used by agents with appropriate RBAC permissions.
@@ -200,7 +200,7 @@ async def register_reachy_tools(tool_manager: Any) -> bool:
         from seedcore.tools.reachy_tools import register_reachy_tools as _register_reachy_hal_tools
         
         # Get HAL base URL from environment or use default
-        hal_base_url = os.getenv("HAL_BASE_URL", "http://localhost:8001")
+        hal_base_url = os.getenv("HAL_BASE_URL", "http://localhost:8003")
         
         result = await _register_reachy_hal_tools(tool_manager, hal_base_url=hal_base_url)
         return result

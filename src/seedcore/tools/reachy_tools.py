@@ -47,14 +47,14 @@ class ReachyMotionTool(ToolBase):
         
         Args:
             hal_base_url: HAL service base URL
-                Defaults to HAL_BASE_URL env var or http://seedcore-hal-bridge:8001 (K8s service)
+                Defaults to HAL_BASE_URL env var or http://seedcore-hal-bridge:8003 (K8s service)
         """
         super().__init__()
         # Priority: parameter -> env var HAL_BASE_URL -> K8s service default
         self._hal_base_url = (
             hal_base_url 
             or os.getenv("HAL_BASE_URL") 
-            or "http://seedcore-hal-bridge:8001"  # Kubernetes service name (default for K8s)
+            or "http://seedcore-hal-bridge:8003"  # Kubernetes service name (default for K8s)
         )
         self._client: Optional[httpx.AsyncClient] = None
         
@@ -220,14 +220,14 @@ class ReachyGetStateTool(ToolBase):
         
         Args:
             hal_base_url: HAL service base URL
-                Defaults to HAL_BASE_URL env var or http://seedcore-hal-bridge:8001 (K8s service)
+                Defaults to HAL_BASE_URL env var or http://seedcore-hal-bridge:8003 (K8s service)
         """
         super().__init__()
         # Priority: parameter -> env var HAL_BASE_URL -> K8s service default
         self._hal_base_url = (
             hal_base_url 
             or os.getenv("HAL_BASE_URL") 
-            or "http://seedcore-hal-bridge:8001"  # Kubernetes service name (default for K8s)
+            or "http://seedcore-hal-bridge:8003"  # Kubernetes service name (default for K8s)
         )
         self._client: Optional[httpx.AsyncClient] = None
         
@@ -301,7 +301,7 @@ async def register_reachy_tools(tool_manager: Any, hal_base_url: Optional[str] =
     Args:
         tool_manager: ToolManager instance (or ToolManagerShard actor)
         hal_base_url: Optional HAL service base URL
-            Defaults to HAL_BASE_URL env var or http://seedcore-hal-bridge:8001 (K8s service)
+            Defaults to HAL_BASE_URL env var or http://seedcore-hal-bridge:8003 (K8s service)
     
     Returns:
         True if tools were registered successfully, False otherwise
@@ -311,7 +311,7 @@ async def register_reachy_tools(tool_manager: Any, hal_base_url: Optional[str] =
         base_url = (
             hal_base_url 
             or os.getenv("HAL_BASE_URL") 
-            or "http://seedcore-hal-bridge:8001"  # Kubernetes service name
+            or "http://seedcore-hal-bridge:8003"  # Kubernetes service name
         )
         
         # Create tool instances
