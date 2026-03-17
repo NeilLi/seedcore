@@ -35,14 +35,15 @@ MIGRATION_120="${SCRIPT_DIR}/migrations/120_organ_specialization_indexing.sql"
 MIGRATION_121="${SCRIPT_DIR}/migrations/121_task_proto_plan.sql"
 MIGRATION_122="${SCRIPT_DIR}/migrations/122_source_registration.sql"
 MIGRATION_123="${SCRIPT_DIR}/migrations/123_tracking_events.sql"
-MIGRATION_124="${SCRIPT_DIR}/migrations/124_governed_execution_audit.sql"
+MIGRATION_124="${SCRIPT_DIR}/migrations/124_tracking_events_app_scope.sql"
+MIGRATION_125="${SCRIPT_DIR}/migrations/124_governed_execution_audit.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -74,7 +75,8 @@ echo "   - 120: Agent/organ specialization indexing (specialization column, uniq
 echo "   - 121: Task proto-plan (proto-plan payloads for downstream workers)"
 echo "   - 122: Source registration (registrations, artifacts, measurements, decisions)"
 echo "   - 123: Tracking events (governed event ingress + projection traceability)"
-echo "   - 124: Governed execution audit (append-only decision and execution receipts)"
+echo "   - 124: Tracking event app-scope expansion (external app telemetry + subject indexing)"
+echo "   - 125: Governed execution audit (append-only decision and execution receipts)"
 
 find_pg_pod() {
   local sel pod
@@ -246,10 +248,15 @@ echo "⚙️  Running migration 123: Tracking events (governed event ingress + p
 kubectl -n "$NAMESPACE" cp "$MIGRATION_123" "$POSTGRES_POD:/tmp/123_tracking_events.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/123_tracking_events.sql"
 
-# Migration 124 (Governed Execution Audit)
-echo "⚙️  Running migration 124: Governed execution audit (append-only decision and execution receipts)..."
-kubectl -n "$NAMESPACE" cp "$MIGRATION_124" "$POSTGRES_POD:/tmp/124_governed_execution_audit.sql"
-kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/124_governed_execution_audit.sql"
+# Migration 124 (Tracking Events App Scope)
+echo "⚙️  Running migration 124: Tracking event app-scope expansion (external app telemetry + subject indexing)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_124" "$POSTGRES_POD:/tmp/124_tracking_events_app_scope.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/124_tracking_events_app_scope.sql"
+
+# Migration 125 (Governed Execution Audit)
+echo "⚙️  Running migration 125: Governed execution audit (append-only decision and execution receipts)..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_125" "$POSTGRES_POD:/tmp/125_governed_execution_audit.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/125_governed_execution_audit.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."
