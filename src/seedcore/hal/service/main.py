@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException
+from ..custody.forensic_sealer import ForensicSealer
 from pydantic import BaseModel
 
 # Internal SeedCore HAL imports
@@ -114,6 +115,15 @@ app = FastAPI(title="SeedCore HAL Bridge", lifespan=lifespan)
 
 # --- Request Schemas ---
 
+class ForensicSealRequest(BaseModel):
+    event_id: str
+    platform_state: str
+    trajectory_hash: str
+    policy_hash: str
+    auth_token: str
+    from_zone: str
+    to_zone: str
+
 class ActuationRequest(BaseModel):
     pose_type: str = "head"
     target: Dict[str, Any] = {}
@@ -190,6 +200,52 @@ async def get_state():
         return state
     except Exception as e:
         logger.error(f"Error getting state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/forensic-seal")
+async def forensic_seal(request: ForensicSealRequest):
+    """
+    Generates a cryptographically sealed Honey Digital Twin custody event.
+    Captures edge telemetry synchronously to prevent timing divergence.
+    """
+    try:
+        # 1. Initialize the edge sealer
+        sealer = ForensicSealer(device_identity=HARDWARE_UUID)
+
+        # 2. Capture real edge telemetry (Mocked sensors for this demo if hardware missing)
+        proprioception = None
+        if driver and driver.state in (RobotState.CONNECTED, RobotState.MOVING):
+            try:
+                proprioception = driver.get_proprioception().__dict__
+            except Exception:
+                pass
+
+        # Use mock environmental data if real sensors aren't attached to Reachy yet
+        env_data = {"temperatureC": 21.4, "humidityPct": 61.3}
+        if proprioception and "temperature" in proprioception:
+             env_data["temperatureC"] = proprioception["temperature"]
+
+        # Mock a camera capture (In reality, we'd pull from driver.get_camera_frame())
+        mock_image_bytes = b"mock_vision_data_frame_094"
+        mock_voc_hash = "sha256:8f3ad6b40d81d73e"
+
+        # 3. Seal the event
+        custody_event = sealer.seal_custody_event(
+            event_id=request.event_id,
+            platform_state=request.platform_state,
+            environmental_data=env_data,
+            voc_hash=mock_voc_hash,
+            vision_image=mock_image_bytes,
+            trajectory_hash=request.trajectory_hash,
+            policy_hash=request.policy_hash,
+            auth_token=request.auth_token,
+            from_zone=request.from_zone,
+            to_zone=request.to_zone
+        )
+
+        return custody_event.model_dump(by_alias=True)
+    except Exception as e:
+        logger.error(f"Failed to seal forensic event: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/actuate")
