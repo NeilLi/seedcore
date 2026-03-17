@@ -248,15 +248,18 @@ class ToolManagerShard:
             
             # Import and create tools inside the actor (avoids serialization issues)
             from seedcore.tools.reachy_tools import ReachyMotionTool, ReachyGetStateTool
+            from seedcore.tools.forensic_tools import ForensicSealTool
             
             # Use provided URL or default from environment
             base_url = hal_base_url or os.getenv("HAL_BASE_URL", "http://localhost:8001")
             
             motion_tool = ReachyMotionTool(hal_base_url=base_url)
             get_state_tool = ReachyGetStateTool(hal_base_url=base_url)
+            seal_tool = ForensicSealTool(hal_base_url=base_url)
             
             await manager.register_internal(motion_tool)
             await manager.register_internal(get_state_tool)
+            await manager.register_internal(seal_tool)
             
             return True
         except Exception as e:

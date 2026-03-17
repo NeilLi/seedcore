@@ -816,7 +816,9 @@ class BaseAgent:
             # This ensures agents have access to Reachy tools even when using local fallback
             try:
                 from seedcore.organs.organism_core import register_reachy_tools
+                from seedcore.tools.forensic_tools import register_forensic_tools
                 await register_reachy_tools(self.tool_handler)
+                await register_forensic_tools(self.tool_handler)
             except Exception as e:
                 # Reachy tools are optional - log but don't fail if HAL is unavailable
                 logger.debug(f"[{self.agent_id}] Could not register Reachy tools in local ToolManager: {e}")
