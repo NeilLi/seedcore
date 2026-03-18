@@ -35,6 +35,7 @@ spec:
               containerPort: 50055
               protocol: TCP
 
+
           env:
             - name: PYTHONPATH
               value: "/app/src"
@@ -57,6 +58,31 @@ spec:
             - name: REACHY_SIM_ADDRESS
               value: "127.0.0.1:50055"
 
+            # Attestation / Transition Receipts (Ed25519 Preferred, from .env via ConfigMap)
+            - name: SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64
+              valueFrom:
+                secretKeyRef:
+                  name: seedcore-hal-secrets
+                  key: SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64
+                  optional: true
+            - name: SEEDCORE_HAL_RECEIPT_KEY_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: seedcore-env
+                  key: SEEDCORE_HAL_RECEIPT_KEY_ID
+                  optional: true
+            - name: SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON
+              valueFrom:
+                configMapKeyRef:
+                  name: seedcore-env
+                  key: SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON
+                  optional: true
+            - name: SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: seedcore-env
+                  key: SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY
+                  optional: true
             - name: HARDWARE_UUID
               valueFrom:
                 fieldRef:

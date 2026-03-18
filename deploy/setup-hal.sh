@@ -104,6 +104,18 @@ if [[ ! -f "${DEPLOYMENT_FILE}" ]]; then
     exit 1
 fi
 
+ENV_FILE="${PROJECT_ROOT}/docker/.env"
+if [[ -f "${ENV_FILE}" ]]; then
+    echo "🔐 Creating/Updating ConfigMap and Secret from docker/.env..."
+    kubectl create configmap seedcore-env --from-env-file="${ENV_FILE}" -n "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    kubectl create secret generic seedcore-hal-secrets --from-env-file="${ENV_FILE}" -n "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    echo "✅ Loaded .env configurations into Kubernetes"
+    echo ""
+else
+    echo "⚠️  WARNING: docker/.env file not found. Skipping ConfigMap and Secret creation."
+    echo ""
+fi
+
 if ! kubectl apply -n "${NAMESPACE}" -f "${DEPLOYMENT_FILE}"; then
     echo "❌ ERROR: Failed to apply deployment"
     exit 1

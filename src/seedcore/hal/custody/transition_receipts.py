@@ -7,7 +7,10 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+import logging
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -64,6 +67,7 @@ def build_transition_receipt(
             "key_id": key_id,
             "public_key": base64.b64encode(public_key_bytes).decode("ascii"),
         }
+    logger.warning("attested endpoint fell back to HMAC signature. Ed25519 is preferred.")
     return {
         "receipt_id": str(uuid.uuid4()),
         "proof_type": "hmac_sha256",
@@ -101,6 +105,7 @@ def verify_transition_receipt(
     if not hmac.compare_digest(payload_hash, expected_hash):
         return "payload_hash_mismatch"
     if proof_type == "hmac_sha256":
+        logger.warning("attested endpoint verified HMAC signature. Ed25519 is preferred.")
         if not hmac.compare_digest(signature, _sign_payload_hash(payload_hash)):
             return "signature_mismatch"
     elif proof_type == "ed25519":
