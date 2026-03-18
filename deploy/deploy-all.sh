@@ -37,7 +37,7 @@ SKIP_KIND_LOAD="${SKIP_KIND_LOAD:-false}"
 TAIL_BOOTSTRAP_LOGS="${TAIL_BOOTSTRAP_LOGS:-false}"
 DEPLOY_INGRESS_ENABLED="${DEPLOY_INGRESS_ENABLED:-true}"
 DEPLOY_HAL_BRIDGE="${DEPLOY_HAL_BRIDGE:-true}"
-HAL_IMAGE="${HAL_IMAGE:-seedcore-hal:latest}"
+HAL_IMAGE="${HAL_IMAGE:-${SEEDCORE_IMAGE}}"
 HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
 HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
 
@@ -48,7 +48,7 @@ Usage: $(basename "$0") [options]
 Options:
   -n, --namespace <ns>        Namespace (default: ${NAMESPACE})
   -c, --cluster <name>        Kind cluster name (default: ${CLUSTER_NAME})
-  -i, --image <img:tag>       Shared image for Ray/API/bootstrap (default: ${SEEDCORE_IMAGE})
+  -i, --image <img:tag>       Shared image for Ray/API/bootstrap/HAL (default: ${SEEDCORE_IMAGE})
       --ray-image <img:tag>   Override Ray image only (default: ${RAY_IMAGE})
       --api-image <img:tag>   Override API image only (default: ${API_IMAGE})
       --bootstrap-image <img> Override bootstrap image only (default: ${BOOTSTRAP_IMAGE})
@@ -96,6 +96,7 @@ while [[ $# -gt 0 ]]; do
       RAY_IMAGE="$2"
       API_IMAGE="$2"
       BOOTSTRAP_IMAGE="$2"
+      HAL_IMAGE="$2"
       shift 2
       ;;
     --ray-image) RAY_IMAGE="$2"; shift 2 ;;

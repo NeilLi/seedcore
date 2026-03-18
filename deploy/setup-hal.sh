@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Setup script for SeedCore HAL Bridge
-# Builds the HAL Docker image, loads it into Kind, and deploys to Kubernetes
+# Reuses the shared SeedCore Docker image, loads it into Kind, and deploys to Kubernetes
 
 CLUSTER_NAME="${CLUSTER_NAME:-seedcore-dev}"
 NAMESPACE="${NAMESPACE:-seedcore-dev}"
-IMAGE_NAME="${IMAGE_NAME:-seedcore-hal:latest}"
+IMAGE_NAME="${IMAGE_NAME:-${RAY_IMAGE:-seedcore:latest}}"
 HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
 HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,30 +47,27 @@ echo "✅ Prerequisites OK"
 echo ""
 
 # -----------------------------
-# Step 1: Build the HAL image
+# Step 1: Validate shared image exists locally
 # -----------------------------
-echo "🔨 Step 1: Building HAL Docker image..."
+echo "🔎 Step 1: Validating shared Docker image..."
 echo "   Image: ${IMAGE_NAME}"
-echo "   Dockerfile: docker/Dockerfile.hal"
 echo "   HAL_DRIVER_MODE: ${HAL_DRIVER_MODE}"
 echo "   HAL_SIM_BACKEND: ${HAL_SIM_BACKEND}"
 echo ""
 
-cd "${PROJECT_ROOT}"
-
-# Build with explicit build args for clarity (defaults work from project root)
-# These ARGs make the Dockerfile flexible for different build contexts
-if ! docker build \
-    --build-arg REQUIREMENTS_PATH=docker/requirements_hal.txt \
-    --build-arg HAL_SRC_PATH=src/seedcore/hal \
-    -t "${IMAGE_NAME}" \
-    -f docker/Dockerfile.hal \
-    .; then
-    echo "❌ ERROR: Docker build failed"
+if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
+    echo "❌ ERROR: Image ${IMAGE_NAME} not found locally"
+    echo "   Build the shared SeedCore image first, for example:"
+    echo "   IMAGE_NAME=${IMAGE_NAME%:*} IMAGE_TAG=${IMAGE_NAME##*:} ./build.sh"
     exit 1
 fi
 
-echo "✅ Docker image built successfully"
+IMAGE_PLATFORM="$(docker image inspect "${IMAGE_NAME}" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || echo "unknown")"
+if [[ "${IMAGE_PLATFORM}" != "amd64/linux" && "${IMAGE_PLATFORM}" != "unknown" ]]; then
+    echo "⚠️  WARNING: Image platform is ${IMAGE_PLATFORM}; Kind nodes usually expect amd64/linux"
+fi
+
+echo "✅ Shared image is available locally"
 echo ""
 
 # -----------------------------
