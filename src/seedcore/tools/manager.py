@@ -483,13 +483,13 @@ class ToolManager:
                     governance_ctx=governance_ctx,
                 )
 
-            # 0.5 Governance gate for actuation tools
-            if self._is_actuation_tool(name):
+            # 0.5 Governance gate for all side-effecting tools
+            if self._requires_execution_token(name):
                 self._validate_execution_token(name, governance_ctx)
                 if isinstance(governance_ctx, dict):
                     token = governance_ctx.get("execution_token")
                     if isinstance(token, dict) and "execution_token" not in safe_args:
-                        # Forward token to actuator endpoints for governed execution.
+                        # Forward token to endpoints for governed execution.
                         safe_args["execution_token"] = dict(token)
 
             # 1. Internal tools (includes all query tools registered via register_query_tools)
@@ -577,13 +577,34 @@ class ToolManager:
     # Governance / Custody
     # ============================================================
 
-    def _is_actuation_tool(self, name: str) -> bool:
-        return (
+    def _requires_execution_token(self, name: str) -> bool:
+        """
+        Universal side-effect gate: Determine if a tool modifies physical,
+        financial, or critical digital state.
+        """
+        # 1. Physical Actuation (Robotics, IoT)
+        if (
             name.startswith("reachy.")
             or name == "tuya.send_command"
             or name.startswith("actuator.")
             or name.startswith("robot.")
-        )
+        ):
+            return True
+            
+        # 2. Persistent Memory / State Modifications
+        if name in (
+            "memory.mw.write",
+            "memory.holon.store",
+            "memory.ltm.store",
+            "memory.graph.write",
+        ):
+            return True
+            
+        # 3. External integrations with material impact
+        if name.startswith("finance.") or name.startswith("transaction.") or name.startswith("payment."):
+            return True
+            
+        return False
 
     def _validate_execution_token(self, tool_name: str, governance_ctx: Any) -> None:
         if not isinstance(governance_ctx, dict):

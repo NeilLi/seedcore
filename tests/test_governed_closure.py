@@ -166,3 +166,49 @@ async def test_base_agent_closes_governed_custody_loop():
         row.get("intent_ref") == "governance://action-intent/intent-governed-1"
         for row in ledger["entries"]
     )
+
+@pytest.mark.asyncio
+async def test_tool_manager_requires_execution_token_for_memory_write():
+    manager = ToolManager()
+    
+    # We mock MW Manager
+    class MockMwManager:
+        async def set_item_async(self, item_id, value, ttl_s=None):
+            return True
+            
+    manager.mw_manager = MockMwManager()
+    
+    with pytest.raises(ToolError) as exc:
+        await manager.execute("memory.mw.write", {"item_id": "test", "value": "test_val"}, agent_id="agent-1")
+    assert "missing_execution_token" in str(exc.value)
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-1",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "WRITE"},
+            "resource": {"asset_id": "test", "target_zone": None},
+        },
+        "execution_token": {
+            "token_id": "tok-1",
+            "intent_id": "intent-1",
+            "valid_until": "2099-01-01T00:00:00+00:00",
+            "signature": "sig-1",
+            "constraints": {
+                "action_type": "WRITE",
+                "target_zone": None,
+                "asset_id": "test",
+                "principal_agent_id": "agent-1",
+            },
+        }
+    }
+    
+    out = await manager.execute(
+        "memory.mw.write",
+        {"item_id": "test", "value": "test_val", "_governance": governance},
+        agent_id="agent-1"
+    )
+    
+    assert out.get("status") == "success"
+    assert out.get("item_id") == "test"
+
