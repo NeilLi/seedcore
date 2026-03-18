@@ -9,6 +9,7 @@ import logging
 try:
     from .task import Task as DatabaseTask, TaskStatus, Base as TaskBase
     from .fact import Fact, Base as FactBase
+    from .asset_custody import AssetCustodyState
     from .governance_audit import GovernedExecutionAudit
     from .source_registration import (
         SourceRegistration,
@@ -56,6 +57,7 @@ try:
         "TaskBase",
         "Fact",
         "FactBase",
+        "AssetCustodyState",
         "GovernedExecutionAudit",
         "SourceRegistration",
         "SourceRegistrationArtifact",

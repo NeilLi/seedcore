@@ -16,6 +16,7 @@ import pytest
 import seedcore.services.coordinator_service as cs
 from seedcore.models.cognitive import DecisionKind
 from seedcore.models.eventizer import EventizerRequest
+from seedcore.models.source_registration import SourceRegistration, SourceRegistrationStatus
 
 
 class StubAsyncTransaction:
@@ -163,6 +164,40 @@ class AsyncGraphRepo:
 
     async def add_dependency(self, parent, child):
         self.edges_async.append((str(parent), str(child)))
+
+
+@pytest.mark.asyncio
+async def test_upsert_asset_custody_from_registration_decision_uses_lot_as_authority_key(monkeypatch):
+    captured = {}
+
+    class FakeDAO:
+        async def upsert_snapshot(self, session, **kwargs):
+            captured.update(kwargs)
+            return kwargs
+
+    monkeypatch.setattr(cs, "AssetCustodyStateDAO", lambda: FakeDAO())
+
+    registration = SourceRegistration(
+        id=uuid.uuid4(),
+        source_claim_id="claim-44",
+        lot_id="lot-44",
+        producer_id="producer-44",
+        status=SourceRegistrationStatus.QUARANTINED,
+        claimed_origin={"zone_id": "vault-44"},
+        collection_site={},
+    )
+
+    await cs._upsert_asset_custody_from_registration_decision(
+        object(),
+        registration=registration,
+        decision_status="quarantined",
+    )
+
+    assert captured["asset_id"] == "lot-44"
+    assert captured["source_registration_id"] == str(registration.id)
+    assert captured["current_zone"] == "vault-44"
+    assert captured["is_quarantined"] is True
+    assert captured["authority_source"] == "source_registration_decision"
 
 
 @pytest.mark.asyncio

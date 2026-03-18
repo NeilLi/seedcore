@@ -28,6 +28,7 @@ from seedcore.models.source_registration import (
     SourceRegistration,
     SourceRegistrationStatus,
 )
+from seedcore.models.asset_custody import AssetCustodyState
 from seedcore.models.state import (
     AgentSnapshot,
     MemoryVector,
@@ -131,6 +132,55 @@ def test_project_authoritative_assets_projects_registration_status_and_zone():
     assert assets[str(registration.id)]["current_zone"] == "vault-a"
     assert assets["lot-7"]["source_registration_id"] == str(registration.id)
     assert assets["claim-7"]["producer_id"] == "producer-7"
+
+
+def test_project_asset_custody_states_prefers_dedicated_custody_zone():
+    custody_row = AssetCustodyState(
+        asset_id="asset-22",
+        source_registration_id=str(uuid.uuid4()),
+        lot_id="lot-22",
+        source_claim_id="claim-22",
+        producer_id="producer-22",
+        current_zone="robot-bay-3",
+        is_quarantined=True,
+        authority_source="governed_execution_receipt",
+    )
+    custody_row.updated_at = datetime(2026, 3, 18, 13, 0, tzinfo=timezone.utc)
+
+    assets = state_service._project_asset_custody_states([custody_row])
+
+    assert assets["asset-22"]["current_zone"] == "robot-bay-3"
+    assert assets["asset-22"]["is_quarantined"] is True
+    assert assets["lot-22"]["authority_source"] == "governed_execution_receipt"
+    assert assets["claim-22"]["producer_id"] == "producer-22"
+
+
+def test_merge_registration_fallback_assets_preserves_custody_zone():
+    registration = SourceRegistration(
+        id=uuid.uuid4(),
+        source_claim_id="claim-31",
+        lot_id="lot-31",
+        producer_id="producer-31",
+        status=SourceRegistrationStatus.APPROVED,
+        claimed_origin={"zone_id": "declared-zone"},
+        collection_site={"site_id": "site-31"},
+    )
+    registration.updated_at = datetime(2026, 3, 18, 13, 30, tzinfo=timezone.utc)
+
+    merged = state_service._merge_registration_fallback_assets(
+        {
+            "lot-31": {
+                "current_zone": "scanner-lane-1",
+                "is_quarantined": False,
+                "authority_source": "governed_execution_receipt",
+            }
+        },
+        [registration],
+    )
+
+    assert merged["lot-31"]["current_zone"] == "scanner-lane-1"
+    assert merged["lot-31"]["registration_status"] == "approved"
+    assert merged["lot-31"]["source_registration_id"] == str(registration.id)
 
 
 def test_unified_state_round_trips_assets_in_payload():

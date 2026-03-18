@@ -258,3 +258,41 @@ async def test_tool_manager_requires_execution_token_for_custody_ledger_record()
     )
 
     assert out["ok"] is True
+
+
+def test_tool_manager_builds_asset_custody_update_from_governance():
+    manager = ToolManager()
+
+    update = manager._build_asset_custody_update(
+        {
+            "task_id": "8f5f4e2f-46d9-458a-85dd-d782c52f249d",
+            "agent_id": "agent-7",
+            "evidence_bundle": {
+                "telemetry_summary": {"current_zone": "packing-cell-2"},
+            },
+        },
+        {
+            "action_intent": {
+                "intent_id": "intent-7",
+                "resource": {
+                    "asset_id": "asset-7",
+                    "target_zone": "staging-a",
+                    "source_registration_id": "reg-7",
+                },
+            },
+            "execution_token": {"token_id": "tok-7"},
+            "policy_case": {
+                "relevant_twin_snapshot": {
+                    "asset": {"custody": {"quarantined": True, "target_zone": "vault-z"}}
+                }
+            },
+        },
+    )
+
+    assert update is not None
+    assert update["asset_id"] == "asset-7"
+    assert update["current_zone"] == "packing-cell-2"
+    assert update["is_quarantined"] is True
+    assert update["source_registration_id"] == "reg-7"
+    assert update["last_intent_id"] == "intent-7"
+    assert update["last_token_id"] == "tok-7"

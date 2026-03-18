@@ -24,6 +24,7 @@ from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 from seedcore.database import get_async_pg_session_factory
 from seedcore.graph.agent_repository import AgentGraphRepository
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
+from seedcore.models.asset_custody import AssetCustodyState
 from seedcore.models.source_registration import SourceRegistration, SourceRegistrationStatus
 from seedcore.ops.state.agent_aggregator import AgentAggregator
 from seedcore.ops.state.memory_aggregator import MemoryAggregator
@@ -595,6 +596,12 @@ async def _fetch_authoritative_assets(limit: int = 256) -> Dict[str, Any]:
 
     try:
         async with session_factory() as session:
+            custody_result = await session.execute(
+                select(AssetCustodyState)
+                .order_by(AssetCustodyState.updated_at.desc(), AssetCustodyState.created_at.desc())
+                .limit(limit)
+            )
+            custody_rows = custody_result.scalars().all()
             result = await session.execute(
                 select(SourceRegistration)
                 .order_by(SourceRegistration.updated_at.desc(), SourceRegistration.created_at.desc())
@@ -605,7 +612,40 @@ async def _fetch_authoritative_assets(limit: int = 256) -> Dict[str, Any]:
         logger.debug("StateService asset snapshot fetch failed: %s", exc)
         return {}
 
-    return _project_authoritative_assets(registrations)
+    assets = _project_asset_custody_states(custody_rows)
+    return _merge_registration_fallback_assets(assets, registrations)
+
+
+def _project_asset_custody_states(rows: list[AssetCustodyState]) -> Dict[str, Any]:
+    assets: Dict[str, Any] = {}
+    for row in rows:
+        asset_state = {
+            "source_registration_id": row.source_registration_id,
+            "lot_id": row.lot_id,
+            "source_claim_id": row.source_claim_id,
+            "producer_id": row.producer_id,
+            "registration_status": "quarantined" if bool(row.is_quarantined) else None,
+            "is_quarantined": bool(row.is_quarantined),
+            "current_zone": row.current_zone,
+            "authority_source": row.authority_source,
+            "updated_at": (
+                row.updated_at.isoformat()
+                if getattr(row, "updated_at", None) is not None
+                else None
+            ),
+        }
+        for key in _asset_custody_keys(row):
+            assets.setdefault(key, dict(asset_state))
+    return assets
+
+
+def _asset_custody_keys(row: AssetCustodyState) -> list[str]:
+    keys = [str(row.asset_id)]
+    for value in (row.lot_id, row.source_registration_id, row.source_claim_id):
+        if value:
+            keys.append(str(value))
+    # preserve order while removing duplicates
+    return list(dict.fromkeys(keys))
 
 
 def _project_authoritative_assets(registrations: list[SourceRegistration]) -> Dict[str, Any]:
@@ -626,6 +666,38 @@ def _project_authoritative_assets(registrations: list[SourceRegistration]) -> Di
         }
         for key in _registration_asset_keys(registration):
             assets.setdefault(key, dict(asset_state))
+    return assets
+
+
+def _merge_registration_fallback_assets(
+    custody_assets: Dict[str, Any],
+    registrations: list[SourceRegistration],
+) -> Dict[str, Any]:
+    assets = {
+        str(key): dict(value)
+        for key, value in custody_assets.items()
+        if isinstance(value, dict)
+    }
+    registration_assets = _project_authoritative_assets(registrations)
+    for key, registration_state in registration_assets.items():
+        existing = assets.get(key)
+        if existing is None:
+            assets[key] = dict(registration_state)
+            continue
+        assets[key] = {
+            **dict(registration_state),
+            **existing,
+            "registration_status": (
+                existing.get("registration_status")
+                or registration_state.get("registration_status")
+            ),
+            "producer_id": existing.get("producer_id") or registration_state.get("producer_id"),
+            "source_registration_id": (
+                existing.get("source_registration_id")
+                or registration_state.get("source_registration_id")
+            ),
+            "lot_id": existing.get("lot_id") or registration_state.get("lot_id"),
+        }
     return assets
 
 

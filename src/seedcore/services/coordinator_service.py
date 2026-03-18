@@ -84,6 +84,7 @@ from ..coordinator.utils import (
 
 # DAOs
 from ..coordinator.dao import (
+    AssetCustodyStateDAO,
     GovernedExecutionAuditDAO,
     TaskOutboxDAO,
     TaskProtoPlanDAO,
@@ -1335,7 +1336,14 @@ class Coordinator:
             else:
                 registration.status = SourceRegistrationStatus.REJECTED
 
+            await _upsert_asset_custody_from_registration_decision(
+                session,
+                registration=registration,
+                decision_status=decision["decision"],
+            )
+
             await session.commit()
+
 
     async def _handle_source_registration_task(
         self,
@@ -3122,6 +3130,59 @@ class Coordinator:
         """Manually start capability monitor."""
         await self._start_capability_monitor()
         return {"success": True, "message": "CapabilityMonitor startup initiated"}
+
+
+async def _upsert_asset_custody_from_registration_decision(
+    session: Any,
+    *,
+    registration: SourceRegistration,
+    decision_status: str,
+) -> None:
+    asset_id = str(getattr(registration, "lot_id", "") or "").strip()
+    if not asset_id:
+        return
+
+    dao = AssetCustodyStateDAO()
+    zone = _derive_registration_zone_hint(registration)
+    await dao.upsert_snapshot(
+        session,
+        asset_id=asset_id,
+        source_registration_id=str(registration.id),
+        lot_id=str(registration.lot_id),
+        source_claim_id=(
+            str(registration.source_claim_id)
+            if getattr(registration, "source_claim_id", None)
+            else None
+        ),
+        producer_id=(
+            str(registration.producer_id)
+            if getattr(registration, "producer_id", None)
+            else None
+        ),
+        current_zone=zone,
+        is_quarantined=(decision_status == RegistrationDecisionStatus.QUARANTINED.value),
+        authority_source="source_registration_decision",
+        updated_by="coordinator_service",
+    )
+
+
+def _derive_registration_zone_hint(registration: SourceRegistration) -> Optional[str]:
+    claimed_origin = (
+        dict(registration.claimed_origin)
+        if isinstance(getattr(registration, "claimed_origin", None), dict)
+        else {}
+    )
+    collection_site = (
+        dict(registration.collection_site)
+        if isinstance(getattr(registration, "collection_site", None), dict)
+        else {}
+    )
+    zone = (
+        claimed_origin.get("zone_id")
+        or collection_site.get("zone_id")
+        or collection_site.get("site_id")
+    )
+    return str(zone) if zone is not None else None
 
 
 # Deployment Bind

@@ -130,6 +130,7 @@ class ToolManager:
         self._custody_ledger: List[Dict[str, Any]] = []
         self._custody_lock = asyncio.Lock()
         self._governance_audit_dao = None
+        self._asset_custody_state_dao = None
         self._db_session_factory = None
 
         logger.info("🔧 ToolManager initialized (v2.1+)")
@@ -683,6 +684,13 @@ class ToolManager:
                 )
             async with self._custody_lock:
                 self._custody_ledger.append(record)
+            try:
+                await self._sync_asset_custody_state(record, governance_ctx)
+            except Exception:
+                logger.warning(
+                    "Asset custody state sync failed after ledger record",
+                    exc_info=True,
+                )
             return {"ok": True, "entry_id": record["entry_id"], "persisted": persisted}
 
         if name == "custody.ledger.list":
@@ -790,6 +798,16 @@ class ToolManager:
                 return None
         return self._governance_audit_dao
 
+    def _get_asset_custody_state_dao(self):
+        if self._asset_custody_state_dao is None:
+            try:
+                from seedcore.coordinator.dao import AssetCustodyStateDAO
+
+                self._asset_custody_state_dao = AssetCustodyStateDAO()
+            except Exception:
+                return None
+        return self._asset_custody_state_dao
+
     def _get_db_session_factory(self):
         if self._db_session_factory is None:
             try:
@@ -799,6 +817,119 @@ class ToolManager:
             except Exception:
                 return None
         return self._db_session_factory
+
+    async def _sync_asset_custody_state(
+        self,
+        record: Dict[str, Any],
+        governance_ctx: Any,
+    ) -> bool:
+        update = self._build_asset_custody_update(record, governance_ctx)
+        if update is None:
+            return False
+
+        session_factory = self._get_db_session_factory()
+        dao = self._get_asset_custody_state_dao()
+        if session_factory is None or dao is None:
+            return False
+
+        async with session_factory() as session:
+            async with session.begin():
+                await dao.upsert_snapshot(session, **update)
+        return True
+
+    def _build_asset_custody_update(
+        self,
+        record: Dict[str, Any],
+        governance_ctx: Any,
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(governance_ctx, dict):
+            return None
+
+        action_intent = (
+            governance_ctx.get("action_intent")
+            if isinstance(governance_ctx.get("action_intent"), dict)
+            else {}
+        )
+        resource = (
+            action_intent.get("resource")
+            if isinstance(action_intent.get("resource"), dict)
+            else {}
+        )
+        if not resource:
+            return None
+
+        asset_id = str(resource.get("asset_id") or "").strip()
+        if not asset_id:
+            return None
+
+        execution_token = (
+            governance_ctx.get("execution_token")
+            if isinstance(governance_ctx.get("execution_token"), dict)
+            else {}
+        )
+        policy_case = (
+            governance_ctx.get("policy_case")
+            if isinstance(governance_ctx.get("policy_case"), dict)
+            else {}
+        )
+        twins = (
+            policy_case.get("relevant_twin_snapshot")
+            if isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        )
+        asset_twin = twins.get("asset") if isinstance(twins.get("asset"), dict) else {}
+        asset_custody = (
+            asset_twin.get("custody")
+            if isinstance(asset_twin.get("custody"), dict)
+            else {}
+        )
+        evidence_bundle = (
+            record.get("evidence_bundle")
+            if isinstance(record.get("evidence_bundle"), dict)
+            else {}
+        )
+        telemetry = (
+            evidence_bundle.get("telemetry_summary")
+            if isinstance(evidence_bundle.get("telemetry_summary"), dict)
+            else {}
+        )
+
+        current_zone = (
+            telemetry.get("current_zone")
+            or resource.get("target_zone")
+            or asset_custody.get("target_zone")
+        )
+        is_quarantined = asset_custody.get("quarantined")
+        if is_quarantined is None:
+            is_quarantined = False
+
+        return {
+            "asset_id": asset_id,
+            "source_registration_id": (
+                str(resource.get("source_registration_id"))
+                if resource.get("source_registration_id") is not None
+                else None
+            ),
+            "current_zone": str(current_zone) if current_zone is not None else None,
+            "is_quarantined": bool(is_quarantined),
+            "authority_source": "governed_execution_receipt",
+            "last_task_id": (
+                str(record.get("task_id"))
+                if record.get("task_id") is not None
+                else None
+            ),
+            "last_intent_id": (
+                str(action_intent.get("intent_id"))
+                if action_intent.get("intent_id") is not None
+                else None
+            ),
+            "last_token_id": (
+                str(execution_token.get("token_id"))
+                if execution_token.get("token_id") is not None
+                else None
+            ),
+            "updated_by": str(record.get("agent_id")) if record.get("agent_id") is not None else None,
+        }
 
     def _iso_to_ts(self, iso: str) -> Optional[float]:
         try:
