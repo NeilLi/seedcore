@@ -19,9 +19,12 @@ import numpy as np
 from fastapi import Body, FastAPI, HTTPException
 from fastapi import Response as FastAPIResponse
 from ray import serve  # pyright: ignore[reportMissingImports]
+from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 
+from seedcore.database import get_async_pg_session_factory
 from seedcore.graph.agent_repository import AgentGraphRepository
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
+from seedcore.models.source_registration import SourceRegistration, SourceRegistrationStatus
 from seedcore.ops.state.agent_aggregator import AgentAggregator
 from seedcore.ops.state.memory_aggregator import MemoryAggregator
 from seedcore.ops.state.system_aggregator import SystemAggregator
@@ -52,6 +55,7 @@ class ServiceState:
         self.agent_aggregator: Optional[AgentAggregator] = None
         self.memory_aggregator: Optional[MemoryAggregator] = None
         self.system_aggregator: Optional[SystemAggregator] = None
+        self.pg_session_factory = None
         self.w_mode: np.ndarray = DEFAULT_W_MODE.copy()
         self.started_at: float = 0.0
 
@@ -250,6 +254,7 @@ async def _build_state_response(
 
     if include_unified_state:
         tasks.append(state.agent_aggregator.get_all_agent_snapshots())
+        tasks.append(_fetch_authoritative_assets())
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -316,11 +321,15 @@ async def _build_state_response(
         snapshots = results[5] if len(results) > 5 else {}
         if isinstance(snapshots, Exception):
             snapshots = {}
+        assets = results[6] if len(results) > 6 else {}
+        if isinstance(assets, Exception):
+            assets = {}
         payload = UnifiedState(
             agents=snapshots or {},
             organs={},
             system=system_state,
             memory=memory_vector,
+            assets=assets if isinstance(assets, dict) else {},
         )
 
     response = StateEnvelope.ok(metrics=metrics, meta=meta, payload=payload)
@@ -353,6 +362,11 @@ async def startup_event():
             organism_router = None
 
         graph_repo = AgentGraphRepository()
+        try:
+            state.pg_session_factory = get_async_pg_session_factory()
+        except Exception as exc:
+            logger.warning("StateService asset snapshot DB unavailable: %s", exc)
+            state.pg_session_factory = None
         state.agent_aggregator = AgentAggregator(
             organism_router=organism_router,
             graph_repo=graph_repo,
@@ -572,3 +586,71 @@ state_app = StateService.bind()
 
 def build_state_app(args: dict | None = None):
     return state_app
+
+
+async def _fetch_authoritative_assets(limit: int = 256) -> Dict[str, Any]:
+    session_factory = getattr(state, "pg_session_factory", None)
+    if session_factory is None:
+        return {}
+
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(SourceRegistration)
+                .order_by(SourceRegistration.updated_at.desc(), SourceRegistration.created_at.desc())
+                .limit(limit)
+            )
+            registrations = result.scalars().all()
+    except Exception as exc:
+        logger.debug("StateService asset snapshot fetch failed: %s", exc)
+        return {}
+
+    return _project_authoritative_assets(registrations)
+
+
+def _project_authoritative_assets(registrations: list[SourceRegistration]) -> Dict[str, Any]:
+    assets: Dict[str, Any] = {}
+    for registration in registrations:
+        asset_state = {
+            "source_registration_id": str(registration.id),
+            "lot_id": str(registration.lot_id),
+            "producer_id": str(registration.producer_id),
+            "registration_status": str(registration.status.value),
+            "is_quarantined": registration.status == SourceRegistrationStatus.QUARANTINED,
+            "current_zone": _derive_registration_zone(registration),
+            "updated_at": (
+                registration.updated_at.isoformat()
+                if getattr(registration, "updated_at", None) is not None
+                else None
+            ),
+        }
+        for key in _registration_asset_keys(registration):
+            assets.setdefault(key, dict(asset_state))
+    return assets
+
+
+def _registration_asset_keys(registration: SourceRegistration) -> list[str]:
+    keys = [str(registration.id), str(registration.lot_id)]
+    source_claim_id = getattr(registration, "source_claim_id", None)
+    if source_claim_id:
+        keys.append(str(source_claim_id))
+    return keys
+
+
+def _derive_registration_zone(registration: SourceRegistration) -> Optional[str]:
+    claimed_origin = (
+        dict(registration.claimed_origin)
+        if isinstance(getattr(registration, "claimed_origin", None), dict)
+        else {}
+    )
+    collection_site = (
+        dict(registration.collection_site)
+        if isinstance(getattr(registration, "collection_site", None), dict)
+        else {}
+    )
+    zone = (
+        claimed_origin.get("zone_id")
+        or collection_site.get("zone_id")
+        or collection_site.get("site_id")
+    )
+    return str(zone) if zone is not None else None

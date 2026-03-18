@@ -230,6 +230,7 @@ class UnifiedState:
     organs: Dict[str, OrganState]
     system: SystemState
     memory: MemoryVector
+    assets: Dict[str, Any] = field(default_factory=dict)
 
     # -------- matrices & basic features --------
 
@@ -349,7 +350,13 @@ class UnifiedState:
         # Organs: keep P as-is; P_agg projects on demand
         proj_orgs = {k: OrganState(h=v.h.copy(), P=v.P.copy(), v_pso=None if v.v_pso is None else v.v_pso.copy())
                      for k, v in self.organs.items()}
-        return UnifiedState(agents=proj_agents, organs=proj_orgs, system=sys, memory=self.memory)
+        return UnifiedState(
+            agents=proj_agents,
+            organs=proj_orgs,
+            system=sys,
+            memory=self.memory,
+            assets=dict(self.assets),
+        )
 
     # -------- serialization & bridging --------
 
@@ -404,6 +411,7 @@ class UnifiedState:
                 "mfb": self.memory.mfb,
                 "util_scalar": self.memory.utilization_scalar(),
             },
+            "assets": dict(self.assets),
         }
 
     @classmethod
@@ -436,7 +444,8 @@ class UnifiedState:
         )
         memd = payload.get("memory") or {}
         memory = MemoryVector(ma=memd.get("ma", {}), mw=memd.get("mw", {}), mlt=memd.get("mlt", {}), mfb=memd.get("mfb", {}))
-        return cls(agents=agents, organs=organs, system=system, memory=memory)
+        assets = dict(payload.get("assets") or {}) if isinstance(payload.get("assets"), dict) else {}
+        return cls(agents=agents, organs=organs, system=system, memory=memory, assets=assets)
     
 @dataclass
 class Response:  # noqa: F811

@@ -71,6 +71,7 @@ class UnifiedStatePayload(BaseModel):
     organs: Dict[str, OrganStatePayload]
     system: SystemStatePayload
     memory: MemoryVectorPayload
+    assets: Dict[str, Any] = {}
 
 
 class EnergyWeightsPayload(BaseModel):
