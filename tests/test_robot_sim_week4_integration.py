@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from seedcore.hal.custody.transition_receipts import verify_transition_receipt
 from seedcore.hal.drivers.robot_sim_driver import RobotSimExecutionDriver
@@ -159,6 +163,61 @@ async def test_week4_allow_to_endpoint_response_and_evidence_capture() -> None:
             bundle["execution_receipt"]["transition_receipt"]["payload_hash"]
             == response["transition_receipt"]["payload_hash"]
         )
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_emits_ed25519_transition_receipt_when_key_configured(
+    monkeypatch,
+) -> None:
+    private_key = Ed25519PrivateKey.generate()
+    private_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+    endpoint_id = "robot_sim://pybullet_r2d2_01"
+    monkeypatch.setenv(
+        "SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64",
+        base64.b64encode(private_bytes).decode("ascii"),
+    )
+    monkeypatch.setenv(
+        "SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON",
+        json.dumps({endpoint_id: base64.b64encode(public_bytes).decode("ascii")}),
+    )
+
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        response = await hal_main.actuate(
+            hal_main.ActuationRequest(
+                behavior_name="move_forward",
+                behavior_params={"distance": 1},
+                execution_token=_token_dict(
+                    "tok-ed25519-1",
+                    endpoint_id=endpoint_id,
+                ),
+            )
+        )
+
+        receipt = response["transition_receipt"]
+        assert receipt["proof_type"] == "ed25519"
+        assert verify_transition_receipt(
+            receipt,
+            expected_intent_id="intent-week4",
+            expected_token_id="tok-ed25519-1",
+            expected_endpoint_id=endpoint_id,
+        ) is None
     finally:
         driver.disconnect()
         hal_main.driver = original

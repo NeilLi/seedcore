@@ -25,7 +25,7 @@ spec:
 
       containers:
         - name: hal-bridge
-          image: seedcore-hal:latest
+          image: seedcore:latest
           imagePullPolicy: IfNotPresent
 
           ports:
