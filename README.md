@@ -8,6 +8,82 @@ SeedCore is a zero-trust runtime for governed AI-assisted operations. It sits be
 
 The current focus is narrow and practical: prove one governed end-to-end workflow for release-style custody actions, with clear policy decisions, tokenized execution, and replayable evidence.
 
+## Current Codebase Snapshot
+
+Based on the current repository state, SeedCore is already organized around the three trust problems that most agent systems leave unresolved:
+
+1. **Verifiable authority boundary**
+2. **Policy enforcement layer**
+3. **Trusted chain of custody**
+
+Recent changes reinforced that direction in two concrete areas:
+
+1. **HAL transition attestation and receipt verification**
+2. **Execution token TTL, revocation, and emergency stop controls**
+
+The current baseline now includes:
+
+- HAL transition receipts that prefer Ed25519 signatures and fall back to HMAC only when asymmetric key material is not configured
+- evidence bundles that bind transition receipt hashes into execution receipts for governed closure and replay checks
+- short-lived execution tokens with explicit TTL enforcement at both PDP issuance time and HAL validation time
+- Redis-backed token revocation and an operator-triggered emergency cutoff path at the HAL boundary
+- PKG-first routing where action execution remains behind a policy-produced proto-plan rather than LLM-only actuation
+
+This means the repository is no longer just describing zero-trust ideas. It already contains the runtime seams needed to make authority, policy, and custody inspectable in code.
+
+## Trust Challenges
+
+### 1. Verifiable Authority Boundary
+
+SeedCore already has a concrete authority artifact: `ExecutionToken`.
+
+Current implementation:
+
+- the coordinator derives `ActionIntent` and issues signed `ExecutionToken` objects
+- HAL validates token signature, expiry, and endpoint constraints before actuation
+- HAL transition receipts can prove which endpoint executed a governed action
+- the robot-sim and HAL boundary now reject revoked tokens and emergency-stopped token populations
+
+Current gap profile:
+
+- Ed25519 private keys are still delivered through environment or Kubernetes secret injection rather than a hardware-backed signer
+- revocation exists, but it is Redis-backed operational control rather than hardware-rooted remote attestation
+- the forensic sealer path still contains mocked signing behavior and should not be treated as production-grade device attestation yet
+
+### 2. Policy Enforcement Layer
+
+SeedCore already has a real policy layer instead of prompt-only guardrails.
+
+Current implementation:
+
+- PKG evaluation runs through the `ops/pkg` stack with OPA WASM support
+- coordinator execution follows a PKG-first flow and enforces a PKG-mandatory gate for action tasks
+- routing hints are extracted from PKG proto-plans rather than trusted from cognitive output alone
+- policy snapshots can be reloaded manually through the existing PKG management path
+
+Current gap profile:
+
+- policy rollout is still operationally heavy; the current update flow restarts pods rather than streaming hot updates fleet-wide
+- OCPS drift thresholds remain useful routing signals, but high-risk break-glass policy should keep moving toward deterministic, explainable procedures
+- compliance distribution to edge runtimes is not yet an always-on OTA policy stream
+
+### 3. Trusted Chain of Custody
+
+SeedCore already has the beginnings of a governed custody ledger.
+
+Current implementation:
+
+- evidence bundles include `intent_ref`, execution timing, telemetry, and execution receipts
+- HAL-backed transitions can carry signed `transition_receipt` payloads with nonce-based replay detection
+- governed closure persists receipt hash, nonce, transition sequence, endpoint identity, and authority source
+- forensic sealing captures a pre-contact evidence structure for edge-side custody events
+
+Current gap profile:
+
+- the primary custody trail still depends on SeedCore-managed stores; it is not yet anchored into an immutable external transparency log
+- `ExecutionReceipt.previous_receipt_hash` exists in the model, but a full external tamper-evident receipt chain is not yet the default system of record
+- inter-agent and cognitive handoff custody is not yet represented with the same signed transition contract used for HAL actuation
+
 **Execution boundary**
 
 ```text
@@ -121,6 +197,8 @@ For playback and black-box forensics, the execution evidence envelope should inc
 - `telemetry_snapshot`: multimodal state from vision, sensors, GPS, and zone checks
 - `execution_receipt`: cryptographic proof from the actuator or controlled endpoint
 
+The current implementation now also supports a nested `transition_receipt` for HAL-backed actuation. That receipt carries the endpoint identity, hardware UUID, token binding, execution timestamp, and receipt nonce, and is verified before governed custody closure.
+
 This is the minimum evidence needed to explain why a custody transition was proposed, what policy allowed it, who or what executed it, and what state the asset was in at completion.
 
 ### 4. Corrected State Transition Flow
@@ -192,6 +270,34 @@ The runtime is aimed at environments where a mistaken release is materially expe
 
 In these environments, the default action is quarantine, not graceful degradation.
 
+## Recommended Next Steps
+
+The current codebase is already solving the right problems. The next milestone is not inventing a new architecture, but hardening the existing one into an enterprise-grade trust framework.
+
+### Phase 1: Hardening the Boundary (Next 1-2 Months)
+
+Goal: move from software-defined trust to hardware-backed trust.
+
+- move HAL receipt signing out of `.env` and Kubernetes secret delivery into TPM, HSM, or cloud KMS-backed signing
+- keep the current short-lived execution token model and expand operator tooling around revocation, E-stop, and observability
+- treat Redis-backed revocation as the fast operational control plane, while planning for stronger signer identity guarantees
+
+### Phase 2: Immutable Custody and Auditing (Months 3-4)
+
+Goal: make custody disputes externally auditable.
+
+- anchor `ExecutionReceipt`, `transition_receipt`, and custody-event records into an immutable transparency log or enterprise ledger
+- promote `previous_receipt_hash` from a model field into a default end-to-end chained audit trail
+- add dual-authorization paths for high-risk actions, such as operator co-sign or independent policy approval
+
+### Phase 3: Dynamic and Distributed Policy (Months 5-6)
+
+Goal: support fleet-wide compliance updates and governed multi-agent operation.
+
+- replace restart-based PKG rollout with hot policy distribution and runtime activation across active services and edge endpoints
+- convert high-risk break-glass handling from score thresholds alone into explicit deterministic policy branches
+- extend custody receipts beyond Coordinator -> HAL so Agent -> Agent and cognitive handoffs can be traced with the same rigor
+
 ## Architecture Overview
 
 SeedCore currently uses:
@@ -199,6 +305,15 @@ SeedCore currently uses:
 - **Ray Serve** for service orchestration
 - **Ray Actors** for governed agent and execution runtime behavior
 - **Postgres / Redis / Neo4j** for state, memory, telemetry, and policy foundations
+
+We use Ray because SeedCore is designed as an execution runtime, not a single-model application. The goal is not to optimize for the smallest possible architecture today, but for the right long-term runtime architecture for governed agent execution. As workflows become more distributed, policy-aware, and model-diverse, the runtime needs a substrate that can coordinate computation, scheduling, stateful actors, and scaling across cloud services, edge deployments, and eventually local inference environments.
+
+Ray fits that direction by giving SeedCore a practical control plane for:
+
+- long-lived accountable actors rather than request-only model calls
+- distributed scheduling across heterogeneous runtime environments
+- coordination between policy evaluation, execution routing, and stateful workflow steps
+- gradual expansion from centralized cloud orchestration toward edge and local inference participation without rebuilding the control plane later
 
 The current repository already contains many of the primitives needed for that target design:
 
@@ -232,9 +347,10 @@ The current repo baseline fully supports the physical custody chain:
 - **Governed Ingress:** Multi-modal sensor ingestion via `source-registrations` and `tracking-events`.
 - **State Projection:** Projection from append-only tracking events into a live `SourceRegistration` digital twin.
 - **Stateless PDP:** Deterministic `ActionIntent` derivation and Policy Decision Point evaluation.
-- **Hardware-Attested Execution:** Signed `ExecutionToken` issuance on allow paths.
-- **HAL Bridge (`robot_sim`):** Token checks enforced at the simulator/actuator boundary natively.
-- **Digital Evidence:** Cryptographically signed `EvidenceBundle` construction for replay, audit, and mathematically undeniable proof.
+- **Short-Lived Execution Tokens:** Signed `ExecutionToken` issuance on allow paths, currently capped to a short TTL for endpoint use.
+- **HAL Bridge (`robot_sim`):** Token expiry, revocation, and emergency-stop checks enforced at the simulator/actuator boundary.
+- **Hardware-Attested Execution:** HAL emits transition receipts with Ed25519 signing when configured, with HMAC fallback for local or incomplete setups.
+- **Digital Evidence:** Cryptographically signed `EvidenceBundle` construction binds execution receipts and transition receipt hashes for replay, audit, and mathematically undeniable proof.
 
 ### Demo Runner
 A fully automated serial agent script is available to verify the end-to-end custody loop in a single command. It programmatically triggers the event ingestion, policy gate, and governed physical execution (via `robot_sim`), producing the final evidence artifacts.
@@ -311,7 +427,7 @@ That script forwards the default local ports for:
 If you also want local access to the HAL bridge, forward it separately:
 
 ```bash
-kubectl -n seedcore-dev port-forward svc/seedcore-hal-bridge 8001:8001
+kubectl -n seedcore-dev port-forward svc/seedcore-hal-bridge 8003:8003
 ```
 
 ### Verify Installation
@@ -353,7 +469,27 @@ RAY_HOST=seedcore-svc-stable-svc
 RAY_PORT=10001
 RAY_SERVE_URL=http://seedcore-svc-stable-svc:8000
 API_PORT=8002
+HAL_REQUIRE_EXECUTION_TOKEN=true
+SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS=5
+SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS=300
+SEEDCORE_HAL_ADMIN_TOKEN=change-me
+SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64=
+SEEDCORE_HAL_RECEIPT_KEY_ID=
+SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON=
+SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY=false
 ```
+
+HAL receipt signing prefers Ed25519:
+
+- set `SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64` on the HAL side to sign transition receipts
+- publish trusted verification keys with `SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON`
+- only enable `SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY=true` for controlled local setups
+
+Execution token enforcement is now designed for fast expiry and immediate operator intervention:
+
+- `SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS` caps issued token lifetime at the PDP and HAL boundary
+- `SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS` controls how long per-token revocation entries stay in Redis
+- `SEEDCORE_HAL_ADMIN_TOKEN` protects HAL admin revocation and emergency-stop endpoints when set
 
 ---
 
@@ -384,6 +520,7 @@ Versioned governed API surface under `/api/v1`:
   - `POST /api/v1/tasks`
   - `GET /api/v1/tasks`
   - `GET /api/v1/tasks/{task_id}`
+  - `GET /api/v1/tasks/{task_id}/governance`
   - `POST /api/v1/tasks/{task_id}/cancel`
   - `GET /api/v1/tasks/{task_id}/logs`
 - `Source Registrations`
@@ -397,10 +534,11 @@ Versioned governed API surface under `/api/v1`:
   - `GET /api/v1/tracking-events`
   - `GET /api/v1/tracking-events/{event_id}`
   - `GET /api/v1/source-registrations/{registration_id}/tracking-events`
-- `Facts / Control`
+- `Control`
   - `GET /api/v1/facts`
   - `GET /api/v1/facts/{fact_id}`
   - `POST /api/v1/facts`
+  - `PATCH /api/v1/facts/{fact_id}`
   - `DELETE /api/v1/facts/{fact_id}`
 - `Advisory`
   - `POST /api/v1/advisory`
@@ -413,14 +551,19 @@ Versioned governed API surface under `/api/v1`:
 - `Capabilities`
   - `POST /api/v1/capabilities/register`
 
-### HAL Bridge (`http://localhost:8001` in-cluster)
+### HAL Bridge (`http://localhost:8003`)
 
 The HAL bridge is deployed separately from the main API and exposes the controlled actuator surface:
 
 - `GET /status`
 - `GET /state`
 - `POST /actuate`
-- `GET /vision/frame`
+- `POST /forensic-seal`
+- `POST /admin/execution-tokens/revoke`
+- `POST /admin/execution-tokens/e-stop`
+- `DELETE /admin/execution-tokens/e-stop`
+
+`/actuate` now accepts an `execution_token` payload for governed execution. On HAL-backed paths, successful actuation responses can include a `transition_receipt`, and the bridge rejects tokens that are expired, exceed the configured maximum TTL, or have been revoked through Redis-backed control state.
 
 ### Ray Serve and Dashboard
 
