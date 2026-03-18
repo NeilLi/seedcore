@@ -15,14 +15,15 @@ import json
 import os
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from ..custody.forensic_sealer import ForensicSealer
 from ..custody.transition_receipts import build_transition_receipt
 from pydantic import BaseModel
+from ...database import get_redis_client
 
 # Internal SeedCore HAL imports
 from ..drivers.reachy_mini import ReachyMiniDriver
@@ -52,6 +53,16 @@ HAL_REQUIRE_EXECUTION_TOKEN = os.getenv("HAL_REQUIRE_EXECUTION_TOKEN", "false").
     "true",
     "yes",
 }
+DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 5
+EXECUTION_TOKEN_REVOCATION_PREFIX = os.getenv(
+    "SEEDCORE_EXECUTION_TOKEN_CRL_PREFIX",
+    "seedcore:execution_token:revoked:",
+)
+EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY = os.getenv(
+    "SEEDCORE_EXECUTION_TOKEN_CRL_CUTOFF_KEY",
+    "seedcore:execution_token:revoked_before",
+)
+DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS = 300
 
 # Global driver instance (initialized in lifespan)
 driver: Optional[BaseRobotDriver] = None
@@ -135,6 +146,17 @@ class ActuationRequest(BaseModel):
     behavior_name: Optional[str] = None
     behavior_params: Dict[str, Any] = {}
     execution_token: Optional[Dict[str, Any]] = None
+
+
+class RevokeExecutionTokenRequest(BaseModel):
+    token_id: str
+    ttl_seconds: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class EmergencyStopRequest(BaseModel):
+    issued_before: Optional[str] = None
+    reason: Optional[str] = None
 
 # --- API Endpoints ---
 
@@ -351,6 +373,78 @@ async def actuate(request: ActuationRequest):
         logger.error(f"Actuation Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/admin/execution-tokens/revoke")
+async def revoke_execution_token(
+    request: RevokeExecutionTokenRequest,
+    x_admin_token: str | None = Header(default=None),
+):
+    _require_admin_token(x_admin_token)
+    ttl_seconds = request.ttl_seconds or _execution_token_crl_ttl_seconds()
+    if not request.token_id.strip():
+        raise HTTPException(status_code=400, detail="token_id is required")
+
+    try:
+        stored = _store_revoked_execution_token(
+            token_id=request.token_id.strip(),
+            ttl_seconds=ttl_seconds,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "status": "revoked",
+        "token_id": request.token_id.strip(),
+        "ttl_seconds": ttl_seconds,
+        "stored": stored,
+        "reason": request.reason,
+    }
+
+
+@app.post("/admin/execution-tokens/e-stop")
+async def emergency_stop_execution_tokens(
+    request: EmergencyStopRequest,
+    x_admin_token: str | None = Header(default=None),
+):
+    _require_admin_token(x_admin_token)
+
+    issued_before = _parse_optional_iso8601(request.issued_before) or datetime.now(timezone.utc)
+
+    try:
+        _set_execution_token_revocation_cutoff(issued_before)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if driver is not None:
+        try:
+            driver.emergency_stop()
+        except Exception as exc:
+            logger.warning("HAL driver emergency_stop failed during E-Stop: %s", exc)
+
+    return {
+        "status": "emergency_stopped",
+        "issued_before": issued_before.isoformat(),
+        "reason": request.reason,
+        "driver_state": driver.state.value if driver is not None else None,
+    }
+
+
+@app.delete("/admin/execution-tokens/e-stop")
+async def clear_emergency_stop_execution_tokens(
+    x_admin_token: str | None = Header(default=None),
+):
+    _require_admin_token(x_admin_token)
+
+    try:
+        cleared = _clear_execution_token_revocation_cutoff()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "status": "emergency_stop_cleared",
+        "cleared": cleared,
+    }
+
 def _requires_token(active_driver: BaseRobotDriver) -> bool:
     return HAL_REQUIRE_EXECUTION_TOKEN or isinstance(active_driver, RobotSimExecutionDriver)
 
@@ -400,6 +494,15 @@ def _validate_execution_token(
     issued_at_ts = issued_at_ts.astimezone(timezone.utc)
     if ts <= issued_at_ts:
         return "invalid ExecutionToken"
+    max_valid_until = issued_at_ts + timedelta(seconds=_execution_token_ttl_seconds())
+    if ts > max_valid_until:
+        return "expired ExecutionToken"
+    revocation_error = _validate_execution_token_revocation(
+        token_id=str(token_id),
+        issued_at=issued_at_ts,
+    )
+    if revocation_error is not None:
+        return revocation_error
     if ts <= datetime.now(timezone.utc):
         return "expired ExecutionToken"
     if not _verify_execution_token_signature(token):
@@ -418,6 +521,95 @@ def _coerce_execution_token(token: Dict[str, Any]) -> Any:
     # Kept for compatibility if used elsewhere, though not required internally now
     return token
 
+
+
+def _execution_token_ttl_seconds() -> int:
+    raw = os.getenv(
+        "SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS",
+        str(DEFAULT_EXECUTION_TOKEN_TTL_SECONDS),
+    )
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_EXECUTION_TOKEN_TTL_SECONDS
+
+
+def _execution_token_crl_ttl_seconds() -> int:
+    raw = os.getenv(
+        "SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS",
+        str(DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS),
+    )
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS
+
+
+def _require_admin_token(provided_token: Optional[str]) -> None:
+    expected = os.getenv("SEEDCORE_HAL_ADMIN_TOKEN", "").strip()
+    if not expected:
+        return
+    if not provided_token or not hmac.compare_digest(provided_token, expected):
+        raise HTTPException(status_code=403, detail="invalid admin token")
+
+
+def _get_required_redis_client():
+    redis_client = get_redis_client()
+    if redis_client is None:
+        raise RuntimeError("Redis unavailable for execution token revocation")
+    return redis_client
+
+
+def _store_revoked_execution_token(*, token_id: str, ttl_seconds: int) -> bool:
+    redis_client = _get_required_redis_client()
+    key = f"{EXECUTION_TOKEN_REVOCATION_PREFIX}{token_id}"
+    return bool(redis_client.setex(key, max(1, ttl_seconds), "1"))
+
+
+def _set_execution_token_revocation_cutoff(issued_before: datetime) -> bool:
+    redis_client = _get_required_redis_client()
+    value = issued_before.astimezone(timezone.utc).isoformat()
+    return bool(redis_client.set(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY, value))
+
+
+def _clear_execution_token_revocation_cutoff() -> bool:
+    redis_client = _get_required_redis_client()
+    return bool(redis_client.delete(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY))
+
+
+def _parse_optional_iso8601(value: Optional[str]) -> Optional[datetime]:
+    if value is None or not value.strip():
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _validate_execution_token_revocation(
+    *,
+    token_id: str,
+    issued_at: datetime,
+) -> Optional[str]:
+    redis_client = get_redis_client()
+    if redis_client is None:
+        return None
+
+    try:
+        if redis_client.exists(f"{EXECUTION_TOKEN_REVOCATION_PREFIX}{token_id}"):
+            return "revoked ExecutionToken"
+
+        revoked_before = redis_client.get(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY)
+        if isinstance(revoked_before, str) and revoked_before.strip():
+            revoked_before_ts = datetime.fromisoformat(revoked_before.replace("Z", "+00:00"))
+            if revoked_before_ts.tzinfo is None:
+                revoked_before_ts = revoked_before_ts.replace(tzinfo=timezone.utc)
+            if issued_at <= revoked_before_ts.astimezone(timezone.utc):
+                return "revoked ExecutionToken"
+    except Exception as exc:
+        logger.warning("Execution token revocation check unavailable: %s", exc)
+
+    return None
 
 
 def _derive_actuator_endpoint(active_driver: BaseRobotDriver) -> str:

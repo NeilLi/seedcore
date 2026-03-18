@@ -65,6 +65,7 @@ EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "registration_decision_id",
     "endpoint_id",
 )
+DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 5
 
 
 def requires_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> bool:
@@ -535,11 +536,16 @@ def evaluate_intent(
     if cognitive_violation is not None:
         return cognitive_violation
 
+    token_valid_until = min(
+        valid_until,
+        now + timedelta(seconds=_execution_token_ttl_seconds()),
+    )
+
     token_payload = {
         "token_id": str(uuid.uuid4()),
         "intent_id": action_intent.intent_id,
         "issued_at": _isoformat(now),
-        "valid_until": action_intent.valid_until,
+        "valid_until": _isoformat(token_valid_until),
         "contract_version": action_intent.action.security_contract.version,
         "constraints": _build_execution_constraints(action_intent),
     }
@@ -646,6 +652,17 @@ def _derive_action_parameters(params: Dict[str, Any]) -> Dict[str, Any]:
         key: action_parameters[key]
         for key in sorted(action_parameters)
     }
+
+
+def _execution_token_ttl_seconds() -> int:
+    raw = os.getenv(
+        "SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS",
+        str(DEFAULT_EXECUTION_TOKEN_TTL_SECONDS),
+    )
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_EXECUTION_TOKEN_TTL_SECONDS
 
 
 def _requires_approved_source_registration(action_intent: ActionIntent) -> bool:

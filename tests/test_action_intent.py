@@ -274,6 +274,30 @@ def test_evaluate_intent_allows_release_with_approved_source_registration():
     ]
 
 
+def test_evaluate_intent_caps_execution_token_ttl_to_five_seconds():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
+    )
+    fixed_now = datetime(2026, 3, 18, 9, 0, tzinfo=timezone.utc)
+    intent.timestamp = (fixed_now - timedelta(seconds=1)).isoformat()
+    intent.valid_until = (fixed_now + timedelta(minutes=2)).isoformat()
+
+    with patch("seedcore.coordinator.core.governance._utcnow", return_value=fixed_now):
+        decision = evaluate_intent(
+            intent,
+            policy_snapshot="snapshot:5",
+            approved_source_registrations={"reg-1": "decision-1"},
+        )
+
+    assert decision.allowed is True
+    assert decision.execution_token is not None
+
+    issued_at = datetime.fromisoformat(decision.execution_token.issued_at).astimezone(timezone.utc)
+    valid_until = datetime.fromisoformat(decision.execution_token.valid_until).astimezone(timezone.utc)
+    assert (valid_until - issued_at).total_seconds() == 5
+
+
 def test_prepare_policy_case_builds_default_twin_snapshot():
     intent = _build_release_intent(
         source_registration_id="reg-1",

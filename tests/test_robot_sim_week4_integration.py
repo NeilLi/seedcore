@@ -23,7 +23,7 @@ def _token_dict(
     *,
     endpoint_id: str | None = None,
     target_zone: str | None = None,
-    ttl_minutes: int = 15,
+    ttl_seconds: int = 5,
 ) -> dict[str, object]:
     issued_at = datetime.now(timezone.utc)
     constraints: dict[str, str] = {}
@@ -36,7 +36,7 @@ def _token_dict(
         "token_id": token_id,
         "intent_id": "intent-week4",
         "issued_at": issued_at.isoformat(),
-        "valid_until": (issued_at + timedelta(minutes=ttl_minutes)).isoformat(),
+        "valid_until": (issued_at + timedelta(seconds=ttl_seconds)).isoformat(),
         "contract_version": "snapshot:test",
         "constraints": constraints,
     }
@@ -274,6 +274,163 @@ async def test_robot_sim_endpoint_rejects_expired_execution_token() -> None:
     finally:
         driver.disconnect()
         hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_execution_token_exceeding_max_ttl() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=_token_dict("tok-long-ttl-1", ttl_seconds=30),
+                )
+            )
+        assert "expired ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_revoked_execution_token(monkeypatch) -> None:
+    class FakeRedis:
+        def exists(self, key: str) -> int:
+            return int(key.endswith("tok-revoked-1"))
+
+        def get(self, key: str) -> None:
+            return None
+
+    monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=_token_dict("tok-revoked-1"),
+                )
+            )
+        assert "revoked ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_execution_token_after_estop_cutoff(monkeypatch) -> None:
+    class FakeRedis:
+        def exists(self, key: str) -> int:
+            return 0
+
+        def get(self, key: str) -> str | None:
+            if key == hal_main.EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY:
+                return datetime.now(timezone.utc).isoformat()
+            return None
+
+    monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=_token_dict("tok-estop-1"),
+                )
+            )
+        assert "revoked ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_admin_revoke_execution_token_stores_crl_entry(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeRedis:
+        def setex(self, key: str, ttl_seconds: int, value: str) -> bool:
+            captured["key"] = key
+            captured["ttl_seconds"] = ttl_seconds
+            captured["value"] = value
+            return True
+
+    monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+
+    response = await hal_main.revoke_execution_token(
+        hal_main.RevokeExecutionTokenRequest(token_id="tok-admin-1", reason="operator revoke")
+    )
+
+    assert response["status"] == "revoked"
+    assert response["token_id"] == "tok-admin-1"
+    assert captured["key"] == f"{hal_main.EXECUTION_TOKEN_REVOCATION_PREFIX}tok-admin-1"
+    assert captured["ttl_seconds"] == hal_main.DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS
+    assert captured["value"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_admin_estop_sets_cutoff_and_stops_driver(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeRedis:
+        def set(self, key: str, value: str) -> bool:
+            captured["key"] = key
+            captured["value"] = value
+            return True
+
+    monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        response = await hal_main.emergency_stop_execution_tokens(
+            hal_main.EmergencyStopRequest(reason="operator estop")
+        )
+        assert response["status"] == "emergency_stopped"
+        assert captured["key"] == hal_main.EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY
+        assert driver.state.value == "emergency_stop"
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_admin_clear_estop_removes_cutoff(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeRedis:
+        def delete(self, key: str) -> int:
+            captured["key"] = key
+            return 1
+
+    monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+
+    response = await hal_main.clear_emergency_stop_execution_tokens()
+
+    assert response["status"] == "emergency_stop_cleared"
+    assert response["cleared"] is True
+    assert captured["key"] == hal_main.EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY
 
 
 @pytest.mark.asyncio
