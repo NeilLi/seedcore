@@ -663,3 +663,78 @@ def test_merge_authoritative_twins_overrides_untrusted_data():
     assert merged["asset"].custody["quarantined"] is True
     assert merged["asset"].custody["target_zone"] == "quarantine-lab"
 
+
+def test_merge_authoritative_twins_accepts_state_service_envelope_shape():
+    from seedcore.coordinator.core.governance import build_twin_snapshot, merge_authoritative_twins
+
+    payload = {
+        "task_id": "task-envelope-1",
+        "agent_id": "agent-envelope-1",
+        "params": {
+            "interaction": {"assigned_agent_id": "agent-envelope-1"},
+            "resource": {"asset_id": "asset-envelope-1"},
+        },
+    }
+
+    baseline = build_twin_snapshot(payload)
+    authoritative = {
+        "success": True,
+        "payload": {
+            "agents": {
+                "agent-envelope-1": {
+                    "is_revoked": True,
+                    "role_profile": "guest",
+                }
+            },
+            "assets": {
+                "asset-envelope-1": {
+                    "is_quarantined": True,
+                    "current_zone": "quarantine-b",
+                }
+            },
+        },
+    }
+
+    merged = merge_authoritative_twins(baseline, authoritative)
+
+    assert merged["assistant"].delegation["revoked"] is True
+    assert merged["assistant"].delegation["role_profile"] == "guest"
+    assert merged["asset"].custody["quarantined"] is True
+    assert merged["asset"].custody["target_zone"] == "quarantine-b"
+
+
+def test_prepare_policy_case_applies_authoritative_twin_overrides_to_action_intent():
+    from seedcore.coordinator.core.governance import prepare_policy_case
+
+    payload = {
+        "task_id": "task-authoritative-1",
+        "type": "action",
+        "params": {
+            "interaction": {"assigned_agent_id": "agent-99"},
+            "routing": {"required_specialization": "ADMIN"},
+            "multimodal": {"location_context": "vault-a"},
+            "resource": {"asset_id": "asset-99"},
+            "intent": "release",
+        },
+    }
+
+    relevant_twin_snapshot = {
+        "assistant": {
+            "twin_type": "assistant",
+            "twin_id": "assistant:agent-99",
+            "delegation": {"role_profile": "GUEST", "revoked": False},
+        },
+        "asset": {
+            "twin_type": "asset",
+            "twin_id": "asset:asset-99",
+            "custody": {"asset_id": "asset-99", "target_zone": "quarantine-lab"},
+        },
+    }
+
+    policy_case = prepare_policy_case(
+        payload,
+        relevant_twin_snapshot=relevant_twin_snapshot,
+    )
+
+    assert policy_case.action_intent.principal.role_profile == "GUEST"
+    assert policy_case.action_intent.resource.target_zone == "quarantine-lab"

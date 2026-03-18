@@ -65,7 +65,10 @@ async def test_tool_manager_requires_execution_token_for_actuation():
 
     rec = await manager.execute(
         "custody.ledger.record",
-        {"entry": {"task_id": "task-1", "intent_ref": "governance://action-intent/intent-1"}},
+        {
+            "entry": {"task_id": "task-1", "intent_ref": "governance://action-intent/intent-1"},
+            "_governance": governance,
+        },
         agent_id="agent-1",
     )
     assert rec["ok"] is True
@@ -212,3 +215,46 @@ async def test_tool_manager_requires_execution_token_for_memory_write():
     assert out.get("status") == "success"
     assert out.get("item_id") == "test"
 
+
+@pytest.mark.asyncio
+async def test_tool_manager_requires_execution_token_for_custody_ledger_record():
+    manager = ToolManager()
+
+    with pytest.raises(ToolError) as exc:
+        await manager.execute(
+            "custody.ledger.record",
+            {"entry": {"task_id": "task-2", "intent_ref": "governance://action-intent/intent-2"}},
+            agent_id="agent-1",
+        )
+    assert "missing_execution_token" in str(exc.value)
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-2",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "RECORD"},
+            "resource": {"asset_id": "task-2", "target_zone": None},
+        },
+        "execution_token": {
+            "token_id": "tok-2",
+            "intent_id": "intent-2",
+            "valid_until": "2099-01-01T00:00:00+00:00",
+            "signature": "sig-2",
+            "constraints": {
+                "action_type": "RECORD",
+                "asset_id": "task-2",
+                "principal_agent_id": "agent-1",
+            },
+        },
+    }
+
+    out = await manager.execute(
+        "custody.ledger.record",
+        {
+            "entry": {"task_id": "task-2", "intent_ref": "governance://action-intent/intent-2"},
+            "_governance": governance,
+        },
+        agent_id="agent-1",
+    )
+
+    assert out["ok"] is True

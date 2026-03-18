@@ -234,6 +234,7 @@ def prepare_policy_case(
         or action_intent.action.security_contract.version
     )
     resolved_twins = dict(relevant_twin_snapshot or {}) or build_twin_snapshot(task)
+    action_intent = apply_twin_overrides_to_action_intent(action_intent, resolved_twins)
     resolved_cognitive = _coerce_policy_case_assessment(cognitive_assessment)
     return PolicyCase(
         action_intent=action_intent,
@@ -256,8 +257,9 @@ def merge_authoritative_twins(
     """
     Overrides untrusted AI-provided twin states with authoritative system ground truth.
     """
-    agents_state = authoritative_state.get("agents", {})
-    assets_state = authoritative_state.get("assets", {})
+    normalized_state = normalize_authoritative_state(authoritative_state)
+    agents_state = normalized_state.get("agents", {})
+    assets_state = normalized_state.get("assets", {})
     
     if "assistant" in baseline_twins:
         agent_id = baseline_twins["assistant"].identity.get("agent_id")
@@ -286,6 +288,66 @@ def merge_authoritative_twins(
                     baseline_twins["edge"].telemetry["target_zone"] = auth_zone
                     
     return baseline_twins
+
+
+def normalize_authoritative_state(authoritative_state: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(authoritative_state, dict):
+        return {"agents": {}, "assets": {}}
+
+    payload = authoritative_state.get("payload")
+    if isinstance(payload, dict):
+        agents_state = payload.get("agents", {})
+        assets_state = payload.get("assets", {})
+    else:
+        agents_state = authoritative_state.get("agents", {})
+        assets_state = authoritative_state.get("assets", {})
+
+    return {
+        "agents": dict(agents_state) if isinstance(agents_state, dict) else {},
+        "assets": dict(assets_state) if isinstance(assets_state, dict) else {},
+    }
+
+
+def apply_twin_overrides_to_action_intent(
+    action_intent: ActionIntent,
+    relevant_twin_snapshot: Mapping[str, Any] | None,
+) -> ActionIntent:
+    if not relevant_twin_snapshot:
+        return action_intent
+
+    twins = {
+        key: _coerce_twin_snapshot(key, value)
+        for key, value in dict(relevant_twin_snapshot).items()
+    }
+
+    assistant_twin = twins.get("assistant")
+    asset_twin = twins.get("asset")
+
+    if assistant_twin is not None:
+        authoritative_role = assistant_twin.delegation.get("role_profile")
+        if isinstance(authoritative_role, str) and authoritative_role.strip():
+            action_intent.principal.role_profile = authoritative_role.strip()
+
+    if asset_twin is not None:
+        authoritative_zone = asset_twin.custody.get("target_zone")
+        if isinstance(authoritative_zone, str) and authoritative_zone.strip():
+            action_intent.resource.target_zone = authoritative_zone.strip()
+
+    action_intent.action.security_contract.hash = _sha256_hex(
+        _canonical_json(
+            {
+                "role_profile": action_intent.principal.role_profile,
+                "contract_version": action_intent.action.security_contract.version,
+                "target_zone": action_intent.resource.target_zone,
+                "action_type": action_intent.action.type,
+                "asset_id": action_intent.resource.asset_id,
+                "source_registration_id": action_intent.resource.source_registration_id,
+                "registration_decision_id": action_intent.resource.registration_decision_id,
+            }
+        )
+    )
+
+    return action_intent
 
 def build_twin_snapshot(
     task: TaskPayload | Mapping[str, Any] | Dict[str, Any] | ActionIntent,

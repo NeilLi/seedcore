@@ -476,6 +476,8 @@ class ToolManager:
         try:
             # 0. Built-in custody ledger tools
             if name.startswith("custody.ledger."):
+                if name == "custody.ledger.record":
+                    self._validate_execution_token(name, governance_ctx)
                 return await self._execute_custody(
                     name,
                     safe_args,
