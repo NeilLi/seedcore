@@ -10,6 +10,7 @@ Supports two modes:
 """
 
 import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -283,8 +284,12 @@ async def actuate(request: ActuationRequest):
     # 2. Move / Execute behavior
     try:
         if _requires_token(driver):
-            if not _is_valid_execution_token(request.execution_token):
-                raise HTTPException(status_code=403, detail="Execution blocked: invalid ExecutionToken")
+            token_error = _validate_execution_token(request.execution_token, driver)
+            if token_error is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Execution blocked: {token_error}",
+                )
 
         endpoint_response: Dict[str, Any]
         if isinstance(driver, RobotSimExecutionDriver):
@@ -343,22 +348,64 @@ def _requires_token(active_driver: BaseRobotDriver) -> bool:
     return HAL_REQUIRE_EXECUTION_TOKEN or isinstance(active_driver, RobotSimExecutionDriver)
 
 
-def _is_valid_execution_token(token: Optional[Dict[str, Any]]) -> bool:
+def _is_valid_execution_token(
+    token: Optional[Dict[str, Any]],
+    active_driver: Optional[BaseRobotDriver] = None,
+) -> bool:
+    return _validate_execution_token(token, active_driver) is None
+
+
+def _validate_execution_token(
+    token: Optional[Dict[str, Any]],
+    active_driver: Optional[BaseRobotDriver] = None,
+) -> Optional[str]:
     if not isinstance(token, dict):
-        return False
-    
-    token_id = token.get("token_id") or token.get("id")
+        return "invalid ExecutionToken"
+
+    token_id = token.get("token_id")
     valid_until_raw = token.get("valid_until")
-    
+    intent_id = token.get("intent_id")
+    issued_at = token.get("issued_at")
+    contract_version = token.get("contract_version")
+    signature = token.get("signature")
+    constraints = token.get("constraints")
+
     if not token_id or not isinstance(valid_until_raw, str):
-        return False
-        
+        return "invalid ExecutionToken"
+    if not isinstance(intent_id, str) or not intent_id.strip():
+        return "invalid ExecutionToken"
+    if not isinstance(issued_at, str) or not issued_at.strip():
+        return "invalid ExecutionToken"
+    if not isinstance(contract_version, str) or not contract_version.strip():
+        return "invalid ExecutionToken"
+    if not isinstance(signature, str) or not signature.strip():
+        return "invalid ExecutionToken"
+    if not isinstance(constraints, dict):
+        return "invalid ExecutionToken"
+
     try:
         ts = datetime.fromisoformat(valid_until_raw.replace("Z", "+00:00"))
+        issued_at_ts = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
     except ValueError:
-        return False
-        
-    return ts.astimezone(timezone.utc) > datetime.now(timezone.utc)
+        return "invalid ExecutionToken"
+
+    ts = ts.astimezone(timezone.utc)
+    issued_at_ts = issued_at_ts.astimezone(timezone.utc)
+    if ts <= issued_at_ts:
+        return "invalid ExecutionToken"
+    if ts <= datetime.now(timezone.utc):
+        return "expired ExecutionToken"
+    if not _verify_execution_token_signature(token):
+        return "forged ExecutionToken"
+
+    constraint_error = _validate_execution_token_constraints(
+        constraints=constraints,
+        active_driver=active_driver,
+    )
+    if constraint_error is not None:
+        return constraint_error
+
+    return None
 
 def _coerce_execution_token(token: Dict[str, Any]) -> Any:
     # Kept for compatibility if used elsewhere, though not required internally now
@@ -380,6 +427,76 @@ def _derive_actuator_endpoint(active_driver: BaseRobotDriver) -> str:
 def _hash_result(result: Dict[str, Any]) -> str:
     payload = json.dumps(result, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_execution_token_constraints(
+    *,
+    constraints: Dict[str, Any],
+    active_driver: Optional[BaseRobotDriver],
+) -> Optional[str]:
+    if active_driver is None:
+        return None
+
+    endpoint_constraint = constraints.get("endpoint_id") or constraints.get("actuator_endpoint")
+    expected_endpoint = _derive_actuator_endpoint(active_driver)
+    if (
+        isinstance(endpoint_constraint, str)
+        and endpoint_constraint.strip()
+        and endpoint_constraint != expected_endpoint
+    ):
+        return "ExecutionToken endpoint mismatch"
+
+    target_zone = constraints.get("target_zone")
+    if isinstance(target_zone, str) and target_zone.strip():
+        allowed_zones = _configured_target_zones()
+        if allowed_zones and target_zone not in allowed_zones:
+            return "ExecutionToken target zone mismatch"
+
+    return None
+
+
+def _configured_target_zones() -> set[str]:
+    values: set[str] = set()
+    raw_zone = os.getenv("HAL_TARGET_ZONE", "")
+    if raw_zone.strip():
+        values.add(raw_zone.strip())
+    raw_zones = os.getenv("HAL_ALLOWED_TARGET_ZONES", "")
+    if raw_zones.strip():
+        values.update(
+            part.strip()
+            for part in raw_zones.split(",")
+            if part.strip()
+        )
+    return values
+
+
+def _verify_execution_token_signature(token: Dict[str, Any]) -> bool:
+    expected = _expected_execution_token_signature(token)
+    actual = token.get("signature")
+    if not isinstance(actual, str) or not actual:
+        return False
+    return hmac.compare_digest(actual, expected)
+
+
+def _expected_execution_token_signature(token: Dict[str, Any]) -> str:
+    secret = os.getenv("SEEDCORE_PDP_SIGNING_SECRET", "seedcore-dev-signing-secret")
+    payload = {
+        "token_id": token.get("token_id"),
+        "intent_id": token.get("intent_id"),
+        "issued_at": token.get("issued_at"),
+        "valid_until": token.get("valid_until"),
+        "contract_version": token.get("contract_version"),
+        "constraints": token.get("constraints"),
+    }
+    return hmac.new(
+        secret.encode("utf-8"),
+        _canonical_json(payload).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
 @app.get("/vision/frame")

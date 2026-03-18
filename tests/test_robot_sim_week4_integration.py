@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,13 +13,50 @@ from seedcore.hal.service import main as hal_main
 from seedcore.ops.evidence.builder import attach_evidence_bundle
 
 
-def _token_dict(token_id: str = "tok-week4") -> dict[str, str]:
-    return {
+def _token_dict(
+    token_id: str = "tok-week4",
+    *,
+    endpoint_id: str | None = None,
+    target_zone: str | None = None,
+    ttl_minutes: int = 15,
+) -> dict[str, object]:
+    issued_at = datetime.now(timezone.utc)
+    constraints: dict[str, str] = {}
+    if endpoint_id is not None:
+        constraints["endpoint_id"] = endpoint_id
+    if target_zone is not None:
+        constraints["target_zone"] = target_zone
+
+    payload = {
         "token_id": token_id,
         "intent_id": "intent-week4",
-        "valid_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
-        "signature": "sig-week4",
+        "issued_at": issued_at.isoformat(),
+        "valid_until": (issued_at + timedelta(minutes=ttl_minutes)).isoformat(),
+        "contract_version": "snapshot:test",
+        "constraints": constraints,
     }
+    payload["signature"] = _sign_token_payload(payload)
+    return payload
+
+
+def _sign_token_payload(payload: dict[str, object]) -> str:
+    canonical = json.dumps(
+        {
+            "token_id": payload["token_id"],
+            "intent_id": payload["intent_id"],
+            "issued_at": payload["issued_at"],
+            "valid_until": payload["valid_until"],
+            "contract_version": payload["contract_version"],
+            "constraints": payload["constraints"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hmac.new(
+        b"seedcore-dev-signing-secret",
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def test_behavior_registry_auto_discovery_registers_plugins() -> None:
@@ -64,7 +104,10 @@ async def test_week4_allow_to_endpoint_response_and_evidence_capture() -> None:
             hal_main.ActuationRequest(
                 behavior_name="move_forward",
                 behavior_params={"distance": 2},
-                execution_token=_token_dict("tok-allow-1"),
+                execution_token=_token_dict(
+                    "tok-allow-1",
+                    endpoint_id="robot_sim://pybullet_r2d2_01",
+                ),
             )
         )
 
@@ -101,6 +144,112 @@ async def test_week4_allow_to_endpoint_response_and_evidence_capture() -> None:
         bundle = out["meta"]["evidence_bundle"]
         assert bundle["execution_receipt"]["actuator_endpoint"] == response["actuator_endpoint"]
         assert bundle["execution_receipt"]["actuator_result_hash"] == response["result_hash"]
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_forged_execution_token() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        forged = _token_dict("tok-forged-1")
+        forged["signature"] = "forged-signature"
+
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=forged,
+                )
+            )
+        assert "forged ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_expired_execution_token() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        expired = _token_dict("tok-expired-1")
+        issued_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+        expired["issued_at"] = issued_at.isoformat()
+        expired["valid_until"] = (issued_at + timedelta(minutes=1)).isoformat()
+        expired["signature"] = _sign_token_payload(expired)
+
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=expired,
+                )
+            )
+        assert "expired ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_endpoint_constraint_mismatch() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=_token_dict(
+                        "tok-mismatch-1",
+                        endpoint_id="robot_sim://other_endpoint",
+                    ),
+                )
+            )
+        assert "endpoint mismatch" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_robot_sim_endpoint_rejects_target_zone_mismatch_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HAL_TARGET_ZONE", "lab-a")
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=_token_dict(
+                        "tok-zone-1",
+                        target_zone="lab-b",
+                    ),
+                )
+            )
+        assert "target zone mismatch" in str(exc.value)
     finally:
         driver.disconnect()
         hal_main.driver = original
