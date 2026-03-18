@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from seedcore.hal.custody.transition_receipts import verify_transition_receipt
 from seedcore.hal.drivers.robot_sim_driver import RobotSimExecutionDriver
 from seedcore.hal.robot_sim.actuator.execution_registry import ExecutionRegistry
 from seedcore.hal.service import main as hal_main
@@ -116,6 +117,16 @@ async def test_week4_allow_to_endpoint_response_and_evidence_capture() -> None:
         assert response["actuator_endpoint"].startswith("robot_sim://")
         assert isinstance(response["result_hash"], str)
         assert len(response["result_hash"]) == 64
+        assert isinstance(response.get("transition_receipt"), dict)
+        assert (
+            verify_transition_receipt(
+                response["transition_receipt"],
+                expected_intent_id="intent-week4",
+                expected_token_id="tok-allow-1",
+                expected_endpoint_id=response["actuator_endpoint"],
+            )
+            is None
+        )
 
         task_dict = {
             "task_id": "task-week4-1",
@@ -144,6 +155,10 @@ async def test_week4_allow_to_endpoint_response_and_evidence_capture() -> None:
         bundle = out["meta"]["evidence_bundle"]
         assert bundle["execution_receipt"]["actuator_endpoint"] == response["actuator_endpoint"]
         assert bundle["execution_receipt"]["actuator_result_hash"] == response["result_hash"]
+        assert (
+            bundle["execution_receipt"]["transition_receipt"]["payload_hash"]
+            == response["transition_receipt"]["payload_hash"]
+        )
     finally:
         driver.disconnect()
         hal_main.driver = original

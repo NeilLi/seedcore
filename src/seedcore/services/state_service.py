@@ -628,6 +628,10 @@ def _project_asset_custody_states(rows: list[AssetCustodyState]) -> Dict[str, An
             "is_quarantined": bool(row.is_quarantined),
             "current_zone": row.current_zone,
             "authority_source": row.authority_source,
+            "last_transition_seq": int(getattr(row, "last_transition_seq", 0) or 0),
+            "last_receipt_hash": row.last_receipt_hash,
+            "last_receipt_nonce": row.last_receipt_nonce,
+            "last_endpoint_id": row.last_endpoint_id,
             "updated_at": (
                 row.updated_at.isoformat()
                 if getattr(row, "updated_at", None) is not None

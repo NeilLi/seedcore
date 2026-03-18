@@ -21,6 +21,7 @@ from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from ..custody.forensic_sealer import ForensicSealer
+from ..custody.transition_receipts import build_transition_receipt
 from pydantic import BaseModel
 
 # Internal SeedCore HAL imports
@@ -324,6 +325,11 @@ async def actuate(request: ActuationRequest):
 
         actuator_endpoint = _derive_actuator_endpoint(driver)
         result_hash = _hash_result(endpoint_response)
+        transition_receipt = _build_actuation_transition_receipt(
+            execution_token=request.execution_token,
+            actuator_endpoint=actuator_endpoint,
+            actuator_result_hash=result_hash,
+        )
         final_state = driver.state.value
         logger.info("actuate: Motion completed successfully, final_state=%s", final_state)
         return {
@@ -333,6 +339,7 @@ async def actuate(request: ActuationRequest):
             "result_hash": result_hash,
             "execution_token_id": (request.execution_token or {}).get("token_id"),
             "robot_state": final_state,
+            "transition_receipt": transition_receipt,
             "endpoint_response": endpoint_response,
         }
     except HTTPException:
@@ -427,6 +434,43 @@ def _derive_actuator_endpoint(active_driver: BaseRobotDriver) -> str:
 def _hash_result(result: Dict[str, Any]) -> str:
     payload = json.dumps(result, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _build_actuation_transition_receipt(
+    *,
+    execution_token: Optional[Dict[str, Any]],
+    actuator_endpoint: str,
+    actuator_result_hash: str,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(execution_token, dict):
+        return None
+
+    intent_id = execution_token.get("intent_id")
+    token_id = execution_token.get("token_id")
+    constraints = (
+        execution_token.get("constraints")
+        if isinstance(execution_token.get("constraints"), dict)
+        else {}
+    )
+    if not isinstance(intent_id, str) or not intent_id.strip():
+        return None
+    if not isinstance(token_id, str) or not token_id.strip():
+        return None
+
+    target_zone = constraints.get("target_zone")
+    from_zone = constraints.get("current_zone")
+    to_zone = target_zone if isinstance(target_zone, str) and target_zone.strip() else None
+
+    return build_transition_receipt(
+        intent_id=intent_id,
+        token_id=token_id,
+        actuator_endpoint=actuator_endpoint,
+        hardware_uuid=HARDWARE_UUID,
+        actuator_result_hash=actuator_result_hash,
+        target_zone=str(target_zone) if target_zone is not None else None,
+        from_zone=str(from_zone) if from_zone is not None else None,
+        to_zone=to_zone,
+    )
 
 
 def _validate_execution_token_constraints(

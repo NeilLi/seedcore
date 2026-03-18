@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
 
+from seedcore.hal.custody.transition_receipts import build_transition_receipt
 from seedcore.ops.evidence.builder import (
     _canonical_json,
     _extract_actuator_endpoint,
@@ -206,6 +207,63 @@ def test_evidence_bundle_hashing_is_reproducible_and_explainable(monkeypatch):
         hashlib.sha256,
     ).hexdigest()
     assert out_one["signature"] == expected_signature
+
+
+def test_evidence_bundle_binds_transition_receipt_hash():
+    transition_receipt = build_transition_receipt(
+        intent_id="intent-e-4",
+        token_id="token-e-4",
+        actuator_endpoint="robot_sim://pybullet_r2d2_01",
+        hardware_uuid="robot-4",
+        actuator_result_hash="hash-edge-4",
+        target_zone="zone-r",
+        to_zone="zone-r",
+    )
+    task_dict = {
+        "task_id": "task-e-4",
+        "type": "action",
+        "params": {
+            "governance": {
+                "action_intent": {
+                    "intent_id": "intent-e-4",
+                    "resource": {"target_zone": "zone-r"},
+                },
+                "execution_token": {"token_id": "token-e-4"},
+            }
+        },
+    }
+    envelope = {
+        "payload": {
+            "results": [
+                {
+                    "tool": "reachy.motion",
+                    "output": {
+                        "actuator_endpoint": "robot_sim://pybullet_r2d2_01",
+                        "result_hash": "hash-edge-4",
+                        "transition_receipt": transition_receipt,
+                    },
+                }
+            ]
+        },
+        "meta": {"exec": {"finished_at": "2026-03-10T10:13:13+00:00"}},
+    }
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="actuation_organ",
+        agent_id="agent_edge",
+    )["meta"]["evidence_bundle"]
+
+    receipt = bundle["execution_receipt"]
+    assert receipt["transition_receipt"]["payload_hash"] == transition_receipt["payload_hash"]
+    assert receipt["transition_receipt_hash"] == hashlib.sha256(
+        _canonical_json(transition_receipt).encode("utf-8")
+    ).hexdigest()
+    assert (
+        receipt["signed_payload"]["transition_receipt_hash"]
+        == receipt["transition_receipt_hash"]
+    )
 
 
 @pytest.mark.parametrize(

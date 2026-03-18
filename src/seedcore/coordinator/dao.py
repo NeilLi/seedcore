@@ -521,100 +521,6 @@ class GovernedExecutionAuditDAO:
         rows = await self.list_for_task(session, task_id=task_id, limit=1)
         return rows[0] if rows else None
 
-
-class AssetCustodyStateDAO:
-    """Mutable authoritative state helper for asset custody/location."""
-
-    async def upsert_snapshot(
-        self,
-        session,
-        *,
-        asset_id: str,
-        source_registration_id: Optional[str] = None,
-        lot_id: Optional[str] = None,
-        source_claim_id: Optional[str] = None,
-        producer_id: Optional[str] = None,
-        current_zone: Optional[str] = None,
-        is_quarantined: Optional[bool] = None,
-        authority_source: str,
-        last_task_id: Optional[str] = None,
-        last_intent_id: Optional[str] = None,
-        last_token_id: Optional[str] = None,
-        updated_by: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        row = (
-            await session.execute(
-                select(AssetCustodyState).where(AssetCustodyState.asset_id == str(asset_id))
-            )
-        ).scalars().first()
-
-        if row is None:
-            row = AssetCustodyState(
-                asset_id=str(asset_id),
-                source_registration_id=source_registration_id,
-                lot_id=lot_id,
-                source_claim_id=source_claim_id,
-                producer_id=producer_id,
-                current_zone=current_zone,
-                is_quarantined=bool(is_quarantined) if is_quarantined is not None else False,
-                authority_source=str(authority_source),
-                last_task_id=self._coerce_uuid(last_task_id),
-                last_intent_id=last_intent_id,
-                last_token_id=last_token_id,
-                updated_by=updated_by,
-            )
-            session.add(row)
-            await session.flush()
-            return self._to_dict(row)
-
-        if source_registration_id is not None:
-            row.source_registration_id = str(source_registration_id)
-        if lot_id is not None:
-            row.lot_id = str(lot_id)
-        if source_claim_id is not None:
-            row.source_claim_id = str(source_claim_id)
-        if producer_id is not None:
-            row.producer_id = str(producer_id)
-        if current_zone is not None:
-            row.current_zone = str(current_zone)
-        if is_quarantined is not None:
-            row.is_quarantined = bool(is_quarantined)
-        row.authority_source = str(authority_source)
-        if last_task_id is not None:
-            row.last_task_id = self._coerce_uuid(last_task_id)
-        if last_intent_id is not None:
-            row.last_intent_id = str(last_intent_id)
-        if last_token_id is not None:
-            row.last_token_id = str(last_token_id)
-        if updated_by is not None:
-            row.updated_by = str(updated_by)
-        await session.flush()
-        return self._to_dict(row)
-
-    def _to_dict(self, row: AssetCustodyState) -> Dict[str, Any]:
-        return {
-            "asset_id": str(row.asset_id),
-            "source_registration_id": row.source_registration_id,
-            "lot_id": row.lot_id,
-            "source_claim_id": row.source_claim_id,
-            "producer_id": row.producer_id,
-            "current_zone": row.current_zone,
-            "is_quarantined": bool(row.is_quarantined),
-            "authority_source": row.authority_source,
-            "last_task_id": str(row.last_task_id) if row.last_task_id is not None else None,
-            "last_intent_id": row.last_intent_id,
-            "last_token_id": row.last_token_id,
-            "updated_by": row.updated_by,
-        }
-
-    def _coerce_uuid(self, value: Optional[str]) -> Optional[uuid.UUID]:
-        if value is None:
-            return None
-        try:
-            return uuid.UUID(str(value))
-        except (TypeError, ValueError):
-            return None
-
     def _mapping_to_dict(self, row: Any) -> Dict[str, Any]:
         return {
             "id": str(row["id"]),
@@ -638,3 +544,127 @@ class AssetCustodyStateDAO:
         import hashlib
 
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class AssetCustodyStateDAO:
+    """Mutable authoritative state helper for asset custody/location."""
+
+    async def upsert_snapshot(
+        self,
+        session,
+        *,
+        asset_id: str,
+        source_registration_id: Optional[str] = None,
+        lot_id: Optional[str] = None,
+        source_claim_id: Optional[str] = None,
+        producer_id: Optional[str] = None,
+        current_zone: Optional[str] = None,
+        is_quarantined: Optional[bool] = None,
+        authority_source: str,
+        last_transition_seq: Optional[int] = None,
+        last_receipt_hash: Optional[str] = None,
+        last_receipt_nonce: Optional[str] = None,
+        last_endpoint_id: Optional[str] = None,
+        last_task_id: Optional[str] = None,
+        last_intent_id: Optional[str] = None,
+        last_token_id: Optional[str] = None,
+        updated_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        row = (
+            await session.execute(
+                select(AssetCustodyState).where(AssetCustodyState.asset_id == str(asset_id))
+            )
+        ).scalars().first()
+
+        if row is None:
+            row = AssetCustodyState(
+                asset_id=str(asset_id),
+                source_registration_id=source_registration_id,
+                lot_id=lot_id,
+                source_claim_id=source_claim_id,
+                producer_id=producer_id,
+                current_zone=current_zone,
+                is_quarantined=bool(is_quarantined) if is_quarantined is not None else False,
+                authority_source=str(authority_source),
+                last_transition_seq=int(last_transition_seq or 0),
+                last_receipt_hash=last_receipt_hash,
+                last_receipt_nonce=last_receipt_nonce,
+                last_endpoint_id=last_endpoint_id,
+                last_task_id=self._coerce_uuid(last_task_id),
+                last_intent_id=last_intent_id,
+                last_token_id=last_token_id,
+                updated_by=updated_by,
+            )
+            session.add(row)
+            await session.flush()
+            return self._to_dict(row)
+
+        if source_registration_id is not None:
+            row.source_registration_id = str(source_registration_id)
+        if lot_id is not None:
+            row.lot_id = str(lot_id)
+        if source_claim_id is not None:
+            row.source_claim_id = str(source_claim_id)
+        if producer_id is not None:
+            row.producer_id = str(producer_id)
+        if current_zone is not None:
+            row.current_zone = str(current_zone)
+        if is_quarantined is not None:
+            row.is_quarantined = bool(is_quarantined)
+        row.authority_source = str(authority_source)
+        if last_transition_seq is not None:
+            row.last_transition_seq = int(last_transition_seq)
+        if last_receipt_hash is not None:
+            row.last_receipt_hash = str(last_receipt_hash)
+        if last_receipt_nonce is not None:
+            row.last_receipt_nonce = str(last_receipt_nonce)
+        if last_endpoint_id is not None:
+            row.last_endpoint_id = str(last_endpoint_id)
+        if last_task_id is not None:
+            row.last_task_id = self._coerce_uuid(last_task_id)
+        if last_intent_id is not None:
+            row.last_intent_id = str(last_intent_id)
+        if last_token_id is not None:
+            row.last_token_id = str(last_token_id)
+        if updated_by is not None:
+            row.updated_by = str(updated_by)
+        await session.flush()
+        return self._to_dict(row)
+
+    def _to_dict(self, row: AssetCustodyState) -> Dict[str, Any]:
+        return {
+            "asset_id": str(row.asset_id),
+            "source_registration_id": row.source_registration_id,
+            "lot_id": row.lot_id,
+            "source_claim_id": row.source_claim_id,
+            "producer_id": row.producer_id,
+            "current_zone": row.current_zone,
+            "is_quarantined": bool(row.is_quarantined),
+            "authority_source": row.authority_source,
+            "last_transition_seq": int(getattr(row, "last_transition_seq", 0) or 0),
+            "last_receipt_hash": row.last_receipt_hash,
+            "last_receipt_nonce": row.last_receipt_nonce,
+            "last_endpoint_id": row.last_endpoint_id,
+            "last_task_id": str(row.last_task_id) if row.last_task_id is not None else None,
+            "last_intent_id": row.last_intent_id,
+            "last_token_id": row.last_token_id,
+            "updated_by": row.updated_by,
+        }
+
+    async def get_snapshot(self, session, *, asset_id: str) -> Optional[Dict[str, Any]]:
+        row = (
+            await session.execute(
+                select(AssetCustodyState).where(AssetCustodyState.asset_id == str(asset_id))
+            )
+        ).scalars().first()
+        if row is None:
+            return None
+        return self._to_dict(row)
+
+    def _coerce_uuid(self, value: Optional[str]) -> Optional[uuid.UUID]:
+        if value is None:
+            return None
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            return None

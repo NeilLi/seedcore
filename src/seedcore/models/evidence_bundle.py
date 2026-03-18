@@ -13,6 +13,10 @@ class ExecutionReceipt(BaseModel):
     signed_payload: Dict[str, Any] = Field(default_factory=dict)
     actuator_endpoint: Optional[str] = None
     actuator_result_hash: Optional[str] = None
+    transition_receipt: Optional[Dict[str, Any]] = None
+    transition_receipt_hash: Optional[str] = None
+    transition_seq: Optional[int] = None
+    previous_receipt_hash: Optional[str] = None
 
 
 class PreContactEvidence(BaseModel):

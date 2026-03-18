@@ -7,6 +7,7 @@ import mock_ray_dependencies  # noqa: F401
 
 import pytest
 
+from seedcore.hal.custody.transition_receipts import build_transition_receipt
 from seedcore.agents.base import BaseAgent
 from seedcore.agents.roles import RoleProfile, RoleRegistry, Specialization
 from seedcore.models.task_payload import TaskPayload
@@ -262,13 +263,29 @@ async def test_tool_manager_requires_execution_token_for_custody_ledger_record()
 
 def test_tool_manager_builds_asset_custody_update_from_governance():
     manager = ToolManager()
+    transition_receipt = build_transition_receipt(
+        intent_id="intent-7",
+        token_id="tok-7",
+        actuator_endpoint="robot_sim://asset-7",
+        hardware_uuid="hardware-7",
+        actuator_result_hash="hash-7",
+        target_zone="packing-cell-2",
+        to_zone="packing-cell-2",
+    )
 
     update = manager._build_asset_custody_update(
         {
             "task_id": "8f5f4e2f-46d9-458a-85dd-d782c52f249d",
             "agent_id": "agent-7",
             "evidence_bundle": {
-                "telemetry_summary": {"current_zone": "packing-cell-2"},
+                "telemetry_snapshot": {"zone_checks": {"current_zone": "packing-cell-2"}},
+                "execution_receipt": {
+                    "actuator_endpoint": "robot_sim://asset-7",
+                    "transition_receipt": transition_receipt,
+                    "transition_receipt_hash": manager._sha256_hex(
+                        manager._canonical_json(transition_receipt)
+                    ),
+                },
             },
         },
         {
@@ -287,6 +304,11 @@ def test_tool_manager_builds_asset_custody_update_from_governance():
                 }
             },
         },
+        prior_state={
+            "last_transition_seq": 2,
+            "last_receipt_hash": "old-hash",
+            "last_receipt_nonce": "old-nonce",
+        },
     )
 
     assert update is not None
@@ -294,5 +316,50 @@ def test_tool_manager_builds_asset_custody_update_from_governance():
     assert update["current_zone"] == "packing-cell-2"
     assert update["is_quarantined"] is True
     assert update["source_registration_id"] == "reg-7"
+    assert update["authority_source"] == "governed_transition_receipt"
+    assert update["last_transition_seq"] == 3
     assert update["last_intent_id"] == "intent-7"
     assert update["last_token_id"] == "tok-7"
+
+
+def test_tool_manager_rejects_replayed_transition_receipt():
+    manager = ToolManager()
+    transition_receipt = build_transition_receipt(
+        intent_id="intent-8",
+        token_id="tok-8",
+        actuator_endpoint="robot_sim://asset-8",
+        hardware_uuid="hardware-8",
+        actuator_result_hash="hash-8",
+        target_zone="zone-8",
+        to_zone="zone-8",
+    )
+
+    with pytest.raises(ToolError) as exc:
+        manager._build_asset_custody_update(
+            {
+                "task_id": "task-8",
+                "agent_id": "agent-8",
+                "evidence_bundle": {
+                    "execution_receipt": {
+                        "actuator_endpoint": "robot_sim://asset-8",
+                        "transition_receipt": transition_receipt,
+                        "transition_receipt_hash": manager._sha256_hex(
+                            manager._canonical_json(transition_receipt)
+                        ),
+                    },
+                },
+            },
+            {
+                "action_intent": {
+                    "intent_id": "intent-8",
+                    "resource": {"asset_id": "asset-8", "target_zone": "zone-8"},
+                },
+                "execution_token": {"token_id": "tok-8"},
+            },
+            prior_state={
+                "last_transition_seq": 1,
+                "last_receipt_hash": transition_receipt["payload_hash"],
+                "last_receipt_nonce": transition_receipt["signed_payload"]["receipt_nonce"],
+            },
+        )
+    assert "replayed_transition_receipt" in str(exc.value)

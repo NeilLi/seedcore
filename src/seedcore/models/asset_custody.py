@@ -29,6 +29,10 @@ class AssetCustodyState(Base):
     current_zone: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     is_quarantined: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     authority_source: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    last_transition_seq: Mapped[int] = mapped_column(nullable=False, default=0)
+    last_receipt_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    last_receipt_nonce: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    last_endpoint_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     last_task_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("tasks.id", ondelete="SET NULL"),

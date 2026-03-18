@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from seedcore.hal.custody.transition_receipts import verify_transition_receipt
 from seedcore.models.evidence_bundle import EvidenceBundle, ExecutionReceipt
 
 
@@ -190,6 +191,12 @@ def _build_execution_receipt(
     if actuator_result_hash is None and actuator_entries:
         actuator_result_hash = _sha256_hex(_canonical_json(actuator_entries))
     actuator_endpoint = _extract_actuator_endpoint(task_dict, actuator_entries)
+    transition_receipt = _extract_transition_receipt(actuator_entries)
+    transition_receipt_hash = (
+        _sha256_hex(_canonical_json(transition_receipt))
+        if isinstance(transition_receipt, dict)
+        else None
+    )
     token_id = execution_token.get("token_id") if isinstance(execution_token, dict) else None
 
     signed_payload = {
@@ -199,6 +206,7 @@ def _build_execution_receipt(
         "token_id": token_id,
         "actuator_result_hash": actuator_result_hash,
         "actuator_endpoint": actuator_endpoint,
+        "transition_receipt_hash": transition_receipt_hash,
         "policy_decision": policy_decision,
     }
     payload_hash = _sha256_hex(_canonical_json(signed_payload))
@@ -206,11 +214,14 @@ def _build_execution_receipt(
 
     return ExecutionReceipt(
         receipt_id=str(uuid.uuid4()),
+        proof_type="hmac_sha256",
         signature=signature,
         payload_hash=payload_hash,
         signed_payload=signed_payload,
         actuator_endpoint=actuator_endpoint,
         actuator_result_hash=actuator_result_hash,
+        transition_receipt=transition_receipt if isinstance(transition_receipt, dict) else None,
+        transition_receipt_hash=transition_receipt_hash,
     )
 
 
@@ -265,6 +276,43 @@ def _extract_actuator_endpoint(task_dict: Dict[str, Any], actuator_entries: List
     hint = routing.get("target_organ_hint")
     if isinstance(hint, str) and hint.strip():
         return f"organ://{hint}"
+    return None
+
+
+def _extract_transition_receipt(actuator_entries: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    for item in actuator_entries:
+        if not isinstance(item, dict):
+            continue
+        for container in (item.get("resp"), item.get("output")):
+            if not isinstance(container, dict):
+                continue
+            receipt = container.get("transition_receipt")
+            if isinstance(receipt, dict):
+                token_id = (
+                    receipt.get("signed_payload", {}).get("token_id")
+                    if isinstance(receipt.get("signed_payload"), dict)
+                    else None
+                )
+                intent_id = (
+                    receipt.get("signed_payload", {}).get("intent_id")
+                    if isinstance(receipt.get("signed_payload"), dict)
+                    else None
+                )
+                endpoint_id = (
+                    receipt.get("signed_payload", {}).get("endpoint_id")
+                    if isinstance(receipt.get("signed_payload"), dict)
+                    else None
+                )
+                if (
+                    verify_transition_receipt(
+                        receipt,
+                        expected_token_id=str(token_id) if token_id is not None else None,
+                        expected_intent_id=str(intent_id) if intent_id is not None else None,
+                        expected_endpoint_id=str(endpoint_id) if endpoint_id is not None else None,
+                    )
+                    is None
+                ):
+                    return receipt
     return None
 
 

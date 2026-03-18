@@ -6,9 +6,15 @@ from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
 import asyncio
 import inspect
 import time
+import hashlib
+import json
 from datetime import datetime, timezone
 import uuid
 
+from seedcore.hal.custody.transition_receipts import (
+    is_attestable_transition_endpoint,
+    verify_transition_receipt,
+)
 from seedcore.serve.ml_client import MLServiceClient
 
 if TYPE_CHECKING:
@@ -686,6 +692,8 @@ class ToolManager:
                 self._custody_ledger.append(record)
             try:
                 await self._sync_asset_custody_state(record, governance_ctx)
+            except ToolError:
+                raise
             except Exception:
                 logger.warning(
                     "Asset custody state sync failed after ledger record",
@@ -823,10 +831,6 @@ class ToolManager:
         record: Dict[str, Any],
         governance_ctx: Any,
     ) -> bool:
-        update = self._build_asset_custody_update(record, governance_ctx)
-        if update is None:
-            return False
-
         session_factory = self._get_db_session_factory()
         dao = self._get_asset_custody_state_dao()
         if session_factory is None or dao is None:
@@ -834,6 +838,29 @@ class ToolManager:
 
         async with session_factory() as session:
             async with session.begin():
+                action_intent = (
+                    governance_ctx.get("action_intent")
+                    if isinstance(governance_ctx, dict) and isinstance(governance_ctx.get("action_intent"), dict)
+                    else {}
+                )
+                resource = (
+                    action_intent.get("resource")
+                    if isinstance(action_intent.get("resource"), dict)
+                    else {}
+                )
+                asset_id = str(resource.get("asset_id") or "").strip()
+                prior_state = (
+                    await dao.get_snapshot(session, asset_id=asset_id)
+                    if asset_id
+                    else None
+                )
+                update = self._build_asset_custody_update(
+                    record,
+                    governance_ctx,
+                    prior_state=prior_state,
+                )
+                if update is None:
+                    return False
                 await dao.upsert_snapshot(session, **update)
         return True
 
@@ -841,6 +868,8 @@ class ToolManager:
         self,
         record: Dict[str, Any],
         governance_ctx: Any,
+        *,
+        prior_state: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         if not isinstance(governance_ctx, dict):
             return None
@@ -889,16 +918,126 @@ class ToolManager:
             else {}
         )
         telemetry = (
-            evidence_bundle.get("telemetry_summary")
-            if isinstance(evidence_bundle.get("telemetry_summary"), dict)
+            evidence_bundle.get("telemetry_snapshot")
+            if isinstance(evidence_bundle.get("telemetry_snapshot"), dict)
+            else (
+                evidence_bundle.get("telemetry_summary")
+                if isinstance(evidence_bundle.get("telemetry_summary"), dict)
+                else {}
+            )
+        )
+        execution_receipt = (
+            evidence_bundle.get("execution_receipt")
+            if isinstance(evidence_bundle.get("execution_receipt"), dict)
             else {}
         )
-
-        current_zone = (
-            telemetry.get("current_zone")
-            or resource.get("target_zone")
-            or asset_custody.get("target_zone")
+        zone_checks = (
+            telemetry.get("zone_checks")
+            if isinstance(telemetry.get("zone_checks"), dict)
+            else {}
         )
+        actuator_endpoint = execution_receipt.get("actuator_endpoint")
+        transition_receipt = (
+            execution_receipt.get("transition_receipt")
+            if isinstance(execution_receipt.get("transition_receipt"), dict)
+            else None
+        )
+        transition_receipt_hash = (
+            execution_receipt.get("transition_receipt_hash")
+            if isinstance(execution_receipt.get("transition_receipt_hash"), str)
+            else None
+        )
+        execution_token_id = (
+            str(execution_token.get("token_id"))
+            if execution_token.get("token_id") is not None
+            else None
+        )
+        intent_id = (
+            str(action_intent.get("intent_id"))
+            if action_intent.get("intent_id") is not None
+            else None
+        )
+
+        transition_seq: Optional[int] = None
+        receipt_hash: Optional[str] = None
+        receipt_nonce: Optional[str] = None
+        endpoint_id: Optional[str] = None
+        authority_source = "governed_execution_receipt"
+
+        if is_attestable_transition_endpoint(actuator_endpoint):
+            if transition_receipt is None:
+                raise ToolError("custody.ledger.record", "missing_transition_receipt")
+            transition_error = verify_transition_receipt(
+                transition_receipt,
+                expected_intent_id=intent_id,
+                expected_token_id=execution_token_id,
+                expected_endpoint_id=str(actuator_endpoint),
+            )
+            if transition_error is not None:
+                raise ToolError(
+                    "custody.ledger.record",
+                    f"invalid_transition_receipt:{transition_error}",
+                )
+            receipt_hash = transition_receipt.get("payload_hash")
+            if not isinstance(receipt_hash, str) or not receipt_hash:
+                raise ToolError("custody.ledger.record", "invalid_transition_receipt:missing_payload_hash")
+            if transition_receipt_hash and transition_receipt_hash != self._sha256_hex(self._canonical_json(transition_receipt)):
+                raise ToolError("custody.ledger.record", "transition_receipt_hash_mismatch")
+            signed_transition = (
+                transition_receipt.get("signed_payload")
+                if isinstance(transition_receipt.get("signed_payload"), dict)
+                else {}
+            )
+            receipt_nonce = signed_transition.get("receipt_nonce")
+            endpoint_id = (
+                str(signed_transition.get("endpoint_id"))
+                if signed_transition.get("endpoint_id") is not None
+                else str(actuator_endpoint)
+            )
+            previous_hash = (
+                prior_state.get("last_receipt_hash")
+                if isinstance(prior_state, dict)
+                else None
+            )
+            previous_nonce = (
+                prior_state.get("last_receipt_nonce")
+                if isinstance(prior_state, dict)
+                else None
+            )
+            if previous_hash and previous_hash == receipt_hash:
+                raise ToolError("custody.ledger.record", "replayed_transition_receipt")
+            if (
+                isinstance(receipt_nonce, str)
+                and receipt_nonce
+                and previous_nonce
+                and previous_nonce == receipt_nonce
+            ):
+                raise ToolError("custody.ledger.record", "replayed_transition_nonce")
+            previous_seq = (
+                int(prior_state.get("last_transition_seq") or 0)
+                if isinstance(prior_state, dict)
+                else 0
+            )
+            transition_seq = previous_seq + 1
+            authority_source = "governed_transition_receipt"
+
+        signed_transition_payload = (
+            transition_receipt.get("signed_payload")
+            if isinstance(transition_receipt, dict)
+            and isinstance(transition_receipt.get("signed_payload"), dict)
+            else {}
+        )
+        current_zone = (
+            signed_transition_payload.get("to_zone")
+            or signed_transition_payload.get("target_zone")
+            or zone_checks.get("current_zone")
+        )
+        if not current_zone:
+            current_zone = (
+                resource.get("target_zone")
+                or asset_custody.get("target_zone")
+            )
+
         is_quarantined = asset_custody.get("quarantined")
         if is_quarantined is None:
             is_quarantined = False
@@ -912,7 +1051,15 @@ class ToolManager:
             ),
             "current_zone": str(current_zone) if current_zone is not None else None,
             "is_quarantined": bool(is_quarantined),
-            "authority_source": "governed_execution_receipt",
+            "authority_source": authority_source,
+            "last_transition_seq": transition_seq,
+            "last_receipt_hash": receipt_hash,
+            "last_receipt_nonce": (
+                str(receipt_nonce)
+                if receipt_nonce is not None
+                else None
+            ),
+            "last_endpoint_id": endpoint_id,
             "last_task_id": (
                 str(record.get("task_id"))
                 if record.get("task_id") is not None
@@ -930,6 +1077,12 @@ class ToolManager:
             ),
             "updated_by": str(record.get("agent_id")) if record.get("agent_id") is not None else None,
         }
+
+    def _canonical_json(self, payload: Any) -> str:
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+    def _sha256_hex(self, value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     def _iso_to_ts(self, iso: str) -> Optional[float]:
         try:

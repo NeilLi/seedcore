@@ -31,6 +31,10 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
 
 from seedcore.models import TaskPayload
 from seedcore.models.result_schema import make_envelope
+from seedcore.hal.custody.transition_receipts import (
+    is_attestable_transition_endpoint,
+    verify_transition_receipt,
+)
 from seedcore.ops.evidence.builder import attach_evidence_bundle
 from .roles import (
     Specialization,
@@ -2506,6 +2510,8 @@ class BaseAgent:
             return False, "missing_signed_payload"
         if signed_payload.get("intent_id") != intent_id:
             return False, "receipt_intent_mismatch"
+        transition_receipt_hash = signed_payload.get("transition_receipt_hash")
+        transition_receipt = receipt.get("transition_receipt")
 
         execution_token = governance.get("execution_token", {})
         if isinstance(execution_token, dict):
@@ -2516,12 +2522,40 @@ class BaseAgent:
             valid_until_ts = self._iso_to_ts(str(valid_until)) if valid_until else None
             if valid_until_ts is not None and executed_ts > valid_until_ts:
                 return False, "executed_after_token_expiry"
+            if is_attestable_transition_endpoint(receipt.get("actuator_endpoint")):
+                if not isinstance(transition_receipt, dict):
+                    return False, "missing_transition_receipt"
+                transition_error = verify_transition_receipt(
+                    transition_receipt,
+                    expected_intent_id=str(intent_id),
+                    expected_token_id=str(token_id) if token_id is not None else None,
+                    expected_endpoint_id=str(receipt.get("actuator_endpoint")),
+                )
+                if transition_error is not None:
+                    return False, f"invalid_transition_receipt:{transition_error}"
+                if (
+                    isinstance(transition_receipt_hash, str)
+                    and transition_receipt_hash
+                    and transition_receipt_hash
+                    != self._sha256_hex(self._canonical_json(transition_receipt))
+                ):
+                    return False, "transition_receipt_hash_mismatch"
         policy_decision = governance.get("policy_decision")
         if isinstance(policy_decision, dict):
             if signed_payload.get("policy_decision") != policy_decision:
                 return False, "receipt_policy_decision_mismatch"
 
         return True, "ok"
+
+    def _canonical_json(self, payload: Any) -> str:
+        import json
+
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+    def _sha256_hex(self, value: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     def _score_skill_match(
         self, materialized: Dict[str, float], desired: Dict[str, float]
