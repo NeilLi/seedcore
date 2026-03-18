@@ -63,6 +63,7 @@ EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "principal_agent_id",
     "source_registration_id",
     "registration_decision_id",
+    "endpoint_id",
 )
 
 
@@ -829,6 +830,7 @@ def _coerce_risk_score(value: Any) -> float | None:
 
 
 def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
     values = {
         "action_type": action_intent.action.type,
         "target_zone": action_intent.resource.target_zone,
@@ -836,6 +838,7 @@ def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
         "principal_agent_id": action_intent.principal.agent_id,
         "source_registration_id": action_intent.resource.source_registration_id,
         "registration_decision_id": action_intent.resource.registration_decision_id,
+        "endpoint_id": parameters.get("endpoint_id"),
     }
     return {
         key: values[key]

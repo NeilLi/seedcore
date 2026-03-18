@@ -270,6 +270,7 @@ def test_evaluate_intent_allows_release_with_approved_source_registration():
         "principal_agent_id",
         "source_registration_id",
         "registration_decision_id",
+        "endpoint_id",
     ]
 
 
