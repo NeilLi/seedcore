@@ -610,3 +610,56 @@ async def test_coordinator_handoff_denied_action_skips_organism_and_records_audi
     assert result["error_type"] == "policy_denied"
     assert organism_post.await_count == 0
     coordinator.governance_audit_dao.append_record.assert_awaited_once()
+
+def test_merge_authoritative_twins_overrides_untrusted_data():
+    from seedcore.coordinator.core.governance import build_twin_snapshot, merge_authoritative_twins
+    
+    # Untrusted AI payload claims agent is NOT revoked and asset is NOT quarantined
+    untrusted_payload = {
+        "task_id": "test-123",
+        "agent_id": "rogue-agent",
+        "params": {
+            "resource": {"asset_id": "rare-asset-1"},
+            "governance": {
+                "digital_twins": {
+                    "assistant": {
+                        "twin_id": "rogue-agent",
+                        "delegation": {"revoked": False, "role_profile": "admin"}
+                    },
+                    "asset": {
+                        "twin_id": "rare-asset-1",
+                        "custody": {"quarantined": False, "target_zone": "vault-A"}
+                    }
+                }
+            }
+        }
+    }
+    
+    baseline = build_twin_snapshot(untrusted_payload)
+    
+    # Authoritative state knows the truth
+    authoritative = {
+        "agents": {
+            "rogue-agent": {
+                "is_revoked": True,
+                "role_profile": "guest",
+                "risk_score": 0.99
+            }
+        },
+        "assets": {
+            "rare-asset-1": {
+                "is_quarantined": True,
+                "current_zone": "quarantine-lab"
+            }
+        }
+    }
+    
+    merged = merge_authoritative_twins(baseline, authoritative)
+    
+    assert merged["assistant"].delegation["revoked"] is True
+    assert merged["assistant"].delegation["role_profile"] == "guest"
+    assert merged["assistant"].risk["score"] == 0.99
+    
+    assert merged["asset"].custody["quarantined"] is True
+    assert merged["asset"].custody["target_zone"] == "quarantine-lab"
+

@@ -249,6 +249,44 @@ def prepare_policy_case(
     )
 
 
+def merge_authoritative_twins(
+    baseline_twins: Dict[str, TwinSnapshot],
+    authoritative_state: Dict[str, Any],
+) -> Dict[str, TwinSnapshot]:
+    """
+    Overrides untrusted AI-provided twin states with authoritative system ground truth.
+    """
+    agents_state = authoritative_state.get("agents", {})
+    assets_state = authoritative_state.get("assets", {})
+    
+    if "assistant" in baseline_twins:
+        agent_id = baseline_twins["assistant"].identity.get("agent_id")
+        if agent_id and agent_id in agents_state:
+            agent_data = agents_state[agent_id]
+            baseline_twins["assistant"].delegation["revoked"] = bool(agent_data.get("is_revoked", False))
+            if "role_profile" in agent_data:
+                baseline_twins["assistant"].delegation["role_profile"] = str(agent_data["role_profile"])
+            if "risk_score" in agent_data:
+                baseline_twins["assistant"].risk["score"] = float(agent_data["risk_score"])
+                
+    if "asset" in baseline_twins:
+        # Asset ID is stored in custody, or we can fallback to identity/twin_id parsing
+        asset_id = (
+            baseline_twins["asset"].custody.get("asset_id") 
+            or baseline_twins["asset"].identity.get("asset_id")
+            or baseline_twins["asset"].twin_id.replace("asset:", "")
+        )
+        if asset_id and asset_id in assets_state:
+            asset_data = assets_state[asset_id]
+            baseline_twins["asset"].custody["quarantined"] = bool(asset_data.get("is_quarantined", False))
+            if "current_zone" in asset_data:
+                auth_zone = str(asset_data["current_zone"])
+                baseline_twins["asset"].custody["target_zone"] = auth_zone
+                if "edge" in baseline_twins:
+                    baseline_twins["edge"].telemetry["target_zone"] = auth_zone
+                    
+    return baseline_twins
+
 def build_twin_snapshot(
     task: TaskPayload | Mapping[str, Any] | Dict[str, Any] | ActionIntent,
 ) -> Dict[str, TwinSnapshot]:
