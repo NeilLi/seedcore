@@ -9,6 +9,7 @@ NAMESPACE="${NAMESPACE:-seedcore-dev}"
 IMAGE_NAME="${IMAGE_NAME:-${RAY_IMAGE:-seedcore:latest}}"
 HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
 HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
+SKIP_IMAGE_LOAD="${SKIP_IMAGE_LOAD:-0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -73,16 +74,20 @@ echo ""
 # -----------------------------
 # Step 2: Load image into Kind
 # -----------------------------
-echo "📦 Step 2: Loading image into Kind cluster..."
-echo "   Cluster: ${CLUSTER_NAME}"
-echo ""
+if [[ "${SKIP_IMAGE_LOAD}" == "1" || "${SKIP_IMAGE_LOAD}" == "true" ]]; then
+    echo "⏭️  Step 2: Skipping image load into Kind cluster (SKIP_IMAGE_LOAD is set)"
+    echo ""
+else
+    echo "📦 Step 2: Loading image into Kind cluster..."
+    echo "   Cluster: ${CLUSTER_NAME}"
+    echo ""
 
-if ! kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"; then
-    echo "❌ ERROR: Failed to load image into Kind"
-    exit 1
+    if ! kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"; then
+        echo "❌ ERROR: Failed to load image into Kind"
+        exit 1
+    fi
+    echo "✅ Image loaded into Kind successfully"
 fi
-
-echo "✅ Image loaded into Kind successfully"
 echo ""
 
 # -----------------------------
