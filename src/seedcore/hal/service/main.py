@@ -17,12 +17,12 @@ import uuid
 import logging
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from fastapi import FastAPI, Header, HTTPException
 from ..custody.forensic_sealer import ForensicSealer
 from ..custody.transition_receipts import build_transition_receipt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ...database import get_redis_client
 
 # Internal SeedCore HAL imports
@@ -131,11 +131,14 @@ app = FastAPI(title="SeedCore HAL Bridge", lifespan=lifespan)
 class ForensicSealRequest(BaseModel):
     event_id: str
     platform_state: str
-    trajectory_hash: str
+    trajectory_hash: Optional[str] = None
     policy_hash: str
     auth_token: str
     from_zone: str
     to_zone: str
+    transition_receipt: Optional[Dict[str, Any]] = None
+    actuator_telemetry: Dict[str, Any] = Field(default_factory=dict)
+    media_hash_references: List[Dict[str, Any]] = Field(default_factory=list)
 
 class ActuationRequest(BaseModel):
     pose_type: str = "head"
@@ -233,38 +236,46 @@ async def forensic_seal(request: ForensicSealRequest):
     Captures edge telemetry synchronously to prevent timing divergence.
     """
     try:
+        _validate_hashed_media_references(request.media_hash_references)
+
         # 1. Initialize the edge sealer
         sealer = ForensicSealer(device_identity=HARDWARE_UUID)
 
-        # 2. Capture real edge telemetry (Mocked sensors for this demo if hardware missing)
-        proprioception = None
+        # 2. Capture HAL telemetry only (no remote fetch/interpretation of social/video content)
+        environmental_data: Dict[str, float] = {}
+        actuator_telemetry = dict(request.actuator_telemetry or {})
         if driver and driver.state in (RobotState.CONNECTED, RobotState.MOVING):
             try:
                 proprioception = driver.get_proprioception().__dict__
+                for key, value in proprioception.items():
+                    if isinstance(key, str) and isinstance(value, (int, float)):
+                        environmental_data[key] = float(value)
             except Exception:
-                pass
+                logger.debug("forensic_seal: failed to capture driver proprioception", exc_info=True)
 
-        # Use mock environmental data if real sensors aren't attached to Reachy yet
-        env_data = {"temperatureC": 21.4, "humidityPct": 61.3}
-        if proprioception and "temperature" in proprioception:
-             env_data["temperatureC"] = proprioception["temperature"]
+        # Merge explicit request environmental telemetry (request wins)
+        explicit_env = (
+            actuator_telemetry.get("environmental_telemetry")
+            if isinstance(actuator_telemetry.get("environmental_telemetry"), dict)
+            else {}
+        )
+        for key, value in explicit_env.items():
+            if isinstance(key, str) and isinstance(value, (int, float)):
+                environmental_data[key] = float(value)
 
-        # Mock a camera capture (In reality, we'd pull from driver.get_camera_frame())
-        mock_image_bytes = b"mock_vision_data_frame_094"
-        mock_voc_hash = "sha256:8f3ad6b40d81d73e"
-
-        # 3. Seal the event
-        custody_event = sealer.seal_custody_event(
+        # 3. Seal pilot event from HAL/actuator telemetry + transition receipt + hashed media refs
+        custody_event = sealer.seal_custody_event_pilot(
             event_id=request.event_id,
             platform_state=request.platform_state,
-            environmental_data=env_data,
-            voc_hash=mock_voc_hash,
-            vision_image=mock_image_bytes,
-            trajectory_hash=request.trajectory_hash,
             policy_hash=request.policy_hash,
             auth_token=request.auth_token,
             from_zone=request.from_zone,
-            to_zone=request.to_zone
+            to_zone=request.to_zone,
+            transition_receipt=request.transition_receipt,
+            actuator_telemetry=actuator_telemetry,
+            media_hash_references=list(request.media_hash_references or []),
+            trajectory_hash=request.trajectory_hash,
+            environmental_data=environmental_data,
         )
 
         return custody_event.model_dump(by_alias=True)
@@ -663,6 +674,47 @@ def _build_actuation_transition_receipt(
         from_zone=str(from_zone) if from_zone is not None else None,
         to_zone=to_zone,
     )
+
+
+def _validate_hashed_media_references(media_refs: List[Dict[str, Any]]) -> None:
+    if not isinstance(media_refs, list):
+        raise HTTPException(
+            status_code=422,
+            detail="media_hash_references must be a list of hash reference objects",
+        )
+    forbidden_markers = (
+        "youtube.com",
+        "youtu.be",
+        "x.com",
+        "twitter.com",
+        "tiktok.com",
+        "instagram.com",
+        "facebook.com",
+    )
+    for idx, item in enumerate(media_refs):
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=f"media_hash_references[{idx}] must be an object",
+            )
+        digest = item.get("sha256") or item.get("hash") or item.get("digest")
+        if not (isinstance(digest, str) and digest.strip()):
+            raise HTTPException(
+                status_code=422,
+                detail=f"media_hash_references[{idx}] requires sha256/hash/digest",
+            )
+        uri = item.get("uri")
+        if isinstance(uri, str) and uri.strip():
+            lowered = uri.strip().lower()
+            if lowered.startswith("http://") or lowered.startswith("https://"):
+                if any(marker in lowered for marker in forbidden_markers):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "HAL sealer pilot does not fetch or interpret social/video URLs. "
+                            "Send hashed media references only."
+                        ),
+                    )
 
 
 def _validate_execution_token_constraints(

@@ -1,7 +1,7 @@
 import httpx
 import logging
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,14 @@ class HALClient:
         self,
         event_id: str,
         platform_state: str,
-        trajectory_hash: str,
+        trajectory_hash: Optional[str],
         policy_hash: str,
         auth_token: str,
         from_zone: str,
-        to_zone: str
+        to_zone: str,
+        transition_receipt: Optional[Dict[str, Any]] = None,
+        actuator_telemetry: Optional[Dict[str, Any]] = None,
+        media_hash_references: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Requests the HAL bridge to generate a cryptographically sealed Honey Digital Twin custody event.
@@ -50,7 +53,10 @@ class HALClient:
             "policy_hash": policy_hash,
             "auth_token": auth_token,
             "from_zone": from_zone,
-            "to_zone": to_zone
+            "to_zone": to_zone,
+            "transition_receipt": transition_receipt,
+            "actuator_telemetry": actuator_telemetry or {},
+            "media_hash_references": media_hash_references or [],
         }
         
         try:

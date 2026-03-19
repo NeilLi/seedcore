@@ -55,6 +55,19 @@ class ForensicSealTool(ToolBase):
                     "to_zone": {
                         "type": "string",
                         "description": "Destination zone of the asset."
+                    },
+                    "transition_receipt": {
+                        "type": "object",
+                        "description": "Optional HAL transition receipt from actuation endpoint."
+                    },
+                    "actuator_telemetry": {
+                        "type": "object",
+                        "description": "Optional actuator telemetry payload (no external content fetch)."
+                    },
+                    "media_hash_references": {
+                        "type": "array",
+                        "description": "Optional pre-hashed media references (sha256/hash/digest required).",
+                        "items": {"type": "object"}
                     }
                 },
                 "required": [
@@ -73,11 +86,26 @@ class ForensicSealTool(ToolBase):
             custody_event = await self._hal_client.request_forensic_seal(
                 event_id=event_id,
                 platform_state=params.get("platform_state", "buyer-review-prepared"),
-                trajectory_hash=params.get("trajectory_hash", "sha256:unknown"),
+                trajectory_hash=params.get("trajectory_hash"),
                 policy_hash=params.get("policy_hash", "sha256:unknown"),
                 auth_token=params.get("auth_token", "QA-HONEY-FORENSIC"),
                 from_zone=params.get("from_zone", "inspection-zone-a"),
-                to_zone=params.get("to_zone", "sealed-buyer-review")
+                to_zone=params.get("to_zone", "sealed-buyer-review"),
+                transition_receipt=(
+                    params.get("transition_receipt")
+                    if isinstance(params.get("transition_receipt"), dict)
+                    else None
+                ),
+                actuator_telemetry=(
+                    params.get("actuator_telemetry")
+                    if isinstance(params.get("actuator_telemetry"), dict)
+                    else {}
+                ),
+                media_hash_references=(
+                    params.get("media_hash_references")
+                    if isinstance(params.get("media_hash_references"), list)
+                    else []
+                ),
             )
             
             # 3. Clean up client
