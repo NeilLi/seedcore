@@ -601,14 +601,63 @@ def build_governance_context(
     )
     intent = policy_case.action_intent
     decision = evaluate_intent(policy_case)
+    policy_receipt = build_policy_receipt(
+        policy_case=policy_case,
+        policy_decision=decision,
+    )
     context = {
         "action_intent": intent.model_dump(mode="json"),
         "policy_case": policy_case.model_dump(mode="json"),
         "policy_decision": decision.model_dump(mode="json"),
+        "policy_receipt": policy_receipt,
     }
     if decision.execution_token is not None:
         context["execution_token"] = decision.execution_token.model_dump(mode="json")
     return context
+
+
+def build_policy_receipt(
+    *,
+    policy_case: PolicyCase,
+    policy_decision: PolicyDecision,
+) -> Dict[str, Any]:
+    execution_token = (
+        policy_decision.execution_token.model_dump(mode="json")
+        if policy_decision.execution_token is not None
+        else {}
+    )
+    policy_case_payload = policy_case.model_dump(mode="json")
+    policy_decision_payload = policy_decision.model_dump(mode="json")
+    policy_snapshot = (
+        policy_decision.policy_snapshot
+        or policy_case.policy_snapshot
+        or (
+            policy_case.action_intent.action.security_contract.version
+            if policy_case.action_intent.action.security_contract.version
+            else None
+        )
+    )
+    proof_type = "hmac_sha256"
+    if isinstance(execution_token, dict):
+        token_proof = execution_token.get("proof_type")
+        if isinstance(token_proof, str) and token_proof.strip():
+            proof_type = token_proof.strip()
+
+    return {
+        "receipt_id": str(uuid.uuid4()),
+        "issued_at": _isoformat(_utcnow()),
+        "policy_snapshot": str(policy_snapshot) if policy_snapshot is not None else None,
+        "policy_case_hash": _sha256_hex(_canonical_json(policy_case_payload)),
+        "policy_decision_hash": _sha256_hex(_canonical_json(policy_decision_payload)),
+        "execution_token": execution_token,
+        "signer": {
+            "signer_id": os.getenv("SEEDCORE_PDP_SIGNER_ID", "seedcore-pdp"),
+            "signer_type": "policy_decision_point",
+            "key_id": os.getenv("SEEDCORE_POLICY_SIGNING_KEY_ID"),
+            "public_key": None,
+            "proof_type": proof_type,
+        },
+    }
 
 
 def _task_to_dict(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> Dict[str, Any]:

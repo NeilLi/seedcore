@@ -265,6 +265,17 @@ def _build_policy_receipt(
 ) -> PolicyReceipt | None:
     params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
     governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
+    existing_receipt = (
+        governance.get("policy_receipt")
+        if isinstance(governance.get("policy_receipt"), dict)
+        else {}
+    )
+    if isinstance(existing_receipt, dict) and existing_receipt.get("receipt_id"):
+        try:
+            return PolicyReceipt(**existing_receipt)
+        except Exception:
+            pass
+
     policy_decision = (
         governance.get("policy_decision")
         if isinstance(governance.get("policy_decision"), dict)

@@ -49,6 +49,11 @@ class GovernedExecutionAudit(Base):
         nullable=False,
         default=dict,
     )
+    policy_receipt: Mapped[Dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+    )
     evidence_bundle: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         JSONB,
         nullable=True,

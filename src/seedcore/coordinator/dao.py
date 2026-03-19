@@ -395,6 +395,7 @@ class GovernedExecutionAuditDAO:
         policy_decision: Optional[Dict[str, Any]] = None,
         action_intent: Optional[Dict[str, Any]] = None,
         policy_case: Optional[Dict[str, Any]] = None,
+        policy_receipt: Optional[Dict[str, Any]] = None,
         evidence_bundle: Optional[Dict[str, Any]] = None,
         actor_agent_id: Optional[str] = None,
         actor_organ_id: Optional[str] = None,
@@ -402,6 +403,7 @@ class GovernedExecutionAuditDAO:
         payload = dict(action_intent or {})
         case = dict(policy_case or {})
         decision = dict(policy_decision or {})
+        receipt = dict(policy_receipt or {})
         evidence = dict(evidence_bundle or {}) if isinstance(evidence_bundle, dict) else {}
         input_hash = self._sha256_hex(
             _canonical_json(
@@ -409,6 +411,7 @@ class GovernedExecutionAuditDAO:
                     "action_intent": payload,
                     "policy_case": case,
                     "policy_decision": decision,
+                    "policy_receipt": receipt,
                 }
             )
         )
@@ -430,6 +433,7 @@ class GovernedExecutionAuditDAO:
                 policy_decision,
                 action_intent,
                 policy_case,
+                policy_receipt,
                 evidence_bundle,
                 actor_agent_id,
                 actor_organ_id,
@@ -445,6 +449,7 @@ class GovernedExecutionAuditDAO:
                 CAST(:policy_decision AS jsonb),
                 CAST(:action_intent AS jsonb),
                 CAST(:policy_case AS jsonb),
+                CAST(:policy_receipt AS jsonb),
                 CAST(:evidence_bundle AS jsonb),
                 :actor_agent_id,
                 :actor_organ_id,
@@ -465,6 +470,7 @@ class GovernedExecutionAuditDAO:
                 "policy_decision": _canonical_json(decision),
                 "action_intent": _canonical_json(payload),
                 "policy_case": _canonical_json(case),
+                "policy_receipt": _canonical_json(receipt),
                 "evidence_bundle": _canonical_json(evidence),
                 "actor_agent_id": actor_agent_id,
                 "actor_organ_id": actor_organ_id,
@@ -499,6 +505,7 @@ class GovernedExecutionAuditDAO:
                 policy_decision,
                 action_intent,
                 policy_case,
+                policy_receipt,
                 evidence_bundle,
                 actor_agent_id,
                 actor_organ_id,
@@ -532,6 +539,7 @@ class GovernedExecutionAuditDAO:
             "policy_decision": dict(row["policy_decision"] or {}),
             "action_intent": dict(row["action_intent"] or {}),
             "policy_case": dict(row["policy_case"] or {}),
+            "policy_receipt": dict(row.get("policy_receipt") or {}),
             "evidence_bundle": dict(row["evidence_bundle"] or {}),
             "actor_agent_id": row["actor_agent_id"],
             "actor_organ_id": row["actor_organ_id"],

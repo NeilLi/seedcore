@@ -743,6 +743,7 @@ class ToolManager:
         execution_token = governance_ctx.get("execution_token", {})
         policy_decision = governance_ctx.get("policy_decision", {})
         policy_case = governance_ctx.get("policy_case", {})
+        policy_receipt = governance_ctx.get("policy_receipt", {})
         evidence_bundle = record.get("evidence_bundle")
 
         async with session_factory() as session:
@@ -765,6 +766,7 @@ class ToolManager:
                     policy_decision=policy_decision if isinstance(policy_decision, dict) else {},
                     action_intent=action_intent,
                     policy_case=policy_case if isinstance(policy_case, dict) else {},
+                    policy_receipt=policy_receipt if isinstance(policy_receipt, dict) else {},
                     evidence_bundle=evidence_bundle if isinstance(evidence_bundle, dict) else {},
                     actor_agent_id=str(record.get("agent_id")) if record.get("agent_id") is not None else None,
                     actor_organ_id=str(record.get("organ_id")) if record.get("organ_id") is not None else None,

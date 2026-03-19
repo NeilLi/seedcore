@@ -2419,6 +2419,11 @@ class Coordinator:
             if isinstance(governance.get("policy_case"), dict)
             else {}
         )
+        policy_receipt = (
+            dict(governance.get("policy_receipt"))
+            if isinstance(governance.get("policy_receipt"), dict)
+            else {}
+        )
         execution_token = (
             dict(governance.get("execution_token"))
             if isinstance(governance.get("execution_token"), dict)
@@ -2454,6 +2459,7 @@ class Coordinator:
                         policy_decision=policy_decision,
                         action_intent=action_intent,
                         policy_case=policy_case,
+                        policy_receipt=policy_receipt,
                         evidence_bundle=evidence_bundle,
                         actor_agent_id=actor_agent_id,
                         actor_organ_id=actor_organ_id,

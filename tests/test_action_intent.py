@@ -400,6 +400,8 @@ def test_build_governance_context_carries_policy_case_and_cognitive_assessment()
 
     assert governance["policy_case"]["cognitive_assessment"]["trace_ref"] == "trace-allow-1"
     assert governance["policy_decision"]["disposition"] == "allow"
+    assert governance["policy_receipt"]["execution_token"]["intent_id"] == governance["action_intent"]["intent_id"]
+    assert governance["policy_receipt"]["policy_decision_hash"]
 
 
 @pytest.mark.asyncio
@@ -489,6 +491,7 @@ async def test_coordinator_handoff_injects_governance_context():
     assert governance["action_intent"]["principal"]["role_profile"] == "ROBOT_OPERATOR"
     assert governance["execution_token"]["contract_version"] == "snapshot:8"
     assert governance["policy_decision"]["allowed"] is True
+    assert governance["policy_receipt"]["execution_token"]["intent_id"] == governance["action_intent"]["intent_id"]
     assert governance["policy_case"]["action_intent"]["intent_id"] == governance["action_intent"]["intent_id"]
     assert result["meta"]["governance"]["execution_token"]["intent_id"] == governance["action_intent"]["intent_id"]
     coordinator.governance_audit_dao.append_record.assert_awaited_once()
