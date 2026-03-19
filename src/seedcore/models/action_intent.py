@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
@@ -45,9 +47,56 @@ class TwinFreshness(BaseModel):
     max_age_seconds: Optional[int] = None
 
 
+class AuthorityLevel(str, Enum):
+    OBSERVER = "observer"
+    CONTRIBUTOR = "contributor"
+    SIGNER = "signer"
+
+
+class DelegationConstraint(BaseModel):
+    """Policy envelope constraints applied to delegated assistant authority."""
+
+    max_value_usd: Optional[float] = None
+    allowed_zones: List[str] = Field(default_factory=list)
+    required_modality: List[str] = Field(default_factory=list)
+    time_window: Optional[Dict[str, str]] = None
+
+
+class DelegatedAuthority(BaseModel):
+    """How a specific AI assistant may act on behalf of an owner twin."""
+
+    assistant_id: str
+    authority_level: AuthorityLevel = AuthorityLevel.OBSERVER
+    scope: List[str] = Field(default_factory=list)
+    constraints: DelegationConstraint = Field(default_factory=DelegationConstraint)
+    requires_step_up: bool = True
+
+
+class OwnerTwin(BaseModel):
+    """Root-of-trust owner twin that anchors assistant delegation policy."""
+
+    owner_id: str = Field(description="did:seedcore:owner:uuid")
+    public_key_fingerprint: Optional[str] = None
+    delegations: List[DelegatedAuthority] = Field(default_factory=list)
+    state: str = "ACTIVE"
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    graph_ref: Optional[str] = None
+
+
+class TwinGovernedState(str, Enum):
+    UNVERIFIED = "UNVERIFIED"
+    CERTIFIED = "CERTIFIED"
+    IN_TRANSIT = "IN_TRANSIT"
+    DELIVERED = "DELIVERED"
+
+
 class TwinSnapshot(BaseModel):
     twin_type: str
     twin_id: str
+    governed_state: TwinGovernedState = TwinGovernedState.UNVERIFIED
+    current_custodian_id: Optional[str] = None
+    parent_twin_id: Optional[str] = None
+    ancestry_path: List[str] = Field(default_factory=list)
     freshness: TwinFreshness = Field(default_factory=TwinFreshness)
     identity: Dict[str, Any] = Field(default_factory=dict)
     delegation: Dict[str, Any] = Field(default_factory=dict)

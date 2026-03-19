@@ -319,6 +319,52 @@ def test_prepare_policy_case_builds_default_twin_snapshot():
     }
 
 
+def test_build_twin_snapshot_populates_owner_and_recursive_ancestry_fields():
+    from seedcore.coordinator.core.governance import build_twin_snapshot
+
+    payload = {
+        "task_id": "task-ancestry-1",
+        "type": "action",
+        "params": {
+            "interaction": {"assigned_agent_id": "agent-1"},
+            "resource": {
+                "asset_id": "unit-1",
+                "owner_id": "owner-1",
+                "current_custodian_id": "did:seedcore:owner:owner-1",
+                "parent_twin_id": "batch:lot-10",
+                "category_envelope": {"asset_class": "honey"},
+            },
+            "governance": {
+                "owner_twin": {
+                    "owner_id": "did:seedcore:owner:owner-1",
+                    "delegations": [
+                        {
+                            "assistant_id": "agent-1",
+                            "authority_level": "signer",
+                            "scope": ["asset:unit-1"],
+                            "constraints": {"allowed_zones": ["zone-a"]},
+                            "requires_step_up": False,
+                        }
+                    ],
+                }
+            },
+            "intent": "release",
+        },
+    }
+
+    snapshots = build_twin_snapshot(payload)
+
+    owner = snapshots["owner"]
+    asset = snapshots["asset"]
+    assert owner.identity["owner_id"] == "did:seedcore:owner:owner-1"
+    assert owner.governed_state == "CERTIFIED"
+    assert len(owner.delegation["delegations"]) == 1
+    assert asset.current_custodian_id == "did:seedcore:owner:owner-1"
+    assert asset.parent_twin_id == "batch:lot-10"
+    assert asset.ancestry_path == ["batch:lot-10"]
+    assert asset.custody["category_envelope"]["asset_class"] == "honey"
+
+
 def test_evaluate_intent_denies_stale_twin_state():
     intent = _build_release_intent(
         source_registration_id="reg-1",
@@ -340,6 +386,40 @@ def test_evaluate_intent_denies_stale_twin_state():
     assert decision.allowed is False
     assert decision.disposition == "deny"
     assert decision.deny_code == "stale_twin_state"
+
+
+def test_evaluate_intent_denies_when_owner_delegation_scope_is_missing():
+    intent = _build_release_intent(
+        source_registration_id="reg-1",
+        registration_decision_id="decision-1",
+        agent_id="assistant-7",
+    )
+
+    decision = evaluate_intent(
+        intent,
+        policy_snapshot="snapshot:5",
+        approved_source_registrations={"reg-1": "decision-1"},
+        relevant_twin_snapshot={
+            "owner": {
+                "twin_type": "owner",
+                "twin_id": "owner:did:seedcore:owner:1",
+                "delegation": {
+                    "delegations": [
+                        {
+                            "assistant_id": "assistant-7",
+                            "authority_level": "signer",
+                            "scope": ["asset:another-asset"],
+                            "constraints": {"allowed_zones": ["packing_line_a"]},
+                            "requires_step_up": False,
+                        }
+                    ]
+                },
+            }
+        },
+    )
+
+    assert decision.allowed is False
+    assert decision.deny_code == "owner_scope_violation"
 
 
 def test_evaluate_intent_escalates_on_cognitive_policy_conflict():

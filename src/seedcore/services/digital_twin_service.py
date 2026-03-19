@@ -9,7 +9,7 @@ from seedcore.coordinator.core.governance import (
     merge_authoritative_twins,
 )
 from seedcore.coordinator.dao import DigitalTwinDAO
-from seedcore.models.action_intent import TwinSnapshot
+from seedcore.models.action_intent import TwinGovernedState, TwinSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ class DigitalTwinService:
         intent_id: Optional[str],
         authority_source: str = "coordinator.pdp",
         change_reason: str = "policy_case_resolution",
+        transition_context: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not relevant_twin_snapshot or not self._session_factory:
             return {"updated": 0, "version_bumped": 0}
@@ -90,6 +91,10 @@ class DigitalTwinService:
                     async with begin_ctx:
                         for key, value in dict(relevant_twin_snapshot).items():
                             snapshot = self._coerce_twin_snapshot(key, value)
+                            snapshot = self._apply_universal_state_machine(
+                                snapshot,
+                                transition_context=transition_context,
+                            )
                             outcome = await self._dao.upsert_snapshot(
                                 session,
                                 twin_snapshot=snapshot.model_dump(mode="json"),
@@ -104,6 +109,10 @@ class DigitalTwinService:
                 else:
                     for key, value in dict(relevant_twin_snapshot).items():
                         snapshot = self._coerce_twin_snapshot(key, value)
+                        snapshot = self._apply_universal_state_machine(
+                            snapshot,
+                            transition_context=transition_context,
+                        )
                         outcome = await self._dao.upsert_snapshot(
                             session,
                             twin_snapshot=snapshot.model_dump(mode="json"),
@@ -176,6 +185,38 @@ class DigitalTwinService:
             )
             return []
 
+    async def get_twin_ancestry(
+        self,
+        *,
+        twin_type: str,
+        twin_id: str,
+        max_depth: int = 16,
+    ) -> list[Dict[str, Any]]:
+        lineage: list[Dict[str, Any]] = []
+        current_type = str(twin_type)
+        current_id = str(twin_id)
+
+        for _ in range(max(1, int(max_depth))):
+            row = await self.get_authoritative_twin(
+                twin_type=current_type,
+                twin_id=current_id,
+            )
+            if not row:
+                break
+            lineage.append(row)
+            snapshot = row.get("snapshot") if isinstance(row.get("snapshot"), dict) else {}
+            parent_twin_id = snapshot.get("parent_twin_id")
+            if not isinstance(parent_twin_id, str) or not parent_twin_id.strip():
+                break
+            parent_twin_id = parent_twin_id.strip()
+            if ":" in parent_twin_id:
+                current_type = parent_twin_id.split(":", 1)[0]
+                current_id = parent_twin_id
+            else:
+                current_id = parent_twin_id
+
+        return lineage
+
     async def _load_persisted_refs(
         self,
         baseline_twins: Mapping[str, TwinSnapshot],
@@ -207,3 +248,81 @@ class DigitalTwinService:
             payload.setdefault("twin_id", str(payload.get("twin_id") or key))
             return TwinSnapshot(**payload)
         return TwinSnapshot(twin_type=key, twin_id=str(value))
+
+    def _apply_universal_state_machine(
+        self,
+        snapshot: TwinSnapshot,
+        *,
+        transition_context: Optional[Mapping[str, Any]],
+    ) -> TwinSnapshot:
+        context = dict(transition_context or {})
+        inferred_target = self._infer_target_state(snapshot=snapshot, context=context)
+        current = snapshot.governed_state
+        if inferred_target is None or inferred_target == current:
+            return snapshot
+
+        allowed = {
+            TwinGovernedState.UNVERIFIED: {TwinGovernedState.CERTIFIED},
+            TwinGovernedState.CERTIFIED: {TwinGovernedState.IN_TRANSIT},
+            TwinGovernedState.IN_TRANSIT: {TwinGovernedState.DELIVERED},
+            TwinGovernedState.DELIVERED: {TwinGovernedState.IN_TRANSIT},
+        }
+        if inferred_target not in allowed.get(current, set()):
+            snapshot.pending_exceptions = list(snapshot.pending_exceptions or [])
+            snapshot.pending_exceptions.append(
+                f"invalid_state_transition:{current.value}->{inferred_target.value}"
+            )
+            return snapshot
+
+        snapshot.governed_state = inferred_target
+        return snapshot
+
+    def _infer_target_state(
+        self,
+        *,
+        snapshot: TwinSnapshot,
+        context: Mapping[str, Any],
+    ) -> TwinGovernedState | None:
+        evidence_bundle = (
+            context.get("evidence_bundle")
+            if isinstance(context.get("evidence_bundle"), Mapping)
+            else {}
+        )
+        policy_receipt = (
+            context.get("policy_receipt")
+            if isinstance(context.get("policy_receipt"), Mapping)
+            else {}
+        )
+        execution_token = (
+            context.get("execution_token")
+            if isinstance(context.get("execution_token"), Mapping)
+            else {}
+        )
+        evidence_summary = (
+            context.get("evidence_summary")
+            if isinstance(context.get("evidence_summary"), Mapping)
+            else {}
+        )
+
+        has_delivery_receipt = bool(
+            (evidence_bundle.get("execution_receipt") or {}).get("transition_receipt")
+            if isinstance(evidence_bundle.get("execution_receipt"), Mapping)
+            else False
+        )
+        if has_delivery_receipt:
+            return TwinGovernedState.DELIVERED
+
+        has_certification = bool(policy_receipt) and bool(
+            evidence_bundle.get("asset_fingerprint")
+            or evidence_summary.get("asset_fingerprint")
+        )
+        if has_certification:
+            return TwinGovernedState.CERTIFIED
+
+        has_movement_authorization = bool(execution_token) or bool(
+            (policy_receipt.get("execution_token") if isinstance(policy_receipt, Mapping) else {})
+        )
+        if has_movement_authorization and snapshot.twin_type in {"asset", "product", "batch", "transaction"}:
+            return TwinGovernedState.IN_TRANSIT
+
+        return None

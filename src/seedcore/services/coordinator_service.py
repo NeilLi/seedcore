@@ -2536,6 +2536,23 @@ class Coordinator:
                 intent_id=intent_id,
                 authority_source="coordinator.pdp",
                 change_reason="policy_case_resolution",
+                transition_context={
+                    "policy_receipt": (
+                        dict(governance.get("policy_receipt"))
+                        if isinstance(governance.get("policy_receipt"), dict)
+                        else {}
+                    ),
+                    "execution_token": (
+                        dict(governance.get("execution_token"))
+                        if isinstance(governance.get("execution_token"), dict)
+                        else {}
+                    ),
+                    "evidence_summary": (
+                        dict(policy_case.get("evidence_summary"))
+                        if isinstance(policy_case.get("evidence_summary"), dict)
+                        else {}
+                    ),
+                },
             )
         except Exception:
             logger.warning(

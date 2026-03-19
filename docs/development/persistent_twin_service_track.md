@@ -9,6 +9,9 @@ This track introduces:
 - persisted authoritative twin state (`digital_twin_state`)
 - append-only twin history (`digital_twin_history`)
 - twin versioning (`state_version`)
+- first-class Owner Twin delegation envelope (`owner_id`, `delegations`, DID-style root-of-trust identity)
+- recursive ancestry semantics (`parent_twin_id`, `ancestry_path`, `current_custodian_id`)
+- universal governed state machine (`UNVERIFIED` -> `CERTIFIED` -> `IN_TRANSIT` -> `DELIVERED`)
 - coordinator wiring to resolve from persisted twins first, with fallback to baseline snapshots
 
 ## Non-Scope

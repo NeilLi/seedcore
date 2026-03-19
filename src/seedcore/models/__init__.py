@@ -28,10 +28,15 @@ except ImportError as e:
 
 from .action_intent import (
     ActionIntent,
+    AuthorityLevel,
+    DelegatedAuthority,
+    DelegationConstraint,
     ExecutionToken,
+    OwnerTwin,
     PolicyCase,
     PolicyCaseAssessment,
     PolicyDecision,
+    TwinGovernedState,
     TwinSnapshot,
 )
 from .evidence_bundle import EvidenceBundle, ExecutionReceipt
@@ -41,10 +46,15 @@ from .task_payload import TaskPayload
 # Try to build __all__ dynamically to support both full and thin envs
 __all__ = [
     "ActionIntent",
+    "AuthorityLevel",
+    "DelegatedAuthority",
+    "DelegationConstraint",
     "ExecutionToken",
+    "OwnerTwin",
     "PolicyCase",
     "PolicyCaseAssessment",
     "PolicyDecision",
+    "TwinGovernedState",
     "TwinSnapshot",
     "EvidenceBundle",
     "ExecutionReceipt",

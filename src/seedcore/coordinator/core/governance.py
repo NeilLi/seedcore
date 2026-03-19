@@ -10,14 +10,18 @@ from typing import Any, Dict, Mapping
 
 from seedcore.models.action_intent import (
     ActionIntent,
+    AuthorityLevel,
+    DelegatedAuthority,
     ExecutionToken,
     IntentAction,
     IntentPrincipal,
     IntentResource,
+    OwnerTwin,
     PolicyCase,
     PolicyCaseAssessment,
     PolicyDecision,
     SecurityContract,
+    TwinGovernedState,
     TwinSnapshot,
 )
 from seedcore.models.task_payload import TaskPayload
@@ -53,6 +57,10 @@ EXPLICIT_DENY_RULE = "deny_release_without_approved_source_registration"
 STALE_TWIN_DENY_CODE = "stale_twin_state"
 REVOKED_DELEGATION_DENY_CODE = "revoked_delegation"
 FORBIDDEN_TWIN_STATE_DENY_CODE = "forbidden_twin_state"
+OWNER_SCOPE_VIOLATION_DENY_CODE = "owner_scope_violation"
+OWNER_ZONE_VIOLATION_DENY_CODE = "owner_zone_violation"
+OWNER_MODALITY_VIOLATION_DENY_CODE = "owner_modality_violation"
+OWNER_OBSERVER_DENY_CODE = "owner_observer_restricted"
 MISSING_MANDATORY_EVIDENCE_DENY_CODE = "missing_mandatory_evidence"
 COGNITIVE_DENY_CODE = "cognitive_policy_denied"
 POLICY_ESCALATION_CODE = "policy_escalation_required"
@@ -365,11 +373,25 @@ def build_twin_snapshot(
     governance = params.get("governance") if isinstance(params.get("governance"), dict) else {}
     twin_inputs = governance.get("digital_twins") if isinstance(governance.get("digital_twins"), dict) else {}
     multimodal = params.get("multimodal") if isinstance(params.get("multimodal"), dict) else {}
+    resource = params.get("resource") if isinstance(params.get("resource"), dict) else {}
+    owner_input = (
+        governance.get("owner_twin")
+        if isinstance(governance.get("owner_twin"), dict)
+        else (
+            twin_inputs.get("owner")
+            if isinstance(twin_inputs.get("owner"), dict)
+            else {}
+        )
+    )
 
     def _snapshot(
         twin_key: str,
         twin_id: str,
         *,
+        governed_state: str | None = None,
+        current_custodian_id: str | None = None,
+        parent_twin_id: str | None = None,
+        ancestry_path: list[str] | None = None,
         identity: Mapping[str, Any] | None = None,
         delegation: Mapping[str, Any] | None = None,
         risk: Mapping[str, Any] | None = None,
@@ -379,9 +401,41 @@ def build_twin_snapshot(
     ) -> TwinSnapshot:
         source = twin_inputs.get(twin_key) if isinstance(twin_inputs.get(twin_key), dict) else {}
         freshness = source.get("freshness") if isinstance(source.get("freshness"), dict) else {}
+        resolved_governed_state = (
+            source.get("governed_state")
+            or governed_state
+            or TwinGovernedState.UNVERIFIED.value
+        )
         return TwinSnapshot(
             twin_type=twin_key,
             twin_id=str(source.get("twin_id") or twin_id),
+            governed_state=str(resolved_governed_state),
+            current_custodian_id=(
+                str(source.get("current_custodian_id"))
+                if source.get("current_custodian_id") is not None
+                else (
+                    str(current_custodian_id)
+                    if current_custodian_id is not None
+                    else None
+                )
+            ),
+            parent_twin_id=(
+                str(source.get("parent_twin_id"))
+                if source.get("parent_twin_id") is not None
+                else (
+                    str(parent_twin_id)
+                    if parent_twin_id is not None
+                    else None
+                )
+            ),
+            ancestry_path=[
+                str(item)
+                for item in (
+                    source.get("ancestry_path")
+                    if isinstance(source.get("ancestry_path"), list)
+                    else (ancestry_path or [])
+                )
+            ],
             freshness={
                 "status": source.get("freshness_status") or freshness.get("status") or "unknown",
                 "observed_at": source.get("observed_at") or freshness.get("observed_at"),
@@ -399,23 +453,95 @@ def build_twin_snapshot(
         )
 
     target_zone = intent.resource.target_zone or multimodal.get("location_context")
+    parent_twin_id = (
+        resource.get("parent_twin_id")
+        or resource.get("batch_twin_id")
+        or resource.get("parent_asset_id")
+    )
+    owner_id = (
+        resource.get("current_custodian_id")
+        or resource.get("owner_id")
+        or owner_input.get("owner_id")
+        or owner_input.get("did")
+        or payload.get("owner_id")
+        or f"did:seedcore:owner:{intent.resource.asset_id}"
+    )
+    owner_id = str(owner_id)
+    if not owner_id.startswith("did:"):
+        owner_id = f"did:seedcore:owner:{owner_id}"
+
+    owner_delegations = owner_input.get("delegations")
+    if not isinstance(owner_delegations, list):
+        owner_delegations = []
+    parsed_delegations: list[DelegatedAuthority] = []
+    for entry in owner_delegations:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            parsed_delegations.append(DelegatedAuthority(**entry))
+        except Exception:
+            continue
+
+    owner_twin = OwnerTwin(
+        owner_id=owner_id,
+        public_key_fingerprint=(
+            str(owner_input.get("public_key_fingerprint"))
+            if owner_input.get("public_key_fingerprint") is not None
+            else None
+        ),
+        delegations=parsed_delegations,
+        state=str(owner_input.get("state") or "ACTIVE"),
+        graph_ref=(
+            str(owner_input.get("graph_ref"))
+            if owner_input.get("graph_ref") is not None
+            else None
+        ),
+    )
+
+    ancestry_path = []
+    if parent_twin_id:
+        ancestry_path.append(str(parent_twin_id))
+
     snapshots = {
         "owner": _snapshot(
             "owner",
-            f"owner:{intent.resource.asset_id}",
-            identity={"asset_id": intent.resource.asset_id},
-            delegation={"principal_agent_id": intent.principal.agent_id},
+            f"owner:{owner_twin.owner_id}",
+            governed_state=TwinGovernedState.CERTIFIED.value,
+            current_custodian_id=owner_twin.owner_id,
+            identity={
+                "owner_id": owner_twin.owner_id,
+                "public_key_fingerprint": owner_twin.public_key_fingerprint,
+                "graph_ref": owner_twin.graph_ref,
+            },
+            delegation={
+                "principal_agent_id": intent.principal.agent_id,
+                "delegations": [item.model_dump(mode="json") for item in owner_twin.delegations],
+                "owner_state": owner_twin.state,
+            },
         ),
         "assistant": _snapshot(
             "assistant",
             f"assistant:{intent.principal.agent_id}",
+            current_custodian_id=owner_twin.owner_id,
             identity={"agent_id": intent.principal.agent_id},
             delegation={"role_profile": intent.principal.role_profile},
         ),
         "asset": _snapshot(
             "asset",
             f"asset:{intent.resource.asset_id}",
-            custody={"asset_id": intent.resource.asset_id, "target_zone": target_zone},
+            current_custodian_id=owner_twin.owner_id,
+            parent_twin_id=(str(parent_twin_id) if parent_twin_id is not None else None),
+            ancestry_path=ancestry_path,
+            custody={
+                "asset_id": intent.resource.asset_id,
+                "target_zone": target_zone,
+                "current_custodian_id": owner_twin.owner_id,
+                "category_envelope": (
+                    dict(resource.get("category_envelope"))
+                    if isinstance(resource.get("category_envelope"), dict)
+                    else {}
+                ),
+            },
             provenance={"provenance_hash": intent.resource.provenance_hash},
         ),
         "edge": _snapshot(
@@ -426,6 +552,7 @@ def build_twin_snapshot(
         "transaction": _snapshot(
             "transaction",
             f"transaction:{intent.intent_id}",
+            current_custodian_id=owner_twin.owner_id,
             custody={"intent_id": intent.intent_id},
             telemetry={"session_token": intent.principal.session_token},
         ),
@@ -780,6 +907,10 @@ def _evaluate_twin_policy(policy_case: PolicyCase) -> PolicyDecision | None:
             explanations=[f"stale_twins={','.join(stale_twins)}"],
         )
 
+    owner_violation = _evaluate_owner_delegation_policy(policy_case)
+    if owner_violation is not None:
+        return owner_violation
+
     for twin in twins.values():
         if bool(twin.delegation.get("revoked")):
             return _deny_decision(
@@ -815,6 +946,132 @@ def _evaluate_twin_policy(policy_case: PolicyCase) -> PolicyDecision | None:
             evidence_gaps=evidence_gaps,
         )
     return None
+
+
+def _evaluate_owner_delegation_policy(policy_case: PolicyCase) -> PolicyDecision | None:
+    owner_twin = policy_case.relevant_twin_snapshot.get("owner")
+    if owner_twin is None:
+        return None
+
+    delegation_entries = owner_twin.delegation.get("delegations")
+    if not isinstance(delegation_entries, list):
+        return None
+    if not delegation_entries:
+        return None
+
+    assistant_id = policy_case.action_intent.principal.agent_id
+    assistant_did = assistant_id if assistant_id.startswith("did:") else f"did:seedcore:assistant:{assistant_id}"
+
+    matched: DelegatedAuthority | None = None
+    for raw in delegation_entries:
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            candidate = DelegatedAuthority(**dict(raw))
+        except Exception:
+            continue
+        if candidate.assistant_id in {assistant_id, assistant_did}:
+            matched = candidate
+            break
+
+    if matched is None:
+        return _deny_decision(
+            "Assistant is outside owner delegation scope.",
+            OWNER_SCOPE_VIOLATION_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.8),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[f"assistant_id={assistant_id}", "owner_delegation=missing"],
+        )
+
+    if not _delegation_scope_allows(matched, policy_case.action_intent.resource.asset_id):
+        return _deny_decision(
+            "Owner delegation scope does not permit this asset.",
+            OWNER_SCOPE_VIOLATION_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.75),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[f"assistant_id={assistant_id}", "owner_delegation=scope_restricted"],
+        )
+
+    if matched.authority_level == AuthorityLevel.OBSERVER:
+        return _deny_decision(
+            "Owner delegation is observer-only and cannot authorize execution.",
+            OWNER_OBSERVER_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.8),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[f"assistant_id={assistant_id}", "owner_delegation=observer_only"],
+        )
+
+    if (
+        matched.authority_level == AuthorityLevel.CONTRIBUTOR
+        and str(policy_case.action_intent.action.type or "").upper()
+        in {"TRANSFER", "MOVE", "RELEASE", "DELIVER", "SHIP"}
+    ):
+        return _deny_decision(
+            "Owner delegation contributor role cannot authorize custody transitions.",
+            OWNER_OBSERVER_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.75),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[f"assistant_id={assistant_id}", "owner_delegation=contributor_transition_block"],
+        )
+
+    target_zone = (policy_case.action_intent.resource.target_zone or "").strip()
+    allowed_zones = [item.strip() for item in matched.constraints.allowed_zones if str(item).strip()]
+    if allowed_zones and target_zone and target_zone not in set(allowed_zones):
+        return _deny_decision(
+            "Target zone is not permitted by owner delegation.",
+            OWNER_ZONE_VIOLATION_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.78),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[f"target_zone={target_zone}", f"allowed_zones={','.join(allowed_zones)}"],
+        )
+
+    required_modality = [item.strip() for item in matched.constraints.required_modality if str(item).strip()]
+    available = set(
+        str(item).strip()
+        for item in (
+            policy_case.evidence_summary.get("available")
+            if isinstance(policy_case.evidence_summary.get("available"), list)
+            else []
+        )
+        if str(item).strip()
+    )
+    if required_modality and not set(required_modality).issubset(available):
+        return _deny_decision(
+            "Owner delegation required modality evidence is missing.",
+            OWNER_MODALITY_VIOLATION_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.72),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            evidence_gaps=sorted(set(required_modality) - available),
+            explanations=[f"required_modality={','.join(required_modality)}"],
+        )
+
+    if matched.requires_step_up:
+        assessment = policy_case.cognitive_assessment
+        if assessment is not None and assessment.recommended_disposition != "allow":
+            return _escalate_decision(
+                "Owner delegation requires step-up approval.",
+                policy_case.policy_snapshot,
+                cognitive_assessment=assessment,
+                explanations=["owner_step_up=true"],
+            )
+
+    return None
+
+
+def _delegation_scope_allows(delegation: DelegatedAuthority, asset_id: str) -> bool:
+    scopes = [str(item).strip() for item in delegation.scope if str(item).strip()]
+    if not scopes:
+        return False
+    if "*" in scopes:
+        return True
+    asset_urn = f"asset:{asset_id}"
+    return asset_id in scopes or asset_urn in scopes
 
 
 def _evaluate_cognitive_policy(policy_case: PolicyCase) -> PolicyDecision | None:
