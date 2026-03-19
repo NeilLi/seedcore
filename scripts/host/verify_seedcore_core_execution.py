@@ -22,7 +22,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -33,6 +33,17 @@ DEFAULT_API_URL = os.getenv("SEEDCORE_API_URL", os.getenv("SEEDCORE_API", "http:
 DEFAULT_TIMEOUT_S = float(os.getenv("SEEDCORE_API_TIMEOUT", "12"))
 DEFAULT_POLL_SECONDS = int(os.getenv("SEEDCORE_VERIFY_POLL_SECONDS", "35"))
 DEFAULT_POLL_INTERVAL = float(os.getenv("SEEDCORE_VERIFY_POLL_INTERVAL", "2"))
+DEFAULT_FORCE_GOVERNED_PREDICATES = os.getenv(
+    "SEEDCORE_FORCE_GOVERNED_PREDICATES",
+    ",".join(
+        [
+            "request_release_transfer",
+            "request_robotic_handoff",
+            "request_custody_handoff",
+            "request_concierge",
+        ]
+    ),
+)
 
 
 @dataclass
@@ -121,7 +132,96 @@ def wait_for_task_terminal_state(
     return final
 
 
-def verify(api_url: str, *, strict: bool, poll_seconds: int, poll_interval: float) -> list[StepResult]:
+def _extract_subtasks_from_eval_response(body: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(body, dict):
+        return []
+    emissions = body.get("emissions")
+    if not isinstance(emissions, dict):
+        return []
+    subtasks = emissions.get("subtasks")
+    if not isinstance(subtasks, list):
+        return []
+    return [item for item in subtasks if isinstance(item, dict)]
+
+
+def _extract_eval_reason(body: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(body, dict):
+        return "unknown"
+    decision = body.get("decision")
+    if not isinstance(decision, dict):
+        return "unknown"
+    reason = decision.get("reason")
+    return str(reason or "unknown")
+
+
+def probe_governed_action_payload(
+    session: requests.Session,
+    api_base: str,
+    *,
+    snapshot_id: Optional[int],
+    predicates: List[str],
+) -> tuple[Optional[Dict[str, Any]], List[str]]:
+    traces: List[str] = []
+    object_data = {
+        "actor_id": "owner:verify",
+        "identity_verified": True,
+        "approval_state": "approved",
+        "approvals": ["approver_a", "approver_b"],
+        "release_contract_id": "contract-verify",
+        "release_window_active": True,
+        "provenance_ok": True,
+        "seal_intact": True,
+        "asset_value_usd": 12500,
+        "target_zone": "Zone-EU",
+    }
+
+    for predicate in predicates:
+        payload = {
+            "task_facts": {
+                "namespace": "custody",
+                "subject": "owner:verify",
+                "predicate": predicate,
+                "object_data": object_data,
+            },
+            "snapshot_id": snapshot_id,
+            "mode": "advisory",
+            "zone_id": "zone-eu",
+        }
+        ok, detail, body, code = call_json(
+            session,
+            "POST",
+            f"{api_base}/api/v1/pkg/evaluate_async",
+            expected=(200, 403, 503),
+            payload=payload,
+        )
+        subtasks = _extract_subtasks_from_eval_response(body)
+        if code == 200 and ok and subtasks:
+            traces.append(f"{predicate}:status=200 subtasks={len(subtasks)}")
+            return (
+                {
+                    "predicate": predicate,
+                    "object_data": object_data,
+                    "zone_id": "zone-eu",
+                    "subtasks_count": len(subtasks),
+                },
+                traces,
+            )
+        traces.append(
+            f"{predicate}:status={code} subtasks={len(subtasks)} reason={_extract_eval_reason(body)} detail={detail}"
+        )
+
+    return None, traces
+
+
+def verify(
+    api_url: str,
+    *,
+    strict: bool,
+    poll_seconds: int,
+    poll_interval: float,
+    force_governed_action: bool,
+    governed_predicates: List[str],
+) -> list[StepResult]:
     results: list[StepResult] = []
     session = make_session(DEFAULT_TIMEOUT_S)
     api_base = norm_base(api_url)
@@ -474,7 +574,7 @@ def verify(api_url: str, *, strict: bool, poll_seconds: int, poll_interval: floa
         session,
         "POST",
         f"{api_base}/api/v1/pkg/evaluate_async",
-        expected=(200, 503),
+        expected=(200, 403, 503),
         payload=eval_payload,
     )
     results.append(StepResult("PKG POST /pkg/evaluate_async", "PASS" if code == 200 else "WARN", detail))
@@ -525,6 +625,136 @@ def verify(api_url: str, *, strict: bool, poll_seconds: int, poll_interval: floa
                 "No pkg snapshot_id available from /pkg/status; compare and compile checks skipped.",
             )
         )
+
+    if force_governed_action:
+        if pkg_snapshot_id is None:
+            results.append(
+                StepResult(
+                    "Force governed action probe",
+                    "WARN",
+                    "Skipped: no active snapshot_id from /pkg/status.",
+                )
+            )
+        else:
+            probe, traces = probe_governed_action_payload(
+                session,
+                api_base,
+                snapshot_id=pkg_snapshot_id,
+                predicates=governed_predicates,
+            )
+            if probe is None:
+                results.append(
+                    StepResult(
+                        "Force governed action probe",
+                        "WARN",
+                        "No candidate predicate emitted governed subtasks. "
+                        + "; ".join(traces[:3]),
+                    )
+                )
+            else:
+                predicate = str(probe["predicate"])
+                results.append(
+                    StepResult(
+                        "Force governed action probe",
+                        "PASS",
+                        f"predicate={predicate} subtasks={probe['subtasks_count']}",
+                    )
+                )
+                forced_task_payload = {
+                    "type": "action",
+                    "description": f"force governed action via {predicate}",
+                    "run_immediately": True,
+                    "snapshot_id": pkg_snapshot_id,
+                    "params": {
+                        "interaction": {"assigned_agent_id": "verify-agent"},
+                        "routing": {"required_specialization": "ROBOT_OPERATOR"},
+                        "resource": {"asset_id": f"asset-governed-{uuid.uuid4().hex[:8]}"},
+                        "intent": predicate,
+                        "governance": {
+                            "probe": {
+                                "namespace": "custody",
+                                "subject": "owner:verify",
+                                "predicate": predicate,
+                                "object_data": probe["object_data"],
+                                "zone_id": probe["zone_id"],
+                            }
+                        },
+                    },
+                }
+                ok, detail, body, _ = call_json(
+                    session,
+                    "POST",
+                    f"{api_base}/api/v1/tasks",
+                    expected=(200,),
+                    payload=forced_task_payload,
+                )
+                forced_task_id = str(body.get("id")) if ok and isinstance(body, dict) and body.get("id") else None
+                results.append(
+                    StepResult(
+                        "Force governed action task POST /tasks",
+                        "PASS" if forced_task_id else "FAIL",
+                        detail if forced_task_id else f"failed_to_create_forced_task ({detail})",
+                    )
+                )
+
+                if forced_task_id:
+                    task_final = wait_for_task_terminal_state(
+                        session,
+                        api_base,
+                        forced_task_id,
+                        timeout_seconds=poll_seconds,
+                        poll_interval=poll_interval,
+                    )
+                    task_status = str(task_final.get("status") or "unknown")
+                    results.append(
+                        StepResult(
+                            "Force governed action poll",
+                            "PASS",
+                            f"task_id={forced_task_id} status={task_status}",
+                        )
+                    )
+
+                    ok, detail, governance_body, _ = call_json(
+                        session,
+                        "GET",
+                        f"{api_base}/api/v1/tasks/{forced_task_id}/governance",
+                        expected=(200,),
+                    )
+                    if not ok:
+                        results.append(StepResult("Force governed action governance", "FAIL", detail))
+                    else:
+                        latest = governance_body.get("latest") if isinstance(governance_body, dict) else None
+                        evidence_bundle = latest.get("evidence_bundle") if isinstance(latest, dict) else None
+                        if isinstance(evidence_bundle, dict) and evidence_bundle:
+                            results.append(
+                                StepResult(
+                                    "Force governed action evidence",
+                                    "PASS",
+                                    "evidence_bundle present on governance record",
+                                )
+                            )
+                            ok, detail, _, _ = call_json(
+                                session,
+                                "GET",
+                                f"{api_base}/api/v1/governance/materialized-custody-event",
+                                expected=(200,),
+                                params={"task_id": forced_task_id},
+                            )
+                            results.append(
+                                StepResult(
+                                    "Force governed action materialized-custody-event",
+                                    "PASS" if ok else "FAIL",
+                                    detail,
+                                )
+                            )
+                        else:
+                            results.append(
+                                StepResult(
+                                    "Force governed action evidence",
+                                    "WARN",
+                                    "Task completed but no evidence_bundle found on latest governance record.",
+                                )
+                            )
 
     # Capabilities
     capability_payload = {
@@ -592,6 +822,22 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_POLL_INTERVAL,
         help=f"Task polling interval seconds (default: {DEFAULT_POLL_INTERVAL})",
     )
+    parser.add_argument(
+        "--force-governed-action",
+        action="store_true",
+        help=(
+            "Probe PKG evaluate_async for a predicate that emits subtasks, then create a matching "
+            "action task to try producing governance evidence/materialization."
+        ),
+    )
+    parser.add_argument(
+        "--governed-predicates",
+        default=DEFAULT_FORCE_GOVERNED_PREDICATES,
+        help=(
+            "Comma-separated candidate predicates for governed-action probe "
+            f"(default: {DEFAULT_FORCE_GOVERNED_PREDICATES})"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -602,6 +848,8 @@ def main() -> int:
         strict=args.strict,
         poll_seconds=args.poll_seconds,
         poll_interval=args.poll_interval,
+        force_governed_action=args.force_governed_action,
+        governed_predicates=[p.strip() for p in args.governed_predicates.split(",") if p.strip()],
     )
 
     pass_count = sum(1 for r in results if r.status == "PASS")
