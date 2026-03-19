@@ -341,6 +341,17 @@ async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]
                     "mode": error_meta.get("mode"),
                 },
             )
+
+        # Explicit policy deny in CONTROL mode (deny-by-default).
+        if error_msg == "policy_denied":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Request blocked by policy gate",
+                    "message": error_meta.get("deny_reason") or "policy_denied",
+                    "mode": error_meta.get("mode"),
+                },
+            )
         
         # Generic error handling for other failures
         raise HTTPException(

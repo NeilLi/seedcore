@@ -318,13 +318,19 @@ class PKGManager:
             # P0: In CONTROL mode, empty subtasks = explicit deny (ok=False)
             # In ADVISORY mode, empty subtasks = no-op (ok=True, but no work to do)
             ok = True
+            error_code: Optional[str] = None
+            deny_reason: Optional[str] = None
             if self._mode == PKGMode.CONTROL and not has_subtasks:
                 ok = False
+                error_code = "policy_denied"
+                deny_reason = "control_mode_empty_subtasks"
                 logger.debug("[PKG] CONTROL mode: empty subtasks = explicit deny")
             
             return {
                 "ok": ok,
                 "meta": {
+                    "error": error_code,
+                    "deny_reason": deny_reason,
                     "mode": self._mode.value,
                     "version": result.get("snapshot"),
                     "hydration_blocked": hydration_blocked,
