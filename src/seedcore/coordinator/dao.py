@@ -5,9 +5,10 @@ import json
 import logging
 import os
 import uuid
-from sqlalchemy import select, text  # pyright: ignore[reportMissingImports]
+from sqlalchemy import select, text, tuple_  # pyright: ignore[reportMissingImports]
 
 from ..models.asset_custody import AssetCustodyState
+from ..models.digital_twin import DigitalTwinHistory, DigitalTwinState
 
 
 MAX_PROTO_PLAN_BYTES = int(os.getenv("MAX_PROTO_PLAN_BYTES", str(256 * 1024)))
@@ -628,6 +629,223 @@ class GovernedExecutionAuditDAO:
         import hashlib
 
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class DigitalTwinDAO:
+    """Persistence helper for authoritative digital twin state + version history."""
+
+    async def get_authoritative_snapshot(
+        self,
+        session,
+        *,
+        twin_type: str,
+        twin_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        row = (
+            await session.execute(
+                select(DigitalTwinState).where(
+                    DigitalTwinState.twin_type == str(twin_type),
+                    DigitalTwinState.twin_id == str(twin_id),
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            return None
+        return self._state_to_dict(row)
+
+    async def get_authoritative_snapshots(
+        self,
+        session,
+        *,
+        twin_refs: Sequence[tuple[str, str]],
+    ) -> Dict[tuple[str, str], Dict[str, Any]]:
+        normalized_refs = {
+            (str(twin_type).strip(), str(twin_id).strip())
+            for twin_type, twin_id in twin_refs
+            if str(twin_type).strip() and str(twin_id).strip()
+        }
+        if not normalized_refs:
+            return {}
+
+        rows = (
+            await session.execute(
+                select(DigitalTwinState).where(
+                    tuple_(DigitalTwinState.twin_type, DigitalTwinState.twin_id).in_(
+                        list(normalized_refs)
+                    )
+                )
+            )
+        ).scalars().all()
+        return {
+            (row.twin_type, row.twin_id): self._state_to_dict(row)
+            for row in rows
+        }
+
+    async def upsert_snapshot(
+        self,
+        session,
+        *,
+        twin_snapshot: Dict[str, Any],
+        authority_source: str,
+        source_task_id: Optional[str] = None,
+        source_intent_id: Optional[str] = None,
+        change_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized = self._normalize_snapshot(twin_snapshot)
+        twin_type = normalized["twin_type"]
+        twin_id = normalized["twin_id"]
+        source_task_uuid = self._coerce_uuid(source_task_id)
+
+        row = (
+            await session.execute(
+                select(DigitalTwinState).where(
+                    DigitalTwinState.twin_type == twin_type,
+                    DigitalTwinState.twin_id == twin_id,
+                )
+            )
+        ).scalars().first()
+
+        if row is None:
+            row = DigitalTwinState(
+                twin_type=twin_type,
+                twin_id=twin_id,
+                state_version=1,
+                authority_source=str(authority_source),
+                snapshot=normalized,
+                last_task_id=source_task_uuid,
+                last_intent_id=str(source_intent_id) if source_intent_id is not None else None,
+            )
+            session.add(row)
+            await session.flush()
+            await self._append_history(
+                session,
+                row=row,
+                change_reason=change_reason,
+                source_task_id=source_task_uuid,
+                source_intent_id=source_intent_id,
+            )
+            return {**self._state_to_dict(row), "changed": True}
+
+        previous_snapshot = dict(row.snapshot or {})
+        changed = _canonical_json(previous_snapshot) != _canonical_json(normalized)
+
+        row.authority_source = str(authority_source)
+        if source_task_uuid is not None:
+            row.last_task_id = source_task_uuid
+        if source_intent_id is not None:
+            row.last_intent_id = str(source_intent_id)
+
+        if changed:
+            row.state_version = int(row.state_version or 0) + 1
+            row.snapshot = normalized
+            await session.flush()
+            await self._append_history(
+                session,
+                row=row,
+                change_reason=change_reason,
+                source_task_id=source_task_uuid,
+                source_intent_id=source_intent_id,
+            )
+        else:
+            await session.flush()
+
+        return {**self._state_to_dict(row), "changed": changed}
+
+    async def list_history(
+        self,
+        session,
+        *,
+        twin_type: str,
+        twin_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        rows = (
+            await session.execute(
+                select(DigitalTwinHistory)
+                .where(
+                    DigitalTwinHistory.twin_type == str(twin_type),
+                    DigitalTwinHistory.twin_id == str(twin_id),
+                )
+                .order_by(DigitalTwinHistory.recorded_at.desc(), DigitalTwinHistory.state_version.desc())
+                .limit(max(1, min(int(limit), 500)))
+            )
+        ).scalars().all()
+        return [self._history_to_dict(row) for row in rows]
+
+    async def _append_history(
+        self,
+        session,
+        *,
+        row: DigitalTwinState,
+        change_reason: Optional[str],
+        source_task_id: Optional[uuid.UUID],
+        source_intent_id: Optional[str],
+    ) -> None:
+        history = DigitalTwinHistory(
+            twin_state_id=row.id,
+            twin_type=row.twin_type,
+            twin_id=row.twin_id,
+            state_version=int(row.state_version),
+            authority_source=row.authority_source,
+            snapshot=dict(row.snapshot or {}),
+            change_reason=str(change_reason) if change_reason is not None else None,
+            source_task_id=source_task_id,
+            source_intent_id=str(source_intent_id) if source_intent_id is not None else None,
+        )
+        session.add(history)
+        await session.flush()
+
+    def _normalize_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(payload or {})
+        twin_type = str(data.get("twin_type") or "").strip()
+        twin_id = str(data.get("twin_id") or "").strip()
+        if not twin_type or not twin_id:
+            raise ValueError("twin_snapshot must include non-empty twin_type and twin_id")
+        normalized = {
+            "twin_type": twin_type,
+            "twin_id": twin_id,
+            **data,
+        }
+        normalized["twin_type"] = twin_type
+        normalized["twin_id"] = twin_id
+        return normalized
+
+    def _state_to_dict(self, row: DigitalTwinState) -> Dict[str, Any]:
+        return {
+            "id": str(row.id),
+            "twin_type": row.twin_type,
+            "twin_id": row.twin_id,
+            "state_version": int(row.state_version or 0),
+            "authority_source": row.authority_source,
+            "snapshot": dict(row.snapshot or {}),
+            "last_task_id": str(row.last_task_id) if row.last_task_id is not None else None,
+            "last_intent_id": row.last_intent_id,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    def _history_to_dict(self, row: DigitalTwinHistory) -> Dict[str, Any]:
+        return {
+            "id": str(row.id),
+            "twin_state_id": str(row.twin_state_id),
+            "twin_type": row.twin_type,
+            "twin_id": row.twin_id,
+            "state_version": int(row.state_version),
+            "authority_source": row.authority_source,
+            "snapshot": dict(row.snapshot or {}),
+            "change_reason": row.change_reason,
+            "source_task_id": str(row.source_task_id) if row.source_task_id is not None else None,
+            "source_intent_id": row.source_intent_id,
+            "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+        }
+
+    def _coerce_uuid(self, value: Optional[str]) -> Optional[uuid.UUID]:
+        if value is None:
+            return None
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            return None
 
 
 class AssetCustodyStateDAO:

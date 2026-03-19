@@ -498,6 +498,113 @@ async def test_coordinator_handoff_injects_governance_context():
 
 
 @pytest.mark.asyncio
+async def test_coordinator_handoff_resolves_and_persists_digital_twins():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    organism_post = AsyncMock(
+        return_value={
+            "success": True,
+            "payload": {"status": "ok"},
+            "error": None,
+            "error_type": None,
+            "meta": {},
+            "path": "organism_service",
+        }
+    )
+
+    coordinator.organism_timeout_s = 12
+    coordinator.organism_client = SimpleNamespace(post=organism_post)
+    coordinator._compute_drift_score = AsyncMock(return_value=0.0)
+    coordinator._resolve_approved_source_registrations = AsyncMock(
+        return_value={"reg-1": "decision-1"}
+    )
+    coordinator.graph_task_repo = None
+    coordinator.ml_client = None
+    coordinator.metrics = MagicMock()
+    coordinator.cognitive_client = None
+    coordinator._persist_proto_plan = AsyncMock()
+    coordinator._record_router_telemetry = AsyncMock()
+
+    audit_session = AsyncMock()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return audit_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _BeginCtx:
+        async def __aenter__(self):
+            return audit_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    coordinator._session_factory = MagicMock(return_value=_SessionCtx())
+    audit_session.begin.return_value = _BeginCtx()
+    coordinator.governance_audit_dao = SimpleNamespace(append_record=AsyncMock())
+    coordinator.digital_twin_service = SimpleNamespace(
+        resolve_relevant_twins=AsyncMock(
+            return_value={
+                "assistant": {
+                    "twin_type": "assistant",
+                    "twin_id": "assistant:agent-99",
+                    "identity": {"agent_id": "agent-99"},
+                    "delegation": {"role_profile": "PERSISTED_OPERATOR", "revoked": False},
+                },
+                "asset": {
+                    "twin_type": "asset",
+                    "twin_id": "asset:asset-22",
+                    "identity": {"asset_id": "asset-22"},
+                    "custody": {"asset_id": "asset-22", "target_zone": "persisted-vault"},
+                },
+            }
+        ),
+        persist_relevant_twins=AsyncMock(return_value={"updated": 2, "version_bumped": 1}),
+    )
+    coordinator.fast_path_latency_slo_ms = 1000.0
+    coordinator._run_eventizer = MagicMock()
+
+    exec_cfg = coordinator._build_execution_config("cid-persisted")
+
+    result = await exec_cfg.organism_execute(
+        "organism",
+        {
+            "task_id": "task-persisted-1",
+            "type": "action",
+            "snapshot_id": 8,
+            "params": {
+                "interaction": {"assigned_agent_id": "agent-99"},
+                "routing": {"required_specialization": "ROBOT_OPERATOR"},
+                "resource": {
+                    "asset_id": "asset-22",
+                    "source_registration_id": "reg-1",
+                    "registration_decision_id": "decision-1",
+                },
+                "intent": "release",
+            },
+        },
+        1.0,
+        "cid-persisted",
+    )
+
+    assert result["success"] is True
+    assert coordinator.digital_twin_service.resolve_relevant_twins.await_count == 1
+    assert coordinator.digital_twin_service.persist_relevant_twins.await_count == 1
+
+    sent_payload = organism_post.await_args.kwargs["json"]["task"]
+    governance = sent_payload["params"]["governance"]
+    assert governance["action_intent"]["principal"]["role_profile"] == "PERSISTED_OPERATOR"
+    assert governance["action_intent"]["resource"]["target_zone"] == "persisted-vault"
+
+    persist_call = coordinator.digital_twin_service.persist_relevant_twins.await_args
+    assert persist_call.kwargs["task_id"] == "task-persisted-1"
+    assert persist_call.kwargs["intent_id"] == governance["action_intent"]["intent_id"]
+
+
+@pytest.mark.asyncio
 async def test_coordinator_handoff_reuses_cognitive_policy_advisory():
     with patch.object(cs.Coordinator, "__init__", return_value=None):
         coordinator = cs.Coordinator.__new__(cs.Coordinator)

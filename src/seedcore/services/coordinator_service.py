@@ -85,6 +85,7 @@ from ..coordinator.utils import (
 # DAOs
 from ..coordinator.dao import (
     AssetCustodyStateDAO,
+    DigitalTwinDAO,
     GovernedExecutionAuditDAO,
     TaskOutboxDAO,
     TaskProtoPlanDAO,
@@ -122,6 +123,7 @@ from ..ops.source_registration.normalizer import normalize_source_registration_c
 
 from ..coordinator.core.signals import SignalEnricher
 from ..coordinator.metrics.registry import get_global_metrics_tracker
+from .digital_twin_service import DigitalTwinService
 
 
 setup_logging(app_name="seedcore.coordinator_service.driver")
@@ -345,6 +347,7 @@ class Infrastructure:
     outbox_dao: TaskOutboxDAO
     proto_plan_dao: TaskProtoPlanDAO
     governance_audit_dao: GovernedExecutionAuditDAO
+    digital_twin_dao: DigitalTwinDAO
 
     @classmethod
     def setup(cls) -> "Infrastructure":
@@ -362,6 +365,7 @@ class Infrastructure:
         outbox_dao = TaskOutboxDAO()
         proto_plan_dao = TaskProtoPlanDAO()
         governance_audit_dao = GovernedExecutionAuditDAO()
+        digital_twin_dao = DigitalTwinDAO()
 
         return cls(
             metrics=metrics,
@@ -371,6 +375,7 @@ class Infrastructure:
             outbox_dao=outbox_dao,
             proto_plan_dao=proto_plan_dao,
             governance_audit_dao=governance_audit_dao,
+            digital_twin_dao=digital_twin_dao,
         )
 
 
@@ -444,6 +449,10 @@ class Coordinator:
         self.outbox_dao = self.infra.outbox_dao
         self.proto_plan_dao = self.infra.proto_plan_dao
         self.governance_audit_dao = self.infra.governance_audit_dao
+        self.digital_twin_service = DigitalTwinService(
+            session_factory=self._session_factory,
+            dao=self.infra.digital_twin_dao,
+        )
         # Background task storage for async processing of planning tasks
         self._async_processing_tasks: Dict[str, asyncio.Task] = {}
 
@@ -2177,11 +2186,9 @@ class Coordinator:
                     else {}
                 )
                 
-                # MILESTONE 2: Authoritative Twin Resolution
-                # 1. Build baseline from AI-provided TaskPayload (untrusted)
-                baseline_twins = build_twin_snapshot(payload)
-                
-                # 2. Fetch Authoritative System State (Ground Truth)
+                # Persistent Twin Track:
+                # 1) Pull live authoritative overlays from state-service.
+                # 2) Resolve twins via persisted twin service (fallback to baseline snapshots).
                 authoritative_state = {}
                 try:
                     if hasattr(self.services.state, "get_unified_state"):
@@ -2189,13 +2196,27 @@ class Coordinator:
                 except Exception as e:
                     logger.debug(f"Could not fetch authoritative unified state for twin resolution: {e}")
 
-                # 3. Deep Merge: Override specific sensitive properties
-                merged_twins = merge_authoritative_twins(baseline_twins, authoritative_state)
+                relevant_twin_snapshot: Dict[str, Any] = {}
+                twin_service = getattr(self, "digital_twin_service", None)
+                if twin_service is not None:
+                    try:
+                        relevant_twin_snapshot = await twin_service.resolve_relevant_twins(
+                            payload,
+                            authoritative_state=authoritative_state,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Digital twin service resolution failed; using legacy snapshot fallback.",
+                            exc_info=True,
+                        )
 
-                relevant_twin_snapshot = {
-                    k: v.model_dump() if hasattr(v, "model_dump") else dict(v) 
-                    for k, v in merged_twins.items()
-                }
+                if not relevant_twin_snapshot:
+                    baseline_twins = build_twin_snapshot(payload)
+                    merged_twins = merge_authoritative_twins(baseline_twins, authoritative_state)
+                    relevant_twin_snapshot = {
+                        k: v.model_dump() if hasattr(v, "model_dump") else dict(v)
+                        for k, v in merged_twins.items()
+                    }
 
                 policy_case = prepare_policy_case(
                     payload,
@@ -2251,6 +2272,10 @@ class Coordinator:
                     evidence_summary=evidence_summary,
                 )
                 params["governance"] = {**existing_governance, **governance}
+                await self._persist_digital_twin_state(
+                    task_id=payload.get("task_id"),
+                    governance=params["governance"],
+                )
                 policy_decision = governance.get("policy_decision", {})
                 await self._record_governance_audit(
                     task_id=payload.get("task_id"),
@@ -2467,6 +2492,54 @@ class Coordinator:
         except Exception:
             logger.warning(
                 "Failed to append governance audit record for task %s",
+                task_id,
+                exc_info=True,
+            )
+
+    async def _persist_digital_twin_state(
+        self,
+        *,
+        task_id: str | None,
+        governance: Dict[str, Any],
+    ) -> None:
+        twin_service = getattr(self, "digital_twin_service", None)
+        if twin_service is None:
+            return
+
+        policy_case = (
+            dict(governance.get("policy_case"))
+            if isinstance(governance.get("policy_case"), dict)
+            else {}
+        )
+        relevant_twin_snapshot = (
+            dict(policy_case.get("relevant_twin_snapshot"))
+            if isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        )
+        if not relevant_twin_snapshot:
+            return
+
+        action_intent = (
+            dict(governance.get("action_intent"))
+            if isinstance(governance.get("action_intent"), dict)
+            else {}
+        )
+        intent_id = (
+            str(action_intent.get("intent_id"))
+            if action_intent.get("intent_id") is not None
+            else None
+        )
+        try:
+            await twin_service.persist_relevant_twins(
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                task_id=str(task_id) if task_id is not None else None,
+                intent_id=intent_id,
+                authority_source="coordinator.pdp",
+                change_reason="policy_case_resolution",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist digital twin state for task %s",
                 task_id,
                 exc_info=True,
             )

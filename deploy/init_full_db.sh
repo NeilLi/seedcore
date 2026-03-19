@@ -37,13 +37,15 @@ MIGRATION_122="${SCRIPT_DIR}/migrations/122_source_registration.sql"
 MIGRATION_123="${SCRIPT_DIR}/migrations/123_tracking_events.sql"
 MIGRATION_124="${SCRIPT_DIR}/migrations/124_tracking_events_app_scope.sql"
 MIGRATION_125="${SCRIPT_DIR}/migrations/124_governed_execution_audit.sql"
+MIGRATION_126="${SCRIPT_DIR}/migrations/125_governed_execution_policy_receipt.sql"
+MIGRATION_127="${SCRIPT_DIR}/migrations/126_digital_twin_persistence.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125" "$MIGRATION_126" "$MIGRATION_127"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -77,6 +79,8 @@ echo "   - 122: Source registration (registrations, artifacts, measurements, dec
 echo "   - 123: Tracking events (governed event ingress + projection traceability)"
 echo "   - 124: Tracking event app-scope expansion (external app telemetry + subject indexing)"
 echo "   - 125: Governed execution audit (append-only decision and execution receipts)"
+echo "   - 126: Governed execution policy receipt column + index"
+echo "   - 127: Persistent digital twin state + history"
 
 find_pg_pod() {
   local sel pod
@@ -258,6 +262,16 @@ echo "⚙️  Running migration 125: Governed execution audit (append-only decis
 kubectl -n "$NAMESPACE" cp "$MIGRATION_125" "$POSTGRES_POD:/tmp/125_governed_execution_audit.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/125_governed_execution_audit.sql"
 
+# Migration 126 (Governed Execution Policy Receipt)
+echo "⚙️  Running migration 126: Governed execution policy receipt column + index..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_126" "$POSTGRES_POD:/tmp/126_governed_execution_policy_receipt.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/126_governed_execution_policy_receipt.sql"
+
+# Migration 127 (Persistent Digital Twin State + History)
+echo "⚙️  Running migration 127: Persistent digital twin state + history..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_127" "$POSTGRES_POD:/tmp/127_digital_twin_persistence.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/127_digital_twin_persistence.sql"
+
 # 6) Verify schema
 echo "✅ Verifying schema..."
 
@@ -297,6 +311,11 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 
 echo "📊 Facts table structure (enhanced with PKG integration):"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ facts"
+
+echo "📊 Governed execution + twin persistence tables:"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ governed_execution_audit"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ digital_twin_state"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ digital_twin_history"
 
 # NEW: HGNN verification (key tables + views + helper functions)
 echo "📊 HGNN core mapping + registries:"
@@ -425,6 +444,8 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- \
 echo "🎉 SeedCore database setup complete!"
 echo "✅ Created tables: tasks (with lease columns, routing indexes, cleanup functions),"
 echo "   holons, graph_embeddings_128, graph_embeddings_1024, task_multimodal_embeddings, facts"
+echo "✅ Created governed audit/twin tables: governed_execution_audit (with policy_receipt),"
+echo "   digital_twin_state, digital_twin_history"
 echo "✅ Created graph schema (HGNN): graph_node_map, agent_registry, organ_registry,"
 echo "   artifact, capability, memory_cell, edge tables (task_*), organ_provides_capability, agent_owns_memory_cell"
 echo "✅ Created views: graph_tasks, task_embeddings_primary_128, task_embeddings_primary_1024,"
