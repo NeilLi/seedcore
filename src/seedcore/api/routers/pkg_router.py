@@ -321,7 +321,7 @@ async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]
     }
 
     # Evaluate (async hydration pipeline: semantic + governed facts + engine execution).
-    result = await pkg_mgr.evaluate_task(task_facts, embedding=payload.embedding)
+    result = await pkg_mgr.evaluate_task(task_facts, embedding=payload.embedding, mode=payload.mode)
 
     # Check for evaluation errors (e.g., no active evaluator, validation failures)
     if not result.get("ok", True):
@@ -372,7 +372,7 @@ async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]
         )
 
     try:
-        return normalize_policy_result(result, raise_on_gate_block=True)
+        return normalize_policy_result(result, raise_on_gate_block=(payload.mode == PKGMode.CONTROL))
     except PolicyGateBlockedError as exc:
         raise HTTPException(
             status_code=403,

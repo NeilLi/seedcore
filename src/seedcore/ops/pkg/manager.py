@@ -227,7 +227,8 @@ class PKGManager:
     async def evaluate_task(
         self, 
         task_facts: Dict[str, Any], 
-        embedding: Optional[List[float]] = None
+        embedding: Optional[List[float]] = None,
+        mode: Optional[PKGMode] = None
     ) -> Dict[str, Any]:
         """
         The primary 'Living System' evaluation entrypoint.
@@ -279,6 +280,8 @@ class PKGManager:
                 "snapshot": None
             }
         
+        effective_mode = mode if mode is not None else self._mode
+        
         evaluator = self.get_active_evaluator()
         if not evaluator:
             logger.error("No active PKG evaluator available for task evaluation")
@@ -286,7 +289,7 @@ class PKGManager:
                 "ok": False,
                 "meta": {
                     "error": "no_active_policy",
-                    "mode": self._mode.value,
+                    "mode": effective_mode.value,
                     "version": None,
                     "hydration_blocked": False,
                 },
@@ -298,7 +301,7 @@ class PKGManager:
 
         # P0: Block hydration in CONTROL mode
         hydration_blocked = False
-        if self._mode == PKGMode.CONTROL:
+        if effective_mode == PKGMode.CONTROL:
             if embedding is not None:
                 logger.debug("[PKG] Hydration blocked in CONTROL mode (embedding provided but ignored)")
                 hydration_blocked = True
@@ -320,7 +323,7 @@ class PKGManager:
             ok = True
             error_code: Optional[str] = None
             deny_reason: Optional[str] = None
-            if self._mode == PKGMode.CONTROL and not has_subtasks:
+            if effective_mode == PKGMode.CONTROL and not has_subtasks:
                 ok = False
                 error_code = "policy_denied"
                 deny_reason = "control_mode_empty_subtasks"
@@ -331,7 +334,7 @@ class PKGManager:
                 "meta": {
                     "error": error_code,
                     "deny_reason": deny_reason,
-                    "mode": self._mode.value,
+                    "mode": effective_mode.value,
                     "version": result.get("snapshot"),
                     "hydration_blocked": hydration_blocked,
                     "has_subtasks": has_subtasks,

@@ -1274,6 +1274,14 @@ class NativeRuleEngine:
         # Handle condition type-specific logic
         if condition_type == "TAG":
             tags = context.get("tags", [])
+            if operator == "MATCHES":
+                import re
+                try:
+                    pattern = re.compile(str(value))
+                    return any(bool(pattern.match(str(t))) for t in tags)
+                except re.error:
+                    logger.warning(f"Invalid regex pattern for tag match: {value}")
+                    return False
             if operator == "IN" or operator == "EXISTS":
                 return condition_key in tags
             elif operator == "=":
