@@ -1,4 +1,5 @@
 # Import mock dependencies BEFORE any other imports
+import base64
 import hashlib
 import hmac
 import json
@@ -6,6 +7,7 @@ import os
 import sys
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
@@ -282,8 +284,7 @@ def test_evidence_bundle_binds_transition_receipt_hash():
         receipt["signed_payload"]["transition_receipt_hash"]
         == receipt["transition_receipt_hash"]
     )
-    assert receipt["signer"]["proof_type"] == transition_receipt["proof_type"]
-    assert receipt["signer"]["key_id"] == transition_receipt.get("key_id")
+    assert receipt["signer"]["proof_type"] == receipt["proof_type"]
 
 
 def test_evidence_bundle_v11_prefers_explicit_node_and_asset_fingerprint():
@@ -340,6 +341,119 @@ def test_evidence_bundle_v11_prefers_explicit_node_and_asset_fingerprint():
     assert bundle["asset_fingerprint"]["fingerprint_hash"] == "fingerprint-custom-5"
     assert bundle["policy_receipt"]["policy_snapshot"] == "snapshot:5"
     assert bundle["policy_receipt"]["signer"]["signer_id"] == "seedcore-pdp-main"
+
+
+def test_execution_receipt_signer_mode_ed25519(monkeypatch):
+    private_key = Ed25519PrivateKey.generate()
+    key_b64 = base64.b64encode(private_key.private_bytes_raw()).decode("ascii")
+    monkeypatch.setenv("SEEDCORE_EVIDENCE_SIGNER_MODE", "ed25519")
+    monkeypatch.setenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64", key_b64)
+    monkeypatch.setenv("SEEDCORE_EVIDENCE_ED25519_KEY_ID", "evidence-ed25519-k1")
+    monkeypatch.setenv("SEEDCORE_EVIDENCE_ED25519_SIGNER_ID", "evidence-ed25519-signer")
+
+    task_dict = {
+        "task_id": "task-ed25519-1",
+        "type": "action",
+        "params": {
+            "governance": {
+                "action_intent": {"intent_id": "intent-ed25519-1"},
+                "execution_token": {"token_id": "token-ed25519-1"},
+                "policy_decision": {"allowed": True},
+            }
+        },
+    }
+    envelope = {
+        "payload": {
+            "results": [
+                {
+                    "tool": "reachy.motion",
+                    "output": {
+                        "actuator_endpoint": "robot_sim://reachy/pose",
+                        "result_hash": "hash-ed25519",
+                    },
+                }
+            ]
+        },
+        "meta": {"exec": {"finished_at": "2026-03-10T10:15:00+00:00"}},
+    }
+
+    receipt = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="organ-r",
+        agent_id="agent-r",
+    )["meta"]["evidence_bundle"]["execution_receipt"]
+
+    assert receipt["proof_type"] == "ed25519"
+    assert receipt["signer"]["proof_type"] == "ed25519"
+    assert receipt["signer"]["key_id"] == "evidence-ed25519-k1"
+    assert receipt["signer"]["signer_id"] == "evidence-ed25519-signer"
+    assert isinstance(receipt["signature"], str)
+    assert len(receipt["signature"]) > 20
+
+
+def test_execution_receipt_signer_mode_auto_attested_only(monkeypatch):
+    private_key = Ed25519PrivateKey.generate()
+    key_b64 = base64.b64encode(private_key.private_bytes_raw()).decode("ascii")
+    monkeypatch.setenv("SEEDCORE_EVIDENCE_SIGNER_MODE", "auto")
+    monkeypatch.setenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64", key_b64)
+
+    task_dict = {
+        "task_id": "task-auto-1",
+        "type": "action",
+        "params": {
+            "governance": {
+                "action_intent": {"intent_id": "intent-auto-1"},
+                "execution_token": {"token_id": "token-auto-1"},
+                "policy_decision": {"allowed": True},
+            }
+        },
+    }
+
+    attested_env = {
+        "payload": {
+            "results": [
+                {
+                    "tool": "reachy.motion",
+                    "output": {
+                        "actuator_endpoint": "robot_sim://reachy/pose",
+                        "result_hash": "hash-auto-attested",
+                    },
+                }
+            ]
+        },
+        "meta": {"exec": {"finished_at": "2026-03-10T10:16:00+00:00"}},
+    }
+    non_attested_env = {
+        "payload": {
+            "results": [
+                {
+                    "tool": "tuya.control",
+                    "output": {
+                        "actuator_endpoint": "tuya://device-1",
+                        "result_hash": "hash-auto-non-attested",
+                    },
+                }
+            ]
+        },
+        "meta": {"exec": {"finished_at": "2026-03-10T10:16:10+00:00"}},
+    }
+
+    attested_receipt = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=attested_env,
+        organ_id="organ-a",
+        agent_id="agent-a",
+    )["meta"]["evidence_bundle"]["execution_receipt"]
+    non_attested_receipt = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=non_attested_env,
+        organ_id="organ-b",
+        agent_id="agent-b",
+    )["meta"]["evidence_bundle"]["execution_receipt"]
+
+    assert attested_receipt["proof_type"] == "ed25519"
+    assert non_attested_receipt["proof_type"] == "hmac_sha256"
 
 
 @pytest.mark.parametrize(

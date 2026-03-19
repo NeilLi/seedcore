@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import uuid
@@ -16,6 +15,7 @@ from seedcore.models.evidence_bundle import (
     PolicyReceipt,
     SignerMetadata,
 )
+from seedcore.ops.evidence.signers import resolve_evidence_signer
 
 
 def build_evidence_bundle(
@@ -240,13 +240,14 @@ def _build_execution_receipt(
         "node_id": node_id,
     }
     payload_hash = _sha256_hex(_canonical_json(signed_payload))
-    signature = _sign_payload(payload_hash)
-    signer = _derive_execution_signer(proof_type="hmac_sha256", transition_receipt=transition_receipt)
+    resolved_signer = resolve_evidence_signer(endpoint_id=actuator_endpoint)
+    signing_result = resolved_signer.sign(payload_hash)
+    signer = _derive_execution_signer(signing_result=signing_result)
 
     return ExecutionReceipt(
         receipt_id=str(uuid.uuid4()),
-        proof_type="hmac_sha256",
-        signature=signature,
+        proof_type=signing_result.proof_type,
+        signature=signing_result.signature,
         payload_hash=payload_hash,
         signed_payload=signed_payload,
         actuator_endpoint=actuator_endpoint,
@@ -443,39 +444,22 @@ def _derive_node_id(
 
 def _derive_execution_signer(
     *,
-    proof_type: str,
-    transition_receipt: Dict[str, Any] | None,
+    signing_result: Any,
 ) -> SignerMetadata:
-    if isinstance(transition_receipt, dict):
-        return SignerMetadata(
-            signer_id=(
-                str(transition_receipt.get("endpoint_id"))
-                if transition_receipt.get("endpoint_id") is not None
-                else None
-            ),
-            signer_type="transition_receipt",
-            key_id=(
-                str(transition_receipt.get("key_id"))
-                if transition_receipt.get("key_id") is not None
-                else None
-            ),
-            public_key=(
-                str(transition_receipt.get("public_key"))
-                if transition_receipt.get("public_key") is not None
-                else None
-            ),
-            proof_type=(
-                str(transition_receipt.get("proof_type"))
-                if transition_receipt.get("proof_type") is not None
-                else proof_type
-            ),
-        )
     return SignerMetadata(
-        signer_id=os.getenv("SEEDCORE_EVIDENCE_SIGNER_ID", "seedcore-evidence-service"),
-        signer_type="service",
-        key_id=os.getenv("SEEDCORE_EVIDENCE_SIGNING_KEY_ID"),
-        public_key=None,
-        proof_type=proof_type,
+        signer_id=str(getattr(signing_result, "signer_id", "") or "seedcore-evidence-service"),
+        signer_type=str(getattr(signing_result, "signer_type", "") or "service"),
+        key_id=(
+            str(getattr(signing_result, "key_id"))
+            if getattr(signing_result, "key_id", None) is not None
+            else None
+        ),
+        public_key=(
+            str(getattr(signing_result, "public_key"))
+            if getattr(signing_result, "public_key", None) is not None
+            else None
+        ),
+        proof_type=str(getattr(signing_result, "proof_type", "") or "hmac_sha256"),
     )
 
 
@@ -648,16 +632,6 @@ def _extract_endpoint_responses(actuator_entries: List[Dict[str, Any]]) -> List[
                 )
 
     return endpoint_responses
-
-
-def _sign_payload(payload_hash: str) -> str:
-    secret = os.getenv("SEEDCORE_EVIDENCE_SIGNING_SECRET", "seedcore-dev-evidence-secret")
-    return hmac.new(
-        secret.encode("utf-8"),
-        payload_hash.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
 
 def _sha256_hex(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
