@@ -13,6 +13,7 @@ Each DAO is focused on a single domain responsibility, improving modularity,
 testability, and maintainability.
 """
 
+import json
 import logging
 import inspect
 from typing import Optional, List, Dict, Any, Mapping
@@ -1274,14 +1275,17 @@ class PKGValidationDAO:
         """
         sql = text("""
             UPDATE pkg_validation_runs
-            SET finished_at = now(), success = :success, report = :report
+            SET finished_at = now(), success = :success, report = CAST(:report AS JSONB)
             WHERE id = :run_id
         """)
+
+        # Serialize explicitly for asyncpg JSONB stability across environments.
+        report_json = json.dumps(report, default=str) if report is not None else None
 
         async with self._sf() as session:
             async with session.begin():  # Explicit transaction
                 await session.execute(
-                    sql, {"run_id": run_id, "success": success, "report": report}
+                    sql, {"run_id": run_id, "success": success, "report": report_json}
                 )
 
     async def get_validation_runs(

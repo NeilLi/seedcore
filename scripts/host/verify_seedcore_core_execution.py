@@ -484,10 +484,15 @@ def verify(api_url: str, *, strict: bool, poll_seconds: int, poll_interval: floa
             "baseline_snapshot_id": pkg_snapshot_id,
             "candidate_snapshot_id": pkg_snapshot_id,
             "task_facts": {
-                "namespace": "verify",
-                "subject": "guest:verify",
-                "predicate": "request_concierge",
-                "object_data": {"channel": "api"},
+                "tags": ["verify", "request_concierge", "guest:verify"],
+                "signals": {},
+                "context": {
+                    "namespace": "verify",
+                    "subject": "guest:verify",
+                    "predicate": "request_concierge",
+                    "object_data": {"channel": "api"},
+                    "snapshot_id": pkg_snapshot_id,
+                },
             },
         }
         ok, detail, _, code = call_json(
