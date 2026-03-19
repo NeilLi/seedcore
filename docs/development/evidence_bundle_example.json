@@ -1,10 +1,48 @@
 {
   "intent_ref": "governance://action-intent/intent-investor-demo-1",
   "executed_at": "2026-03-16T09:30:10+00:00",
+  "node_id": "robot_sim://reachy/move_forward#sim-device-9",
+  "policy_receipt": {
+    "receipt_id": "3f42af60-2f1f-460e-8af4-13a7da9dd11d",
+    "issued_at": "2026-03-16T09:30:08+00:00",
+    "policy_snapshot": "snapshot:42",
+    "policy_case_hash": "a91673f74e3cda8bc8df0c3e9bd4b183451146b26d8bb76cff4f50cc8fa0abaf",
+    "policy_decision_hash": "9b46f27e4ac6ed9baf98cab94f4d239f2f095f7c1eb05a11cb4f42078c11f39f",
+    "execution_token": {
+      "token_id": "tok-investor-demo-1",
+      "intent_id": "intent-investor-demo-1",
+      "issued_at": "2026-03-16T09:30:08+00:00",
+      "valid_until": "2026-03-16T09:30:13+00:00",
+      "contract_version": "snapshot:42",
+      "signature": "token-signature-demo"
+    },
+    "signer": {
+      "signer_id": "seedcore-pdp",
+      "signer_type": "policy_decision_point",
+      "key_id": "pdp-hmac-v1",
+      "public_key": null,
+      "proof_type": "hmac_sha256"
+    }
+  },
+  "asset_fingerprint": {
+    "fingerprint_hash": "b61e739e3355a03396f5ea9ec903f080c8f9a150f1d8fa6ecfbf43b5eecfd063",
+    "algorithm": "sha256",
+    "asset_id": "lot-demo-001",
+    "source_modalities": [
+      "vision",
+      "gps"
+    ],
+    "components": {
+      "provenance_hash": "provenance-demo-001",
+      "vision_hash": "155cb27fd0f8f4f237352bde4266c7c9755f4298ae57dd738a32eb37085768be",
+      "gps_hash": "917f35a7a9afef902f7cedf0be49a66f4d6c8c88ef526fd4f8450e5e3f8f9a80"
+    }
+  },
   "telemetry_snapshot": {
     "executed_by": {
       "organ_id": "physical_actuation_organ",
-      "agent_id": "reachy_executor_7"
+      "agent_id": "reachy_executor_7",
+      "node_id": "robot_sim://reachy/move_forward#sim-device-9"
     },
     "captured_at": "2026-03-16T09:30:10+00:00",
     "vision": [
@@ -78,6 +116,14 @@
       }
     },
     "actuator_endpoint": "robot_sim://reachy/move_forward",
-    "actuator_result_hash": "f9d0266f5e2279c2e1947c29f4d95a907cf6f7eb3d5dd02fe6f5107b859f97cf"
+    "actuator_result_hash": "f9d0266f5e2279c2e1947c29f4d95a907cf6f7eb3d5dd02fe6f5107b859f97cf",
+    "node_id": "robot_sim://reachy/move_forward#sim-device-9",
+    "signer": {
+      "signer_id": "seedcore-evidence-service",
+      "signer_type": "service",
+      "key_id": "evidence-hmac-v1",
+      "public_key": null,
+      "proof_type": "hmac_sha256"
+    }
   }
 }

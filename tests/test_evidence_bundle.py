@@ -76,10 +76,14 @@ def test_attach_evidence_bundle_includes_required_fields():
     assert bundle["executed_at"] == "2026-03-10T10:10:10+00:00"
     assert "telemetry_snapshot" in bundle
     assert "execution_receipt" in bundle
+    assert "node_id" in bundle
+    assert "policy_receipt" in bundle
+    assert "asset_fingerprint" in bundle
     assert bundle["execution_receipt"]["proof_type"] == "hmac_sha256"
     assert isinstance(bundle["execution_receipt"]["signature"], str)
     assert len(bundle["execution_receipt"]["signature"]) > 10
     assert isinstance(bundle["execution_receipt"]["signed_payload"], dict)
+    assert isinstance(bundle["execution_receipt"]["signer"], dict)
 
 
 def test_evidence_bundle_mandatory_field_completeness():
@@ -134,10 +138,13 @@ def test_evidence_bundle_mandatory_field_completeness():
     assert bundle["executed_at"]
     assert isinstance(bundle["telemetry_snapshot"], dict)
     assert isinstance(bundle["execution_receipt"], dict)
+    assert isinstance(bundle["policy_receipt"], dict)
+    assert isinstance(bundle["asset_fingerprint"], dict)
 
     telemetry = bundle["telemetry_snapshot"]
     assert telemetry["executed_by"]["organ_id"] == "actuation_organ"
     assert telemetry["executed_by"]["agent_id"] == "agent_77"
+    assert telemetry["executed_by"]["node_id"] == bundle["node_id"]
     assert "target_zone" in telemetry["zone_checks"]
     assert "current_zone" in telemetry["zone_checks"]
     assert isinstance(telemetry["vision"], list)
@@ -151,6 +158,17 @@ def test_evidence_bundle_mandatory_field_completeness():
     assert isinstance(receipt["signed_payload"], dict)
     assert receipt["signed_payload"]["intent_id"] == "intent-e-2"
     assert receipt["signed_payload"]["policy_decision"]["allowed"] is True
+    assert receipt["node_id"] == bundle["node_id"]
+    assert isinstance(receipt["signer"], dict)
+
+    policy_receipt = bundle["policy_receipt"]
+    assert policy_receipt["execution_token"]["token_id"] == "token-e-2"
+    assert isinstance(policy_receipt["signer"], dict)
+    assert policy_receipt["policy_decision_hash"]
+
+    asset_fingerprint = bundle["asset_fingerprint"]
+    assert asset_fingerprint["fingerprint_hash"]
+    assert asset_fingerprint["algorithm"] == "sha256"
 
 
 def test_evidence_bundle_hashing_is_reproducible_and_explainable(monkeypatch):
@@ -264,6 +282,64 @@ def test_evidence_bundle_binds_transition_receipt_hash():
         receipt["signed_payload"]["transition_receipt_hash"]
         == receipt["transition_receipt_hash"]
     )
+    assert receipt["signer"]["proof_type"] == transition_receipt["proof_type"]
+    assert receipt["signer"]["key_id"] == transition_receipt.get("key_id")
+
+
+def test_evidence_bundle_v11_prefers_explicit_node_and_asset_fingerprint():
+    task_dict = {
+        "task_id": "task-e-5",
+        "type": "action",
+        "params": {
+            "governance": {
+                "node_id": "node://line-a/arm-2",
+                "asset_fingerprint": {
+                    "fingerprint_hash": "fingerprint-custom-5",
+                    "algorithm": "sha256",
+                    "source_modalities": ["vision", "gps"],
+                    "components": {"vision_hash": "vh-5", "gps_hash": "gh-5"},
+                },
+                "action_intent": {
+                    "intent_id": "intent-e-5",
+                    "resource": {
+                        "asset_id": "asset-e-5",
+                        "target_zone": "zone-e-5",
+                    },
+                },
+                "execution_token": {
+                    "token_id": "token-e-5",
+                    "issued_at": "2026-03-10T10:14:14+00:00",
+                    "signature": "sig-token-e-5",
+                    "issuer": "seedcore-pdp-main",
+                    "proof_type": "hmac_sha256",
+                },
+                "policy_decision": {"allowed": True, "reason": "approved"},
+                "policy_case": {"policy_snapshot": "snapshot:5"},
+            },
+            "multimodal": {
+                "detections": [{"label": "asset-e-5", "confidence": 0.99}],
+                "gps": {"lat": 18.81, "lon": 98.92},
+            },
+        },
+    }
+    envelope = {
+        "payload": {"results": []},
+        "meta": {"exec": {"finished_at": "2026-03-10T10:14:20+00:00"}},
+    }
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="actuation_organ",
+        agent_id="agent-e5",
+    )["meta"]["evidence_bundle"]
+
+    assert bundle["node_id"] == "node://line-a/arm-2"
+    assert bundle["execution_receipt"]["node_id"] == "node://line-a/arm-2"
+    assert bundle["telemetry_snapshot"]["executed_by"]["node_id"] == "node://line-a/arm-2"
+    assert bundle["asset_fingerprint"]["fingerprint_hash"] == "fingerprint-custom-5"
+    assert bundle["policy_receipt"]["policy_snapshot"] == "snapshot:5"
+    assert bundle["policy_receipt"]["signer"]["signer_id"] == "seedcore-pdp-main"
 
 
 @pytest.mark.parametrize(
