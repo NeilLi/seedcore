@@ -345,3 +345,76 @@ class TestGovernedExecutionAuditDAO:
         assert len(rows) == 1
         assert rows[0]["record_type"] == "policy_decision"
         assert rows[0]["intent_id"] == "intent-1"
+
+    @pytest.mark.asyncio
+    async def test_get_latest_for_intent_returns_first_row(self):
+        dao = GovernedExecutionAuditDAO()
+        session = AsyncMock()
+
+        mock_result = MagicMock()
+        mappings = MagicMock()
+        mappings.all.return_value = [
+            {
+                "id": "audit-2",
+                "task_id": "123e4567-e89b-12d3-a456-426614174000",
+                "record_type": "execution_receipt",
+                "intent_id": "intent-2",
+                "token_id": "token-2",
+                "policy_snapshot": "snapshot:2",
+                "policy_decision": {"allowed": True},
+                "action_intent": {"intent_id": "intent-2"},
+                "policy_case": {},
+                "policy_receipt": {"receipt_id": "policy-r-2"},
+                "evidence_bundle": {"intent_ref": "governance://action-intent/intent-2"},
+                "actor_agent_id": "agent-2",
+                "actor_organ_id": "organ-2",
+                "input_hash": "b" * 64,
+                "evidence_hash": "c" * 64,
+                "recorded_at": MagicMock(isoformat=MagicMock(return_value="2026-03-16T11:00:00+00:00")),
+            }
+        ]
+        mock_result.mappings.return_value = mappings
+        session.execute = AsyncMock(return_value=mock_result)
+
+        row = await dao.get_latest_for_intent(session, intent_id="intent-2")
+
+        assert row is not None
+        assert row["intent_id"] == "intent-2"
+        assert row["policy_receipt"]["receipt_id"] == "policy-r-2"
+
+    @pytest.mark.asyncio
+    async def test_get_by_entry_id_returns_row(self):
+        dao = GovernedExecutionAuditDAO()
+        session = AsyncMock()
+
+        mock_result = MagicMock()
+        mappings = MagicMock()
+        mappings.one_or_none.return_value = {
+            "id": "audit-3",
+            "task_id": "123e4567-e89b-12d3-a456-426614174000",
+            "record_type": "policy_decision",
+            "intent_id": "intent-3",
+            "token_id": "token-3",
+            "policy_snapshot": "snapshot:3",
+            "policy_decision": {"allowed": False},
+            "action_intent": {"intent_id": "intent-3"},
+            "policy_case": {},
+            "policy_receipt": {"receipt_id": "policy-r-3"},
+            "evidence_bundle": {},
+            "actor_agent_id": "agent-3",
+            "actor_organ_id": "organ-3",
+            "input_hash": "d" * 64,
+            "evidence_hash": None,
+            "recorded_at": MagicMock(isoformat=MagicMock(return_value="2026-03-16T12:00:00+00:00")),
+        }
+        mock_result.mappings.return_value = mappings
+        session.execute = AsyncMock(return_value=mock_result)
+
+        row = await dao.get_by_entry_id(
+            session,
+            entry_id="123e4567-e89b-12d3-a456-426614174000",
+        )
+
+        assert row is not None
+        assert row["id"] == "audit-3"
+        assert row["policy_receipt"]["receipt_id"] == "policy-r-3"

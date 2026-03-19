@@ -17,6 +17,7 @@ from sqlalchemy import select, String, text  # pyright: ignore[reportMissingImpo
 from ...database import get_async_pg_session
 from ...coordinator.dao import GovernedExecutionAuditDAO
 from ...models import DatabaseTask as Task, TaskStatus
+from ...ops.evidence.materializer import materialize_seedcore_custody_event_payload
 
 # --- Configuration ---
 RUN_NOW_ENSURE_NODE = os.getenv("RUN_NOW_ENSURE_NODE", "true").lower() in ("1","true","yes")
@@ -68,6 +69,13 @@ class TaskGovernanceRead(BaseModel):
     latest: Dict[str, Any] | None
     entries: List[Dict[str, Any]]
     task_governance: Dict[str, Any] | None = None
+
+
+class MaterializedCustodyEventRead(BaseModel):
+    retrieval_key: str
+    retrieval_value: str
+    audit_record: Dict[str, Any]
+    custody_event_jsonld: Dict[str, Any]
 
 # --- Helpers ---
 async def _ensure_task_node_mapping(session: AsyncSession, task_id: uuid.UUID, call_site: str) -> int:
@@ -245,6 +253,62 @@ async def get_task_governance(
         latest=latest,
         entries=entries,
         task_governance=task_governance,
+    )
+
+
+@router.get("/governance/materialized-custody-event", response_model=MaterializedCustodyEventRead)
+async def get_materialized_custody_event(
+    task_id: str | None = None,
+    intent_id: str | None = None,
+    audit_id: str | None = None,
+    session: AsyncSession = Depends(get_async_pg_session),
+) -> MaterializedCustodyEventRead:
+    provided = [("task_id", task_id), ("intent_id", intent_id), ("audit_id", audit_id)]
+    provided = [(k, v) for k, v in provided if isinstance(v, str) and v.strip()]
+    if len(provided) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide exactly one retrieval key: task_id, intent_id, or audit_id",
+        )
+
+    key, raw_value = provided[0]
+    value = raw_value.strip()
+
+    if key == "task_id":
+        uid = await _resolve_task_id(session, value)
+        record = await governance_audit_dao.get_latest_for_task(session, task_id=str(uid))
+        retrieval_value = str(uid)
+    elif key == "intent_id":
+        record = await governance_audit_dao.get_latest_for_intent(session, intent_id=value)
+        retrieval_value = value
+    else:
+        try:
+            audit_uuid = str(uuid.UUID(value))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid audit_id format")
+        record = await governance_audit_dao.get_by_entry_id(session, entry_id=audit_uuid)
+        retrieval_value = audit_uuid
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Governed audit record not found")
+
+    evidence_bundle = (
+        record.get("evidence_bundle")
+        if isinstance(record.get("evidence_bundle"), dict)
+        else {}
+    )
+    if not evidence_bundle:
+        raise HTTPException(
+            status_code=409,
+            detail="Audit record exists but has no evidence_bundle to materialize",
+        )
+
+    custody_event_jsonld = materialize_seedcore_custody_event_payload(audit_record=record)
+    return MaterializedCustodyEventRead(
+        retrieval_key=key,
+        retrieval_value=retrieval_value,
+        audit_record=record,
+        custody_event_jsonld=custody_event_jsonld,
     )
 
 

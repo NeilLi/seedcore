@@ -528,6 +528,82 @@ class GovernedExecutionAuditDAO:
         rows = await self.list_for_task(session, task_id=task_id, limit=1)
         return rows[0] if rows else None
 
+    async def list_for_intent(
+        self,
+        session,
+        *,
+        intent_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        stmt = text(
+            f"""
+            SELECT
+                id,
+                task_id,
+                record_type,
+                intent_id,
+                token_id,
+                policy_snapshot,
+                policy_decision,
+                action_intent,
+                policy_case,
+                policy_receipt,
+                evidence_bundle,
+                actor_agent_id,
+                actor_organ_id,
+                input_hash,
+                evidence_hash,
+                recorded_at
+            FROM {self._TABLE_NAME}
+            WHERE intent_id = :intent_id
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT :limit
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {"intent_id": str(intent_id), "limit": max(1, min(int(limit), 500))},
+        )
+        return [self._mapping_to_dict(row) for row in result.mappings().all()]
+
+    async def get_latest_for_intent(self, session, *, intent_id: str) -> Optional[Dict[str, Any]]:
+        rows = await self.list_for_intent(session, intent_id=intent_id, limit=1)
+        return rows[0] if rows else None
+
+    async def get_by_entry_id(self, session, *, entry_id: str) -> Optional[Dict[str, Any]]:
+        stmt = text(
+            f"""
+            SELECT
+                id,
+                task_id,
+                record_type,
+                intent_id,
+                token_id,
+                policy_snapshot,
+                policy_decision,
+                action_intent,
+                policy_case,
+                policy_receipt,
+                evidence_bundle,
+                actor_agent_id,
+                actor_organ_id,
+                input_hash,
+                evidence_hash,
+                recorded_at
+            FROM {self._TABLE_NAME}
+            WHERE id = CAST(:entry_id AS uuid)
+            LIMIT 1
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {"entry_id": str(uuid.UUID(str(entry_id)))},
+        )
+        row = result.mappings().one_or_none()
+        if row is None:
+            return None
+        return self._mapping_to_dict(row)
+
     def _mapping_to_dict(self, row: Any) -> Dict[str, Any]:
         return {
             "id": str(row["id"]),
