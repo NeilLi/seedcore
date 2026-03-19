@@ -2537,6 +2537,7 @@ class Coordinator:
                 authority_source="coordinator.pdp",
                 change_reason="policy_case_resolution",
                 transition_context={
+                    "phase": "policy_time",
                     "policy_receipt": (
                         dict(governance.get("policy_receipt"))
                         if isinstance(governance.get("policy_receipt"), dict)

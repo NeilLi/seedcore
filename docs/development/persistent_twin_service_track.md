@@ -36,3 +36,13 @@ build_twin_snapshot() baseline shape
 ```
 
 `build_twin_snapshot()` remains as a compatibility fallback and bootstrap input for missing twins.
+
+## Auth-Loop Settlement
+
+Twin authority now follows a two-phase loop:
+
+1. Policy-time persistence writes twin updates with `authority_status=PENDING`.
+2. Execution-time settlement ingests `EvidenceBundle` and verifies `node_id`.
+3. On successful verification, pending state is promoted to `authority_status=AUTHORITATIVE`.
+
+Settlement runs during custody-ledger receipt ingestion (transition-time), not only at policy-time.

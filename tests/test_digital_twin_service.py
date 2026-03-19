@@ -165,6 +165,7 @@ async def test_persist_relevant_twins_infers_in_transit_state_on_execution_token
     )
 
     assert captured[0]["governed_state"] == "IN_TRANSIT"
+    assert captured[0]["authority_status"] == "PENDING"
 
 
 @pytest.mark.asyncio
@@ -193,3 +194,72 @@ async def test_get_twin_ancestry_follows_parent_chain():
 
     ancestry = await service.get_twin_ancestry(twin_type="asset", twin_id="asset:unit-1")
     assert len(ancestry) == 2
+
+
+@pytest.mark.asyncio
+async def test_settle_from_evidence_bundle_promotes_pending_to_authoritative():
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+    captured = []
+
+    async def _capture_upsert(*_args, **kwargs):
+        captured.append(kwargs["twin_snapshot"])
+        return {"changed": True}
+
+    dao = SimpleNamespace(upsert_snapshot=AsyncMock(side_effect=_capture_upsert))
+    session_factory = MagicMock(return_value=_SessionCtx(session))
+    service = DigitalTwinService(session_factory=session_factory, dao=dao)
+
+    result = await service.settle_from_evidence_bundle(
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_type": "asset",
+                "twin_id": "asset:asset-1",
+                "governed_state": "IN_TRANSIT",
+                "authority_status": "PENDING",
+            }
+        },
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        execution_token={"constraints": {"endpoint_id": "node-1"}},
+        evidence_bundle={
+            "node_id": "node-1",
+            "execution_receipt": {"node_id": "node-1"},
+        },
+    )
+
+    assert result["updated"] == 1
+    assert captured[0]["authority_status"] == "AUTHORITATIVE"
+    assert captured[0]["custody"]["pending_authority"] is False
+    assert captured[0]["custody"]["authoritative_node_id"] == "node-1"
+
+
+@pytest.mark.asyncio
+async def test_settle_from_evidence_bundle_rejects_node_mismatch():
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+    dao = SimpleNamespace(upsert_snapshot=AsyncMock(return_value={"changed": True}))
+    session_factory = MagicMock(return_value=_SessionCtx(session))
+    service = DigitalTwinService(session_factory=session_factory, dao=dao)
+
+    result = await service.settle_from_evidence_bundle(
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_type": "asset",
+                "twin_id": "asset:asset-1",
+                "governed_state": "IN_TRANSIT",
+                "authority_status": "PENDING",
+            }
+        },
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        execution_token={"constraints": {"endpoint_id": "node-expected"}},
+        evidence_bundle={
+            "node_id": "node-actual",
+            "execution_receipt": {"node_id": "node-actual"},
+        },
+    )
+
+    assert result["updated"] == 0
+    assert result["rejected_reason"] == "node_id_mismatch_expected_endpoint"
+    assert dao.upsert_snapshot.await_count == 0

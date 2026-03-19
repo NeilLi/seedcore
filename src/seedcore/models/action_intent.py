@@ -90,10 +90,16 @@ class TwinGovernedState(str, Enum):
     DELIVERED = "DELIVERED"
 
 
+class TwinAuthorityStatus(str, Enum):
+    PENDING = "PENDING"
+    AUTHORITATIVE = "AUTHORITATIVE"
+
+
 class TwinSnapshot(BaseModel):
     twin_type: str
     twin_id: str
     governed_state: TwinGovernedState = TwinGovernedState.UNVERIFIED
+    authority_status: TwinAuthorityStatus = TwinAuthorityStatus.AUTHORITATIVE
     current_custodian_id: Optional[str] = None
     parent_twin_id: Optional[str] = None
     ancestry_path: List[str] = Field(default_factory=list)

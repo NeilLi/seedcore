@@ -36,6 +36,7 @@ from .action_intent import (
     PolicyCase,
     PolicyCaseAssessment,
     PolicyDecision,
+    TwinAuthorityStatus,
     TwinGovernedState,
     TwinSnapshot,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "PolicyCase",
     "PolicyCaseAssessment",
     "PolicyDecision",
+    "TwinAuthorityStatus",
     "TwinGovernedState",
     "TwinSnapshot",
     "EvidenceBundle",

@@ -137,6 +137,7 @@ class ToolManager:
         self._custody_lock = asyncio.Lock()
         self._governance_audit_dao = None
         self._asset_custody_state_dao = None
+        self._digital_twin_service = None
         self._db_session_factory = None
 
         logger.info("🔧 ToolManager initialized (v2.1+)")
@@ -699,7 +700,13 @@ class ToolManager:
                     "Asset custody state sync failed after ledger record",
                     exc_info=True,
                 )
-            return {"ok": True, "entry_id": record["entry_id"], "persisted": persisted}
+            settlement = await self._settle_digital_twin_state(record, governance_ctx)
+            return {
+                "ok": True,
+                "entry_id": record["entry_id"],
+                "persisted": persisted,
+                "twin_settlement": settlement,
+            }
 
         if name == "custody.ledger.list":
             limit = args.get("limit", 50)
@@ -817,6 +824,23 @@ class ToolManager:
             except Exception:
                 return None
         return self._asset_custody_state_dao
+
+    def _get_digital_twin_service(self):
+        if self._digital_twin_service is None:
+            try:
+                from seedcore.coordinator.dao import DigitalTwinDAO
+                from seedcore.services.digital_twin_service import DigitalTwinService
+
+                session_factory = self._get_db_session_factory()
+                if session_factory is None:
+                    return None
+                self._digital_twin_service = DigitalTwinService(
+                    session_factory=session_factory,
+                    dao=DigitalTwinDAO(),
+                )
+            except Exception:
+                return None
+        return self._digital_twin_service
 
     def _get_db_session_factory(self):
         if self._db_session_factory is None:
@@ -1079,6 +1103,78 @@ class ToolManager:
             ),
             "updated_by": str(record.get("agent_id")) if record.get("agent_id") is not None else None,
         }
+
+    async def _settle_digital_twin_state(
+        self,
+        record: Dict[str, Any],
+        governance_ctx: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(governance_ctx, dict):
+            return {"ok": False, "reason": "missing_governance_ctx"}
+        service = self._get_digital_twin_service()
+        if service is None:
+            return {"ok": False, "reason": "digital_twin_service_unavailable"}
+
+        policy_case = (
+            governance_ctx.get("policy_case")
+            if isinstance(governance_ctx.get("policy_case"), dict)
+            else {}
+        )
+        relevant_twin_snapshot = (
+            policy_case.get("relevant_twin_snapshot")
+            if isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        )
+        action_intent = (
+            governance_ctx.get("action_intent")
+            if isinstance(governance_ctx.get("action_intent"), dict)
+            else {}
+        )
+        if not relevant_twin_snapshot or not action_intent:
+            return {"ok": False, "reason": "missing_twin_snapshot"}
+
+        try:
+            result = await service.settle_from_evidence_bundle(
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                task_id=(
+                    str(record.get("task_id"))
+                    if record.get("task_id") is not None
+                    else None
+                ),
+                intent_id=(
+                    str(action_intent.get("intent_id"))
+                    if action_intent.get("intent_id") is not None
+                    else None
+                ),
+                policy_receipt=(
+                    governance_ctx.get("policy_receipt")
+                    if isinstance(governance_ctx.get("policy_receipt"), dict)
+                    else {}
+                ),
+                execution_token=(
+                    governance_ctx.get("execution_token")
+                    if isinstance(governance_ctx.get("execution_token"), dict)
+                    else {}
+                ),
+                evidence_summary=(
+                    policy_case.get("evidence_summary")
+                    if isinstance(policy_case.get("evidence_summary"), dict)
+                    else {}
+                ),
+                evidence_bundle=(
+                    record.get("evidence_bundle")
+                    if isinstance(record.get("evidence_bundle"), dict)
+                    else {}
+                ),
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            logger.warning(
+                "Digital twin settlement failed for task %s",
+                record.get("task_id"),
+                exc_info=True,
+            )
+            return {"ok": False, "reason": str(exc)}
 
     def _canonical_json(self, payload: Any) -> str:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
