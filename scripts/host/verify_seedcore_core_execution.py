@@ -174,6 +174,12 @@ def probe_governed_action_payload(
         "asset_value_usd": 12500,
         "target_zone": "Zone-EU",
     }
+    signals = {
+        "identity_verified": 1.0,
+        "release_window_open": 1.0,
+        "seal_integrity": 0.99,
+        "route_drift": 0.0,
+    }
 
     for predicate in predicates:
         payload = {
@@ -183,6 +189,7 @@ def probe_governed_action_payload(
                 "predicate": predicate,
                 "object_data": object_data,
             },
+            "signals": signals,
             "snapshot_id": snapshot_id,
             "mode": "advisory",
             "zone_id": "zone-eu",
@@ -201,6 +208,7 @@ def probe_governed_action_payload(
                 {
                     "predicate": predicate,
                     "object_data": object_data,
+                    "signals": signals,
                     "zone_id": "zone-eu",
                     "subtasks_count": len(subtasks),
                 },
@@ -676,6 +684,7 @@ def verify(
                                 "subject": "owner:verify",
                                 "predicate": predicate,
                                 "object_data": probe["object_data"],
+                                "signals": probe["signals"],
                                 "zone_id": probe["zone_id"],
                             }
                         },

@@ -188,6 +188,13 @@ class HotelTaskFacts(BaseModel):
 
 class PKGEvaluateAsyncRequest(BaseModel):
     task_facts: HotelTaskFacts
+    signals: Optional[Dict[str, float]] = Field(
+        default=None,
+        description=(
+            "Optional numeric policy signals merged into PKG task_facts.signals "
+            "(e.g., identity_verified=1, release_window_open=1, seal_integrity=0.98)."
+        ),
+    )
     snapshot_id: Optional[int] = Field(
         default=None,
         description="Optional PKG snapshot_id for governed-facts scoping/hydration",
@@ -236,7 +243,8 @@ async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]
     """
     Hotel-simulator friendly wrapper around PKGManager/PKGEvaluator async evaluation.
 
-    Input contract is a simple SPO-ish triple (namespace/subject/predicate/object_data).
+    Input contract is a simple SPO-ish triple (namespace/subject/predicate/object_data)
+    plus optional numeric policy signals.
     Internally we translate to the PKGManager closed-world `task_facts` schema:
       { "tags": [...], "signals": {...}, "context": {...} }
     """
@@ -300,7 +308,7 @@ async def pkg_evaluate_async(payload: PKGEvaluateAsyncRequest) -> Dict[str, Any]
     
     task_facts: Dict[str, Any] = {
         "tags": enriched_tags,
-        "signals": {},
+        "signals": dict(payload.signals or {}),
         "context": {
             "namespace": tf.namespace,
             "subject": tf.subject,
