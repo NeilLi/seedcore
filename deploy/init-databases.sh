@@ -5,9 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== Preflighting PostgreSQL + Bootstrapping Auxiliary Stores ==="
-bash "$SCRIPT_DIR/init_basic_db.sh" "${NAMESPACE:-seedcore-dev}"
+bash "$SCRIPT_DIR/init-basic-db.sh" "${NAMESPACE:-seedcore-dev}"
 
 echo "=== Applying Comprehensive PostgreSQL Schema ==="
-bash "$SCRIPT_DIR/init_full_db.sh"
+bash "$SCRIPT_DIR/init-full-db.sh"
 
 echo "✅ All databases initialized successfully."

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ============================
-# Datadog Kubernetes Bootstrap
+# Datadog Kubernetes deployment
 # ============================
 
 # -------- Config (override via env) --------
@@ -96,4 +96,3 @@ echo
 echo "Next checks:"
 echo "  kubectl get pods -n ${DATADOG_NAMESPACE}"
 echo "  kubectl exec -n ${DATADOG_NAMESPACE} <datadog-pod> -c agent -- agent status"
-

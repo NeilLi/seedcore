@@ -207,7 +207,7 @@ The runtime registry integrates with the existing database schema through:
 #### Migration Sequence
 1. **Migration 011**: Creates `cluster_metadata` and `registry_instance` tables
 2. **Migration 012**: Implements registry functions and views
-3. **Database Initialization**: `init_full_db.sh` applies all migrations
+3. **Database Initialization**: `init-full-db.sh` applies all migrations
 
 #### Repository Pattern
 - **`AgentGraphRepository`**: Async repository with connection pooling
@@ -2389,7 +2389,7 @@ The runtime registry is integrated through a systematic migration process:
 - Implements `expire_stale_instances()` for cleanup
 
 #### Database Initialization Script
-The `init_full_db.sh` script orchestrates the complete database setup:
+The `init-full-db.sh` script orchestrates the complete database setup:
 
 ```bash
 # Migration 011: Runtime registry tables & views

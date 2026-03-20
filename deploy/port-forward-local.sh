@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Script: port-forward-mini.sh
-# Purpose: Forward PostgreSQL and Redis ports for local development
+# Script: port-forward-local.sh
+# Purpose: Forward PostgreSQL and Redis ports for local development on lower-memory machines
 
 set -euo pipefail
 

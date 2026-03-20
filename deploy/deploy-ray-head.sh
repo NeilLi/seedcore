@@ -25,7 +25,7 @@ RAY_HEAD_FILE="${RAY_HEAD_FILE:-${SCRIPT_DIR}/k8s/seedcore-ray-head.yaml}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-${SCRIPT_DIR}/../docker/.env}"
 SECRET_NAME="${SECRET_NAME:-seedcore-env-secret}"
 
-# Optional CLI: setup-ray-mini.sh [namespace] [ray_head_file]
+# Optional CLI: deploy-ray-head.sh [namespace] [ray_head_file]
 if [[ $# -ge 1 ]]; then NAMESPACE="$1"; fi
 if [[ $# -ge 2 ]]; then RAY_HEAD_FILE="$2"; fi
 

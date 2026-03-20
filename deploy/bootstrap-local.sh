@@ -33,7 +33,7 @@ Options:
   -i, --image <img:tag>        Ray/bootstrap image (default: ${RAY_IMAGE})
       --rayservice-name <n>    RayService name (default: ${RAYSERVICE_NAME})
       --stable-service <name>  Stable Ray service name (default: ${stable_service_default})
-      --skip-setup             Skip setup-ray-serve.sh
+      --skip-setup             Skip deploy-ray-service.sh
       --skip-bootstrap         Skip bootstrap.sh
       --skip-port-forward      Do not start port-forward.sh
       --wait-after-setup <s>   Extra settle time after setup (default: ${WAIT_AFTER_SETUP_S})
@@ -78,9 +78,9 @@ echo
 
 run_setup() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "📍 Step 1: setup-ray-serve.sh"
+  echo "📍 Step 1: deploy-ray-service.sh"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  bash "${SCRIPT_DIR}/setup-ray-serve.sh" \
+  bash "${SCRIPT_DIR}/deploy-ray-service.sh" \
     --namespace "${NAMESPACE}" \
     --cluster "${CLUSTER_NAME}" \
     --image "${RAY_IMAGE}" \
@@ -117,7 +117,7 @@ if [[ "${SKIP_SETUP}" != "true" ]]; then
     sleep "${WAIT_AFTER_SETUP_S}"
   fi
 else
-  echo "ℹ️  Skipping setup-ray-serve.sh"
+  echo "ℹ️  Skipping deploy-ray-service.sh"
   echo
 fi
 

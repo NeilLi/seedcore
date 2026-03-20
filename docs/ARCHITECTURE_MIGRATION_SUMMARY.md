@@ -20,7 +20,7 @@ This document summarizes the implementation of **Option C** from the architectur
    - No state collection responsibilities - purely computational
    - RESTful API with endpoints for energy computation and optimization
 
-3. **Updated Ray Service Deployment** (`/deploy/rayservice.yaml`)
+3. **Updated Ray Service Deployment** (`/deploy/k8s/rayservice.yaml`)
    - Added two new services: `state` and `energy`
    - Configured appropriate resource allocation for each service
    - Maintained existing organism service configuration
@@ -1442,5 +1442,4 @@ The implementation successfully achieves the recommended architecture:
 - ✅ **Result Provenance**: Routing decisions, execution telemetry, and cognitive traces stored in `result.meta`
 
 This architecture provides a solid foundation for future enhancements while maintaining system stability and performance. The database schema evolution enables advanced AI/ML capabilities while preserving the core service architecture benefits.
-
 

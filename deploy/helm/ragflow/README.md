@@ -30,7 +30,7 @@ RAGFlow integrates seamlessly with your existing Seedcore data stores:
 The RAGFlow chart is automatically deployed when you run:
 
 ```bash
-./deploy/setup-cores.sh
+./deploy/deploy-datastores.sh
 ```
 
 This script deploys all Seedcore cores including RAGFlow with proper integration.

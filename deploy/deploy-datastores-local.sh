@@ -1,22 +1,24 @@
 #!/bin/bash
 
-# Deploy Minimal Data Stores to Kubernetes Cluster
-# This script installs only PostgreSQL and Redis using Helm
+# Deploy minimal local data stores to Kubernetes Cluster
+# This script is the low-memory / local-dev variant that installs only PostgreSQL and Redis.
 
 set -e
 
 # Resolve script directory for robust relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NAMESPACE="${NAMESPACE:-seedcore-dev}"
 
 echo "🚀 Deploying minimal data stores (PostgreSQL + Redis) to Kubernetes cluster..."
+echo "   Namespace: ${NAMESPACE}"
 
 # Create namespace if it doesn't exist
-kubectl create namespace seedcore-dev --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
 # Deploy PostgreSQL with pgvector (PgBouncer disabled)
 echo "📦 Deploying PostgreSQL with pgvector..."
 helm upgrade --install postgresql "${SCRIPT_DIR}/helm/postgresql" \
-  --namespace seedcore-dev \
+  --namespace "${NAMESPACE}" \
   --set pgbouncer.enabled=false \
   --wait \
   --timeout 20m \
@@ -29,7 +31,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis
-  namespace: seedcore-dev
+  namespace: ${NAMESPACE}
 spec:
   replicas: 1
   selector:
@@ -73,11 +75,11 @@ EOF
 echo "✅ PostgreSQL and Redis deployed successfully!"
 echo ""
 echo "🔍 Checking deployment status..."
-kubectl get pods -n seedcore-dev
+kubectl get pods -n "${NAMESPACE}"
 
 echo ""
 echo "🌐 Data store endpoints:"
-echo "  PostgreSQL: postgresql.seedcore-dev.svc.cluster.local:5432"
+echo "  PostgreSQL: postgresql.${NAMESPACE}.svc.cluster.local:5432"
 echo "  Redis: redis.seedcore-dev.svc.cluster.local:6379"
 echo ""
 echo "🔑 Default credentials:"

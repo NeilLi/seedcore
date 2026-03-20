@@ -34,6 +34,17 @@ BUILD_NO_CACHE="${BUILD_NO_CACHE:-0}"
 BUILD_DOCKERFILE="${BUILD_DOCKERFILE:-docker/Dockerfile.optimize}"
 BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
 SKIP_KIND_LOAD="${SKIP_KIND_LOAD:-false}"
+SKIP_KIND="${SKIP_KIND:-false}"
+SKIP_DATASTORES="${SKIP_DATASTORES:-false}"
+SKIP_DB_INIT="${SKIP_DB_INIT:-false}"
+SKIP_STORAGE="${SKIP_STORAGE:-false}"
+SKIP_RBAC="${SKIP_RBAC:-false}"
+SKIP_RAY="${SKIP_RAY:-false}"
+SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
+SKIP_API="${SKIP_API:-false}"
+SKIP_PKG="${SKIP_PKG:-false}"
+SKIP_WAIT="${SKIP_WAIT:-false}"
+SKIP_HAL="${SKIP_HAL:-false}"
 TAIL_BOOTSTRAP_LOGS="${TAIL_BOOTSTRAP_LOGS:-false}"
 DEPLOY_INGRESS_ENABLED="${DEPLOY_INGRESS_ENABLED:-true}"
 DEPLOY_HAL_BRIDGE="${DEPLOY_HAL_BRIDGE:-true}"
@@ -58,9 +69,19 @@ Options:
       --skip-build            Skip ./build.sh
       --enable-ml             Build optional ML/local-AI layer and enable ML services
       --no-cache             Build without Docker cache
+      --skip-kind             Skip creating the Kind cluster
+      --skip-datastores       Skip PostgreSQL/MySQL/Redis/Neo4j deployment
+      --skip-db-init          Skip database schema initialization
+      --skip-storage          Skip persistent storage setup
+      --skip-rbac             Skip service account, role binding, and network policy setup
+      --skip-ray              Skip Ray cluster / Ray Serve deployment
+      --skip-bootstrap        Skip organism and dispatcher bootstrap
+      --skip-api              Skip SeedCore API deployment
+      --skip-pkg              Skip PKG WASM deployment
       --skip-load            Skip kind image loads in downstream scripts
       --skip-hal             Skip HAL bridge deployment
       --skip-ingress         Skip ingress deployment
+      --skip-wait            Skip the post-Ray stabilization sleep
   -h, --help                  Show this help
 EOF
 }
@@ -112,9 +133,19 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --no-cache) BUILD_NO_CACHE=1; shift ;;
+    --skip-kind) SKIP_KIND=true; shift ;;
+    --skip-datastores) SKIP_DATASTORES=true; shift ;;
+    --skip-db-init) SKIP_DB_INIT=true; shift ;;
+    --skip-storage) SKIP_STORAGE=true; shift ;;
+    --skip-rbac) SKIP_RBAC=true; shift ;;
+    --skip-ray) SKIP_RAY=true; shift ;;
+    --skip-bootstrap) SKIP_BOOTSTRAP=true; shift ;;
+    --skip-api) SKIP_API=true; shift ;;
+    --skip-pkg) SKIP_PKG=true; shift ;;
     --skip-load) SKIP_KIND_LOAD=true; shift ;;
-    --skip-hal) DEPLOY_HAL_BRIDGE=false; shift ;;
+    --skip-hal) SKIP_HAL=true; DEPLOY_HAL_BRIDGE=false; shift ;;
     --skip-ingress) DEPLOY_INGRESS_ENABLED=false; shift ;;
+    --skip-wait) SKIP_WAIT=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: Unknown argument '$1'"; usage; exit 1 ;;
   esac
@@ -216,26 +247,55 @@ build_docker_image() {
 }
 
 start_kind_cluster() {
+  if is_true "${SKIP_KIND}"; then
+    log "Skipping Kind cluster bootstrap (SKIP_KIND=${SKIP_KIND})"
+    return 0
+  fi
+
   log "Starting Kubernetes cluster (kind)"
-  CLUSTER_NAME="${CLUSTER_NAME}" "${DEPLOY_DIR}/setup-kind-only.sh"
+  CLUSTER_NAME="${CLUSTER_NAME}" "${DEPLOY_DIR}/bootstrap-kind.sh"
 }
 
 deploy_core_services() {
+  if is_true "${SKIP_DATASTORES}"; then
+    log "Skipping core datastore deployment (SKIP_DATASTORES=${SKIP_DATASTORES})"
+    return 0
+  fi
+
   log "Deploying core services (PostgreSQL, MySQL, Redis, Neo4j)"
-  NAMESPACE="${NAMESPACE}" "${DEPLOY_DIR}/setup-cores.sh"
+  NAMESPACE="${NAMESPACE}" "${DEPLOY_DIR}/deploy-datastores.sh"
 }
 
 init_databases() {
+  if is_true "${SKIP_DB_INIT}"; then
+    log "Skipping database initialization (SKIP_DB_INIT=${SKIP_DB_INIT})"
+    return 0
+  fi
+
+  if is_true "${SKIP_DATASTORES}"; then
+    echo "⚠️  SKIP_DATASTORES=true but SKIP_DB_INIT=false; database init may fail without the backing services."
+  fi
+
   log "Initializing databases (schema + runtime registry)"
   "${DEPLOY_DIR}/init-databases.sh"
 }
 
 deploy_storage() {
+  if is_true "${SKIP_STORAGE}"; then
+    log "Skipping persistent storage deployment (SKIP_STORAGE=${SKIP_STORAGE})"
+    return 0
+  fi
+
   log "Deploying persistent storage"
   kubectl apply -f "${DEPLOY_DIR}/k8s/seedcore-data-pvc.yaml"
 }
 
 deploy_rbac() {
+  if is_true "${SKIP_RBAC}"; then
+    log "Skipping RBAC and service account setup (SKIP_RBAC=${SKIP_RBAC})"
+    return 0
+  fi
+
   log "Deploying RBAC and service account configuration"
 
   echo "📦 Deploying service account..."
@@ -253,6 +313,11 @@ deploy_rbac() {
 }
 
 deploy_ray_services() {
+  if is_true "${SKIP_RAY}"; then
+    log "Skipping Ray deployment (SKIP_RAY=${SKIP_RAY})"
+    return 0
+  fi
+
   log "Deploying Ray cluster and Ray Serve"
   CLUSTER_NAME="${CLUSTER_NAME}" \
   NAMESPACE="${NAMESPACE}" \
@@ -264,13 +329,18 @@ deploy_ray_services() {
   ENV_FILE_PATH="${ENV_FILE}" \
   HOST_DATA_DIR="${HOST_DATA_DIR}" \
   SKIP_LOAD="${SKIP_KIND_LOAD}" \
-  "${DEPLOY_DIR}/setup-ray-serve.sh"
+  "${DEPLOY_DIR}/deploy-ray-service.sh"
 
   echo "📦 Deploying stable Ray service..."
-  kubectl apply -f "${DEPLOY_DIR}/ray-stable-svc.yaml"
+  kubectl apply -f "${DEPLOY_DIR}/k8s/ray-stable-svc.yaml"
 }
 
 deploy_pkg_policy() {
+  if is_true "${SKIP_PKG}"; then
+    log "Skipping PKG WASM deployment (SKIP_PKG=${SKIP_PKG})"
+    return 0
+  fi
+
   log "Deploying PKG policy (WASM)"
 
   if [[ "${APPLY_PKG_WASM}" != "true" ]]; then
@@ -311,6 +381,11 @@ deploy_pkg_policy() {
 }
 
 bootstrap_components() {
+  if is_true "${SKIP_BOOTSTRAP}"; then
+    log "Skipping bootstrap components (SKIP_BOOTSTRAP=${SKIP_BOOTSTRAP})"
+    return 0
+  fi
+
   log "Bootstrapping organism and dispatchers"
   NAMESPACE="${NAMESPACE}" \
   RAY_IMAGE="${RAY_IMAGE}" \
@@ -322,6 +397,11 @@ bootstrap_components() {
 }
 
 deploy_seedcore_api() {
+  if is_true "${SKIP_API}"; then
+    log "Skipping SeedCore API deployment (SKIP_API=${SKIP_API})"
+    return 0
+  fi
+
   log "Deploying SeedCore API"
   CLUSTER_NAME="${CLUSTER_NAME}" \
   NAMESPACE="${NAMESPACE}" \
@@ -329,22 +409,22 @@ deploy_seedcore_api() {
   ENV_FILE="${ENV_FILE}" \
   RAY_HEAD_SVC="${STABLE_SERVICE_NAME}" \
   SKIP_LOAD="${SKIP_KIND_LOAD}" \
-  "${DEPLOY_DIR}/deploy-seedcore-api.sh"
+  "${DEPLOY_DIR}/deploy-api.sh"
 }
 
 deploy_hal_bridge() {
-  log "Deploying HAL bridge"
-  if ! is_true "${DEPLOY_HAL_BRIDGE}"; then
-    echo "ℹ️  Skipping HAL bridge deployment (DEPLOY_HAL_BRIDGE=${DEPLOY_HAL_BRIDGE})"
+  if is_true "${SKIP_HAL}" || ! is_true "${DEPLOY_HAL_BRIDGE}"; then
+    log "Skipping HAL bridge deployment (SKIP_HAL=${SKIP_HAL})"
     return 0
   fi
 
+  log "Deploying HAL bridge"
   CLUSTER_NAME="${CLUSTER_NAME}" \
   NAMESPACE="${NAMESPACE}" \
   IMAGE_NAME="${HAL_IMAGE}" \
   HAL_DRIVER_MODE="${HAL_DRIVER_MODE}" \
   HAL_SIM_BACKEND="${HAL_SIM_BACKEND}" \
-  "${DEPLOY_DIR}/setup-hal.sh"
+  "${DEPLOY_DIR}/deploy-hal.sh"
 }
 
 deploy_ingress() {
@@ -368,8 +448,8 @@ deploy_ingress() {
     }
   fi
 
-  if [[ -f "${DEPLOY_DIR}/deploy-k8s-ingress.sh" ]]; then
-    "${DEPLOY_DIR}/deploy-k8s-ingress.sh"
+  if [[ -f "${DEPLOY_DIR}/deploy-ingress.sh" ]]; then
+    "${DEPLOY_DIR}/deploy-ingress.sh"
   else
     echo "⚠️  Ingress controller script not found, skipping"
   fi
@@ -390,7 +470,17 @@ main() {
   echo "Build image:      ${BUILD_IMAGE}"
   echo "Enable ML build:  ${BUILD_ENABLE_ML}"
   echo "Enable ML serve:  ${DEPLOY_ENABLE_ML_SERVICE}"
-  echo "Deploy HAL:       ${DEPLOY_HAL_BRIDGE}"
+  echo "Skip kind:        ${SKIP_KIND}"
+  echo "Skip datastores:  ${SKIP_DATASTORES}"
+  echo "Skip db init:     ${SKIP_DB_INIT}"
+  echo "Skip storage:     ${SKIP_STORAGE}"
+  echo "Skip RBAC:        ${SKIP_RBAC}"
+  echo "Skip Ray:         ${SKIP_RAY}"
+  echo "Skip bootstrap:   ${SKIP_BOOTSTRAP}"
+  echo "Skip API:         ${SKIP_API}"
+  echo "Skip PKG:         ${SKIP_PKG}"
+  echo "Skip HAL:         ${SKIP_HAL}"
+  echo "Skip wait:        ${SKIP_WAIT}"
   echo "HAL image:        ${HAL_IMAGE}"
   echo "HAL mode:         ${HAL_DRIVER_MODE}"
   echo "HAL sim backend:  ${HAL_SIM_BACKEND}"
@@ -405,8 +495,12 @@ main() {
   deploy_ray_services
   deploy_pkg_policy
 
-  echo "⏳ Waiting for ${WAIT_FOR_RAY_S} seconds for Ray services to stabilize..."
-  sleep "${WAIT_FOR_RAY_S}"
+  if is_true "${SKIP_WAIT}"; then
+    log "Skipping stabilization wait (SKIP_WAIT=${SKIP_WAIT})"
+  else
+    echo "⏳ Waiting for ${WAIT_FOR_RAY_S} seconds for Ray services to stabilize..."
+    sleep "${WAIT_FOR_RAY_S}"
+  fi
 
   bootstrap_components
   deploy_seedcore_api

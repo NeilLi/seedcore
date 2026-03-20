@@ -75,8 +75,8 @@ RAY_IMAGE="${RAY_IMAGE:-seedcore:latest}"
 WORKER_REPLICAS="${WORKER_REPLICAS:-1}"
 ENABLE_ML_SERVICE="${ENABLE_ML_SERVICE:-0}"
 RS_NAME="${RS_NAME:-seedcore-svc}"
-RAYSERVICE_FILE="${RAYSERVICE_FILE:-${SCRIPT_DIR}/rayservice.yaml}"
-STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-${SCRIPT_DIR}/ray-stable-svc.yaml}"
+RAYSERVICE_FILE="${RAYSERVICE_FILE:-${SCRIPT_DIR}/k8s/rayservice.yaml}"
+STABLE_SERVE_SVC_FILE="${STABLE_SERVE_SVC_FILE:-${SCRIPT_DIR}/k8s/ray-stable-svc.yaml}"
 STABLE_SERVE_SVC_NAME="${STABLE_SERVE_SVC_NAME:-}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-${SCRIPT_DIR}/../docker/.env}"
 SECRET_NAME="${SECRET_NAME:-seedcore-env-secret}"
@@ -177,7 +177,7 @@ ensure_kind_cluster() {
   fi
 
   print_status "INFO" "Creating Kind cluster '${CLUSTER_NAME}' with project mount..."
-  CLUSTER_NAME="${CLUSTER_NAME}" "${SCRIPT_DIR}/setup-kind-only.sh"
+  CLUSTER_NAME="${CLUSTER_NAME}" "${SCRIPT_DIR}/bootstrap-kind.sh"
   print_status "OK" "Kind cluster created"
 }
 

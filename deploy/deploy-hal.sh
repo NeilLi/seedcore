@@ -40,7 +40,7 @@ fi
 # Check if Kind cluster exists
 if ! kind get clusters 2>/dev/null | grep -Fxq "$CLUSTER_NAME"; then
     echo "❌ ERROR: Kind cluster '$CLUSTER_NAME' does not exist"
-    echo "   Create it first with: deploy/setup-kind-only.sh"
+    echo "   Create it first with: deploy/bootstrap-kind.sh"
     exit 1
 fi
 

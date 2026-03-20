@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Deploy Data Stores to Kubernetes Cluster
+# Deploy data stores to Kubernetes Cluster
 # This script installs PostgreSQL, MySQL, Redis, and Neo4j using Helm
 
 set -e

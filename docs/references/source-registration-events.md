@@ -210,7 +210,7 @@ Database support for the event log is added in:
 
 Bootstrap ordering is updated in:
 
-- [init_full_db.sh](/Users/ningli/project/seedcore/deploy/init_full_db.sh#L30)
+- [init-full-db.sh](/Users/ningli/project/seedcore/deploy/init-full-db.sh#L30)
 
 ## 10. Practical Rule
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy/deploy-seedcore-api.sh — SeedCore API deployer for Kind/Kubernetes
+# deploy/deploy-api.sh — SeedCore API deployer for Kind/Kubernetes
 set -euo pipefail
 
 # Resolve script directory for robust relative paths

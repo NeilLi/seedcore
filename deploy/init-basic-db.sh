@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SeedCore Auxiliary Database Initialization (Kubernetes)
 # Portable: can be run from any directory.
-# Postgres schema is owned by init_full_db.sh; this script only preflights
+# Postgres schema is owned by init-full-db.sh; this script only preflights
 # Postgres readiness and bootstraps auxiliary stores.
 
 set -Eeuo pipefail
@@ -94,7 +94,7 @@ ensure_postgresql_ready() {
     die "PostgreSQL is reachable but not ready for migrations"
   fi
 
-  log "✅ PostgreSQL is ready. Full schema will be applied by init_full_db.sh."
+  log "✅ PostgreSQL is ready. Full schema will be applied by init-full-db.sh."
 }
 
 init_mysql() {
@@ -245,7 +245,7 @@ main() {
   verify_databases
   log "🎉 Auxiliary database initialization completed!"
   printf "\nNext steps:\n"
-  printf "1) Run init_full_db.sh (or deploy/init-databases.sh) to apply the PostgreSQL schema\n"
+    printf "1) Run init-full-db.sh (or deploy/init-databases.sh) to apply the PostgreSQL schema\n"
   printf "2) Check logs for database errors\n"
   printf "3) Verify the application end-to-end\n"
 }
