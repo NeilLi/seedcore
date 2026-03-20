@@ -9,6 +9,7 @@ from importlib import import_module
 
 ACTIVE_ROUTER_SPECS = (
     ("Tasks", "tasks_router"),
+    ("Replay", "replay_router"),
     ("Source Registrations", "source_registrations_router"),
     ("Tracking Events", "tracking_events_router"),
     ("Control", "control_router"),
@@ -29,6 +30,7 @@ LEGACY_ROUTER_NAMES = (
 
 _ROUTER_MODULES = {
     "tasks_router": ".tasks_router",
+    "replay_router": ".replay_router",
     "source_registrations_router": ".source_registrations_router",
     "tracking_events_router": ".tracking_events_router",
     "control_router": ".control_router",

@@ -178,6 +178,13 @@ DEFAULT_SIGNER_POLICIES: dict[str, ArtifactSignerPolicy] = {
         preferred_scheme="preserve_lineage",
         config_profile="preserve_lineage",
     ),
+    "trust_certificate": ArtifactSignerPolicy(
+        artifact_type="trust_certificate",
+        allowed_schemes=("hmac_sha256", "ed25519"),
+        default_scheme="hmac_sha256",
+        preferred_scheme="hmac_sha256",
+        config_profile="trust_certificate_baseline",
+    ),
 }
 
 

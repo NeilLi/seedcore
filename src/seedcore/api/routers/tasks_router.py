@@ -17,7 +17,7 @@ from sqlalchemy import select, String, text  # pyright: ignore[reportMissingImpo
 from ...database import get_async_pg_session
 from ...coordinator.dao import GovernedExecutionAuditDAO
 from ...models import DatabaseTask as Task, TaskStatus
-from ...ops.evidence.materializer import materialize_seedcore_custody_event_payload
+from ...services.replay_service import ReplayService, ReplayServiceError
 
 # --- Configuration ---
 RUN_NOW_ENSURE_NODE = os.getenv("RUN_NOW_ENSURE_NODE", "true").lower() in ("1","true","yes")
@@ -25,6 +25,7 @@ RUN_NOW_ENSURE_NODE = os.getenv("RUN_NOW_ENSURE_NODE", "true").lower() in ("1","
 router = APIRouter()
 logger = logging.getLogger(__name__)
 governance_audit_dao = GovernedExecutionAuditDAO()
+replay_service = ReplayService(governance_audit_dao=governance_audit_dao)
 
 # --- Observability ---
 GNM_ENSURE_TASK_NODE_SUCCESS = Counter("gnm_ensure_task_node_success_total", "Success count", ["call_site"])
@@ -263,52 +264,29 @@ async def get_materialized_custody_event(
     audit_id: str | None = None,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> MaterializedCustodyEventRead:
-    provided = [("task_id", task_id), ("intent_id", intent_id), ("audit_id", audit_id)]
-    provided = [(k, v) for k, v in provided if isinstance(v, str) and v.strip()]
-    if len(provided) != 1:
-        raise HTTPException(
-            status_code=422,
-            detail="Provide exactly one retrieval key: task_id, intent_id, or audit_id",
+    try:
+        retrieval_key, retrieval_value, replay = await replay_service.assemble_replay_record(
+            session,
+            task_id=task_id,
+            intent_id=intent_id,
+            audit_id=audit_id,
         )
+    except ReplayServiceError as exc:
+        if exc.code in {"invalid_lookup", "invalid_audit_id"}:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if exc.code == "record_not_found":
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if exc.code == "missing_evidence_bundle":
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if exc.code == "ambiguous_task_id":
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    key, raw_value = provided[0]
-    value = raw_value.strip()
-
-    if key == "task_id":
-        uid = await _resolve_task_id(session, value)
-        record = await governance_audit_dao.get_latest_for_task(session, task_id=str(uid))
-        retrieval_value = str(uid)
-    elif key == "intent_id":
-        record = await governance_audit_dao.get_latest_for_intent(session, intent_id=value)
-        retrieval_value = value
-    else:
-        try:
-            audit_uuid = str(uuid.UUID(value))
-        except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid audit_id format")
-        record = await governance_audit_dao.get_by_entry_id(session, entry_id=audit_uuid)
-        retrieval_value = audit_uuid
-
-    if record is None:
-        raise HTTPException(status_code=404, detail="Governed audit record not found")
-
-    evidence_bundle = (
-        record.get("evidence_bundle")
-        if isinstance(record.get("evidence_bundle"), dict)
-        else {}
-    )
-    if not evidence_bundle:
-        raise HTTPException(
-            status_code=409,
-            detail="Audit record exists but has no evidence_bundle to materialize",
-        )
-
-    custody_event_jsonld = materialize_seedcore_custody_event_payload(audit_record=record)
     return MaterializedCustodyEventRead(
-        retrieval_key=key,
+        retrieval_key=retrieval_key,
         retrieval_value=retrieval_value,
-        audit_record=record,
-        custody_event_jsonld=custody_event_jsonld,
+        audit_record=replay.audit_record,
+        custody_event_jsonld=replay_service.build_jsonld_export(replay),
     )
 
 

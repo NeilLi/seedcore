@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import os
+import sys
+import hashlib
+from typing import Any, Dict, List
+from unittest.mock import AsyncMock
+
+sys.path.insert(0, os.path.dirname(__file__))
+import mock_database_dependencies  # noqa: F401
+
+import pytest
+
+from seedcore.hal.custody.transition_receipts import build_transition_receipt
+from seedcore.services.replay_service import ReplayProjectionKind, ReplayService
+from seedcore.ops.evidence.verification import build_signed_artifact
+
+
+class _DummySession:
+    async def execute(self, *args, **kwargs):
+        raise AssertionError("execute() should not be called in these tests")
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self._values: Dict[str, Any] = {}
+
+    async def get(self, key: str) -> Any:
+        return self._values.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        self._values[key] = {"value": value, "ex": ex}
+        return True
+
+
+def _build_policy_receipt(*, task_id: str, intent_id: str, asset_id: str | None = None) -> Dict[str, Any]:
+    payload = {
+        "policy_receipt_id": f"policy-{intent_id}",
+        "policy_decision_id": f"decision-{intent_id}",
+        "task_id": task_id,
+        "intent_id": intent_id,
+        "policy_version": "pkg@2026-03-20",
+        "decision": {"allowed": True, "disposition": "allow"},
+        "evaluated_rules": ["zone_match"],
+        "subject_ref": "agent:test",
+        "asset_ref": asset_id,
+        "timestamp": "2026-03-20T10:00:00+00:00",
+    }
+    _, signer_metadata, signature = build_signed_artifact(
+        artifact_type="policy_receipt",
+        payload=payload,
+    )
+    return {
+        **payload,
+        "signer_metadata": signer_metadata.model_dump(mode="json"),
+        "signature": signature,
+    }
+
+
+def _build_evidence_bundle(
+    *,
+    task_id: str,
+    intent_id: str,
+    token_id: str,
+    transition_receipts: List[Dict[str, Any]],
+    asset_id: str | None = None,
+) -> Dict[str, Any]:
+    payload = {
+        "evidence_bundle_id": f"bundle-{intent_id}",
+        "task_id": task_id,
+        "intent_id": intent_id,
+        "execution_token_id": token_id,
+        "policy_receipt_id": f"policy-{intent_id}",
+        "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
+        "asset_fingerprint": {
+            "fingerprint_id": f"fingerprint-{intent_id}",
+            "fingerprint_hash": f"hash-{intent_id}",
+            "modality_map": {"visual_hash": f"visual-{intent_id}"},
+            "derivation_logic": {"algorithm": "sha256"},
+            "capture_context": {"asset_id": asset_id} if asset_id else {},
+            "hardware_witness": {"node_id": "robot_sim://unit-1"},
+            "captured_at": "2026-03-20T10:03:00+00:00",
+        },
+        "evidence_inputs": {
+            "execution_summary": {
+                "intent_id": intent_id,
+                "task_id": task_id,
+                "execution_token_id": token_id,
+                "executed_at": "2026-03-20T10:02:00+00:00",
+                "actuator_endpoint": "robot_sim://unit-1",
+                "actuator_result_hash": "actuator-hash",
+                "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
+                "node_id": "robot_sim://unit-1",
+            },
+            "transition_receipts": transition_receipts,
+        },
+        "telemetry_refs": [
+            {
+                "kind": "telemetry_snapshot",
+                "inline": {
+                    "zone_checks": {"target_zone": "vault-a", "current_zone": "staging-a"},
+                    "vision": [{"label": "sealed_box"}],
+                },
+            }
+        ],
+        "media_refs": [{"kind": "image", "uri": "s3://bucket/proof.jpg", "sha256": "media-sha"}],
+        "node_id": "robot_sim://unit-1",
+        "created_at": "2026-03-20T10:03:00+00:00",
+    }
+    _, signer_metadata, signature = build_signed_artifact(
+        artifact_type="evidence_bundle",
+        payload=payload,
+        endpoint_id="robot_sim://unit-1",
+        trust_level="attested",
+        node_id="robot_sim://unit-1",
+    )
+    return {
+        **payload,
+        "signer_metadata": signer_metadata.model_dump(mode="json"),
+        "signature": signature,
+    }
+
+
+def _build_audit_record(*, task_id: str, intent_id: str, asset_id: str | None = None) -> Dict[str, Any]:
+    audit_suffix = hashlib.md5(intent_id.encode("utf-8")).hexdigest()[:12]
+    transition_receipt = build_transition_receipt(
+        intent_id=intent_id,
+        token_id=f"token-{intent_id}",
+        actuator_endpoint="robot_sim://unit-1",
+        hardware_uuid="robot-1",
+        actuator_result_hash="actuator-hash",
+        from_zone="staging-a",
+        to_zone="vault-a",
+        target_zone="vault-a",
+        executed_at="2026-03-20T10:01:00+00:00",
+        receipt_nonce=f"nonce-{intent_id}",
+    )
+    return {
+        "id": f"00000000-0000-0000-0000-{audit_suffix}",
+        "task_id": task_id,
+        "record_type": "execution_receipt",
+        "intent_id": intent_id,
+        "token_id": f"token-{intent_id}",
+        "policy_snapshot": "pkg@2026-03-20",
+        "policy_decision": {"allowed": True, "disposition": "allow"},
+        "action_intent": {
+            "intent_id": intent_id,
+            "resource": {"asset_id": asset_id} if asset_id else {},
+        },
+        "policy_case": {},
+        "policy_receipt": _build_policy_receipt(task_id=task_id, intent_id=intent_id, asset_id=asset_id),
+        "evidence_bundle": _build_evidence_bundle(
+            task_id=task_id,
+            intent_id=intent_id,
+            token_id=f"token-{intent_id}",
+            transition_receipts=[transition_receipt],
+            asset_id=asset_id,
+        ),
+        "actor_agent_id": "agent:test",
+        "actor_organ_id": "organ:test",
+        "input_hash": "input-hash",
+        "evidence_hash": "evidence-hash",
+        "recorded_at": "2026-03-20T10:04:00+00:00",
+    }
+
+
+@pytest.mark.asyncio
+async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified_chain():
+    record = _build_audit_record(task_id="task-asset-1", intent_id="intent-asset-1", asset_id="asset-1")
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type(
+            "TwinDAO",
+            (),
+            {
+                "list_history": AsyncMock(
+                    side_effect=[
+                        [{"id": "asset-hist-1", "twin_type": "asset", "state_version": 2, "authority_source": "pdp", "recorded_at": "2026-03-20T10:05:00+00:00"}],
+                        [{"id": "tx-hist-1", "twin_type": "transaction", "state_version": 1, "authority_source": "settlement", "recorded_at": "2026-03-20T10:06:00+00:00"}],
+                    ]
+                )
+            },
+        )(),
+        asset_custody_dao=type(
+            "AssetDAO",
+            (),
+            {
+                "get_snapshot": AsyncMock(
+                    return_value={
+                        "asset_id": "asset-1",
+                        "current_zone": "vault-a",
+                        "is_quarantined": False,
+                        "authority_source": "governed_transition_receipt",
+                        "last_transition_seq": 4,
+                    }
+                )
+            },
+        )(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.subject_type == "asset"
+    assert replay.subject_id == "asset-1"
+    assert replay.verification_status.verified is True
+    assert replay.asset_custody_state["current_zone"] == "vault-a"
+    assert [item.event_type for item in replay.replay_timeline] == [
+        "policy_receipt_issued",
+        "transition_executed",
+        "evidence_materialized",
+        "audit_recorded",
+        "digital_twin_updated",
+        "digital_twin_updated",
+    ]
+    assert "audit_record" not in replay.public_projection
+    assert replay.internal_projection["audit_record"]["actor_agent_id"] == "agent:test"
+
+
+@pytest.mark.asyncio
+async def test_assemble_replay_record_for_transaction_defaults_to_transaction_subject():
+    record = _build_audit_record(task_id="task-tx-1", intent_id="intent-tx-1", asset_id=None)
+    record["action_intent"] = {"intent_id": "intent-tx-1", "resource": {}}
+    record["policy_receipt"]["asset_ref"] = None
+    record["evidence_bundle"]["asset_fingerprint"]["capture_context"] = {}
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type(
+            "TwinDAO",
+            (),
+            {"list_history": AsyncMock(return_value=[{"id": "tx-hist-2", "twin_type": "transaction", "state_version": 3, "authority_source": "settlement", "recorded_at": "2026-03-20T10:07:00+00:00"}])},
+        )(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.subject_type == "transaction"
+    assert replay.subject_id == "transaction:intent-tx-1"
+    assert replay.asset_custody_state is None
+    assert replay.public_projection["subject_title"] == "Transaction transaction:intent-tx-1"
+
+
+@pytest.mark.asyncio
+async def test_public_projection_redacts_internal_details_and_internal_projection_keeps_them():
+    record = _build_audit_record(task_id="task-redact-1", intent_id="intent-redact-1", asset_id="asset-redact-1")
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert "audit_record" in replay.internal_projection
+    assert "evidence_bundle" in replay.internal_projection
+    assert "audit_record" not in replay.public_projection
+    assert "signer_chain" not in replay.public_projection
+    assert replay.public_projection["fingerprint_summary"]["fingerprint_hash"] == "hash-intent-redact-1"
+
+
+@pytest.mark.asyncio
+async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_verification():
+    record = _build_audit_record(task_id="task-ref-1", intent_id="intent-ref-1", asset_id="asset-ref-1")
+    dao = type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})()
+    service = ReplayService(
+        governance_audit_dao=dao,
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+    reference, public_id = service.build_public_reference(
+        lookup_key="audit_id",
+        lookup_value=record["id"],
+        replay=replay,
+        ttl_hours=4,
+    )
+    decoded = service.decode_public_reference(public_id)
+    redis_client = _FakeRedis()
+    revoke_result = await service.revoke_reference(public_id=public_id, redis_client=redis_client)
+    verification = await service.verify_reference(
+        _DummySession(),
+        public_id=public_id,
+        redis_client=redis_client,
+    )
+
+    assert decoded.audit_id == record["id"]
+    assert revoke_result["revoked"] is True
+    assert await service.reference_is_revoked(reference=reference, redis_client=redis_client) is True
+    assert verification.verified is False
+    assert verification.reason == "revoked_reference"

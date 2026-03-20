@@ -40,6 +40,16 @@ from .action_intent import (
     TwinSnapshot,
 )
 from .evidence_bundle import EvidenceBundle, HALCaptureEnvelope, PolicyReceipt, TransitionReceipt
+from .replay import (
+    PublicTrustReference,
+    ReplayProjectionKind,
+    ReplayRecord,
+    ReplayTimelineEvent,
+    ReplayVerificationStatus,
+    TrustCertificate,
+    TrustPageProjection,
+    VerificationResult,
+)
 from .task_api import Task
 from .task_payload import TaskPayload
 
@@ -59,9 +69,17 @@ __all__ = [
     "EvidenceBundle",
     "HALCaptureEnvelope",
     "PolicyReceipt",
+    "PublicTrustReference",
+    "ReplayProjectionKind",
+    "ReplayRecord",
+    "ReplayTimelineEvent",
+    "ReplayVerificationStatus",
+    "TrustCertificate",
+    "TrustPageProjection",
     "TransitionReceipt",
     "Task",
     "TaskPayload",
+    "VerificationResult",
 ]
 try:
     __all__.extend([

@@ -1,0 +1,201 @@
+# SeedCore API Reference
+
+This document is a practical reference for the currently mounted `seedcore-api` surface defined by [main.py](/Users/ningli/project/seedcore/src/seedcore/main.py) and the active router registry in [__init__.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/__init__.py).
+
+It is intentionally runtime-oriented: it describes what the application actually exposes today, how those endpoints are grouped, and a few important behavior notes from startup and readiness handling.
+
+## 1. Application Surface
+
+SeedCore runs a FastAPI application with:
+
+- title: `SeedCore API`
+- version: `1.0.0`
+- primary API prefix: `/api/v1`
+- interactive docs: `/docs`
+- OpenAPI schema: `/openapi.json`
+
+All active routers are mounted under `/api/v1` in this order:
+
+1. Tasks
+2. Replay
+3. Source Registrations
+4. Tracking Events
+5. Control
+6. Advisory
+7. PKG
+8. Capabilities
+
+Legacy routers still exist in the codebase under `src/seedcore/api/routers/legacy`, but they are not part of the active mounted surface returned by `get_active_routers()`.
+
+## 2. Runtime And Startup Notes
+
+Important behavior from [main.py](/Users/ningli/project/seedcore/src/seedcore/main.py):
+
+- CORS origins come from `CORS_ALLOW_ORIGINS`, defaulting to `*`.
+- `RUN_DDL_ON_STARTUP=true` causes task and fact tables to be created on boot.
+- Startup verifies database support for `ensure_task_node(uuid)`.
+- Startup checks snapshot support through `pkg_active_snapshot_id(pkg_env)`.
+- PKG manager initialization is attempted at startup, but failure is non-fatal.
+- Task processing is expected to happen through dispatcher Ray actors, not inside this API process.
+
+## 3. Unprefixed Operational Endpoints
+
+These endpoints are mounted directly on the app, not under `/api/v1`.
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `GET` | `/` | Basic welcome payload with links to docs and health. |
+| `GET` | `/health` | Liveness check for the API process. |
+| `GET` | `/readyz` | Readiness check with dependency status, currently focused on DB connectivity. |
+| `GET` | `/_env` | Optional debug env dump, only mounted when `ENABLE_DEBUG_ENV=true`. |
+
+## 4. Tasks API
+
+Implemented in [tasks_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tasks_router.py).
+
+### 4.1 Endpoints
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/tasks` | Create a task row and queue it for downstream processing. |
+| `GET` | `/api/v1/tasks` | List tasks, optionally filtered by `snapshot_id`. |
+| `GET` | `/api/v1/tasks/{task_id}` | Fetch a task by UUID or UUID prefix. |
+| `GET` | `/api/v1/tasks/{task_id}/governance` | Return governed execution audit entries associated with a task. |
+| `GET` | `/api/v1/governance/materialized-custody-event` | Backward-compatible JSON-LD materialization view, now backed by the replay service. |
+| `POST` | `/api/v1/tasks/{task_id}/cancel` | Cancel a non-terminal task. |
+| `GET` | `/api/v1/tasks/{task_id}/logs` | Stream task logs and metadata over Server-Sent Events. |
+
+### 4.2 Notes
+
+- `POST /tasks` creates the task and ensures a graph node mapping through `ensure_task_node(...)`.
+- `GET /tasks/{task_id}/logs` returns `text/event-stream`.
+- The governance materialization endpoint accepts one replay lookup key: `task_id`, `intent_id`, or `audit_id`.
+
+## 5. Replay, Trust, And Verification API
+
+Implemented in [replay_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/replay_router.py).
+
+This router exposes the replay/trust MVP layer over governed audit records, evidence bundles, custody state, and digital twin history.
+
+### 5.1 Replay Endpoints
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/replay` | Assemble a normalized replay record and return a projection view. |
+| `GET` | `/api/v1/replay/timeline` | Return replay timeline events and verification status. |
+| `GET` | `/api/v1/replay/artifacts` | Return replay artifacts, either full internal artifacts or public-safe summaries based on projection. |
+| `GET` | `/api/v1/replay/jsonld` | Return JSON-LD generated from the replay record. |
+
+### 5.2 Trust Publishing And Public Retrieval
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/trust/publish` | Mint a signed public trust reference for a replayable record. |
+| `POST` | `/api/v1/trust/refresh` | Mint a fresh signed public trust reference. |
+| `POST` | `/api/v1/trust/revoke` | Revoke a public trust reference through Redis-backed revocation state. |
+| `GET` | `/api/v1/trust/{public_id}` | Return the public trust page projection as JSON. |
+| `GET` | `/api/v1/trust/{public_id}/jsonld` | Return the public JSON-LD trust artifact. |
+| `GET` | `/api/v1/trust/{public_id}/certificate` | Return a signed trust certificate. |
+
+### 5.3 Verification Endpoints
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/verify/{reference_id}` | Verify a trust reference token directly. |
+| `POST` | `/api/v1/verify` | Verify by exactly one of `reference_id`, `public_id`, `audit_id`, or `subject_id`. |
+
+### 5.4 Notes
+
+- Replay lookups require exactly one of `task_id`, `intent_id`, or `audit_id`.
+- Projection modes currently include `internal`, `auditor`, `buyer`, and `public`.
+- Public trust references are signed and time-bounded.
+- Revocation depends on Redis. If Redis is unavailable, revoke returns `503`.
+- Expired or revoked trust references return `410 Gone` semantics on public trust retrieval.
+
+## 6. Source Registration API
+
+Implemented in [source_registrations_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/source_registrations_router.py).
+
+This surface supports governed provenance-heavy registration intake and decision submission.
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/source-registrations` | Create a source registration and emit initial tracking events for declared evidence and measurements. |
+| `GET` | `/api/v1/source-registrations/{registration_id}` | Fetch the projected source registration view. |
+| `POST` | `/api/v1/source-registrations/{registration_id}/artifacts` | Add a new provenance or seal artifact to an existing registration. |
+| `POST` | `/api/v1/source-registrations/{registration_id}/submit` | Submit the registration into the governed decision workflow and create a task. |
+| `GET` | `/api/v1/source-registrations/{registration_id}/verdict` | Fetch the latest registration decision verdict. |
+
+### 6.1 Notes
+
+- Submission creates a task in the `provenance` domain.
+- Source registration writes are coupled to `TrackingEvent` ingestion rather than relying only on direct table mutation.
+
+## 7. Tracking Events API
+
+Implemented in [tracking_events_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tracking_events_router.py).
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/tracking-events` | Ingest a tracking event directly. |
+| `GET` | `/api/v1/tracking-events` | List tracking events. |
+| `GET` | `/api/v1/tracking-events/{event_id}` | Fetch a single tracking event. |
+| `GET` | `/api/v1/source-registrations/{registration_id}/tracking-events` | List tracking events scoped to a source registration. |
+
+Tracking events form the append-only provenance ingress stream used by source registration projection flows.
+
+## 8. Control API
+
+Implemented in [control_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/control_router.py).
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/facts` | List control-plane facts. |
+| `GET` | `/api/v1/facts/{fact_id}` | Fetch one fact. |
+| `POST` | `/api/v1/facts` | Create a fact. |
+| `PATCH` | `/api/v1/facts/{fact_id}` | Update part of a fact. |
+| `DELETE` | `/api/v1/facts/{fact_id}` | Delete a fact. |
+
+This is the lightweight CRUD control-plane surface currently mounted in the active API.
+
+## 9. Advisory API
+
+Implemented in [advisory_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/advisory_router.py).
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/advisory` | Run advisory evaluation and return non-binding governance-style guidance. |
+
+This route is advisory-only. It does not replace the governed authorization path for controlled execution.
+
+## 10. PKG API
+
+Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py).
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/pkg/reload` | Reload the active PKG evaluator state. |
+| `GET` | `/api/v1/pkg/status` | Report PKG runtime status. |
+| `POST` | `/api/v1/pkg/evaluate_async` | Run asynchronous policy evaluation. |
+| `POST` | `/api/v1/pkg/snapshots/compare` | Compare two policy snapshots. |
+| `POST` | `/api/v1/pkg/snapshots/{snapshot_id}/compile-rules` | Compile rules for a specific snapshot. |
+
+These endpoints support policy runtime inspection and snapshot-oriented operations.
+
+## 11. Capabilities API
+
+Implemented in [capabilities_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/capabilities_router.py).
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/capabilities/register` | Register or refresh runtime capability definitions. |
+
+This endpoint is the active mounted capability-management surface at the moment.
+
+## 12. Quick Practical Rules
+
+- Treat `/health` as process liveness and `/readyz` as dependency readiness.
+- Treat `/api/v1/replay*`, `/api/v1/trust*`, and `/api/v1/verify*` as the canonical replay/trust API family.
+- Prefer `/api/v1/replay/jsonld` over older one-off JSON-LD generation paths for new integrations.
+- Use `/api/v1/tasks/{task_id}/logs` only for streaming clients that can consume SSE.
+- Do not assume legacy routers are mounted just because they exist in the repository.
