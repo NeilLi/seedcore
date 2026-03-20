@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS custody_dispute_case (
     opened_by VARCHAR(128) NULL,
     resolved_by VARCHAR(128) NULL,
     resolution TEXT NULL,
-    references JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reference_map JSONB NOT NULL DEFAULT '{}'::jsonb,
     details JSONB NOT NULL DEFAULT '{}'::jsonb,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

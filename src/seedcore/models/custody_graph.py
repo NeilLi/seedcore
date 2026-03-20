@@ -108,7 +108,7 @@ class CustodyDisputeCase(Base):
     opened_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     resolved_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     resolution: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    references: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    reference_map: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     details: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

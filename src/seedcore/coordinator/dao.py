@@ -1241,7 +1241,7 @@ class CustodyDisputeDAO:
             summary=str(summary) if summary is not None else None,
             asset_id=str(asset_id) if asset_id is not None else None,
             opened_by=str(opened_by) if opened_by is not None else None,
-            references=dict(references or {}),
+            reference_map=dict(references or {}),
             details=dict(details or {}),
         )
         session.add(row)
@@ -1356,7 +1356,7 @@ class CustodyDisputeDAO:
             "opened_by": row.opened_by,
             "resolved_by": row.resolved_by,
             "resolution": row.resolution,
-            "references": dict(row.references or {}),
+            "references": dict(row.reference_map or {}),
             "details": dict(row.details or {}),
             "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
