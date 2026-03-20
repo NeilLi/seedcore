@@ -39,13 +39,15 @@ MIGRATION_124="${SCRIPT_DIR}/migrations/124_tracking_events_app_scope.sql"
 MIGRATION_125="${SCRIPT_DIR}/migrations/124_governed_execution_audit.sql"
 MIGRATION_126="${SCRIPT_DIR}/migrations/125_governed_execution_policy_receipt.sql"
 MIGRATION_127="${SCRIPT_DIR}/migrations/126_digital_twin_persistence.sql"
+MIGRATION_128="${SCRIPT_DIR}/migrations/127_digital_twin_event_journal.sql"
+MIGRATION_129="${SCRIPT_DIR}/migrations/128_custody_graph.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125" "$MIGRATION_126" "$MIGRATION_127"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125" "$MIGRATION_126" "$MIGRATION_127" "$MIGRATION_128" "$MIGRATION_129"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -81,6 +83,8 @@ echo "   - 124: Tracking event app-scope expansion (external app telemetry + sub
 echo "   - 125: Governed execution audit (append-only decision and execution receipts)"
 echo "   - 126: Governed execution policy receipt column + index"
 echo "   - 127: Persistent digital twin state + history"
+echo "   - 128: Append-only digital twin event journal"
+echo "   - 129: Custody graph, lineage chain, and dispute workflow tables"
 
 find_pg_pod() {
   local sel pod
@@ -272,6 +276,16 @@ echo "⚙️  Running migration 127: Persistent digital twin state + history..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_127" "$POSTGRES_POD:/tmp/127_digital_twin_persistence.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/127_digital_twin_persistence.sql"
 
+# Migration 128 (Digital Twin Event Journal)
+echo "⚙️  Running migration 128: Append-only digital twin event journal..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_128" "$POSTGRES_POD:/tmp/128_digital_twin_event_journal.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/128_digital_twin_event_journal.sql"
+
+# Migration 129 (Custody Graph)
+echo "⚙️  Running migration 129: Custody graph, lineage chain, and dispute workflow tables..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_129" "$POSTGRES_POD:/tmp/129_custody_graph.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/129_custody_graph.sql"
+
 # 6) Verify schema
 echo "✅ Verifying schema..."
 
@@ -316,6 +330,12 @@ echo "📊 Governed execution + twin persistence tables:"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ governed_execution_audit"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ digital_twin_state"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ digital_twin_history"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ digital_twin_event_journal"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ custody_graph_node"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ custody_graph_edge"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ custody_transition_event"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ custody_dispute_case"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -c "\d+ custody_dispute_event"
 
 # NEW: HGNN verification (key tables + views + helper functions)
 echo "📊 HGNN core mapping + registries:"
