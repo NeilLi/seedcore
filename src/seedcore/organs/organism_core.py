@@ -105,7 +105,7 @@ from seedcore.config.paths import resolve_config_path
 
 CONFIG_PATH = resolve_config_path(
     "organism.yaml",
-    env_names=("ORGANISM_CONFIG_PATH", "CONFIG_PATH"),
+    env_names=("ORGANISM_CONFIG_PATH",),
 )
 RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
