@@ -1,0 +1,38 @@
+{
+    "pack_id": "fast-core",
+    "pack_version": "1.0.0",
+    "schema_version": "1",
+    "defaults": {
+      "max_chars": 1024,
+      "time_budget_ms": 2.0,
+      "fallback_event_type": "routine"
+    },
+    "pii_redaction": [
+      {
+        "id": "cc",
+        "regex": "(?:\\d[ -]?){13,19}",
+        "flags": [],
+        "replacement": "[CC]",
+        "validator": { "type": "luhn" }
+      }
+    ],
+    "patterns": [
+      {
+        "id": "emergency",
+        "regex": "\\b(fire|evacuate|emergency|help)\\b",
+        "flags": ["IGNORECASE"],
+        "emit": {
+          "event_types": ["emergency"],
+          "priority": 10
+        },
+        "keywords": ["fire", "emergency"],
+        "early_exit": true
+      }
+    ],
+    "keyword_lexicon": {
+      "terms": ["fire", "alarm", "help"]
+    },
+    "location_patterns": [],
+    "timestamp_patterns": []
+  }
+  

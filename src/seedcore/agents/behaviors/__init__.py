@@ -4,7 +4,7 @@ Behavior Plugin System for SeedCore Agents.
 
 Behaviors are pluggable capabilities that can be dynamically configured via:
 - RoleProfile.default_behaviors (specialization-level defaults)
-- organs.yaml agent config
+- organism.yaml agent config
 - pkg_subtask_types.default_params.executor.behaviors (DNA registry)
 
 This enables dynamic agent generation without code changes.

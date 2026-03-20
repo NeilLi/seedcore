@@ -9,7 +9,7 @@ from typing import Optional
 import ray  # pyright: ignore[reportMissingImports]
 import asyncpg  # pyright: ignore[reportMissingImports]
 
-from seedcore.dispatcher.config import (
+from seedcore.dispatcher.settings import (
     ASYNC_PG_IDLE_LIFETIME,
     ASYNC_PG_STMT_CACHE,
     TASK_STALE_S,  # e.g., 300 seconds

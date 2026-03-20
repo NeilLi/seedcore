@@ -31,6 +31,7 @@ from sqlalchemy import select, text  # pyright: ignore[reportMissingImports]
 
 # --- Internal Imports ---
 from ..logging_setup import ensure_serve_logger, setup_logging
+from ..config.paths import resolve_config_path
 from ..database import get_async_pg_session_factory, get_redis_client
 from ..utils.ray_utils import COG, ML, ORG
 
@@ -145,11 +146,13 @@ def _measurement_value(value: Any) -> float | None:
         return None
 
 # --- Constants & Configuration Models ---
-CONFIG_PATH = os.getenv(
-    "COORDINATOR_CONFIG_PATH", "/app/config/coordinator_config.yaml"
+CONFIG_PATH = resolve_config_path(
+    "coordinator.yaml",
+    env_names=("COORDINATOR_CONFIG_PATH",),
 )
-FAST_EVENTIZER_PATTERNS_PATH = os.getenv(
-    "FAST_EVENTIZER_PATTERNS_PATH", "/app/config/fast_eventizer_patterns.json"
+FAST_EVENTIZER_PATTERNS_PATH = resolve_config_path(
+    "eventizer-fast-patterns.json",
+    env_names=("FAST_EVENTIZER_PATTERNS_PATH",),
 )
 FAST_PATH_LATENCY_SLO_MS = float(os.getenv("FAST_PATH_LATENCY_SLO_MS", "1000"))
 router_prefix = ""

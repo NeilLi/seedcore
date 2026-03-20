@@ -316,7 +316,7 @@ def mock_ray():
 
 @pytest.fixture
 def sample_config():
-    """Sample organs.yaml configuration."""
+    """Sample organism.yaml configuration."""
     return {
         "seedcore": {
             "organism": {
@@ -350,13 +350,13 @@ def mock_config_file(tmp_path, sample_config):
     """Create a temporary config file."""
     try:
         import yaml
-        config_file = tmp_path / "test_organs.yaml"
+        config_file = tmp_path / "test_organism.yaml"
         with open(config_file, "w") as f:
             yaml.dump(sample_config, f)
         return config_file
     except ImportError:
         # Fallback: create minimal YAML manually
-        config_file = tmp_path / "test_organs.yaml"
+        config_file = tmp_path / "test_organism.yaml"
         config_content = """seedcore:
   organism:
     settings:

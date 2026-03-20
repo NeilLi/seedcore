@@ -584,7 +584,7 @@ class Organ:
 
             # 3. Behavior Plugin System: Pass behaviors to agent
             # Behaviors can come from:
-            # - organs.yaml agent definition (behaviors, behavior_config) - passed via create_agent()
+            # - organism.yaml agent definition (behaviors, behavior_config) - passed via create_agent()
             # - RoleProfile.default_behaviors (handled in BaseAgent.__init__)
             # - pkg_subtask_types.default_params.executor (via executor hints in task, handled during JIT spawning)
             if behaviors is not None:

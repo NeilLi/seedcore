@@ -58,7 +58,7 @@ spec:
                   serve.start(http_options={'host': '0.0.0.0', 'port': 8000})
                   
                   # Load config file
-                  config_path = '/app/config/serve_config.yaml'
+                  config_path = '/app/config/ray-serve.yaml'
                   if not os.path.exists(config_path):
                       print(f'⚠️  Config file not found: {config_path}', file=sys.stderr)
                       print('   Ray head is running, but Serve config not found', file=sys.stderr)

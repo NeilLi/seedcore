@@ -4,7 +4,7 @@ from typing import Dict, Any
 
 from datasets import Dataset, Features, Value  # pyright: ignore[reportMissingImports]
 from tools import TOOLS
-from .path_config import (
+from .paths import (
     INTENT_TOOL_DATASET_JSONL as INPUT_JSONL,
     FUNCTION_CALL_DATASET_DIR as OUTPUT_DIR,
 )

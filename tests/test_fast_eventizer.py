@@ -13,7 +13,7 @@ from seedcore.models.eventizer import EventType, RouteDecision
 FIXTURE_PATH = os.path.join(
     os.path.dirname(__file__),
     "fixtures",
-    "fast_eventizer_patterns.json",
+    "eventizer-fast-patterns.json",
 )
 
 

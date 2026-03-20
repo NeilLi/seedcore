@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from seedcore.config.paths import resolve_project_config_path
 from seedcore.ops.eventizer.utils.json_schema_validator import EventizerPatternsValidator
 
 from seedcore.models.eventizer import EventizerConfig, PatternMatch
@@ -895,11 +896,9 @@ class PatternCompiler:
     def _validate_patterns_file(self, file_path: Path) -> bool:
         """Validate patterns file against JSON Schema."""
         try:
-            # Use the schema in the config directory
-            project_root = Path(__file__).parent.parent.parent.parent.parent
-            schema_path = project_root / "config" / "eventizer_patterns_schema.json"
-            
-            validator = EventizerPatternsValidator(schema_path)
+            validator = EventizerPatternsValidator(
+                resolve_project_config_path("eventizer-patterns.schema.json")
+            )
             result = validator.validate_file(file_path)
             
             if not result.is_valid:

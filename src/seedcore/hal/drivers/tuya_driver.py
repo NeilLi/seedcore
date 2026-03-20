@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional, List
 import httpx  # pyright: ignore[reportMissingImports]
 
 from ..interfaces import BaseIoTDeviceDriver
-from seedcore.config.tuya_config import TuyaConfig
+from seedcore.config.tuya_settings import TuyaConfig
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 setup_logging(app_name="seedcore.hal.drivers.tuya")

@@ -2,7 +2,7 @@
 """
 JSON Schema Validator for Eventizer Patterns
 
-Validates eventizer_patterns.json files against the defined JSON Schema.
+Validates eventizer-patterns.json files against the defined JSON Schema.
 Provides detailed error reporting and validation statistics.
 """
 
@@ -13,6 +13,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass
+
+from seedcore.config.paths import resolve_project_config_path
 
 logger = logging.getLogger(__name__)
 
@@ -65,19 +67,8 @@ class EventizerPatternsValidator:
         self.validator = self._create_validator() if JSONSCHEMA_AVAILABLE else None
     
     def _get_default_schema_path(self) -> Path:
-        """Get the default schema path by searching upward for config directory."""
-        # Start from current file and search upward for config directory
-        current = Path(__file__).resolve()
-        while current.parent != current:  # Stop at filesystem root
-            config_dir = current / "config"
-            schema_file = config_dir / "eventizer_patterns_schema.json"
-            if schema_file.exists():
-                return schema_file
-            current = current.parent
-        
-        # Fallback to original logic if config not found
-        project_root = Path(__file__).parent.parent.parent.parent.parent
-        return project_root / "config" / "eventizer_patterns_schema.json"
+        """Get the default schema path using the canonical config filename."""
+        return resolve_project_config_path("eventizer-patterns.schema.json")
     
     def _load_schema(self) -> Dict[str, Any]:
         """Load the JSON Schema."""

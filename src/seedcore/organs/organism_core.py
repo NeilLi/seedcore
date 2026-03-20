@@ -100,7 +100,13 @@ from seedcore.logging_setup import setup_logging, ensure_serve_logger
 #  Settings & Environment
 # ---------------------------------------------------------------------
 
-CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/config/organs.yaml")
+from seedcore.config.paths import resolve_config_path
+
+
+CONFIG_PATH = resolve_config_path(
+    "organism.yaml",
+    env_names=("ORGANISM_CONFIG_PATH", "CONFIG_PATH"),
+)
 RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
 
 setup_logging(app_name="seedcore.organs.OrganismCore")
@@ -132,7 +138,7 @@ async def register_tuya_tools(tool_manager: Any) -> bool:
         True if tools were registered, False if Tuya is disabled
     """
     try:
-        from seedcore.config.tuya_config import TuyaConfig
+        from seedcore.config.tuya_settings import TuyaConfig
 
         tuya_config = TuyaConfig()
         if not tuya_config.enabled:
@@ -466,7 +472,7 @@ class OrganismCore:
         Phase 4: Background Loops (Health, Reconciliation)
 
         Architecture Philosophy:
-        - **Static Initialization (YAML)**: `organs.yaml` and `specializations.yaml` provide
+        - **Static Initialization (YAML)**: `organism.yaml` and `specializations.yaml` provide
           the initial baseline configuration. This is ONLY used for first-time static setup.
         - **Dynamic Evolution (PKG)**: After initialization, `CapabilityMonitor` in `CoordinatorService`
           continuously watches `pkg_subtask_types` for changes and notifies `OrganismService` via RPC.
@@ -915,7 +921,7 @@ class OrganismCore:
             True if Tuya is enabled and configured, False otherwise
         """
         try:
-            from seedcore.config.tuya_config import TuyaConfig
+            from seedcore.config.tuya_settings import TuyaConfig
 
             tuya_config = TuyaConfig()
             return tuya_config.enabled
@@ -1054,9 +1060,9 @@ class OrganismCore:
 
         Integration with specializations.yaml:
         - Loads specializations.yaml first (if exists) to register dynamic specializations with their role profiles
-        - Then processes organs.yaml to ensure all referenced specializations are registered
+        - Then processes organism.yaml to ensure all referenced specializations are registered
         - Role profiles from specializations.yaml provide default_behaviors and behavior_config
-        - organs.yaml can override these defaults per-agent
+        - organism.yaml can override these defaults per-agent
         """
         logger.info("--- Registering all role profiles from config ---")
 
@@ -1123,7 +1129,7 @@ class OrganismCore:
                 "Skipping dynamic specialization loading."
             )
 
-        # Step 2: Collect all unique specializations from organs.yaml config
+        # Step 2: Collect all unique specializations from organism.yaml config
         specialization_strings: Set[str] = set()
 
         for cfg in self.organ_configs:
@@ -1197,8 +1203,8 @@ class OrganismCore:
                         allowed_tools=set(),  # Empty defaults - can be customized later
                         routing_tags=set(),
                         safety_policies={},
-                        default_behaviors=[],  # Empty behaviors - can be customized via organs.yaml
-                        behavior_config={},  # Empty config - can be customized via organs.yaml
+                        default_behaviors=[],  # Empty behaviors - can be customized via organism.yaml
+                        behavior_config={},  # Empty config - can be customized via organism.yaml
                     )
                     self.role_registry.register(profile)
                     logger.info(
@@ -1558,7 +1564,7 @@ class OrganismCore:
                 self.organ_specs[spec_val] = organ_id
 
                 # 2.5. Extract behaviors from agent config (Behavior Plugin System)
-                # Merge defaults from RoleProfile with explicit overrides from organs.yaml
+                # Merge defaults from RoleProfile with explicit overrides from organism.yaml
                 role_profile = self.role_registry.get_safe(spec)
                 if role_profile:
                     # Start with RoleProfile defaults (from specializations.yaml or DEFAULT_ROLE_REGISTRY)
@@ -1573,20 +1579,20 @@ class OrganismCore:
                         else {}
                     )
 
-                    # Override with explicit values from organs.yaml (if provided)
+                    # Override with explicit values from organism.yaml (if provided)
                     if "behaviors" in block:
                         agent_behaviors = block.get("behaviors", [])
                         logger.debug(
                             f"[OrganismCore] Configuring {spec.value} in {organ_id} with behaviors: {agent_behaviors}"
                         )
                     elif agent_behaviors:
-                        # Using RoleProfile defaults (no override in organs.yaml)
+                        # Using RoleProfile defaults (no override in organism.yaml)
                         logger.debug(
                             f"[OrganismCore] Using RoleProfile default behaviors for {spec.value} in {organ_id}: {agent_behaviors}"
                         )
 
                     if "behavior_config" in block:
-                        # Merge behavior_config (organs.yaml overrides RoleProfile defaults)
+                        # Merge behavior_config (organism.yaml overrides RoleProfile defaults)
                         override_config = block.get("behavior_config", {})
                         agent_behavior_config = role_profile.merge_behavior_config(
                             override_config
@@ -1599,7 +1605,7 @@ class OrganismCore:
                                 f"overriding configs for {len(config_keys)} behavior(s): {config_keys}"
                             )
                 else:
-                    # No RoleProfile found - use explicit values from organs.yaml only
+                    # No RoleProfile found - use explicit values from organism.yaml only
                     agent_behaviors = block.get("behaviors", [])
                     agent_behavior_config = block.get("behavior_config", {})
                     if agent_behaviors or agent_behavior_config:
@@ -5043,7 +5049,7 @@ class OrganismCore:
             
             repo = AgentGraphRepository()
             
-            # Get list of static agents to keep (from organs.yaml)
+            # Get list of static agents to keep (from organism.yaml)
             keep_static_agents = []
             for cfg in self.organ_configs:
                 for agent_def in cfg.get("agents", []):

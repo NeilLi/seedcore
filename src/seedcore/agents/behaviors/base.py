@@ -5,7 +5,7 @@ Base class for Agent Behaviors.
 Behaviors are pluggable capabilities that extend BaseAgent functionality
 without requiring code changes. They can be configured via:
 - RoleProfile.default_behaviors
-- organs.yaml
+- organism.yaml
 - pkg_subtask_types.default_params.executor.behaviors
 """
 

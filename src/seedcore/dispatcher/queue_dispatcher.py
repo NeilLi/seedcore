@@ -17,7 +17,7 @@ from seedcore.models import TaskPayload
 from seedcore.models.result_schema import make_envelope, normalize_envelope
 from seedcore.database import get_asyncpg_pool, PG_DSN
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
-from seedcore.dispatcher.config import MAX_ATTEMPTS
+from seedcore.dispatcher.settings import MAX_ATTEMPTS
 
 setup_logging(app_name="seedcore.dispatcher")
 logger = ensure_serve_logger("seedcore.dispatcher")

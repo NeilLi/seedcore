@@ -49,7 +49,7 @@ def create_default_registry() -> RoleRegistry:
         default_skills={"dialogue": 0.95, "empathy": 0.9, "compliance": 0.95},
         allowed_tools={"chat.reply", "user.profile.read", "general_query"},
         # Behavior Plugin System: Default behaviors for USER_LIAISON
-        # Can be overridden by organs.yaml or pkg_subtask_types.default_params
+        # Can be overridden by organism.yaml or pkg_subtask_types.default_params
         default_behaviors=["chat_history", "tool_auto_injection"],
         behavior_config={
             "chat_history": {"limit": 50},

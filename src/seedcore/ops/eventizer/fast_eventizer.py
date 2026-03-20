@@ -4,7 +4,7 @@ SeedCore Fast Eventizer (framework-grade)
 
 Goals:
 - Deterministic (<1ms p95 typical)
-- Data-driven via fast_eventizer_patterns.json
+- Data-driven via eventizer-fast-patterns.json
 - Unified EventType output for PKG compatibility
 - Minimal PII redaction (Luhn for CC) with low FP rate
 """

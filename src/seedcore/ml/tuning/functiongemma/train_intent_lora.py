@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from tools import tuya_send_command, tuya_get_status
 from transformers.utils import get_json_schema  # pyright: ignore[reportMissingImports]
-from .path_config import (
+from .paths import (
     BASE_MODEL_ID as MODEL_ID,
     FUNCTION_CALL_DATASET_DIR,
     LORA_ADAPTER_DIR,

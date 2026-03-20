@@ -45,7 +45,7 @@ from ..utils.ray_utils import ensure_ray_initialized
 # -------------------------
 # Memory configuration
 # -------------------------
-from ..config.mem_config import CONFIG
+from ..config.memory_settings import CONFIG
 
 try:
     # Sharded miss tracker implementation

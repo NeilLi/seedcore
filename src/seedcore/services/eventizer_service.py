@@ -4,7 +4,7 @@ Eventizer Service (product-grade)
 
 Deterministic, low-latency text processing pipeline for task classification & routing.
 Refactored to be configuration-driven: attributes and tags are derived directly
-from pattern metadata (loaded from eventizer_patterns.json), removing hardcoded heuristics.
+from pattern metadata (loaded from eventizer-patterns.json), removing hardcoded heuristics.
 
 Pipeline:
   1) Unicode-safe normalization

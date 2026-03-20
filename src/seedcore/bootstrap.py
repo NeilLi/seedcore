@@ -24,7 +24,7 @@ from typing import List, Optional, Tuple, Callable
 from seedcore.memory.mw_manager import SharedCache
 from seedcore.memory.shared_cache_shard import SharedCacheShard
 from seedcore.memory.mw_store_shard import MwStoreShard
-from seedcore.config.mem_config import CONFIG as MEMORY_CONFIG
+from seedcore.config.memory_settings import CONFIG as MEMORY_CONFIG
 
 # -----------------------------------------------------------------------------
 # Logging

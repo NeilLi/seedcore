@@ -1,6 +1,6 @@
 import os
 from huggingface_hub import snapshot_download  # pyright: ignore[reportMissingImports]
-from .path_config import (
+from .paths import (
     BASE_MODEL_ID as BASE_MODEL,
     CHECKPOINT_DIR,
     HF_CACHE_DIR,

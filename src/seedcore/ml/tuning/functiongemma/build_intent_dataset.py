@@ -7,7 +7,7 @@ from seedcore.tools.tuya.tuya_tools import (
     TuyaGetStatusTool,
     TuyaSendCommandTool,
 )
-from .path_config import (
+from .paths import (
     INTENT_TOOL_DATASET_JSONL as INPUT_JSONL,
     INTENT_TOOL_SFT_DATASET_JSONL as OUTPUT_JSONL,
 )

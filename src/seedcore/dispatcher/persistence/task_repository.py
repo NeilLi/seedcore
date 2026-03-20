@@ -96,7 +96,7 @@ class TaskRepository:
         """
         # Pass RUN_LEASE_S as parameter ($4) and MAX_ATTEMPTS as parameter ($5)
         # Ensure exclusion list is a list, not tuple, for asyncpg
-        from seedcore.dispatcher.config import MAX_ATTEMPTS
+        from seedcore.dispatcher.settings import MAX_ATTEMPTS
         rows = await con.fetch(
             CLAIM_BATCH_SQL,
             batch_size,

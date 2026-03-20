@@ -1,0 +1,500 @@
+{"user_content":"Turn on the living room light.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_001\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Is the bedroom lamp still on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_002\"}"}
+{"user_content":"Set the kitchen light brightness to 50%.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_003\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"Can you make the study light cooler?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_004\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"Switch the lounge light to color mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_005\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Kill the power to the basement light.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_006\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"What is the status of the outdoor floodlight?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_007\"}"}
+{"user_content":"Dim the lights in the dining room.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_008\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"Put the bulb in music sync mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_009\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Warm up the light color in the nursery.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_010\", \"commands\": [{\"code\": \"temp_value\", \"value\": 200}]}"}
+{"user_content":"Check if the hallway light is off.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_011\"}"}
+{"user_content":"Trun on light_442.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_442\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Make the porch light as bright as possible.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_012\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Change the garage light to white mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_013\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Is the smart plug active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"plug_99\"}"}
+{"user_content":"Deactivate the security system.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"sec_001\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Status update for dev_x_909.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_x_909\"}"}
+{"user_content":"Switch light_01 to scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Set temp value to 450 for the ceiling light.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_015\", \"commands\": [{\"code\": \"temp_value\", \"value\": 450}]}"}
+{"user_content":"Heater status check.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"heat_001\"}"}
+{"user_content":"Activate the corridor lighting.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_016\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"It's too dark in here, fix it.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_017\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Shut down everything in the office.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"off_001\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Is the alarm armed?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"alarm_001\"}"}
+{"user_content":"I want the lights set to music mode please.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_018\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Low light for movie night.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_019\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"Check the status of the thermostat.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"therm_001\"}"}
+{"user_content":"Turn the bathroom light to full heat.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_020\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"Set the light to white.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_021\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Give me the status of the front door lock.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"lock_001\"}"}
+{"user_content":"Lights on!","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_022\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Brightness 0 for light_abc.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_abc\", \"commands\": [{\"code\": \"bright_value\", \"value\": 0}]}"}
+{"user_content":"Current status of light_556?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_556\"}"}
+{"user_content":"Switch the kitchen to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_023\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Turn off the patio heater.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"heat_002\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Is the light on in the attic?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_024\"}"}
+{"user_content":"Make the light warmer.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_025\", \"commands\": [{\"code\": \"temp_value\", \"value\": 300}]}"}
+{"user_content":"Set the light to scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_026\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Check device light_xyz.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_xyz\"}"}
+{"user_content":"Turn on the coffee machine.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"plug_002\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Set the brightness to 750.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_027\", \"commands\": [{\"code\": \"bright_value\", \"value\": 750}]}"}
+{"user_content":"Switch to white work mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_028\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Get status light_88.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_88\"}"}
+{"user_content":"Disable the fan.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"fan_001\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Crank the temp value to max.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_029\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"What is the brightness level now?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_030\"}"}
+{"user_content":"Music mode on.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_031\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Light switch true.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_032\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Is the gate closed?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"gate_001\"}"}
+{"user_content":"Set brightness to 333.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_033\", \"commands\": [{\"code\": \"bright_value\", \"value\": 333}]}"}
+{"user_content":"Hey, turn off the light in the kitchen.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_kitchen_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Is the bedroom light currently on or off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_bedroom_99\"}"}
+{"user_content":"Set the living room lamp brightness to 800.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lamp_living_room\", \"commands\": [{\"code\": \"bright_value\", \"value\": 800}]}"}
+{"user_content":"Make the study light warmer, set temperature to 300.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"study_light_v3\", \"commands\": [{\"code\": \"temp_value\", \"value\": 300}]}"}
+{"user_content":"Switch the LED strip to music mode!","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"led_strip_rgb\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Can you check the status of the front door security sensor?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"sensor_front_door\"}"}
+{"user_content":"kitchen lamp on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_kitchen_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"dim the hallway light to 100","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_hallway_main\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"Switch light_445 to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_445\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Is the office heater still running? Check status.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"heater_office_1\"}"}
+{"user_content":"turn the basement light off immediately","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_basement_02\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Set the bulb in the attic to scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bulb_attic\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"I need the light temperature in the bathroom to be 900.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bath_light_01\", \"commands\": [{\"code\": \"temp_value\", \"value\": 900}]}"}
+{"user_content":"status of device_9823?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"device_9823\"}"}
+{"user_content":"switch_led true for light_x9","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_x9\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Set brightness to 500 on light_id_77.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_id_77\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"put the patio lights in white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"patio_lights_group\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"what's the current state of the garage light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"garage_light_01\"}"}
+{"user_content":"kill light_001","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_001\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Set the floor lamp temperature to 100.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"floor_lamp_01\", \"commands\": [{\"code\": \"temp_value\", \"value\": 100}]}"}
+{"user_content":"Can you check if the porch light is on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"porch_light_44\"}"}
+{"user_content":"bright_value 1000 for device_id_999","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"device_id_999\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Switch to scene mode on the master bedroom light.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_mb_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Turn on the light in the nursery.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nursery_light_unit\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"status check device 'ac_unit_living_room'","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"ac_unit_living_room\"}"}
+{"user_content":"Set light_55 temperature value to 450.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_55\", \"commands\": [{\"code\": \"temp_value\", \"value\": 450}]}"}
+{"user_content":"is the desk lamp switched on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"desk_lamp_office\"}"}
+{"user_content":"Change the main light to music mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_light_hall\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Turn off the backyard floodlight.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"backyard_flood_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Increase brightness of the reading light to 700.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_light_x\", \"commands\": [{\"code\": \"bright_value\", \"value\": 700}]}"}
+{"user_content":"Check the status of sensor_882.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"sensor_882\"}"}
+{"user_content":"set temp_value to 0 on light_cool","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_cool\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"Switch bulb_2 to colour mode, please.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bulb_2\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"is the guest room light active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_guest_room\"}"}
+{"user_content":"Turn on the chandelier.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"chandelier_main\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Change the brightness for light_3 to 350.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_3\", \"commands\": [{\"code\": \"bright_value\", \"value\": 350}]}"}
+{"user_content":"What is the status of the outdoor light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"outdoor_light_main\"}"}
+{"user_content":"Set work_mode to white for kitchen_light_2.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_light_2\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Switch off the laundry room bulb.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"laundry_bulb_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Set temperature to 1000 for maximum warmth on light_abc.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_abc\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"status report for light_id_500","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_id_500\"}"}
+{"user_content":"turn on the light in the playroom","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"playroom_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Adjust the dining lamp brightness to 250.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_lamp_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 250}]}"}
+{"user_content":"Switch the ceiling light to scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"ceiling_light_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Check if the pool light is currently off.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"pool_light_01\"}"}
+{"user_content":"Set temp_value to 600 for light_study.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_study\", \"commands\": [{\"code\": \"temp_value\", \"value\": 600}]}"}
+{"user_content":"Activate the smart bulb.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"smart_bulb_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Is light_776 currently responding? Status check.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_776\"}"}
+{"user_content":"Dim the spotlight to 400.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"spotlight_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 400}]}"}
+{"user_content":"Change the office panel to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_panel_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"light on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":true}]}"}
+{"user_content":"turn the lamp off please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":false}]}"}
+{"user_content":"make it as bright as possible","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":1000}]}"}
+{"user_content":"dim the kitchen light to 20 percent","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":200}]}"}
+{"user_content":"set the color temperature to halfway","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"temp_value\",\"value\":500}]}"}
+{"user_content":"tunr on teh light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":true}]}"}
+{"user_content":"is the bedroom light currently on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"set mode to music","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"music\"}]}"}
+{"user_content":"change lighting to scene mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"scene\"}]}"}
+{"user_content":"switch to white light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"white\"}]}"}
+{"user_content":"lights out!","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":false}]}"}
+{"user_content":"check the ac status","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"climate_001\"}"}
+{"user_content":"is the front door locked?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"security_001\"}"}
+{"user_content":"get the status of the living room lamp","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"i want it more orange set temp to 800","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"temp_value\",\"value\":800}]}"}
+{"user_content":"set brightness to 10","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":10}]}"}
+{"user_content":"activate colour mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"colour\"}]}"}
+{"user_content":"can you check if the heater is running?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"climate_001\"}"}
+{"user_content":"status of device id light_001","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"hit the switch","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":true}]}"}
+{"user_content":"darken the room","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":0}]}"}
+{"user_content":"set temp_value to 100","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"temp_value\",\"value\":100}]}"}
+{"user_content":"kill the lights","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":false}]}"}
+{"user_content":"is the alarm set?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"security_001\"}"}
+{"user_content":"get light_001 status","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"put it in disco mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"music\"}]}"}
+{"user_content":"set light to 750 brightness","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":750}]}"}
+{"user_content":"switch_led true","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":true}]}"}
+{"user_content":"off now","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":false}]}"}
+{"user_content":"is the back door open?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"security_001\"}"}
+{"user_content":"check climate_001","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"climate_001\"}"}
+{"user_content":"it is too cold, check the thermostat","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"climate_001\"}"}
+{"user_content":"mode colour","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"colour\"}]}"}
+{"user_content":"set temperature value to 300","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"temp_value\",\"value\":300}]}"}
+{"user_content":"make it brighter by setting to 900","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":900}]}"}
+{"user_content":"check status of security_001","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"security_001\"}"}
+{"user_content":"turn on the bulb","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":true}]}"}
+{"user_content":"set light_001 to work_mode white","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"white\"}]}"}
+{"user_content":"how is the sensor looking?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"security_001\"}"}
+{"user_content":"give me the current state of light_001","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"switch_led false","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":false}]}"}
+{"user_content":"set bright_value 450","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":450}]}"}
+{"user_content":"please set temp_value 0","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"temp_value\",\"value\":0}]}"}
+{"user_content":"scene mode please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"scene\"}]}"}
+{"user_content":"switch on the light_001","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"switch_led\",\"value\":true}]}"}
+{"user_content":"is the kitchen light off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"check on security_001 status","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"security_001\"}"}
+{"user_content":"what is the temperature of the light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\":\"light_001\"}"}
+{"user_content":"put on music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"work_mode\",\"value\":\"music\"}]}"}
+{"user_content":"set brightness to max","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\":\"light_001\",\"commands\":[{\"code\":\"bright_value\",\"value\":1000}]}"}
+{"user_content":"Hey, can you turn the kitchen light on please?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_light_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Is the bedroom lamp currently on or off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"bedroom_lamp_02\"}"}
+{"user_content":"Kill the lights in the garage.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"garage_light_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"I need the living room at full brightness right now.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_bulb\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Make the office light really dim.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light_main\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"Set the light to its warmest setting.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"study_lamp_01\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"Can you put the dining room light into scene mode?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_light_v3\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"What is the status of the front door light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"front_door_light_1\"}"}
+{"user_content":"Swtich on the bulb in the attic.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"attic_bulb_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Make it disco time in the basement.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"basement_strip_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Check the light level in the nursery.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"nursery_lamp_x\"}"}
+{"user_content":"I want the lights to be cold white.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_light\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"Turn down the brightness to 50 percent.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_ceiling_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"Set the master bedroom to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"master_bedroom_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Off.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"current_device_id\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Gimme the stats on the patio light.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"patio_floodlight\"}"}
+{"user_content":"it's too dark here, crank the light up","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"desk_lamp_primary\", \"commands\": [{\"code\": \"bright_value\", \"value\": 900}]}"}
+{"user_content":"put the light back to normal white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_living_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Status?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"active_light_01\"}"}
+{"user_content":"set temp value to 500","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"corridor_light_5\", \"commands\": [{\"code\": \"temp_value\", \"value\": 500}]}"}
+{"user_content":"Turn on light_id_9988.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_id_9988\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Get the current settings for the chandelier.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"chandelier_dining\"}"}
+{"user_content":"lights out in the kids room","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kids_room_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"bright_value 350 for the porch","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"porch_light_ext\", \"commands\": [{\"code\": \"bright_value\", \"value\": 350}]}"}
+{"user_content":"I need more blue light, set temp to 0","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lab_light_alpha\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"Change the vibe to music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"tv_backlight_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Check if the pool lights are still on.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"pool_light_system\"}"}
+{"user_content":"Switch led true for kitchen_pendant","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_pendant\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"lower the brightness to 10","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nightlight_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 10}]}"}
+{"user_content":"Set the temp_value to 800 for the reading lamp.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_lamp_7\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"is the porch light active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"porch_light_01\"}"}
+{"user_content":"enable colour mode for the led strip","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"led_strip_99\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Turn it off, I'm sleeping.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"master_bed_lamp\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Show me the current state of the laundry room light.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"laundry_light_01\"}"}
+{"user_content":"Max out the brightness in the workshop.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"workshop_main\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"make the light warm in the den","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"den_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 900}]}"}
+{"user_content":"switch to scene mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Kitchen light report please.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"kitchen_light_main\"}"}
+{"user_content":"Power on.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"dim the light to 200","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"set temp to 300","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_light_2\", \"commands\": [{\"code\": \"temp_value\", \"value\": 300}]}"}
+{"user_content":"Switch the mode to music.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"rgb_strip_bedroom\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Is my desk lamp on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"desk_lamp_id_44\"}"}
+{"user_content":"Turn off the light in the pantry.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"pantry_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Full power to the grow light.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"grow_light_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Set work_mode to white","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"studio_light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"What is the brightness of the sunroom light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"sunroom_light_a\"}"}
+{"user_content":"Lights on in the cellar.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"cellar_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Reduce brightness to 500","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"Change temperature to 100","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_light_beta\", \"commands\": [{\"code\": \"temp_value\", \"value\": 100}]}"}
+{"user_content":"Hey, can you turn on the kitchen lights?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_light_123\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"it's too dark in the office, make it brighter","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_lamp_456\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"check the status of the living room bulb","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"living_room_bulb_789\"}"}
+{"user_content":"set the bedroom light to a warm tone","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_light_001\", \"commands\": [{\"code\": \"temp_value\", \"value\": 200}]}"}
+{"user_content":"lights off in the hallway","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_light_102\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"switch the lounge lamp to color mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lounge_lamp_303\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"is the front door light currently active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"front_door_light_404\"}"}
+{"user_content":"dim the patio lights to about 20 percent","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"patio_light_505\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"make the basement light very cool white","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"basement_light_606\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"set the dining room to scene mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_light_707\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"turn the garage light on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"garage_light_808\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"how bright is the nursery light right now?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"nursery_light_909\"}"}
+{"user_content":"switch the ceiling light to music sync mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"ceiling_light_111\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"kill the lights in the master bedroom","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"master_bedroom_light_222\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"put the desk lamp on white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"desk_lamp_333\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"what's the current state of the porch light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"porch_light_444\"}"}
+{"user_content":"adjust the attic light brightness to 500","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"attic_light_555\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"I need the vanity mirror light on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"vanity_light_666\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"set the garden spots to 80% brightness","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"garden_spots_777\", \"commands\": [{\"code\": \"bright_value\", \"value\": 800}]}"}
+{"user_content":"change the study light to a cooler temperature","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"study_light_888\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"turn off the reading lamp","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_lamp_999\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"get me the info for the deck light","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"deck_light_010\"}"}
+{"user_content":"set the bathroom light to 10% intensity","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bathroom_light_020\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"enable the security floodlight","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"security_floodlight_030\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"switch the playroom light to colour mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"playroom_light_040\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"what is the temperature setting on the kitchen bulb?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"kitchen_bulb_050\"}"}
+{"user_content":"shut down the pantry light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"pantry_light_060\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"crank the brightness to max on the driveway light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"driveway_light_070\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"make the guest room light very warm","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"guest_room_light_080\", \"commands\": [{\"code\": \"temp_value\", \"value\": 50}]}"}
+{"user_content":"is the workshop light still on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"workshop_light_090\"}"}
+{"user_content":"set the mood in the dining area to scene","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_light_101\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"turn on the storage closet light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"closet_light_202\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"lower the brightness of the bedside lamp to 300","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedside_lamp_303\", \"commands\": [{\"code\": \"bright_value\", \"value\": 300}]}"}
+{"user_content":"check the pool light status","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"pool_light_404\"}"}
+{"user_content":"switch the accent light to music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"accent_light_505\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"put the stairs light on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"stairs_light_606\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"turn the utility room light off","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"utility_light_707\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"brighten the foyer light to 750","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"foyer_light_808\", \"commands\": [{\"code\": \"bright_value\", \"value\": 750}]}"}
+{"user_content":"change the balcony light to white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"balcony_light_909\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"show me the status for the shed light","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"shed_light_011\"}"}
+{"user_content":"set the nursery bulb to the warmest setting","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nursery_bulb_022\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"activate the basement pendant light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"basement_pendant_033\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"deactivate the library light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"library_light_044\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"make the cabinet lights 40% bright","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"cabinet_lights_055\", \"commands\": [{\"code\": \"bright_value\", \"value\": 400}]}"}
+{"user_content":"status check on the cabinet light strip","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_strip_066\"}"}
+{"user_content":"put the tv backlight in music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"tv_backlight_077\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"set the chandelier to cool white","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"chandelier_088\", \"commands\": [{\"code\": \"temp_value\", \"value\": 900}]}"}
+{"user_content":"turn the chandelier off","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"chandelier_088\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"lights on in the garage please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"garage_main_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"is the attic light still burning?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"attic_light_101\"}"}
+{"user_content":"Hey, can you turn on the living room light?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_light_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"It's way too bright in here, dim the bedroom lamp to 200.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_lamp_99\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"What's the current status of the kitchen light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"kitchen_bulb_02\"}"}
+{"user_content":"Set the office light to a warmer tone.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light_44\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"I'm feeling like a party, put the lounge light on music mode!","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lounge_light_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Kill the lights in the hallway.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_light_12\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Check if the front door light is still on.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"front_door_light\"}"}
+{"user_content":"Can you make the study light 80% bright?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"study_lamp_5\", \"commands\": [{\"code\": \"bright_value\", \"value\": 800}]}"}
+{"user_content":"Swich the dining room to scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_light_7\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Cool down the light color in the bathroom.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bathroom_led_01\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"Turn light on.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"generic_light_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Is the basement light on or off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"basement_bulb_v2\"}"}
+{"user_content":"Set brightness to max.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"ceiling_fan_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"I need white light for reading in the library.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"library_lamp_8\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"I think I left the garage light on, can you check?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"garage_light_99\"}"}
+{"user_content":"Lghts out!","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"master_bedroom_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Please adjust the color temperature to 500 for the nursery.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nursery_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 500}]}"}
+{"user_content":"Change the porch light to color mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"porch_light_ext\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Dim the lights a little bit, maybe to 400.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_dimmer\", \"commands\": [{\"code\": \"bright_value\", \"value\": 400}]}"}
+{"user_content":"Light status please.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"backyard_floodlight\"}"}
+{"user_content":"Initiate white light mode for the vanity mirror.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"vanity_mirror_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Trun on the brigtness to 750.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"desk_lamp_a1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 750}]}"}
+{"user_content":"Make the corridor light very cool.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"corridor_led\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"I'm leaving, turn off everything.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_switch_group\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Is the nursery light still burning?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"nursery_bulb_01\"}"}
+{"user_content":"Turn the lamp in the guest room to 10% brightness.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"guest_room_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"Activate music sync lighting in the gaming room.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"gaming_led_strip\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"Can you set the kitchen spots to half brightness?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_spots_array\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"What is the brightness level of the balcony light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"balcony_light_01\"}"}
+{"user_content":"Switch the light in the attic to the warmest setting.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"attic_light_xyz\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"Put the smart bulb in scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"smart_bulb_f8\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Turn on light in foyer.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"foyer_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Check the power status of the security light.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"security_light_west\"}"}
+{"user_content":"Maximize the brightness for the laundry room.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"laundry_room_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Change to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"mood_light_strip\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Could you please inform me if the patio light is currently active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"patio_light_01\"}"}
+{"user_content":"Set lamp to 300 bright.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"side_table_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 300}]}"}
+{"user_content":"Turn off the chandelier.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_chandelier\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"I need the light to be neutral, set temp to 500.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_overhead_light\", \"commands\": [{\"code\": \"temp_value\", \"value\": 500}]}"}
+{"user_content":"Switch light to white.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"basement_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Verify if the pool lights are on.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"pool_lights_ctrl\"}"}
+{"user_content":"Make it dark in the bedroom.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_light_02\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Increase brightness to 600.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_lamp_03\", \"commands\": [{\"code\": \"bright_value\", \"value\": 600}]}"}
+{"user_content":"Get the status for device id dev_5566.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_5566\"}"}
+{"user_content":"Nightlight on.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_nightlight\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Set work mode to scene.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"accent_lighting\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Adjust the temperature value to 800.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_ceiling_led\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"Status of the garage?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"garage_main_light\"}"}
+{"user_content":"Put light on 1000 brightness.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"floodlight_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Switch off.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lamp_a2\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Yo, flip the light on.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"set the brightness level to 300 for me","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 300}]}"}
+{"user_content":"i want the scene mode activated","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"is the lamp even on? check it.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_1\"}"}
+{"user_content":"kill the lights in here","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"crank that brightness up to 1000","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"adjust temp to 500","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 500}]}"}
+{"user_content":"switch to colour mode please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"status of device_8872","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"device_8872\"}"}
+{"user_content":"shut down the led immediately","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"make the light warmer, set temp to 1000","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"i need some music sync mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"dim the bulb to 10","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 10}]}"}
+{"user_content":"activate light_bulb_22","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_bulb_22\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"give me the current state of the hallway lamp","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"hallway_lamp\"}"}
+{"user_content":"darken the room to 50 brightness","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 50}]}"}
+{"user_content":"set the temperature value to 800","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"go to white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"status check on light-xyz-99","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light-xyz-99\"}"}
+{"user_content":"deactivate the office light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"half brightness please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"make it cold light, temp 100","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 100}]}"}
+{"user_content":"put it on scene","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"check if the security light is triggered","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"security_light\"}"}
+{"user_content":"lights on now","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"can you set the bright_value to 888?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 888}]}"}
+{"user_content":"temp_value 450","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 450}]}"}
+{"user_content":"sync with the music","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"what is the current status of the kitchen bulb?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"kitchen_bulb\"}"}
+{"user_content":"turn the led off","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"max brightness levels","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"zero temperature","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"change work mode to colour","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"get device state for living_room_1","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"living_room_1\"}"}
+{"user_content":"deactivate device id sensor_4","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"sensor_4\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"brightness at 700","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 700}]}"}
+{"user_content":"temp at 600","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 600}]}"}
+{"user_content":"set it to white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"any info on the light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_1\"}"}
+{"user_content":"enable the led light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"minimum brightness please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1}]}"}
+{"user_content":"highest temp value possible","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 999}]}"}
+{"user_content":"change to scene","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"is device-1-off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"device-1\"}"}
+{"user_content":"shut the lamp down","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lamp\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"full brightness please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"min temp value","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"temp_value\", \"value\": 10}]}"}
+{"user_content":"music mode toggle","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"how is the lamp-22 doing?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"lamp-22\"}"}
+{"user_content":"switch_led false","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Hey, can you turn on the living room light for me?","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_001\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Check if the bedroom lamp is still on.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"lamp_99\"}"}
+{"user_content":"it's too bright in here, dim the kitchen light to 200","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_bulb\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"Set the porch light to a warmer tone.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"porch_01\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"party time! switch the light to music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"strip_light_5\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"lights off","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dev_992\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"What's the current state of device id-882?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"id-882\"}"}
+{"user_content":"I need the brightness at maximum right now.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Switch the basement bulb to white light mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"base_7\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"make the lamp very cold, like blueish","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bed_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 100}]}"}
+{"user_content":"Is the garage light active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"garage_1\"}"}
+{"user_content":"activate scene mode on the main chandelier","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"chan_02\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"turn it on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"generic_dev\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"brightness 500 for the hallway","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"set light mode to colour please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bulb_x\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"check status of dev_af22","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_af22\"}"}
+{"user_content":"Kill the power to the study lamp.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"study_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Put the light on 1000 temp.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dev_33\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"Can you check if the floodlight is on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"flood_09\"}"}
+{"user_content":"make it 50% bright","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_abc\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"Switch to scene mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"status check dev_777","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_777\"}"}
+{"user_content":"Lower the brightness to 50","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nursery_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 50}]}"}
+{"user_content":"Power on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"unknown_dev\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Change the bulb to music sync.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"music_bulb\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"get me the status for the attic light","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"attic_4\"}"}
+{"user_content":"set temp to 350","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_2\", \"commands\": [{\"code\": \"temp_value\", \"value\": 350}]}"}
+{"user_content":"Shut down the outdoor lighting.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"out_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"I want the lights in white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"tell me if the light is on or off","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_44\"}"}
+{"user_content":"Full blast on the brightness!","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dev_44\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"Switching to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"led_strip\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"status of bulb_22","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"bulb_22\"}"}
+{"user_content":"turn the light on please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"guest_room\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"set color temperature to 0","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bed_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"Check device dev_id_901.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_id_901\"}"}
+{"user_content":"brightness level 750","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 750}]}"}
+{"user_content":"lights out in the kid's room","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kids_room\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Enter music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bar_lights\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"what is the light status?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"hallway_lamp\"}"}
+{"user_content":"make it 100% warm","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"enable the led","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"led_01\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"status of device lamp_porch_1","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"lamp_porch_1\"}"}
+{"user_content":"set brightness to 123","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dev_002\", \"commands\": [{\"code\": \"bright_value\", \"value\": 123}]}"}
+{"user_content":"Switch to white","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"smart_bulb_1\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Is it on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"dev_unknown\"}"}
+{"user_content":"deactivate the light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dev_unknown\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"put the light in scene mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_main\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"temp value 450","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bulb_77\", \"commands\": [{\"code\": \"temp_value\", \"value\": 450}]}"}
+{"user_content":"Check bulb status","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"bulb_45\"}"}
+{"user_content":"Check if the living room light is actually on or not.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"living_room_lamp_01\"}"}
+{"user_content":"Is the kitchen light currently active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"kitchen_main_bulb\"}"}
+{"user_content":"What's the status of the bedroom lamp?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"bedroom_lamp_2\"}"}
+{"user_content":"tell me if the garage light is on","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"garage_light_v3\"}"}
+{"user_content":"get status of device office_ceiling_light","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"office_ceiling_light\"}"}
+{"user_content":"is the hallway led running?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"hallway_led_strip\"}"}
+{"user_content":"status check patio_light","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"patio_light_outdoor\"}"}
+{"user_content":"Can you verify if the basement lights are off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"basement_main_light\"}"}
+{"user_content":"Check power for smart_bulb_xyz","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"smart_bulb_xyz\"}"}
+{"user_content":"is the front porch light on or off right now?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"front_porch_01\"}"}
+{"user_content":"Turn on the light in the kitchen.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_light_4\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"lights out in the bedroom","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"kill the power to the basement lamp","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"basement_lamp_x\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"activate the office light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light_9\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"tturn of bedrom light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_main\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Enable the light strip under the cabinet","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"cabinet_led_02\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"shut down light_55","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"light_55\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"switch on the desk lamp","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"desk_lamp_id\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"living room light off","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"light on garage_main","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"garage_main\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"Dim the kitchen light to 200.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_led_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"Set brightness to 800 for the reading lamp.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_lamp_7\", \"commands\": [{\"code\": \"bright_value\", \"value\": 800}]}"}
+{"user_content":"Make the office light full blast","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_ceiling\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"lower the brightness of dev_99 to 50","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dev_99\", \"commands\": [{\"code\": \"bright_value\", \"value\": 50}]}"}
+{"user_content":"adjust intensity to 500 on the patio bulb","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"patio_bulb\", \"commands\": [{\"code\": \"bright_value\", \"value\": 500}]}"}
+{"user_content":"bright_value 100 for hallway_lamp","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"Please adjust the illumination level to 650.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_light_fixture\", \"commands\": [{\"code\": \"bright_value\", \"value\": 650}]}"}
+{"user_content":"it's too bright, drop to 300 in the nursery","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nursery_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 300}]}"}
+{"user_content":"maximum brightness in the studio","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"studio_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"set light brightness to 450","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"generic_light_1\", \"commands\": [{\"code\": \"bright_value\", \"value\": 450}]}"}
+{"user_content":"Make the light warmer in the living room.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_light\", \"commands\": [{\"code\": \"temp_value\", \"value\": 200}]}"}
+{"user_content":"Set the temperature to 900 for a cool white effect.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"work_desk_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 900}]}"}
+{"user_content":"Go for a middle temperature of 500.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"hallway_bulb_01\", \"commands\": [{\"code\": \"temp_value\", \"value\": 500}]}"}
+{"user_content":"cool down the dining room light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"dining_light\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"warm the office lights up","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_spotlight\", \"commands\": [{\"code\": \"temp_value\", \"value\": 0}]}"}
+{"user_content":"set temp_value to 750","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_main_light\", \"commands\": [{\"code\": \"temp_value\", \"value\": 750}]}"}
+{"user_content":"change the warmth level of bulb_x to 300","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bulb_x\", \"commands\": [{\"code\": \"temp_value\", \"value\": 300}]}"}
+{"user_content":"Make it yellow in here (temp 100)","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"mood_lamp\", \"commands\": [{\"code\": \"temp_value\", \"value\": 100}]}"}
+{"user_content":"daylight color for the kitchen","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_ceiling\", \"commands\": [{\"code\": \"temp_value\", \"value\": 800}]}"}
+{"user_content":"adjust temperature on lamp_3 to 400","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lamp_3\", \"commands\": [{\"code\": \"temp_value\", \"value\": 400}]}"}
+{"user_content":"Switch the light to music mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"party_led_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"I want the lamp to show some scenes.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_mood\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Set it to colour mode.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"smart_strip_x\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"back to normal white light please","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_lamp\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"party time! music mode on for the bulb","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bulb_abc\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"work_mode: scene for my gaming room","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"gaming_leds\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"make it colorful","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"strip_light_01\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"Change the bedroom bulb to white mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bed_lamp_main\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"Switch to music sync for basement_v2","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"basement_v2\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"scene mode activate","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"smart_light_05\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Yo, kill the lights in the kitchen.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_light_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"Can you check if the bedroom lamp is still on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"bedroom_lamp_99\"}"}
+{"user_content":"Make the study light super bright.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"study_light_01\", \"commands\": [{\"code\": \"bright_value\", \"value\": 1000}]}"}
+{"user_content":"I want some music mode vibes in the living room.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"living_room_led\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"it's too cold in here, turn on the heater","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"heater_unit_4\", \"commands\": [{\"code\": \"switch\", \"value\": true}]}"}
+{"user_content":"Status of the front door alarm?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"front_door_alarm\"}"}
+{"user_content":"set light temp to 500","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_bulb\", \"commands\": [{\"code\": \"temp_value\", \"value\": 500}]}"}
+{"user_content":"pls turn off the ac in the guest room","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"guest_ac\", \"commands\": [{\"code\": \"switch\", \"value\": false}]}"}
+{"user_content":"Is the backyard light active?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"backyard_light\"}"}
+{"user_content":"Switch to white light for reading.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"reading_lamp\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"dim the lights to minimum","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bedroom_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 10}]}"}
+{"user_content":"enable security system","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"home_security_hub\", \"commands\": [{\"code\": \"alarm_switch\", \"value\": true}]}"}
+{"user_content":"get status for device_id_9921","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"device_id_9921\"}"}
+{"user_content":"hey lamp on","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"lamp_1\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"set the led to scene mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"strip_light_02\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"I need the light to be warmer","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"overhead_light\", \"commands\": [{\"code\": [\"temp_value\"], \"value\": 800}]}"}
+{"user_content":"Check the thermostat status.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"thermostat_ctrl\"}"}
+{"user_content":"Turn down the brightness a bit.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"office_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 400}]}"}
+{"user_content":"is the alarm on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"alarm_panel_1\"}"}
+{"user_content":"turn off the corridor light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"corridor_bulb\", \"commands\": [{\"code\": \"switch_led\", \"value\": false}]}"}
+{"user_content":"change color to music mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"party_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"is the kitchen ac running?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"kitchen_ac\"}"}
+{"user_content":"activate the siren","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"alarm_siren\", \"commands\": [{\"code\": \"alarm_switch\", \"value\": true}]}"}
+{"user_content":"make the light very cool blueish","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"smart_bulb_7\", \"commands\": [{\"code\": \"temp_value\", \"value\": 100}]}"}
+{"user_content":"power on the air conditioning","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"ac_main\", \"commands\": [{\"code\": \"switch\", \"value\": true}]}"}
+{"user_content":"What's the status of the basement light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"basement_light\"}"}
+{"user_content":"Set brightness to 750 on the porch.","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"porch_light\", \"commands\": [{\"code\": \"bright_value\", \"value\": 750}]}"}
+{"user_content":"disable the alarm system","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"security_hub\", \"commands\": [{\"code\": \"alarm_switch\", \"value\": false}]}"}
+{"user_content":"is the smart plug on?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"plug_alpha\"}"}
+{"user_content":"put the light in colour mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"mood_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"colour\"}]}"}
+{"user_content":"turn off the fan","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"fan_switch_1\", \"commands\": [{\"code\": \"switch\", \"value\": false}]}"}
+{"user_content":"brightness at 200 for the nursery","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nursery_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 200}]}"}
+{"user_content":"is the desk lamp off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"desk_lamp_3\"}"}
+{"user_content":"set the light temperature to max","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"ceiling_fan_light\", \"commands\": [{\"code\": \"temp_value\", \"value\": 1000}]}"}
+{"user_content":"alarm status?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"house_alarm\"}"}
+{"user_content":"turn on led strip","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"led_strip_88\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"change to scene work mode","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"outdoor_led\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"scene\"}]}"}
+{"user_content":"Check device light_554 status.","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"light_554\"}"}
+{"user_content":"kill the power to the ac","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"main_ac_unit\", \"commands\": [{\"code\": \"switch\", \"value\": false}]}"}
+{"user_content":"set lamp to 300 brightness","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"table_lamp\", \"commands\": [{\"code\": \"bright_value\", \"value\": 300}]}"}
+{"user_content":"is the hallway light on or off?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"hallway_bulb\"}"}
+{"user_content":"make it white light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"bathroom_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"white\"}]}"}
+{"user_content":"set temperature to 400","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"kitchen_bulb\", \"commands\": [{\"code\": \"temp_value\", \"value\": 400}]}"}
+{"user_content":"turn on the outdoor light","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"garden_light\", \"commands\": [{\"code\": \"switch_led\", \"value\": true}]}"}
+{"user_content":"check status of security_camera_1","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"security_camera_1\"}"}
+{"user_content":"set light to music","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"club_light\", \"commands\": [{\"code\": \"work_mode\", \"value\": \"music\"}]}"}
+{"user_content":"is the heater running?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"heater_room_1\"}"}
+{"user_content":"turn the brightness to 100","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"nightlight\", \"commands\": [{\"code\": \"bright_value\", \"value\": 100}]}"}
+{"user_content":"arm the house","tool_name":"tuya.send_command","tool_arguments":"{\"device_id\": \"security_panel\", \"commands\": [{\"code\": \"alarm_switch\", \"value\": true}]}"}
+{"user_content":"how is the garage light?","tool_name":"tuya.get_status","tool_arguments":"{\"device_id\": \"garage_light\"}"}

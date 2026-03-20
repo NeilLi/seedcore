@@ -34,7 +34,7 @@ async def test_eventizer_basic():
         enable_keyword=True,
         enable_entity=True,
         enable_pii_redaction=True,
-        pattern_files=["../config/eventizer_patterns.json"]
+        pattern_files=["../config/eventizer-patterns.json"]
     )
     
     eventizer = MockEventizerService(config)
@@ -183,7 +183,7 @@ async def test_eventizer_integration():
     print("=" * 60)
     
     config = EventizerConfig(
-        pattern_files=["../config/eventizer_patterns.json"]
+        pattern_files=["../config/eventizer-patterns.json"]
     )
     
     eventizer = MockEventizerService(config)

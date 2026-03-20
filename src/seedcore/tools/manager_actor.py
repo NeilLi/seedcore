@@ -206,7 +206,7 @@ class ToolManagerShard:
         They should only be used by OrchestrationAgent for device orchestration tasks.
         """
         try:
-            from seedcore.config.tuya_config import TuyaConfig
+            from seedcore.config.tuya_settings import TuyaConfig
             
             tuya_config = TuyaConfig()
             if not tuya_config.enabled:
@@ -296,4 +296,3 @@ class ToolManagerShard:
         if hasattr(manager, "list_capabilities"):
             return await manager.list_capabilities()
         return set()
-

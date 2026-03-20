@@ -111,7 +111,7 @@ class RoleProfile:
     
     Behavior configs are merged from:
     1. RoleProfile.default_behaviors (specialization-level defaults)
-    2. Agent config (organs.yaml or pkg_subtask_types)
+    2. Agent config (organism.yaml or pkg_subtask_types)
     3. Runtime overrides (executor.behavior_config)
     
     Zone affinity and environment constraints enable zone-scoped role profiles:

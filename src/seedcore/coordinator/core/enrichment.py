@@ -46,6 +46,7 @@ except ImportError:
     HAS_YAML = False
 
 from seedcore.logging_setup import ensure_serve_logger
+from seedcore.config.paths import resolve_config_path
 from seedcore.models.task import TaskType
 from seedcore.models.cognitive import DecisionKind, CognitiveType
 from .cognitive_reasoning import CoordinatorCognitiveReasoner
@@ -205,9 +206,11 @@ class EnrichmentConfig:
     def load_from_file(cls, config_path: Optional[str] = None) -> "EnrichmentConfig":
         """Load enrichment config from YAML file."""
         if config_path is None:
-            config_path = os.getenv(
-                "COORDINATOR_CONFIG_PATH",
-                "/app/config/coordinator_config.yaml"
+            config_path = str(
+                resolve_config_path(
+                    "coordinator.yaml",
+                    env_names=("COORDINATOR_CONFIG_PATH",),
+                )
             )
         
         path = Path(config_path)
