@@ -707,12 +707,37 @@ class ToolManager:
                 governance_ctx,
                 custody_sync=custody_sync,
             )
+            execution_twin_update = await self._persist_digital_twin_stage(
+                record,
+                governance_ctx,
+                event_type="action_executed",
+                phase="execution",
+                authority_source="governed_execution_receipt",
+                change_reason="execution_completed",
+            )
+            transition_twin_update = await self._persist_digital_twin_stage(
+                record,
+                governance_ctx,
+                event_type="transition_recorded",
+                phase="transition",
+                authority_source="governed_transition_receipt",
+                change_reason="custody_transition_recorded",
+                extra_context={
+                    "transition_event": (
+                        graph_projection.get("transition_event")
+                        if isinstance(graph_projection.get("transition_event"), dict)
+                        else {}
+                    ),
+                },
+            )
             settlement = await self._settle_digital_twin_state(record, governance_ctx)
             return {
                 "ok": True,
                 "entry_id": record["entry_id"],
                 "persisted": persisted,
                 "custody_transition": graph_projection,
+                "twin_execution": execution_twin_update,
+                "twin_transition": transition_twin_update,
                 "twin_settlement": settlement,
             }
 
@@ -1209,6 +1234,94 @@ class ToolManager:
             logger.warning(
                 "Digital twin settlement failed for task %s",
                 record.get("task_id"),
+                exc_info=True,
+            )
+            return {"ok": False, "reason": str(exc)}
+
+    async def _persist_digital_twin_stage(
+        self,
+        record: Dict[str, Any],
+        governance_ctx: Any,
+        *,
+        event_type: str,
+        phase: str,
+        authority_source: str,
+        change_reason: str,
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(governance_ctx, dict):
+            return {"ok": False, "reason": "missing_governance_ctx"}
+        service = self._get_digital_twin_service()
+        if service is None:
+            return {"ok": False, "reason": "digital_twin_service_unavailable"}
+
+        policy_case = (
+            governance_ctx.get("policy_case")
+            if isinstance(governance_ctx.get("policy_case"), dict)
+            else {}
+        )
+        relevant_twin_snapshot = (
+            policy_case.get("relevant_twin_snapshot")
+            if isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        )
+        action_intent = (
+            governance_ctx.get("action_intent")
+            if isinstance(governance_ctx.get("action_intent"), dict)
+            else {}
+        )
+        if not relevant_twin_snapshot or not action_intent:
+            return {"ok": False, "reason": "missing_twin_snapshot"}
+
+        context = {
+            "phase": phase,
+            "event_type": event_type,
+            "policy_receipt": (
+                governance_ctx.get("policy_receipt")
+                if isinstance(governance_ctx.get("policy_receipt"), dict)
+                else {}
+            ),
+            "execution_token": (
+                governance_ctx.get("execution_token")
+                if isinstance(governance_ctx.get("execution_token"), dict)
+                else {}
+            ),
+            "evidence_summary": (
+                policy_case.get("evidence_summary")
+                if isinstance(policy_case.get("evidence_summary"), dict)
+                else {}
+            ),
+            "evidence_bundle": (
+                record.get("evidence_bundle")
+                if isinstance(record.get("evidence_bundle"), dict)
+                else {}
+            ),
+        }
+        if extra_context:
+            context.update(extra_context)
+        try:
+            result = await service.persist_relevant_twins(
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                task_id=(
+                    str(record.get("task_id"))
+                    if record.get("task_id") is not None
+                    else None
+                ),
+                intent_id=(
+                    str(action_intent.get("intent_id"))
+                    if action_intent.get("intent_id") is not None
+                    else None
+                ),
+                authority_source=authority_source,
+                change_reason=change_reason,
+                transition_context=context,
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            logger.warning(
+                "Digital twin stage persistence failed for task %s event=%s",
+                record.get("task_id"),
+                event_type,
                 exc_info=True,
             )
             return {"ok": False, "reason": str(exc)}

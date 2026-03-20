@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 import logging
 import os
 import uuid
@@ -14,6 +13,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from seedcore.models.evidence_bundle import SignerMetadata, TransitionReceipt
+from seedcore.ops.evidence.policy import (
+    canonical_json,
+    load_ed25519_public_key,
+    resolve_public_key_from_registry,
+    sha256_hex,
+    verify_payload_signature,
+)
 from seedcore.ops.evidence.signers import get_signer_policy
 
 logger = logging.getLogger(__name__)
@@ -45,7 +51,7 @@ def build_transition_receipt(
         "executed_at": executed_at or datetime.now(timezone.utc).isoformat(),
         "receipt_nonce": receipt_nonce or str(uuid.uuid4()),
     }
-    payload_hash = _sha256_hex(_canonical_json(payload))
+    payload_hash = sha256_hex(canonical_json(payload))
     signer_metadata, signature = _sign_transition_payload(
         payload_hash=payload_hash,
         endpoint_id=actuator_endpoint,
@@ -65,42 +71,87 @@ def verify_transition_receipt(
     expected_token_id: Optional[str] = None,
     expected_endpoint_id: Optional[str] = None,
 ) -> Optional[str]:
+    return verify_transition_receipt_result(
+        receipt,
+        expected_intent_id=expected_intent_id,
+        expected_token_id=expected_token_id,
+        expected_endpoint_id=expected_endpoint_id,
+    ).get("error")
+
+
+def verify_transition_receipt_result(
+    receipt: Dict[str, Any],
+    *,
+    expected_intent_id: Optional[str] = None,
+    expected_token_id: Optional[str] = None,
+    expected_endpoint_id: Optional[str] = None,
+) -> Dict[str, Any]:
     try:
         model = TransitionReceipt(**dict(receipt))
     except Exception:
-        return "invalid_receipt"
+        return {
+            "artifact_type": "transition_receipt",
+            "verified": False,
+            "error": "invalid_receipt",
+            "policy": {},
+        }
 
     payload = model.model_dump(mode="json", exclude={"payload_hash", "signer_metadata", "signature"})
-    expected_hash = _sha256_hex(_canonical_json(payload))
+    expected_hash = sha256_hex(canonical_json(payload))
     if not hmac.compare_digest(model.payload_hash, expected_hash):
-        return "payload_hash_mismatch"
+        return {
+            "artifact_type": "transition_receipt",
+            "verified": False,
+            "error": "payload_hash_mismatch",
+            "policy": {},
+        }
 
-    if model.signer_metadata.signing_scheme == "hmac_sha256":
-        expected_signature = _sign_payload_hash(model.payload_hash)
-        if not hmac.compare_digest(model.signature, expected_signature):
-            return "signature_mismatch"
-    elif model.signer_metadata.signing_scheme == "ed25519":
-        verification_error = _verify_ed25519_signature(model=model)
-        if verification_error is not None:
-            return verification_error
-    else:
-        return "unsupported_signing_scheme"
+    verification = verify_payload_signature(
+        artifact_type="transition_receipt",
+        payload=payload,
+        signer_metadata=model.signer_metadata,
+        signature=model.signature,
+        endpoint_id=model.endpoint_id,
+        trust_level=(
+            "attested"
+            if is_attestable_transition_endpoint(model.endpoint_id)
+            else "baseline"
+        ),
+        attested=is_attestable_transition_endpoint(model.endpoint_id),
+        public_key_resolver=_resolve_ed25519_public_key,
+        secret_resolver=lambda _metadata: os.getenv(
+            "SEEDCORE_HAL_RECEIPT_SIGNING_SECRET",
+            "seedcore-hal-receipt-secret",
+        ),
+    )
+    if verification.get("error") is not None:
+        return verification
 
     if expected_intent_id is not None and model.intent_id != str(expected_intent_id):
-        return "intent_id_mismatch"
+        verification["verified"] = False
+        verification["error"] = "intent_id_mismatch"
+        return verification
     if expected_token_id is not None and model.execution_token_id != str(expected_token_id):
-        return "token_id_mismatch"
+        verification["verified"] = False
+        verification["error"] = "token_id_mismatch"
+        return verification
     if expected_endpoint_id is not None and model.endpoint_id != str(expected_endpoint_id):
-        return "endpoint_id_mismatch"
+        verification["verified"] = False
+        verification["error"] = "endpoint_id_mismatch"
+        return verification
 
     try:
         datetime.fromisoformat(model.executed_at.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
-        return "invalid_executed_at"
+        verification["verified"] = False
+        verification["error"] = "invalid_executed_at"
+        return verification
 
     if not model.receipt_nonce.strip():
-        return "missing_receipt_nonce"
-    return None
+        verification["verified"] = False
+        verification["error"] = "missing_receipt_nonce"
+        return verification
+    return verification
 
 
 def is_attestable_transition_endpoint(endpoint_id: Optional[str]) -> bool:
@@ -169,55 +220,12 @@ def _sign_payload_hash(payload_hash: str) -> str:
     ).hexdigest()
 
 
-def _verify_ed25519_signature(*, model: TransitionReceipt) -> Optional[str]:
-    public_key = _resolve_ed25519_public_key(model)
-    if public_key is None:
-        return "missing_public_key"
-    try:
-        signature_bytes = base64.b64decode(model.signature, validate=True)
-    except Exception:
-        return "invalid_signature_encoding"
-    try:
-        public_key.verify(signature_bytes, model.payload_hash.encode("utf-8"))
-    except Exception:
-        return "signature_mismatch"
-    return None
-
-
-def _resolve_ed25519_public_key(model: TransitionReceipt) -> Optional[Ed25519PublicKey]:
-    raw_registry = os.getenv("SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON", "").strip()
-    if not raw_registry:
-        return None
-    try:
-        registry = json.loads(raw_registry)
-    except Exception:
-        return None
-    if not isinstance(registry, dict):
-        return None
-    for candidate in (model.endpoint_id, model.signer_metadata.key_ref):
-        if isinstance(candidate, str) and candidate.strip():
-            value = registry.get(candidate.strip())
-            public_key = _extract_registry_public_key(value)
-            if public_key is not None:
-                return _load_ed25519_public_key(public_key)
-    for value in registry.values():
-        if not isinstance(value, dict):
-            continue
-        if value.get("key_id") == model.signer_metadata.key_ref:
-            public_key = _extract_registry_public_key(value)
-            if public_key is not None:
-                return _load_ed25519_public_key(public_key)
-    return None
-
-
-def _extract_registry_public_key(value: Any) -> Optional[str]:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    if isinstance(value, dict):
-        candidate = value.get("public_key")
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    return None
+def _resolve_ed25519_public_key(metadata: SignerMetadata) -> Optional[Ed25519PublicKey]:
+    return resolve_public_key_from_registry(
+        metadata,
+        registry_env="SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON",
+        candidate_fields=("node_id", "signer_id", "key_ref"),
+    )
 
 
 def _load_ed25519_private_key() -> Optional[Ed25519PrivateKey]:
@@ -244,25 +252,8 @@ def _load_ed25519_private_key() -> Optional[Ed25519PrivateKey]:
 
 
 def _load_ed25519_public_key(value: str) -> Optional[Ed25519PublicKey]:
-    try:
-        if "BEGIN PUBLIC KEY" in value:
-            loaded = serialization.load_pem_public_key(value.encode("utf-8"))
-            if isinstance(loaded, Ed25519PublicKey):
-                return loaded
-            return None
-        key_bytes = base64.b64decode(value, validate=True)
-        return Ed25519PublicKey.from_public_bytes(key_bytes)
-    except Exception:
-        return None
+    return load_ed25519_public_key(value)
 
 
 def _derive_key_ref(public_key_bytes: bytes) -> str:
     return hashlib.sha256(public_key_bytes).hexdigest()[:16]
-
-
-def _sha256_hex(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)

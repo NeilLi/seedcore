@@ -1356,6 +1356,60 @@ class Coordinator:
 
             await session.commit()
 
+        zone_hint = _derive_registration_zone_hint(registration)
+        twin_task = {
+            "task_id": str(task_dict.get("task_id") or task_dict.get("id") or f"registration:{registration.id}"),
+            "type": "source_registration",
+            "params": {
+                "interaction": {"assigned_agent_id": "coordinator_service"},
+                "resource": {
+                    "asset_id": str(registration.lot_id),
+                    "lot_id": str(registration.lot_id),
+                    "batch_twin_id": f"batch:{registration.lot_id}",
+                    "source_registration_id": str(registration.id),
+                    "target_zone": zone_hint,
+                    "owner_id": (
+                        str(registration.producer_id)
+                        if getattr(registration, "producer_id", None)
+                        else None
+                    ),
+                },
+                "source_registration": {
+                    "registration_id": str(registration.id),
+                    "lot_id": str(registration.lot_id),
+                },
+            },
+        }
+        if decision["decision"] == RegistrationDecisionStatus.APPROVED.value:
+            event_type = "registration_confirmed"
+        elif decision["decision"] == RegistrationDecisionStatus.QUARANTINED.value:
+            event_type = "registration_quarantined"
+        else:
+            return
+        try:
+            await self.digital_twin_service.persist_relevant_twins(
+                relevant_twin_snapshot=build_twin_snapshot(twin_task),
+                task_id=str(task_dict.get("task_id")) if task_dict.get("task_id") is not None else None,
+                intent_id=None,
+                authority_source="source_registration_decision",
+                change_reason="source_registration_decision",
+                transition_context={
+                    "phase": "registration",
+                    "event_type": event_type,
+                    "source_registration": {
+                        "registration_id": str(registration.id),
+                        "lot_id": str(registration.lot_id),
+                        "status": decision["decision"],
+                    },
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist registration twin state for %s",
+                registration_id,
+                exc_info=True,
+            )
+
 
     async def _handle_source_registration_task(
         self,

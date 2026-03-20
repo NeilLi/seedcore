@@ -12,12 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 TWIN_UPDATE_POLICY: dict[str, set[str]] = {
-    "policy_created": {"owner", "assistant", "asset", "edge", "transaction"},
-    "intent_bound": {"owner", "assistant", "asset", "edge", "transaction"},
-    "token_issued": {"owner", "assistant", "asset", "transaction"},
-    "action_executed": {"asset", "edge", "transaction"},
-    "evidence_settled": {"asset", "edge", "transaction"},
-    "dispute_opened": {"owner", "assistant", "asset", "edge", "transaction"},
+    "policy_created": {"owner", "assistant", "asset", "batch", "product", "edge", "transaction"},
+    "intent_bound": {"owner", "assistant", "asset", "batch", "product", "edge", "transaction"},
+    "token_issued": {"owner", "assistant", "asset", "batch", "product", "transaction"},
+    "action_executed": {"asset", "batch", "product", "edge", "transaction"},
+    "transition_recorded": {"asset", "batch", "transaction"},
+    "evidence_settled": {"asset", "batch", "product", "edge", "transaction"},
+    "dispute_opened": {"owner", "assistant", "asset", "batch", "product", "edge", "transaction"},
+    "dispute_resolved": {"owner", "assistant", "asset", "batch", "product", "edge", "transaction"},
+    "registration_confirmed": {"asset", "batch", "product"},
+    "registration_quarantined": {"asset", "batch", "product"},
 }
 
 
@@ -75,6 +79,43 @@ class DigitalTwinService:
     ) -> Dict[str, Any]:
         if not relevant_twin_snapshot or not self._session_factory:
             return {"updated": 0, "version_bumped": 0}
+        try:
+            async with self._session_factory() as session:
+                begin_ctx = session.begin()
+                if asyncio.iscoroutine(begin_ctx):
+                    begin_ctx = await begin_ctx
+                async with begin_ctx:
+                    return await self.persist_relevant_twins_in_session(
+                        session,
+                        relevant_twin_snapshot=relevant_twin_snapshot,
+                        task_id=task_id,
+                        intent_id=intent_id,
+                        authority_source=authority_source,
+                        change_reason=change_reason,
+                        transition_context=transition_context,
+                    )
+        except Exception:
+            logger.warning(
+                "Failed to persist digital twin state for task=%s intent=%s",
+                task_id,
+                intent_id,
+                exc_info=True,
+            )
+            return {"updated": 0, "version_bumped": 0}
+
+    async def persist_relevant_twins_in_session(
+        self,
+        session,
+        *,
+        relevant_twin_snapshot: Mapping[str, Any],
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        authority_source: str = "coordinator.pdp",
+        change_reason: str = "policy_case_resolution",
+        transition_context: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not relevant_twin_snapshot:
+            return {"updated": 0, "version_bumped": 0}
         context = dict(transition_context or {})
         event_type = self._resolve_event_type(context)
         if event_type == "evidence_settled":
@@ -84,52 +125,55 @@ class DigitalTwinService:
 
         updated = 0
         version_bumped = 0
-        try:
-            async with self._session_factory() as session:
-                begin_ctx = session.begin()
-                if asyncio.iscoroutine(begin_ctx):
-                    begin_ctx = await begin_ctx
-                async with begin_ctx:
-                    for key, value in dict(relevant_twin_snapshot).items():
-                        snapshot = self._coerce_twin_snapshot(key, value)
-                        snapshot = self._apply_update_policy(snapshot=snapshot, context=context)
-                        outcome = await self._dao.upsert_snapshot(
-                            session,
-                            twin_snapshot=snapshot.model_dump(mode="json"),
-                            authority_source=authority_source,
-                            source_task_id=task_id,
-                            source_intent_id=intent_id,
-                            change_reason=change_reason,
-                        )
-                        try:
-                            await self._event_dao.append_event(
-                                session,
-                                twin_kind=snapshot.twin_kind,
-                                twin_id=snapshot.twin_id,
-                                event_type=event_type,
-                                revision_stage=snapshot.revision_stage.value,
-                                lifecycle_state=snapshot.lifecycle_state,
-                                task_id=task_id,
-                                intent_id=intent_id,
-                                payload={
-                                    "snapshot": snapshot.model_dump(mode="json"),
-                                    "context": context,
-                                },
-                            )
-                        except Exception:
-                            logger.debug("Twin event journal append skipped", exc_info=True)
-                        updated += 1
-                        if outcome.get("changed"):
-                            version_bumped += 1
-        except Exception:
-            logger.warning(
-                "Failed to persist digital twin state for task=%s intent=%s",
-                task_id,
-                intent_id,
-                exc_info=True,
+        for key, value in dict(relevant_twin_snapshot).items():
+            snapshot = self._coerce_twin_snapshot(key, value)
+            snapshot = self._apply_update_policy(snapshot=snapshot, context=context)
+            outcome = await self._dao.upsert_snapshot(
+                session,
+                twin_snapshot=snapshot.model_dump(mode="json"),
+                authority_source=authority_source,
+                source_task_id=task_id,
+                source_intent_id=intent_id,
+                change_reason=change_reason,
             )
-            return {"updated": 0, "version_bumped": 0}
+            try:
+                await self._event_dao.append_event(
+                    session,
+                    twin_kind=snapshot.twin_kind,
+                    twin_id=snapshot.twin_id,
+                    event_type=event_type,
+                    revision_stage=snapshot.revision_stage.value,
+                    lifecycle_state=snapshot.lifecycle_state,
+                    task_id=task_id,
+                    intent_id=intent_id,
+                    payload={
+                        "snapshot": snapshot.model_dump(mode="json"),
+                        "context": context,
+                    },
+                )
+            except Exception:
+                logger.debug("Twin event journal append skipped", exc_info=True)
+            updated += 1
+            if outcome.get("changed"):
+                version_bumped += 1
         return {"updated": updated, "version_bumped": version_bumped}
+
+    async def load_authoritative_snapshots(
+        self,
+        session,
+        *,
+        twin_refs: list[tuple[str, str]],
+    ) -> Dict[str, Dict[str, Any]]:
+        getter = getattr(self._dao, "get_authoritative_snapshots", None)
+        if getter is None:
+            return {}
+        rows = await getter(session, twin_refs=twin_refs)
+        snapshots: Dict[str, Dict[str, Any]] = {}
+        for (twin_type, _twin_id), row in rows.items():
+            snapshot = row.get("snapshot")
+            if isinstance(snapshot, dict):
+                snapshots[twin_type] = dict(snapshot)
+        return snapshots
 
     async def get_authoritative_twin(self, *, twin_type: str, twin_id: str) -> Optional[Dict[str, Any]]:
         if not self._session_factory:
@@ -247,6 +291,8 @@ class DigitalTwinService:
             return "evidence_settled"
         if phase == "execution":
             return "action_executed"
+        if phase == "transition":
+            return "transition_recorded"
         return "policy_created"
 
     def _apply_update_policy(self, *, snapshot: TwinSnapshot, context: Mapping[str, Any]) -> TwinSnapshot:
@@ -264,6 +310,16 @@ class DigitalTwinService:
         elif event_type == "action_executed":
             snapshot.revision_stage = TwinRevisionStage.EXECUTED
             snapshot.custody["pending_authority"] = True
+        elif event_type == "transition_recorded":
+            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
+            snapshot.custody["pending_authority"] = False
+            transition_event = (
+                context.get("transition_event")
+                if isinstance(context.get("transition_event"), Mapping)
+                else {}
+            )
+            if transition_event.get("transition_event_id"):
+                snapshot.custody["transition_event_id"] = transition_event.get("transition_event_id")
         elif event_type == "evidence_settled":
             snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
             snapshot.custody["pending_authority"] = False
@@ -271,7 +327,22 @@ class DigitalTwinService:
             if node_id:
                 snapshot.custody["authoritative_node_id"] = node_id
         elif event_type == "dispute_opened":
+            governance_state = dict(snapshot.governance or {})
+            governance_state.setdefault("pre_dispute_lifecycle_state", snapshot.lifecycle_state)
+            snapshot.governance = governance_state
             snapshot.revision_stage = TwinRevisionStage.DISPUTED
+            snapshot.custody["pending_authority"] = False
+        elif event_type == "dispute_resolved":
+            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
+            snapshot.custody["pending_authority"] = False
+            restored = (
+                context.get("resolved_lifecycle_state")
+                or snapshot.governance.get("pre_dispute_lifecycle_state")
+            )
+            if isinstance(restored, str) and restored.strip():
+                snapshot.lifecycle_state = restored.strip()
+        elif event_type in {"registration_confirmed", "registration_quarantined"}:
+            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
             snapshot.custody["pending_authority"] = False
 
         snapshot.evidence_refs = self._collect_evidence_refs(snapshot=snapshot, context=context)
@@ -292,12 +363,25 @@ class DigitalTwinService:
             if isinstance(evidence_inputs.get("transition_receipts"), list)
             else []
         )
+        event_type = self._resolve_event_type(context)
+        if event_type == "dispute_opened":
+            return "DISPUTED"
+        if event_type == "registration_quarantined" and snapshot.twin_kind in {"asset", "batch"}:
+            return "QUARANTINED"
+        if event_type == "registration_confirmed" and snapshot.twin_kind in {"asset", "batch", "product"}:
+            return "REGISTERED"
+        if event_type == "transition_recorded" and snapshot.twin_kind in {"asset", "batch", "transaction"}:
+            return "IN_TRANSIT"
         if transition_receipts and snapshot.twin_kind in {"asset", "transaction"}:
             return "DELIVERED"
+        if transition_receipts and snapshot.twin_kind == "batch":
+            return "IN_TRANSIT"
         if context.get("evidence_summary") and snapshot.twin_kind in {"asset", "transaction"}:
             return "CERTIFIED"
+        if context.get("evidence_summary") and snapshot.twin_kind in {"batch", "product"}:
+            return "CERTIFIED"
         execution_token = context.get("execution_token") if isinstance(context.get("execution_token"), Mapping) else {}
-        if execution_token and snapshot.twin_kind in {"asset", "transaction"}:
+        if execution_token and snapshot.twin_kind in {"asset", "batch", "product", "transaction"}:
             return "IN_TRANSIT"
         if snapshot.twin_kind == "edge" and context.get("phase") == "execution":
             return "ACTUATED"

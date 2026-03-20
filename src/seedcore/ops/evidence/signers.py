@@ -145,14 +145,14 @@ DEFAULT_SIGNER_POLICIES: dict[str, ArtifactSignerPolicy] = {
         artifact_type="policy_receipt",
         allowed_schemes=("hmac_sha256", "ed25519"),
         default_scheme="hmac_sha256",
-        preferred_scheme="hmac_sha256",
+        preferred_scheme="ed25519",
         config_profile="policy_receipt_baseline",
     ),
     "evidence_bundle": ArtifactSignerPolicy(
         artifact_type="evidence_bundle",
         allowed_schemes=("hmac_sha256", "ed25519"),
         default_scheme="hmac_sha256",
-        preferred_scheme="hmac_sha256",
+        preferred_scheme="ed25519",
         config_profile="evidence_bundle_baseline",
     ),
     "transition_receipt": ArtifactSignerPolicy(
@@ -184,6 +184,20 @@ DEFAULT_SIGNER_POLICIES: dict[str, ArtifactSignerPolicy] = {
         default_scheme="hmac_sha256",
         preferred_scheme="hmac_sha256",
         config_profile="trust_certificate_baseline",
+    ),
+    "external_signed_intent": ArtifactSignerPolicy(
+        artifact_type="external_signed_intent",
+        allowed_schemes=("ed25519", "hmac_sha256"),
+        default_scheme="ed25519",
+        preferred_scheme="ed25519",
+        config_profile="external_signed_intent_verified",
+    ),
+    "execution_token": ArtifactSignerPolicy(
+        artifact_type="execution_token",
+        allowed_schemes=("hmac_sha256",),
+        default_scheme="hmac_sha256",
+        preferred_scheme="hmac_sha256",
+        config_profile="execution_token_hmac",
     ),
 }
 

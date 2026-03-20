@@ -171,6 +171,25 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
         or registration_decision.get("decision_id")
         or registration_decision.get("id")
     )
+    lot_id = (
+        resource.get("lot_id")
+        or params.get("lot_id")
+        or source_registration.get("lot_id")
+    )
+    batch_twin_id = (
+        resource.get("batch_twin_id")
+        or (f"batch:{lot_id}" if lot_id is not None else None)
+    )
+    parent_asset_id = resource.get("parent_asset_id") or params.get("parent_asset_id")
+    category_envelope = (
+        dict(resource.get("category_envelope"))
+        if isinstance(resource.get("category_envelope"), dict)
+        else {}
+    )
+    product_id = (
+        resource.get("product_id")
+        or category_envelope.get("product_id")
+    )
 
     contract_version = _derive_contract_version(payload, governance)
     action_type = _derive_action_type(payload, params)
@@ -192,6 +211,8 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
                     "task_type": payload.get("type"),
                     "action_type": action_type,
                     "source_registration_id": source_registration_id,
+                    "lot_id": lot_id,
+                    "product_id": product_id,
                 }
             )
         ),
@@ -224,6 +245,15 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
                 if registration_decision_id is not None
                 else None
             ),
+            lot_id=(str(lot_id) if lot_id is not None else None),
+            batch_twin_id=(str(batch_twin_id) if batch_twin_id is not None else None),
+            parent_asset_id=(
+                str(parent_asset_id)
+                if parent_asset_id is not None
+                else None
+            ),
+            product_id=(str(product_id) if product_id is not None else None),
+            category_envelope=category_envelope,
         ),
     )
 
@@ -353,6 +383,8 @@ def apply_twin_overrides_to_action_intent(
                 "asset_id": action_intent.resource.asset_id,
                 "source_registration_id": action_intent.resource.source_registration_id,
                 "registration_decision_id": action_intent.resource.registration_decision_id,
+                "lot_id": action_intent.resource.lot_id,
+                "product_id": action_intent.resource.product_id,
             }
         )
     )
@@ -437,11 +469,40 @@ def build_twin_snapshot(
         )
 
     target_zone = intent.resource.target_zone or multimodal.get("location_context")
+    category_envelope = (
+        dict(intent.resource.category_envelope)
+        if isinstance(intent.resource.category_envelope, dict)
+        else (
+            dict(resource.get("category_envelope"))
+            if isinstance(resource.get("category_envelope"), dict)
+            else {}
+        )
+    )
+    lot_id = (
+        intent.resource.lot_id
+        or resource.get("lot_id")
+        or (
+            params.get("source_registration", {}).get("lot_id")
+            if isinstance(params.get("source_registration"), dict)
+            else None
+        )
+    )
+    batch_twin_id = (
+        intent.resource.batch_twin_id
+        or resource.get("batch_twin_id")
+        or (f"batch:{lot_id}" if lot_id else None)
+    )
     parent_twin_id = (
         resource.get("parent_twin_id")
-        or resource.get("batch_twin_id")
+        or batch_twin_id
+        or intent.resource.parent_asset_id
         or resource.get("parent_asset_id")
     )
+    product_id = (
+        intent.resource.product_id
+        or category_envelope.get("product_id")
+    )
+    product_twin_id = f"product:{product_id}" if product_id else None
     owner_id = (
         resource.get("current_custodian_id")
         or resource.get("owner_id")
@@ -482,9 +543,11 @@ def build_twin_snapshot(
         ),
     )
 
-    lineage_refs = []
-    if parent_twin_id:
-        lineage_refs.append(str(parent_twin_id))
+    asset_lineage_refs: list[str] = []
+    if batch_twin_id:
+        asset_lineage_refs.append(str(batch_twin_id))
+    elif parent_twin_id:
+        asset_lineage_refs.append(str(parent_twin_id))
 
     snapshots = {
         "owner": _snapshot(
@@ -527,16 +590,15 @@ def build_twin_snapshot(
             "asset",
             f"asset:{intent.resource.asset_id}",
             lifecycle_state="REGISTERED",
-            lineage_refs=lineage_refs,
+            lineage_refs=asset_lineage_refs,
             custody={
                 "asset_id": intent.resource.asset_id,
                 "target_zone": target_zone,
                 "current_custodian_id": owner_twin.owner_id,
-                "category_envelope": (
-                    dict(resource.get("category_envelope"))
-                    if isinstance(resource.get("category_envelope"), dict)
-                    else {}
-                ),
+                "category_envelope": category_envelope,
+                "lot_id": lot_id,
+                "batch_twin_id": batch_twin_id,
+                "product_id": product_id,
             },
             governance_state={
                 "current_custodian_id": owner_twin.owner_id,
@@ -570,6 +632,46 @@ def build_twin_snapshot(
             telemetry={"session_token": intent.principal.session_token},
         ),
     }
+    if batch_twin_id:
+        snapshots["batch"] = _snapshot(
+            "batch",
+            str(batch_twin_id),
+            lifecycle_state="REGISTERED",
+            lineage_refs=[str(product_twin_id)] if product_twin_id else [],
+            identity={
+                "batch_twin_id": str(batch_twin_id),
+                "lot_id": lot_id,
+            },
+            governance_state={
+                "current_custodian_id": owner_twin.owner_id,
+                "lockouts": [],
+                "pending_exceptions": [],
+                "conflicts": [],
+            },
+            custody={
+                "asset_id": intent.resource.asset_id,
+                "target_zone": target_zone,
+                "current_custodian_id": owner_twin.owner_id,
+                "lot_id": lot_id,
+                "batch_twin_id": str(batch_twin_id),
+            },
+            provenance={
+                "source_registration_id": intent.resource.source_registration_id,
+                "provenance_hash": intent.resource.provenance_hash,
+            },
+        )
+    if product_twin_id:
+        snapshots["product"] = _snapshot(
+            "product",
+            str(product_twin_id),
+            lifecycle_state="REGISTERED",
+            identity={"product_id": str(product_id)},
+            governance_state={"lockouts": [], "pending_exceptions": [], "conflicts": []},
+            provenance={
+                "source_registration_id": intent.resource.source_registration_id,
+                "category_envelope": category_envelope,
+            },
+        )
     return snapshots
 
 

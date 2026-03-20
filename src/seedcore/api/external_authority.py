@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
 import time
@@ -10,8 +7,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +22,13 @@ from seedcore.models.action_intent import (
     TwinSnapshot,
 )
 from seedcore.models.fact import Fact
+from seedcore.models.evidence_bundle import SignerMetadata
+from seedcore.ops.evidence.policy import (
+    canonical_json,
+    load_ed25519_public_key,
+    sha256_hex,
+    verify_payload_signature,
+)
 
 
 IDENTITY_NAMESPACE = "identity"
@@ -35,14 +37,6 @@ DELEGATION_PREDICATE_PREFIX = "delegation:"
 DEFAULT_EXTERNAL_INTENT_MAX_SKEW_SECONDS = 300
 DEFAULT_EXTERNAL_INTENT_NONCE_TTL_SECONDS = 300
 _NONCE_CACHE: dict[str, float] = {}
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def sha256_hex(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def utcnow() -> datetime:
@@ -352,38 +346,29 @@ async def verify_signed_intent_submission(
         nonce=submission.nonce,
         signed_at=submission.signed_at,
     )
-    payload_hash = sha256_hex(canonical_json(payload))
-
-    if submission.signing_scheme == "ed25519":
-        if not method.public_key:
-            return False, "missing_public_key", document
-        public_key = _load_ed25519_public_key(method.public_key)
-        if public_key is None:
-            return False, "invalid_public_key", document
-        try:
-            signature_bytes = base64.b64decode(submission.signature, validate=True)
-        except Exception:
-            return False, "invalid_signature_encoding", document
-        try:
-            public_key.verify(signature_bytes, payload_hash.encode("utf-8"))
-        except Exception:
-            return False, "signature_mismatch", document
+    verification = verify_payload_signature(
+        artifact_type="external_signed_intent",
+        payload=payload,
+        signer_metadata=SignerMetadata(
+            signer_type="external_principal",
+            signer_id=did,
+            signing_scheme=submission.signing_scheme,
+            key_ref=submission.key_ref or method.key_ref,
+            attestation_level="baseline",
+            node_id=did,
+            config_profile="external_signed_intent_verified",
+        ),
+        signature=submission.signature,
+        public_key_resolver=lambda _metadata: (
+            load_ed25519_public_key(method.public_key)
+            if isinstance(method.public_key, str) and method.public_key.strip()
+            else None
+        ),
+        secret_resolver=lambda _metadata: _resolve_external_hmac_secret(did, method.key_ref),
+    )
+    if verification.get("verified"):
         return True, None, document
-
-    if submission.signing_scheme == "hmac_sha256":
-        secret = _resolve_external_hmac_secret(did, method.key_ref)
-        if secret is None:
-            return False, "missing_hmac_secret", document
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            payload_hash.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(expected, submission.signature):
-            return False, "signature_mismatch", document
-        return True, None, document
-
-    return False, "unsupported_signing_scheme", document
+    return False, str(verification.get("error") or "verification_failed"), document
 
 
 async def _get_did_fact(session: AsyncSession, did: str) -> Fact | None:
@@ -454,18 +439,6 @@ def _resolve_external_hmac_secret(did: str, key_ref: Optional[str]) -> Optional[
             if isinstance(secret, str) and secret.strip():
                 return secret.strip()
     return None
-
-
-def _load_ed25519_public_key(value: str) -> Optional[Ed25519PublicKey]:
-    try:
-        if "BEGIN PUBLIC KEY" in value:
-            loaded = serialization.load_pem_public_key(value.encode("utf-8"))
-            if isinstance(loaded, Ed25519PublicKey):
-                return loaded
-            return None
-        return Ed25519PublicKey.from_public_bytes(base64.b64decode(value, validate=True))
-    except Exception:
-        return None
 
 
 async def _record_nonce_once(signer_did: str, nonce: str, ttl_seconds: int) -> Optional[str]:

@@ -24,6 +24,7 @@ from ..custody.forensic_sealer import ForensicSealer
 from ..custody.transition_receipts import build_transition_receipt
 from pydantic import BaseModel, Field
 from ...database import get_redis_client
+from ...ops.evidence.policy import verify_execution_token_signature as verify_execution_token_signature_result
 
 # Internal SeedCore HAL imports
 from ..drivers.reachy_mini import ReachyMiniDriver
@@ -759,11 +760,7 @@ def _configured_target_zones() -> set[str]:
 
 
 def _verify_execution_token_signature(token: Dict[str, Any]) -> bool:
-    expected = _expected_execution_token_signature(token)
-    actual = token.get("signature")
-    if not isinstance(actual, str) or not actual:
-        return False
-    return hmac.compare_digest(actual, expected)
+    return bool(verify_execution_token_signature_result(token).get("verified"))
 
 
 def _expected_execution_token_signature(token: Dict[str, Any]) -> str:

@@ -30,6 +30,11 @@ class IntentResource(BaseModel):
     provenance_hash: str
     source_registration_id: Optional[str] = None
     registration_decision_id: Optional[str] = None
+    lot_id: Optional[str] = None
+    batch_twin_id: Optional[str] = None
+    parent_asset_id: Optional[str] = None
+    product_id: Optional[str] = None
+    category_envelope: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ActionIntent(BaseModel):

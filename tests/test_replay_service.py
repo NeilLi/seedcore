@@ -203,6 +203,9 @@ async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified
     assert replay.subject_type == "asset"
     assert replay.subject_id == "asset-1"
     assert replay.verification_status.verified is True
+    assert replay.verification_status.artifact_results["policy_receipt"]["verified"] is True
+    assert replay.verification_status.artifact_results["evidence_bundle"]["verified"] is True
+    assert replay.verification_status.signer_policy["evidence_bundle"]["preferred_scheme"] in {"ed25519", "hmac_sha256"}
     assert replay.asset_custody_state["current_zone"] == "vault-a"
     assert [item.event_type for item in replay.replay_timeline] == [
         "policy_receipt_issued",

@@ -18,7 +18,7 @@ from seedcore.coordinator.dao import (
     DigitalTwinDAO,
     GovernedExecutionAuditDAO,
 )
-from seedcore.hal.custody.transition_receipts import verify_transition_receipt
+from seedcore.hal.custody.transition_receipts import verify_transition_receipt_result
 from seedcore.models import DatabaseTask as Task
 from seedcore.models.replay import (
     PublicTrustReference,
@@ -31,11 +31,12 @@ from seedcore.models.replay import (
     VerificationResult,
 )
 from seedcore.ops.evidence.materializer import materialize_seedcore_custody_event_payload
+from seedcore.ops.evidence.policy import build_policy_summary
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
     verify_artifact_signature,
-    verify_evidence_bundle,
-    verify_policy_receipt,
+    verify_evidence_bundle_result,
+    verify_policy_receipt_result,
 )
 from seedcore.services.custody_graph_service import CustodyGraphService
 
@@ -563,13 +564,28 @@ class ReplayService:
         if subject_type == "asset":
             twin_queries.append(("asset", f"asset:{subject_id}"))
         twin_queries.append(("transaction", f"transaction:{intent_id}"))
-        for twin_type, twin_id in twin_queries:
+        seen_queries: set[tuple[str, str]] = set()
+        index = 0
+        while index < len(twin_queries):
+            twin_type, twin_id = twin_queries[index]
+            index += 1
+            if not twin_type or not twin_id or (twin_type, twin_id) in seen_queries:
+                continue
+            seen_queries.add((twin_type, twin_id))
             try:
                 rows = await self._digital_twin_dao.list_history(session, twin_type=twin_type, twin_id=twin_id, limit=25)
             except Exception:
                 rows = []
             for row in rows:
                 refs.append({**row, "twin_ref": twin_id})
+                snapshot = row.get("snapshot") if isinstance(row.get("snapshot"), dict) else {}
+                lineage_refs = snapshot.get("lineage_refs") if isinstance(snapshot.get("lineage_refs"), list) else []
+                for ref in lineage_refs:
+                    if not isinstance(ref, str) or ":" not in ref:
+                        continue
+                    lineage_type = ref.split(":", 1)[0]
+                    if lineage_type in {"batch", "product"} and (lineage_type, ref) not in seen_queries:
+                        twin_queries.append((lineage_type, ref))
         refs.sort(key=lambda item: item.get("recorded_at") or "")
         return refs
 
@@ -738,19 +754,50 @@ class ReplayService:
         transition_receipts: Sequence[Mapping[str, Any]],
     ) -> ReplayVerificationStatus:
         issues: List[str] = []
+        artifact_results: Dict[str, Any] = {}
+        signer_policy: Dict[str, Any] = {
+            "policy_receipt": build_policy_summary(artifact_type="policy_receipt"),
+            "evidence_bundle": build_policy_summary(
+                artifact_type="evidence_bundle",
+                endpoint_id=str(evidence_bundle.get("node_id")) if evidence_bundle.get("node_id") is not None else None,
+                trust_level=(
+                    "attested"
+                    if evidence_bundle.get("signer_metadata", {}).get("attestation_level") == "attested"
+                    else "baseline"
+                ),
+            ),
+            "transition_receipt": build_policy_summary(
+                artifact_type="transition_receipt",
+                endpoint_id=str(transition_receipts[0].get("endpoint_id")) if transition_receipts else None,
+                trust_level="attested" if transition_receipts else None,
+            ),
+        }
         if not policy_receipt:
             issues.append("missing_policy_receipt")
+            artifact_results["policy_receipt"] = {
+                "artifact_type": "policy_receipt",
+                "verified": False,
+                "error": "missing_policy_receipt",
+                "policy": signer_policy["policy_receipt"],
+            }
         else:
-            policy_error = verify_policy_receipt(policy_receipt)
-            if policy_error is not None:
-                issues.append(f"policy_receipt:{policy_error}")
-        evidence_error = verify_evidence_bundle(evidence_bundle)
-        if evidence_error is not None:
-            issues.append(f"evidence_bundle:{evidence_error}")
+            policy_result = verify_policy_receipt_result(policy_receipt)
+            artifact_results["policy_receipt"] = policy_result
+            if policy_result.get("error") is not None:
+                issues.append(f"policy_receipt:{policy_result['error']}")
+        evidence_result = verify_evidence_bundle_result(evidence_bundle)
+        artifact_results["evidence_bundle"] = evidence_result
+        if evidence_result.get("error") is not None:
+            issues.append(f"evidence_bundle:{evidence_result['error']}")
+        transition_results: List[Dict[str, Any]] = []
         for receipt in transition_receipts:
-            transition_error = verify_transition_receipt(dict(receipt))
-            if transition_error is not None:
-                issues.append(f"transition_receipt:{receipt.get('transition_receipt_id')}:{transition_error}")
+            transition_result = verify_transition_receipt_result(dict(receipt))
+            transition_results.append(transition_result)
+            if transition_result.get("error") is not None:
+                issues.append(
+                    f"transition_receipt:{receipt.get('transition_receipt_id')}:{transition_result['error']}"
+                )
+        artifact_results["transition_receipts"] = transition_results
 
         signature_valid = not any(
             marker in issue
@@ -776,6 +823,8 @@ class ReplayService:
             tamper_status=tamper_status,
             issues=issues,
             verified_at=self._utcnow().isoformat(),
+            artifact_results=artifact_results,
+            signer_policy=signer_policy,
         )
 
     def _build_replay_timeline(

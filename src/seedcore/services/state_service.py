@@ -622,6 +622,8 @@ def _project_asset_custody_states(rows: list[AssetCustodyState]) -> Dict[str, An
         asset_state = {
             "source_registration_id": row.source_registration_id,
             "lot_id": row.lot_id,
+            "batch_id": row.lot_id,
+            "product_id": getattr(row, "product_id", None),
             "source_claim_id": row.source_claim_id,
             "producer_id": row.producer_id,
             "registration_status": "quarantined" if bool(row.is_quarantined) else None,
@@ -658,6 +660,12 @@ def _project_authoritative_assets(registrations: list[SourceRegistration]) -> Di
         asset_state = {
             "source_registration_id": str(registration.id),
             "lot_id": str(registration.lot_id),
+            "batch_id": str(registration.lot_id),
+            "product_id": (
+                str(getattr(registration, "product_id"))
+                if getattr(registration, "product_id", None) is not None
+                else None
+            ),
             "producer_id": str(registration.producer_id),
             "registration_status": str(registration.status.value),
             "is_quarantined": registration.status == SourceRegistrationStatus.QUARANTINED,
@@ -701,6 +709,8 @@ def _merge_registration_fallback_assets(
                 or registration_state.get("source_registration_id")
             ),
             "lot_id": existing.get("lot_id") or registration_state.get("lot_id"),
+            "batch_id": existing.get("batch_id") or registration_state.get("batch_id"),
+            "product_id": existing.get("product_id") or registration_state.get("product_id"),
         }
     return assets
 

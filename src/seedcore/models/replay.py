@@ -30,6 +30,8 @@ class ReplayVerificationStatus(BaseModel):
     tamper_status: str = "unknown"
     issues: List[str] = Field(default_factory=list)
     verified_at: Optional[str] = None
+    artifact_results: Dict[str, Any] = Field(default_factory=dict)
+    signer_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ReplayRecord(BaseModel):

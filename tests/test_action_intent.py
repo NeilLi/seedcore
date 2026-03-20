@@ -64,6 +64,25 @@ def test_build_twin_snapshot_uses_typed_lifecycle_schema():
     assert snapshots["asset"].lineage_refs == ["batch:lot-10"]
 
 
+def test_build_twin_snapshot_emits_batch_and_product_twins_when_ids_are_stable():
+    payload = _base_payload()
+    payload["params"]["resource"].update(
+        {
+            "lot_id": "lot-10",
+            "batch_twin_id": "batch:lot-10",
+            "category_envelope": {"product_id": "product-77"},
+        }
+    )
+
+    snapshots = build_twin_snapshot(payload)
+
+    assert snapshots["asset"].custody["batch_twin_id"] == "batch:lot-10"
+    assert snapshots["asset"].custody["product_id"] == "product-77"
+    assert snapshots["batch"].twin_id == "batch:lot-10"
+    assert snapshots["batch"].lineage_refs == ["product:product-77"]
+    assert snapshots["product"].twin_id == "product:product-77"
+
+
 def test_evaluate_intent_denies_stale_twin_state():
     payload = _base_payload()
     payload["params"]["governance"]["digital_twins"] = {

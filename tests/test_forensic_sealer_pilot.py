@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from seedcore.hal.custody.forensic_sealer import ForensicSealer
 
 
@@ -31,3 +33,25 @@ def test_forensic_sealer_pilot_uses_signed_hal_capture_envelope():
     assert payload["signer_metadata"]["signing_scheme"] == "hmac_sha256"
     assert payload["media_refs"][-1]["from_zone"] == "zone-a"
     assert payload["media_refs"][-1]["to_zone"] == "zone-b"
+
+
+def test_forensic_sealer_requires_attested_signing_for_attested_hal_paths(monkeypatch):
+    monkeypatch.delenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64", raising=False)
+    monkeypatch.delenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_PEM", raising=False)
+
+    sealer = ForensicSealer(device_identity="robot_sim://unit-1")
+
+    with pytest.raises(ValueError, match="hal_capture requires Ed25519 signing"):
+        sealer.seal_custody_event_pilot(
+            event_id="urn:seedcore:event:pilot-2",
+            platform_state="allow",
+            policy_hash="policy-receipt-2",
+            auth_token="token-2",
+            from_zone="zone-a",
+            to_zone="zone-b",
+            transition_receipt={"transition_receipt_id": "tr-2", "actuator_result_hash": "trajectory-hash-2"},
+            actuator_telemetry={},
+            media_hash_references=[],
+            trajectory_hash=None,
+            environmental_data={"temperatureC": 22.0},
+        )

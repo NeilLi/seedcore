@@ -4,12 +4,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from seedcore.database import get_async_pg_session_factory
 from seedcore.coordinator.dao import (
     CustodyDisputeDAO,
     CustodyGraphDAO,
     CustodyTransitionDAO,
     DigitalTwinDAO,
 )
+from seedcore.services.digital_twin_service import DigitalTwinService
 
 
 DISPUTE_STATUSES = {"OPEN", "UNDER_REVIEW", "RESOLVED", "REJECTED"}
@@ -19,6 +21,7 @@ class CustodyGraphService:
     def __init__(
         self,
         *,
+        session_factory: Any = None,
         transition_dao: Optional[CustodyTransitionDAO] = None,
         graph_dao: Optional[CustodyGraphDAO] = None,
         dispute_dao: Optional[CustodyDisputeDAO] = None,
@@ -28,6 +31,10 @@ class CustodyGraphService:
         self._graph_dao = graph_dao or CustodyGraphDAO()
         self._dispute_dao = dispute_dao or CustodyDisputeDAO()
         self._digital_twin_dao = digital_twin_dao or DigitalTwinDAO()
+        self._digital_twin_service = DigitalTwinService(
+            session_factory=session_factory or get_async_pg_session_factory(),
+            dao=self._digital_twin_dao,
+        )
 
     async def record_governed_transition(
         self,
@@ -320,6 +327,7 @@ class CustodyGraphService:
 
     async def get_asset_lineage(self, session, *, asset_id: str, limit: int = 100) -> Dict[str, Any]:
         transitions = await self.get_asset_transitions(session, asset_id=asset_id, limit=limit)
+        twin_refs = await self._linked_twin_refs(session, asset_id=asset_id)
         artifacts = [
             {
                 "transition_event_id": item["transition_event_id"],
@@ -337,10 +345,12 @@ class CustodyGraphService:
             "transition_count": len(transitions),
             "transitions": transitions,
             "artifacts": artifacts,
+            "twin_refs": twin_refs,
         }
 
     async def get_asset_graph(self, session, *, asset_id: str, limit: int = 100) -> Dict[str, Any]:
         transitions = await self._transition_dao.list_for_asset(session, asset_id=asset_id, limit=limit)
+        twin_refs = await self._linked_twin_refs(session, asset_id=asset_id)
         node_ids = {
             self.node_id("asset", asset_id),
             *[self.node_id("transition_event", item["transition_event_id"]) for item in transitions],
@@ -367,6 +377,7 @@ class CustodyGraphService:
             "root_node_id": self.node_id("asset", asset_id),
             "nodes": nodes,
             "edges": edges,
+            "twin_refs": twin_refs,
         }
 
     async def query(self, session, **filters: Any) -> Dict[str, Any]:
@@ -466,7 +477,16 @@ class CustodyGraphService:
                 source_ref=dispute_id,
                 payload={"field": ref["field"]},
             )
-        return await self.get_dispute(session, dispute_id=dispute_id)
+        dispute = await self.get_dispute(session, dispute_id=dispute_id)
+        if dispute is not None:
+            await self._sync_dispute_twins(
+                session,
+                dispute=dispute,
+                event_type="dispute_opened",
+                authority_source="custody_dispute_case",
+                change_reason="dispute_opened",
+            )
+        return dispute
 
     async def append_dispute_event(
         self,
@@ -527,7 +547,16 @@ class CustodyGraphService:
             subject_id=dispute_id,
             payload=case,
         )
-        return await self.get_dispute(session, dispute_id=dispute_id)
+        dispute = await self.get_dispute(session, dispute_id=dispute_id)
+        if dispute is not None:
+            await self._sync_dispute_twins(
+                session,
+                dispute=dispute,
+                event_type="dispute_resolved",
+                authority_source="custody_dispute_case",
+                change_reason="dispute_resolved",
+            )
+        return dispute
 
     async def list_disputes(self, session, *, status: Optional[str] = None, asset_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         rows = await self._dispute_dao.list_cases(
@@ -622,12 +651,133 @@ class CustodyGraphService:
 
     async def _load_twin_refs(self, session, *, asset_id: str, intent_id: Optional[str]) -> List[Dict[str, Any]]:
         refs: List[Dict[str, Any]] = []
-        for twin_type, twin_id in (("asset", f"asset:{asset_id}"), ("transaction", f"transaction:{intent_id}") if intent_id else (None, None)):
+        twin_queries: List[tuple[str, str]] = [("asset", f"asset:{asset_id}")]
+        if intent_id:
+            twin_queries.append(("transaction", f"transaction:{intent_id}"))
+        asset_snapshot = await self._get_authoritative_twin_snapshot(
+            session,
+            twin_type="asset",
+            twin_id=f"asset:{asset_id}",
+        )
+        asset_payload = asset_snapshot.get("snapshot") if isinstance(asset_snapshot, dict) else {}
+        lineage_refs = asset_payload.get("lineage_refs") if isinstance(asset_payload, dict) else []
+        if isinstance(lineage_refs, list):
+            for ref in lineage_refs:
+                if not isinstance(ref, str) or ":" not in ref:
+                    continue
+                twin_type, twin_id = ref.split(":", 1)
+                if twin_type in {"batch", "product"}:
+                    twin_queries.append((twin_type, ref))
+        batch_snapshot = None
+        for twin_type, twin_ref in twin_queries:
+            if twin_type == "batch":
+                batch_snapshot = await self._get_authoritative_twin_snapshot(
+                    session,
+                    twin_type=twin_type,
+                    twin_id=twin_ref,
+                )
+                batch_payload = batch_snapshot.get("snapshot") if isinstance(batch_snapshot, dict) else {}
+                batch_lineage_refs = batch_payload.get("lineage_refs") if isinstance(batch_payload, dict) else []
+                if isinstance(batch_lineage_refs, list):
+                    for ref in batch_lineage_refs:
+                        if isinstance(ref, str) and ref.startswith("product:"):
+                            twin_queries.append(("product", ref))
+        seen_queries: set[tuple[str, str]] = set()
+        for twin_type, twin_id in twin_queries:
+            if (twin_type, twin_id) in seen_queries:
+                continue
+            seen_queries.add((twin_type, twin_id))
             if not twin_type or not twin_id:
                 continue
             rows = await self._digital_twin_dao.list_history(session, twin_type=twin_type, twin_id=twin_id, limit=5)
             refs.extend(rows[:1])
         return refs
+
+    async def _linked_twin_refs(self, session, *, asset_id: str) -> Dict[str, str]:
+        result: Dict[str, str] = {"asset": f"asset:{asset_id}"}
+        asset_snapshot = await self._get_authoritative_twin_snapshot(
+            session,
+            twin_type="asset",
+            twin_id=f"asset:{asset_id}",
+        )
+        snapshot = asset_snapshot.get("snapshot") if isinstance(asset_snapshot, dict) else {}
+        lineage_refs = snapshot.get("lineage_refs") if isinstance(snapshot, dict) else []
+        if isinstance(lineage_refs, list):
+            for ref in lineage_refs:
+                if isinstance(ref, str) and ref.startswith("batch:"):
+                    result["batch"] = ref
+        batch_ref = result.get("batch")
+        if batch_ref:
+            batch_snapshot = await self._get_authoritative_twin_snapshot(
+                session,
+                twin_type="batch",
+                twin_id=batch_ref,
+            )
+            batch_payload = batch_snapshot.get("snapshot") if isinstance(batch_snapshot, dict) else {}
+            batch_lineage_refs = batch_payload.get("lineage_refs") if isinstance(batch_payload, dict) else []
+            if isinstance(batch_lineage_refs, list):
+                for ref in batch_lineage_refs:
+                    if isinstance(ref, str) and ref.startswith("product:"):
+                        result["product"] = ref
+        elif isinstance(snapshot, dict):
+            custody = snapshot.get("custody") if isinstance(snapshot.get("custody"), dict) else {}
+            product_id = custody.get("product_id")
+            if isinstance(product_id, str) and product_id.strip():
+                result["product"] = f"product:{product_id.strip()}"
+        return result
+
+    async def _sync_dispute_twins(
+        self,
+        session,
+        *,
+        dispute: Mapping[str, Any],
+        event_type: str,
+        authority_source: str,
+        change_reason: str,
+    ) -> None:
+        asset_id = dispute.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id.strip():
+            return
+        twin_refs = await self._linked_twin_refs(session, asset_id=asset_id.strip())
+        resolved_refs = []
+        for twin_type in ("asset", "batch", "product"):
+            twin_id = twin_refs.get(twin_type)
+            if isinstance(twin_id, str) and twin_id.strip():
+                resolved_refs.append((twin_type, twin_id))
+        snapshots = await self._digital_twin_service.load_authoritative_snapshots(
+            session,
+            twin_refs=resolved_refs,
+        )
+        if not snapshots:
+            return
+        await self._digital_twin_service.persist_relevant_twins_in_session(
+            session,
+            relevant_twin_snapshot=snapshots,
+            task_id=None,
+            intent_id=next(iter(self._reference_values(dispute.get("references", {}), "intent_id")), None),
+            authority_source=authority_source,
+            change_reason=change_reason,
+            transition_context={
+                "event_type": event_type,
+                "phase": "dispute",
+                "dispute_case": dict(dispute),
+            },
+        )
+
+    async def _get_authoritative_twin_snapshot(
+        self,
+        session,
+        *,
+        twin_type: str,
+        twin_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        getter = getattr(self._digital_twin_dao, "get_authoritative_snapshot", None)
+        if getter is None:
+            return None
+        try:
+            return await getter(session, twin_type=twin_type, twin_id=twin_id)
+        except Exception:
+            return None
 
     async def _dispute_map_for_asset(self, session, *, asset_id: Optional[str]) -> Dict[str, List[Dict[str, Any]]]:
         if not asset_id:
