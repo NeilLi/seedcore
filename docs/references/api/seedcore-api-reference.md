@@ -168,7 +168,31 @@ This surface adds the missing external authority APIs needed for DID-style ident
 - Signed submission requires nonce protection and rejects replayed nonces.
 - Signed submission verifies ingress authenticity but still runs the normal PDP and delegation checks before issuing `ExecutionToken`.
 
-## 9. Control API
+## 9. Custody API
+
+Implemented in [custody_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/custody_router.py).
+
+This surface exposes the new custody graph, lineage, search, and dispute workflows over the append-only custody transition chain.
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/custody/assets/{asset_id}/lineage` | Return the ordered lineage chain for an asset plus linked artifacts and disputes. |
+| `GET` | `/api/v1/custody/assets/{asset_id}/transitions` | Return custody transition events for an asset. |
+| `GET` | `/api/v1/custody/assets/{asset_id}/graph` | Return a graph projection with `{nodes, edges, root_node_id}` for the asset investigation view. |
+| `GET` | `/api/v1/custody/query` | Search custody transitions by asset, intent, task, token, zone, actor, endpoint, time range, and dispute status. |
+| `GET` | `/api/v1/custody/disputes` | List dispute cases, optionally filtered by asset or status. |
+| `GET` | `/api/v1/custody/disputes/{dispute_id}` | Fetch one dispute case with append-only dispute events. |
+| `POST` | `/api/v1/custody/disputes` | Open a dispute linked to custody graph entities. |
+| `POST` | `/api/v1/custody/disputes/{dispute_id}/events` | Append a dispute event or move a dispute into review. |
+| `POST` | `/api/v1/custody/disputes/{dispute_id}/resolve` | Resolve or reject a dispute case. |
+
+### 9.1 Notes
+
+- Custody lineage is now persisted in `custody_transition_event` and treated as the canonical append-only transition chain.
+- Graph projection is Postgres-first and does not rely on Neo4j for correctness.
+- Replay records now surface linked custody transition refs and dispute refs without exposing the full internal graph by default.
+
+## 10. Control API
 
 Implemented in [control_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/control_router.py).
 
@@ -182,7 +206,7 @@ Implemented in [control_router.py](/Users/ningli/project/seedcore/src/seedcore/a
 
 This is the lightweight CRUD control-plane surface currently mounted in the active API.
 
-## 10. Advisory API
+## 11. Advisory API
 
 Implemented in [advisory_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/advisory_router.py).
 
@@ -192,7 +216,7 @@ Implemented in [advisory_router.py](/Users/ningli/project/seedcore/src/seedcore/
 
 This route is advisory-only. It does not replace the governed authorization path for controlled execution.
 
-## 11. PKG API
+## 12. PKG API
 
 Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py).
 
@@ -206,7 +230,7 @@ Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/r
 
 These endpoints support policy runtime inspection and snapshot-oriented operations.
 
-## 12. Capabilities API
+## 13. Capabilities API
 
 Implemented in [capabilities_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/capabilities_router.py).
 
@@ -216,11 +240,12 @@ Implemented in [capabilities_router.py](/Users/ningli/project/seedcore/src/seedc
 
 This endpoint is the active mounted capability-management surface at the moment.
 
-## 13. Quick Practical Rules
+## 14. Quick Practical Rules
 
 - Treat `/health` as process liveness and `/readyz` as dependency readiness.
 - Treat `/api/v1/replay*`, `/api/v1/trust*`, and `/api/v1/verify*` as the canonical replay/trust API family.
 - Treat `/api/v1/identities/dids*`, `/api/v1/delegations*`, and `/api/v1/intents/submit-signed` as the external authority ingress family.
+- Treat `/api/v1/custody*` as the canonical lineage, graph, and dispute workflow family.
 - Prefer `/api/v1/replay/jsonld` over older one-off JSON-LD generation paths for new integrations.
 - Use `/api/v1/tasks/{task_id}/logs` only for streaming clients that can consume SSE.
 - Do not assume legacy routers are mounted just because they exist in the repository.

@@ -138,6 +138,7 @@ class ToolManager:
         self._governance_audit_dao = None
         self._asset_custody_state_dao = None
         self._digital_twin_service = None
+        self._custody_graph_service = None
         self._db_session_factory = None
 
         logger.info("🔧 ToolManager initialized (v2.1+)")
@@ -692,19 +693,26 @@ class ToolManager:
             async with self._custody_lock:
                 self._custody_ledger.append(record)
             try:
-                await self._sync_asset_custody_state(record, governance_ctx)
+                custody_sync = await self._sync_asset_custody_state(record, governance_ctx)
             except ToolError:
                 raise
             except Exception:
+                custody_sync = None
                 logger.warning(
                     "Asset custody state sync failed after ledger record",
                     exc_info=True,
                 )
+            graph_projection = await self._persist_custody_graph_projection(
+                record,
+                governance_ctx,
+                custody_sync=custody_sync,
+            )
             settlement = await self._settle_digital_twin_state(record, governance_ctx)
             return {
                 "ok": True,
                 "entry_id": record["entry_id"],
                 "persisted": persisted,
+                "custody_transition": graph_projection,
                 "twin_settlement": settlement,
             }
 
@@ -842,6 +850,16 @@ class ToolManager:
                 return None
         return self._digital_twin_service
 
+    def _get_custody_graph_service(self):
+        if self._custody_graph_service is None:
+            try:
+                from seedcore.services.custody_graph_service import CustodyGraphService
+
+                self._custody_graph_service = CustodyGraphService()
+            except Exception:
+                return None
+        return self._custody_graph_service
+
     def _get_db_session_factory(self):
         if self._db_session_factory is None:
             try:
@@ -856,11 +874,11 @@ class ToolManager:
         self,
         record: Dict[str, Any],
         governance_ctx: Any,
-    ) -> bool:
+    ) -> Optional[Dict[str, Any]]:
         session_factory = self._get_db_session_factory()
         dao = self._get_asset_custody_state_dao()
         if session_factory is None or dao is None:
-            return False
+            return None
 
         async with session_factory() as session:
             async with session.begin():
@@ -886,9 +904,42 @@ class ToolManager:
                     prior_state=prior_state,
                 )
                 if update is None:
-                    return False
+                    return None
                 await dao.upsert_snapshot(session, **update)
-        return True
+        return update
+
+    async def _persist_custody_graph_projection(
+        self,
+        record: Dict[str, Any],
+        governance_ctx: Any,
+        *,
+        custody_sync: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not isinstance(governance_ctx, dict):
+            return {"ok": False, "reason": "missing_governance_ctx"}
+        service = self._get_custody_graph_service()
+        session_factory = self._get_db_session_factory()
+        if service is None or session_factory is None:
+            return {"ok": False, "reason": "custody_graph_service_unavailable"}
+        try:
+            async with session_factory() as session:
+                async with session.begin():
+                    result = await service.record_governed_transition(
+                        session,
+                        record=record,
+                        governance_ctx=governance_ctx,
+                        custody_update=custody_sync,
+                    )
+            if result is None:
+                return {"ok": False, "reason": "transition_not_materialized"}
+            return {"ok": True, **result}
+        except Exception as exc:
+            logger.warning(
+                "Custody graph projection failed for task %s",
+                record.get("task_id"),
+                exc_info=True,
+            )
+            return {"ok": False, "reason": str(exc)}
 
     def _build_asset_custody_update(
         self,

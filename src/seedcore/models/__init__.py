@@ -10,6 +10,13 @@ try:
     from .task import Task as DatabaseTask, TaskStatus, Base as TaskBase
     from .fact import Fact, Base as FactBase
     from .asset_custody import AssetCustodyState
+    from .custody_graph import (
+        CustodyDisputeCase,
+        CustodyDisputeEvent,
+        CustodyGraphEdge,
+        CustodyGraphNode,
+        CustodyTransitionEvent,
+    )
     from .digital_twin import DigitalTwinEventJournal, DigitalTwinHistory, DigitalTwinState
     from .governance_audit import GovernedExecutionAudit
     from .source_registration import (
@@ -89,6 +96,11 @@ try:
         "Fact",
         "FactBase",
         "AssetCustodyState",
+        "CustodyGraphNode",
+        "CustodyGraphEdge",
+        "CustodyTransitionEvent",
+        "CustodyDisputeCase",
+        "CustodyDisputeEvent",
         "DigitalTwinState",
         "DigitalTwinHistory",
         "DigitalTwinEventJournal",

@@ -52,6 +52,8 @@ class ReplayRecord(BaseModel):
     internal_projection: Dict[str, Any] = Field(default_factory=dict)
     audit_record: Dict[str, Any] = Field(default_factory=dict)
     asset_custody_state: Optional[Dict[str, Any]] = None
+    custody_transition_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    dispute_refs: List[Dict[str, Any]] = Field(default_factory=list)
     jsonld_export: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -63,6 +65,7 @@ class TrustPageProjection(BaseModel):
     custody_summary: Dict[str, Any] = Field(default_factory=dict)
     fingerprint_summary: Dict[str, Any] = Field(default_factory=dict)
     policy_summary: Dict[str, Any] = Field(default_factory=dict)
+    dispute_summary: Dict[str, Any] = Field(default_factory=dict)
     timeline_summary: List[Dict[str, Any]] = Field(default_factory=list)
     verifiable_claims: List[Dict[str, Any]] = Field(default_factory=list)
     public_media_refs: List[Dict[str, Any]] = Field(default_factory=list)

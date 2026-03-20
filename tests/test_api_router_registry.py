@@ -12,6 +12,7 @@ def test_active_router_specs_preserve_mount_order():
         ("Source Registrations", "source_registrations_router"),
         ("Tracking Events", "tracking_events_router"),
         ("Identity", "identity_router"),
+        ("Custody", "custody_router"),
         ("Control", "control_router"),
         ("Advisory", "advisory_router"),
         ("PKG", "pkg_router"),

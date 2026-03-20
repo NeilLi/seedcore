@@ -260,6 +260,62 @@ async def test_public_projection_redacts_internal_details_and_internal_projectio
 
 
 @pytest.mark.asyncio
+async def test_replay_includes_custody_transition_and_dispute_refs():
+    record = _build_audit_record(task_id="task-graph-1", intent_id="intent-graph-1", asset_id="asset-graph-1")
+    dispute_case = {
+        "dispute_id": "dispute:test-1",
+        "status": "OPEN",
+        "asset_id": "asset-graph-1",
+        "title": "Seal mismatch",
+        "references": {"transition_event_id": "receipt-intent-graph-1"},
+        "recorded_at": "2026-03-20T10:05:00+00:00",
+        "updated_at": "2026-03-20T10:05:00+00:00",
+    }
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-graph-1"})})(),
+        custody_transition_dao=type(
+            "TransitionDAO",
+            (),
+            {
+                "list_for_asset": AsyncMock(
+                    return_value=[
+                        {
+                            "transition_event_id": "receipt-intent-graph-1",
+                            "asset_id": "asset-graph-1",
+                            "transition_seq": 1,
+                            "lineage_status": "authoritative",
+                            "recorded_at": "2026-03-20T10:04:30+00:00",
+                            "intent_id": "intent-graph-1",
+                            "audit_record_id": record["id"],
+                        }
+                    ]
+                )
+            },
+        )(),
+        custody_dispute_dao=type(
+            "DisputeDAO",
+            (),
+            {
+                "list_cases": AsyncMock(
+                    return_value=[dispute_case]
+                ),
+                "list_events": AsyncMock(return_value=[]),
+                "get_case": AsyncMock(return_value=dispute_case),
+            },
+        )(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.custody_transition_refs[0]["transition_event_id"] == "receipt-intent-graph-1"
+    assert replay.dispute_refs[0]["dispute_id"] == "dispute:test-1"
+    assert any(item.event_type == "custody_lineage_recorded" for item in replay.replay_timeline)
+    assert replay.public_projection["dispute_summary"]["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_verification():
     record = _build_audit_record(task_id="task-ref-1", intent_id="intent-ref-1", asset_id="asset-ref-1")
     dao = type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})()

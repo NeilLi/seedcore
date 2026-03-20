@@ -13,6 +13,8 @@ from sqlalchemy import String, select, text
 
 from seedcore.coordinator.dao import (
     AssetCustodyStateDAO,
+    CustodyDisputeDAO,
+    CustodyTransitionDAO,
     DigitalTwinDAO,
     GovernedExecutionAuditDAO,
 )
@@ -35,6 +37,7 @@ from seedcore.ops.evidence.verification import (
     verify_evidence_bundle,
     verify_policy_receipt,
 )
+from seedcore.services.custody_graph_service import CustodyGraphService
 
 
 TRUST_TOKEN_PREFIX = "stp1"
@@ -55,10 +58,17 @@ class ReplayService:
         governance_audit_dao: Optional[GovernedExecutionAuditDAO] = None,
         digital_twin_dao: Optional[DigitalTwinDAO] = None,
         asset_custody_dao: Optional[AssetCustodyStateDAO] = None,
+        custody_transition_dao: Optional[CustodyTransitionDAO] = None,
+        custody_dispute_dao: Optional[CustodyDisputeDAO] = None,
     ) -> None:
         self._governance_audit_dao = governance_audit_dao or GovernedExecutionAuditDAO()
         self._digital_twin_dao = digital_twin_dao or DigitalTwinDAO()
         self._asset_custody_dao = asset_custody_dao or AssetCustodyStateDAO()
+        self._custody_graph_service = CustodyGraphService(
+            transition_dao=custody_transition_dao,
+            dispute_dao=custody_dispute_dao,
+            digital_twin_dao=self._digital_twin_dao,
+        )
 
     async def resolve_lookup_record(
         self,
@@ -150,11 +160,22 @@ class ReplayService:
         transition_receipts = self._extract_transition_receipts(evidence_bundle=evidence_bundle)
         subject_type, subject_id = self._derive_subject(record=record, evidence_bundle=evidence_bundle, policy_receipt=policy_receipt)
         asset_custody_state = await self._load_asset_custody_state(session, subject_type=subject_type, subject_id=subject_id)
+        custody_transition_refs = await self._load_custody_transition_refs(
+            session,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
         digital_twin_history_refs = await self._load_digital_twin_history(
             session,
             subject_type=subject_type,
             subject_id=subject_id,
             intent_id=str(record.get("intent_id") or ""),
+        )
+        dispute_refs = await self._load_dispute_refs(
+            session,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            custody_transition_refs=custody_transition_refs,
         )
         signer_chain = self._build_signer_chain(policy_receipt=policy_receipt, evidence_bundle=evidence_bundle, transition_receipts=transition_receipts)
         verification_status = self._build_verification_status(
@@ -167,7 +188,9 @@ class ReplayService:
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
+            custody_transition_refs=custody_transition_refs,
             digital_twin_history_refs=digital_twin_history_refs,
+            dispute_refs=dispute_refs,
         )
 
         replay = ReplayRecord(
@@ -180,7 +203,9 @@ class ReplayService:
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
+            custody_transition_refs=custody_transition_refs,
             digital_twin_history_refs=digital_twin_history_refs,
+            dispute_refs=dispute_refs,
             signer_chain=signer_chain,
             verification_status=verification_status,
             replay_timeline=replay_timeline,
@@ -213,6 +238,8 @@ class ReplayService:
                 "evidence_bundle": replay.evidence_bundle,
                 "transition_receipts": replay.transition_receipts,
                 "asset_custody_state": replay.asset_custody_state,
+                "custody_transition_refs": replay.custody_transition_refs,
+                "dispute_refs": replay.dispute_refs,
                 "digital_twin_history_refs": replay.digital_twin_history_refs,
                 "signer_chain": replay.signer_chain,
                 "replay_timeline": [item.model_dump(mode="json") for item in replay.replay_timeline],
@@ -231,6 +258,8 @@ class ReplayService:
                 "evidence_bundle": self._auditor_safe_evidence_bundle(replay.evidence_bundle),
                 "transition_receipts": replay.transition_receipts,
                 "asset_custody_state": replay.asset_custody_state,
+                "custody_transition_refs": replay.custody_transition_refs,
+                "dispute_refs": replay.dispute_refs,
                 "digital_twin_history_refs": replay.digital_twin_history_refs,
                 "signer_chain": replay.signer_chain,
                 "replay_timeline": [item.model_dump(mode="json") for item in replay.replay_timeline],
@@ -544,6 +573,44 @@ class ReplayService:
         refs.sort(key=lambda item: item.get("recorded_at") or "")
         return refs
 
+    async def _load_custody_transition_refs(
+        self,
+        session,
+        *,
+        subject_type: str,
+        subject_id: str,
+    ) -> List[Dict[str, Any]]:
+        if subject_type != "asset":
+            return []
+        try:
+            return await self._custody_graph_service.get_asset_transitions(session, asset_id=subject_id, limit=50)
+        except Exception:
+            return []
+
+    async def _load_dispute_refs(
+        self,
+        session,
+        *,
+        subject_type: str,
+        subject_id: str,
+        custody_transition_refs: Sequence[Mapping[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        try:
+            if subject_type == "asset":
+                return await self._custody_graph_service.disputes_for_asset(session, asset_id=subject_id)
+            dispute_refs: List[Dict[str, Any]] = []
+            for item in custody_transition_refs:
+                transition_event_id = item.get("transition_event_id")
+                if not transition_event_id:
+                    continue
+                dispute_refs.extend(
+                    await self._custody_graph_service.disputes_for_transition(session, transition_event_id=str(transition_event_id))
+                )
+            deduped = {item["dispute_id"]: item for item in dispute_refs if isinstance(item, dict) and item.get("dispute_id")}
+            return list(deduped.values())
+        except Exception:
+            return []
+
     async def _get_latest_for_asset_subject(self, session, *, subject_id: str) -> Optional[Dict[str, Any]]:
         stmt = text(
             """
@@ -718,7 +785,9 @@ class ReplayService:
         policy_receipt: Mapping[str, Any],
         evidence_bundle: Mapping[str, Any],
         transition_receipts: Sequence[Mapping[str, Any]],
+        custody_transition_refs: Sequence[Mapping[str, Any]],
         digital_twin_history_refs: Sequence[Mapping[str, Any]],
+        dispute_refs: Sequence[Mapping[str, Any]],
     ) -> List[ReplayTimelineEvent]:
         events: List[ReplayTimelineEvent] = []
         if policy_receipt.get("timestamp"):
@@ -791,6 +860,37 @@ class ReplayService:
                     },
                 )
             )
+        for transition_event in custody_transition_refs:
+            recorded_at = transition_event.get("recorded_at")
+            if not recorded_at:
+                continue
+            events.append(
+                ReplayTimelineEvent(
+                    event_id=str(transition_event.get("transition_event_id") or f"custody-transition:{uuid.uuid4()}"),
+                    event_type="custody_lineage_recorded",
+                    timestamp=str(recorded_at),
+                    summary="Custody lineage chain updated",
+                    artifact_ref=str(transition_event.get("transition_event_id") or ""),
+                    details={
+                        "transition_seq": transition_event.get("transition_seq"),
+                        "lineage_status": transition_event.get("lineage_status"),
+                    },
+                )
+            )
+        for dispute in dispute_refs:
+            recorded_at = dispute.get("recorded_at") or dispute.get("updated_at")
+            if not recorded_at:
+                continue
+            events.append(
+                ReplayTimelineEvent(
+                    event_id=str(dispute.get("dispute_id") or f"dispute:{uuid.uuid4()}"),
+                    event_type="custody_dispute_linked",
+                    timestamp=str(recorded_at),
+                    summary="Custody dispute linked to replay subject",
+                    artifact_ref=str(dispute.get("dispute_id") or ""),
+                    details={"status": dispute.get("status"), "title": dispute.get("title")},
+                )
+            )
         return sorted(events, key=lambda item: self._parse_datetime(item.timestamp))
 
     def _build_trust_page_projection(
@@ -802,6 +902,7 @@ class ReplayService:
         custody_summary = self._build_custody_summary(replay)
         fingerprint_summary = self._build_fingerprint_summary(replay)
         policy_summary = self._build_policy_summary(replay)
+        dispute_summary = self._build_dispute_summary(replay)
         timeline_summary = [
             {
                 "event_type": item.event_type,
@@ -824,6 +925,7 @@ class ReplayService:
             custody_summary=custody_summary,
             fingerprint_summary=fingerprint_summary,
             policy_summary=policy_summary,
+            dispute_summary=dispute_summary,
             timeline_summary=timeline_summary,
             verifiable_claims=claims,
             public_media_refs=media_refs,
@@ -838,6 +940,8 @@ class ReplayService:
             "quarantined": bool(asset_state.get("is_quarantined")),
             "authority_source": asset_state.get("authority_source"),
             "last_transition_seq": asset_state.get("last_transition_seq"),
+            "lineage_events": len(replay.custody_transition_refs),
+            "linked_disputes": len(replay.dispute_refs),
         }
 
     def _build_fingerprint_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -859,6 +963,15 @@ class ReplayService:
             "disposition": decision.get("disposition"),
             "allowed": decision.get("allowed"),
             "timestamp": receipt.get("timestamp"),
+        }
+
+    def _build_dispute_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        disputes = replay.dispute_refs or []
+        return {
+            "count": len(disputes),
+            "open_count": sum(1 for item in disputes if item.get("status") in {"OPEN", "UNDER_REVIEW"}),
+            "statuses": sorted({str(item.get("status")) for item in disputes if item.get("status")}),
+            "linked_dispute_ids": [item.get("dispute_id") for item in disputes if item.get("dispute_id")],
         }
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
@@ -883,7 +996,7 @@ class ReplayService:
             claims.append(
                 {
                     "claim": "custody_trace_available",
-                    "value": bool(replay.transition_receipts or replay.asset_custody_state),
+                    "value": bool(replay.transition_receipts or replay.asset_custody_state or replay.custody_transition_refs),
                     "source": replay.audit_record_id,
                 }
             )
