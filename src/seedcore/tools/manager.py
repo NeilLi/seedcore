@@ -943,36 +943,35 @@ class ToolManager:
             if isinstance(record.get("evidence_bundle"), dict)
             else {}
         )
-        telemetry = (
-            evidence_bundle.get("telemetry_snapshot")
-            if isinstance(evidence_bundle.get("telemetry_snapshot"), dict)
-            else (
-                evidence_bundle.get("telemetry_summary")
-                if isinstance(evidence_bundle.get("telemetry_summary"), dict)
-                else {}
-            )
-        )
-        execution_receipt = (
-            evidence_bundle.get("execution_receipt")
-            if isinstance(evidence_bundle.get("execution_receipt"), dict)
+        telemetry_refs = evidence_bundle.get("telemetry_refs")
+        telemetry = {}
+        if isinstance(telemetry_refs, list):
+            for item in telemetry_refs:
+                if isinstance(item, dict) and isinstance(item.get("inline"), dict):
+                    telemetry = dict(item["inline"])
+                    break
+        evidence_inputs = (
+            evidence_bundle.get("evidence_inputs")
+            if isinstance(evidence_bundle.get("evidence_inputs"), dict)
             else {}
         )
+        execution_summary = (
+            evidence_inputs.get("execution_summary")
+            if isinstance(evidence_inputs.get("execution_summary"), dict)
+            else {}
+        )
+        transition_receipts = (
+            evidence_inputs.get("transition_receipts")
+            if isinstance(evidence_inputs.get("transition_receipts"), list)
+            else []
+        )
+        transition_receipt = next((item for item in transition_receipts if isinstance(item, dict)), None)
         zone_checks = (
             telemetry.get("zone_checks")
             if isinstance(telemetry.get("zone_checks"), dict)
             else {}
         )
-        actuator_endpoint = execution_receipt.get("actuator_endpoint")
-        transition_receipt = (
-            execution_receipt.get("transition_receipt")
-            if isinstance(execution_receipt.get("transition_receipt"), dict)
-            else None
-        )
-        transition_receipt_hash = (
-            execution_receipt.get("transition_receipt_hash")
-            if isinstance(execution_receipt.get("transition_receipt_hash"), str)
-            else None
-        )
+        actuator_endpoint = execution_summary.get("actuator_endpoint")
         execution_token_id = (
             str(execution_token.get("token_id"))
             if execution_token.get("token_id") is not None
@@ -1007,17 +1006,10 @@ class ToolManager:
             receipt_hash = transition_receipt.get("payload_hash")
             if not isinstance(receipt_hash, str) or not receipt_hash:
                 raise ToolError("custody.ledger.record", "invalid_transition_receipt:missing_payload_hash")
-            if transition_receipt_hash and transition_receipt_hash != self._sha256_hex(self._canonical_json(transition_receipt)):
-                raise ToolError("custody.ledger.record", "transition_receipt_hash_mismatch")
-            signed_transition = (
-                transition_receipt.get("signed_payload")
-                if isinstance(transition_receipt.get("signed_payload"), dict)
-                else {}
-            )
-            receipt_nonce = signed_transition.get("receipt_nonce")
+            receipt_nonce = transition_receipt.get("receipt_nonce")
             endpoint_id = (
-                str(signed_transition.get("endpoint_id"))
-                if signed_transition.get("endpoint_id") is not None
+                str(transition_receipt.get("endpoint_id"))
+                if transition_receipt.get("endpoint_id") is not None
                 else str(actuator_endpoint)
             )
             previous_hash = (
@@ -1047,15 +1039,9 @@ class ToolManager:
             transition_seq = previous_seq + 1
             authority_source = "governed_transition_receipt"
 
-        signed_transition_payload = (
-            transition_receipt.get("signed_payload")
-            if isinstance(transition_receipt, dict)
-            and isinstance(transition_receipt.get("signed_payload"), dict)
-            else {}
-        )
         current_zone = (
-            signed_transition_payload.get("to_zone")
-            or signed_transition_payload.get("target_zone")
+            (transition_receipt.get("to_zone") if isinstance(transition_receipt, dict) else None)
+            or (transition_receipt.get("target_zone") if isinstance(transition_receipt, dict) else None)
             or zone_checks.get("current_zone")
         )
         if not current_zone:

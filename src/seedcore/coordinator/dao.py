@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy import select, text, tuple_  # pyright: ignore[reportMissingImports]
 
 from ..models.asset_custody import AssetCustodyState
-from ..models.digital_twin import DigitalTwinHistory, DigitalTwinState
+from ..models.digital_twin import DigitalTwinEventJournal, DigitalTwinHistory, DigitalTwinState
 
 
 MAX_PROTO_PLAN_BYTES = int(os.getenv("MAX_PROTO_PLAN_BYTES", str(256 * 1024)))
@@ -692,7 +692,7 @@ class DigitalTwinDAO:
         change_reason: Optional[str] = None,
     ) -> Dict[str, Any]:
         normalized = self._normalize_snapshot(twin_snapshot)
-        twin_type = normalized["twin_type"]
+        twin_type = normalized["twin_kind"]
         twin_id = normalized["twin_id"]
         source_task_uuid = self._coerce_uuid(source_task_id)
 
@@ -797,16 +797,16 @@ class DigitalTwinDAO:
 
     def _normalize_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         data = dict(payload or {})
-        twin_type = str(data.get("twin_type") or "").strip()
+        twin_type = str(data.get("twin_kind") or data.get("twin_type") or "").strip()
         twin_id = str(data.get("twin_id") or "").strip()
         if not twin_type or not twin_id:
-            raise ValueError("twin_snapshot must include non-empty twin_type and twin_id")
+            raise ValueError("twin_snapshot must include non-empty twin_kind and twin_id")
         normalized = {
-            "twin_type": twin_type,
+            "twin_kind": twin_type,
             "twin_id": twin_id,
             **data,
         }
-        normalized["twin_type"] = twin_type
+        normalized["twin_kind"] = twin_type
         normalized["twin_id"] = twin_id
         return normalized
 
@@ -814,6 +814,7 @@ class DigitalTwinDAO:
         return {
             "id": str(row.id),
             "twin_type": row.twin_type,
+            "twin_kind": row.twin_type,
             "twin_id": row.twin_id,
             "state_version": int(row.state_version or 0),
             "authority_source": row.authority_source,
@@ -829,6 +830,7 @@ class DigitalTwinDAO:
             "id": str(row.id),
             "twin_state_id": str(row.twin_state_id),
             "twin_type": row.twin_type,
+            "twin_kind": row.twin_type,
             "twin_id": row.twin_id,
             "state_version": int(row.state_version),
             "authority_source": row.authority_source,
@@ -836,6 +838,82 @@ class DigitalTwinDAO:
             "change_reason": row.change_reason,
             "source_task_id": str(row.source_task_id) if row.source_task_id is not None else None,
             "source_intent_id": row.source_intent_id,
+            "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+        }
+
+    def _coerce_uuid(self, value: Optional[str]) -> Optional[uuid.UUID]:
+        if value is None:
+            return None
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            return None
+
+
+class DigitalTwinEventJournalDAO:
+    """Persistence helper for normalized twin event journal records."""
+
+    async def append_event(
+        self,
+        session,
+        *,
+        twin_kind: str,
+        twin_id: str,
+        event_type: str,
+        revision_stage: str,
+        lifecycle_state: Optional[str],
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        row = DigitalTwinEventJournal(
+            twin_type=str(twin_kind),
+            twin_id=str(twin_id),
+            event_type=str(event_type),
+            revision_stage=str(revision_stage),
+            lifecycle_state=str(lifecycle_state) if lifecycle_state is not None else None,
+            task_id=self._coerce_uuid(task_id),
+            intent_id=str(intent_id) if intent_id is not None else None,
+            payload=dict(payload or {}),
+        )
+        session.add(row)
+        flushed = session.flush()
+        if inspect.isawaitable(flushed):
+            await flushed
+        return self._row_to_dict(row)
+
+    async def list_events(
+        self,
+        session,
+        *,
+        twin_type: str,
+        twin_id: str,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        rows = (
+            await session.execute(
+                select(DigitalTwinEventJournal)
+                .where(
+                    DigitalTwinEventJournal.twin_type == str(twin_type),
+                    DigitalTwinEventJournal.twin_id == str(twin_id),
+                )
+                .order_by(DigitalTwinEventJournal.recorded_at.desc())
+                .limit(max(1, min(int(limit), 500)))
+            )
+        ).scalars().all()
+        return [self._row_to_dict(row) for row in rows]
+
+    def _row_to_dict(self, row: DigitalTwinEventJournal) -> Dict[str, Any]:
+        return {
+            "id": str(row.id),
+            "twin_type": row.twin_type,
+            "twin_id": row.twin_id,
+            "event_type": row.event_type,
+            "revision_stage": row.revision_stage,
+            "lifecycle_state": row.lifecycle_state,
+            "task_id": str(row.task_id) if row.task_id is not None else None,
+            "intent_id": row.intent_id,
+            "payload": dict(row.payload or {}),
             "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
         }
 

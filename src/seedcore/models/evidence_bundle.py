@@ -6,103 +6,85 @@ from pydantic import BaseModel, Field
 
 
 class SignerMetadata(BaseModel):
-    signer_id: Optional[str] = None
-    signer_type: Optional[str] = None
-    key_id: Optional[str] = None
-    public_key: Optional[str] = None
-    proof_type: Optional[str] = None
-
-
-class ExecutionReceipt(BaseModel):
-    receipt_id: str
-    proof_type: str = "ed25519"
-    signature: str
-    payload_hash: str
-    signed_payload: Dict[str, Any] = Field(default_factory=dict)
-    actuator_endpoint: Optional[str] = None
-    actuator_result_hash: Optional[str] = None
-    transition_receipt: Optional[Dict[str, Any]] = None
-    transition_receipt_hash: Optional[str] = None
-    transition_seq: Optional[int] = None
-    previous_receipt_hash: Optional[str] = None
+    signer_type: str
+    signer_id: str
+    signing_scheme: str
+    key_ref: Optional[str] = None
+    attestation_level: str = "baseline"
     node_id: Optional[str] = None
-    signer: Optional[SignerMetadata] = None
+    config_profile: Optional[str] = None
+
+
+class TransitionReceipt(BaseModel):
+    transition_receipt_id: str
+    intent_id: str
+    execution_token_id: str
+    endpoint_id: str
+    hardware_uuid: str
+    actuator_result_hash: str
+    target_zone: Optional[str] = None
+    from_zone: Optional[str] = None
+    to_zone: Optional[str] = None
+    executed_at: str
+    receipt_nonce: str
+    payload_hash: str
+    signer_metadata: SignerMetadata
+    signature: str
 
 
 class PolicyReceipt(BaseModel):
-    receipt_id: str
-    issued_at: str
-    policy_snapshot: Optional[str] = None
-    policy_case_hash: Optional[str] = None
-    policy_decision_hash: Optional[str] = None
-    execution_token: Dict[str, Any] = Field(default_factory=dict)
-    signer: Optional[SignerMetadata] = None
+    policy_receipt_id: str
+    policy_decision_id: str
+    task_id: str
+    intent_id: str
+    policy_version: Optional[str] = None
+    decision: Dict[str, Any] = Field(default_factory=dict)
+    evaluated_rules: List[str] = Field(default_factory=list)
+    subject_ref: Optional[str] = None
+    asset_ref: Optional[str] = None
+    timestamp: str
+    signer_metadata: SignerMetadata
+    signature: str
 
 
 class AssetFingerprint(BaseModel):
+    fingerprint_id: str
     fingerprint_hash: str
-    algorithm: str = "sha256"
-    asset_id: Optional[str] = None
-    source_modalities: List[str] = Field(default_factory=list)
-    components: Dict[str, str] = Field(default_factory=dict)
+    modality_map: Dict[str, str] = Field(default_factory=dict)
+    derivation_logic: Dict[str, Any] = Field(default_factory=dict)
+    capture_context: Dict[str, Any] = Field(default_factory=dict)
+    hardware_witness: Dict[str, Any] = Field(default_factory=dict)
+    captured_at: str
 
 
-class PreContactEvidence(BaseModel):
-    environmental_telemetry: Dict[str, float] = Field(default_factory=dict)
-    voc_profile: Dict[str, str] = Field(default_factory=dict)
-    vision_baseline: Dict[str, str] = Field(default_factory=dict)
-
-
-class ManipulationTelemetry(BaseModel):
-    commanded_forces: str = "envelope-verified"
-    observed_forces: str = "within-tolerance"
-    trajectory_hash: Optional[str] = None
-
-
-class PolicyVerification(BaseModel):
-    policy_hash: str
-    authorization_token: str
-
-
-class CustodyTransition(BaseModel):
-    from_zone: str = Field(alias="from")
-    to_zone: str = Field(alias="to")
-    timestamp: str
-
-    model_config = {
-        "populate_by_name": True
-    }
-
-
-class SeedCoreCustodyEvent(BaseModel):
-    context: Dict[str, str] = Field(
-        alias="@context",
-        default={
-            "@vocab": "https://schema.org/",
-            "seedcore": "https://seedcore.ai/schema/"
-        }
-    )
-    type: str = Field(alias="@type", default="seedcore:SeedCoreCustodyEvent")
-    id: str = Field(alias="@id")
+class HALCaptureEnvelope(BaseModel):
+    hal_capture_id: str
+    event_id: str
     device_identity: str
     platform_state: str
-    pre_contact_evidence: PreContactEvidence
-    manipulation_telemetry: ManipulationTelemetry
-    policy_verification: PolicyVerification
-    custody_transition: CustodyTransition
+    policy_receipt_id: Optional[str] = None
+    transition_receipt_id: Optional[str] = None
+    media_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    environmental_telemetry: Dict[str, float] = Field(default_factory=dict)
+    trajectory_hash: Optional[str] = None
+    node_id: Optional[str] = None
+    captured_at: str
+    signer_metadata: SignerMetadata
     signature: str
-
-    model_config = {
-        "populate_by_name": True
-    }
 
 
 class EvidenceBundle(BaseModel):
-    intent_ref: str
-    executed_at: str
-    node_id: Optional[str] = None
-    telemetry_snapshot: Dict[str, Any] = Field(default_factory=dict)
-    execution_receipt: ExecutionReceipt
-    policy_receipt: Optional[PolicyReceipt] = None
+    evidence_bundle_id: str
+    task_id: str
+    intent_id: str
+    execution_token_id: Optional[str] = None
+    policy_receipt_id: Optional[str] = None
+    transition_receipt_ids: List[str] = Field(default_factory=list)
     asset_fingerprint: Optional[AssetFingerprint] = None
-    custody_event: Optional[SeedCoreCustodyEvent] = None
+    evidence_inputs: Dict[str, Any] = Field(default_factory=dict)
+    telemetry_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    media_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    node_id: Optional[str] = None
+    signer_metadata: SignerMetadata
+    signature: str
+    created_at: str

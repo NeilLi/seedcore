@@ -6,10 +6,7 @@ import json
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from seedcore.hal.custody.transition_receipts import (
-    build_transition_receipt,
-    verify_transition_receipt,
-)
+from seedcore.hal.custody.transition_receipts import build_transition_receipt, verify_transition_receipt
 
 
 def test_build_and_verify_transition_receipt_with_ed25519(monkeypatch):
@@ -44,8 +41,7 @@ def test_build_and_verify_transition_receipt_with_ed25519(monkeypatch):
         to_zone="zone-ed",
     )
 
-    assert receipt["proof_type"] == "ed25519"
-    assert isinstance(receipt.get("key_id"), str)
+    assert receipt["signer_metadata"]["signing_scheme"] == "ed25519"
     assert verify_transition_receipt(
         receipt,
         expected_intent_id="intent-ed-1",
@@ -67,7 +63,6 @@ def test_verify_transition_receipt_rejects_missing_registered_public_key(monkeyp
         base64.b64encode(private_bytes).decode("ascii"),
     )
     monkeypatch.delenv("SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON", raising=False)
-    monkeypatch.delenv("SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY", raising=False)
 
     receipt = build_transition_receipt(
         intent_id="intent-ed-2",
@@ -77,4 +72,5 @@ def test_verify_transition_receipt_rejects_missing_registered_public_key(monkeyp
         actuator_result_hash="hash-ed-2",
     )
 
+    assert receipt["signer_metadata"]["signing_scheme"] == "ed25519"
     assert verify_transition_receipt(receipt) == "missing_public_key"

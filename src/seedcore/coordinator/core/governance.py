@@ -21,10 +21,11 @@ from seedcore.models.action_intent import (
     PolicyCaseAssessment,
     PolicyDecision,
     SecurityContract,
-    TwinGovernedState,
+    TwinRevisionStage,
     TwinSnapshot,
 )
 from seedcore.models.task_payload import TaskPayload
+from seedcore.ops.evidence.builder import build_policy_receipt_artifact
 
 
 SYSTEM_PARAM_KEYS = {
@@ -388,52 +389,37 @@ def build_twin_snapshot(
         twin_key: str,
         twin_id: str,
         *,
-        governed_state: str | None = None,
-        current_custodian_id: str | None = None,
-        parent_twin_id: str | None = None,
-        ancestry_path: list[str] | None = None,
+        lifecycle_state: str,
+        lineage_refs: list[str] | None = None,
         identity: Mapping[str, Any] | None = None,
-        delegation: Mapping[str, Any] | None = None,
+        governance_state: Mapping[str, Any] | None = None,
         risk: Mapping[str, Any] | None = None,
+        delegation: Mapping[str, Any] | None = None,
         custody: Mapping[str, Any] | None = None,
         provenance: Mapping[str, Any] | None = None,
         telemetry: Mapping[str, Any] | None = None,
     ) -> TwinSnapshot:
         source = twin_inputs.get(twin_key) if isinstance(twin_inputs.get(twin_key), dict) else {}
         freshness = source.get("freshness") if isinstance(source.get("freshness"), dict) else {}
-        resolved_governed_state = (
-            source.get("governed_state")
-            or governed_state
-            or TwinGovernedState.UNVERIFIED.value
-        )
         return TwinSnapshot(
-            twin_type=twin_key,
+            twin_kind=str(source.get("twin_kind") or twin_key),
             twin_id=str(source.get("twin_id") or twin_id),
-            governed_state=str(resolved_governed_state),
-            current_custodian_id=(
-                str(source.get("current_custodian_id"))
-                if source.get("current_custodian_id") is not None
-                else (
-                    str(current_custodian_id)
-                    if current_custodian_id is not None
-                    else None
-                )
-            ),
-            parent_twin_id=(
-                str(source.get("parent_twin_id"))
-                if source.get("parent_twin_id") is not None
-                else (
-                    str(parent_twin_id)
-                    if parent_twin_id is not None
-                    else None
-                )
-            ),
-            ancestry_path=[
+            revision_stage=str(source.get("revision_stage") or TwinRevisionStage.PROPOSED.value),
+            lifecycle_state=str(source.get("lifecycle_state") or lifecycle_state),
+            lineage_refs=[
                 str(item)
                 for item in (
-                    source.get("ancestry_path")
-                    if isinstance(source.get("ancestry_path"), list)
-                    else (ancestry_path or [])
+                    source.get("lineage_refs")
+                    if isinstance(source.get("lineage_refs"), list)
+                    else (lineage_refs or [])
+                )
+            ],
+            evidence_refs=[
+                str(item)
+                for item in (
+                    source.get("evidence_refs")
+                    if isinstance(source.get("evidence_refs"), list)
+                    else []
                 )
             ],
             freshness={
@@ -442,14 +428,12 @@ def build_twin_snapshot(
                 "max_age_seconds": source.get("max_age_seconds") or freshness.get("max_age_seconds"),
             },
             identity=dict(identity or source.get("identity") or {}),
-            delegation=dict(delegation or source.get("delegation") or {}),
+            governance=dict(governance_state or source.get("governance") or {}),
             risk=dict(risk or source.get("risk") or {}),
+            delegation=dict(delegation or source.get("delegation") or {}),
             custody=dict(custody or source.get("custody") or {}),
             provenance=dict(provenance or source.get("provenance") or {}),
             telemetry=dict(telemetry or source.get("telemetry") or {}),
-            pending_exceptions=list(source.get("pending_exceptions") or []),
-            lockouts=list(source.get("lockouts") or []),
-            conflicts=list(source.get("conflicts") or []),
         )
 
     target_zone = intent.resource.target_zone or multimodal.get("location_context")
@@ -498,40 +482,52 @@ def build_twin_snapshot(
         ),
     )
 
-    ancestry_path = []
+    lineage_refs = []
     if parent_twin_id:
-        ancestry_path.append(str(parent_twin_id))
+        lineage_refs.append(str(parent_twin_id))
 
     snapshots = {
         "owner": _snapshot(
             "owner",
             f"owner:{owner_twin.owner_id}",
-            governed_state=TwinGovernedState.CERTIFIED.value,
-            current_custodian_id=owner_twin.owner_id,
+            lifecycle_state=owner_twin.state,
             identity={
                 "owner_id": owner_twin.owner_id,
                 "public_key_fingerprint": owner_twin.public_key_fingerprint,
                 "graph_ref": owner_twin.graph_ref,
             },
+            governance_state={
+                "current_custodian_id": owner_twin.owner_id,
+                "owner_state": owner_twin.state,
+                "lockouts": [],
+                "pending_exceptions": [],
+                "conflicts": [],
+            },
+            risk={},
             delegation={
                 "principal_agent_id": intent.principal.agent_id,
                 "delegations": [item.model_dump(mode="json") for item in owner_twin.delegations],
-                "owner_state": owner_twin.state,
             },
         ),
         "assistant": _snapshot(
             "assistant",
             f"assistant:{intent.principal.agent_id}",
-            current_custodian_id=owner_twin.owner_id,
+            lifecycle_state="READY",
             identity={"agent_id": intent.principal.agent_id},
+            governance_state={
+                "current_custodian_id": owner_twin.owner_id,
+                "lockouts": [],
+                "pending_exceptions": [],
+                "conflicts": [],
+            },
+            risk={},
             delegation={"role_profile": intent.principal.role_profile},
         ),
         "asset": _snapshot(
             "asset",
             f"asset:{intent.resource.asset_id}",
-            current_custodian_id=owner_twin.owner_id,
-            parent_twin_id=(str(parent_twin_id) if parent_twin_id is not None else None),
-            ancestry_path=ancestry_path,
+            lifecycle_state="REGISTERED",
+            lineage_refs=lineage_refs,
             custody={
                 "asset_id": intent.resource.asset_id,
                 "target_zone": target_zone,
@@ -542,17 +538,34 @@ def build_twin_snapshot(
                     else {}
                 ),
             },
+            governance_state={
+                "current_custodian_id": owner_twin.owner_id,
+                "lockouts": [],
+                "pending_exceptions": [],
+                "conflicts": [],
+            },
+            risk={},
             provenance={"provenance_hash": intent.resource.provenance_hash},
         ),
         "edge": _snapshot(
             "edge",
             f"edge:{target_zone or 'unknown'}",
+            lifecycle_state="OBSERVED",
+            governance_state={"lockouts": [], "pending_exceptions": [], "conflicts": []},
+            risk={},
             telemetry={"target_zone": target_zone},
         ),
         "transaction": _snapshot(
             "transaction",
             f"transaction:{intent.intent_id}",
-            current_custodian_id=owner_twin.owner_id,
+            lifecycle_state="PREPARED",
+            governance_state={
+                "current_custodian_id": owner_twin.owner_id,
+                "lockouts": [],
+                "pending_exceptions": [],
+                "conflicts": [],
+            },
+            risk={},
             custody={"intent_id": intent.intent_id},
             telemetry={"session_token": intent.principal.session_token},
         ),
@@ -753,38 +766,22 @@ def build_policy_receipt(
         if policy_decision.execution_token is not None
         else {}
     )
-    policy_case_payload = policy_case.model_dump(mode="json")
-    policy_decision_payload = policy_decision.model_dump(mode="json")
-    policy_snapshot = (
-        policy_decision.policy_snapshot
-        or policy_case.policy_snapshot
-        or (
-            policy_case.action_intent.action.security_contract.version
-            if policy_case.action_intent.action.security_contract.version
-            else None
-        )
-    )
-    proof_type = "hmac_sha256"
-    if isinstance(execution_token, dict):
-        token_proof = execution_token.get("proof_type")
-        if isinstance(token_proof, str) and token_proof.strip():
-            proof_type = token_proof.strip()
-
-    return {
-        "receipt_id": str(uuid.uuid4()),
-        "issued_at": _isoformat(_utcnow()),
-        "policy_snapshot": str(policy_snapshot) if policy_snapshot is not None else None,
-        "policy_case_hash": _sha256_hex(_canonical_json(policy_case_payload)),
-        "policy_decision_hash": _sha256_hex(_canonical_json(policy_decision_payload)),
-        "execution_token": execution_token,
-        "signer": {
-            "signer_id": os.getenv("SEEDCORE_PDP_SIGNER_ID", "seedcore-pdp"),
-            "signer_type": "policy_decision_point",
-            "key_id": os.getenv("SEEDCORE_POLICY_SIGNING_KEY_ID"),
-            "public_key": None,
-            "proof_type": proof_type,
+    task_dict = {
+        "task_id": policy_case.action_intent.intent_id,
+        "params": {
+            "governance": {
+                "action_intent": policy_case.action_intent.model_dump(mode="json"),
+                "policy_case": policy_case.model_dump(mode="json"),
+                "policy_decision": policy_decision.model_dump(mode="json"),
+                "execution_token": execution_token,
+            }
         },
     }
+    receipt = build_policy_receipt_artifact(
+        task_dict=task_dict,
+        timestamp=_isoformat(_utcnow()),
+    )
+    return receipt.model_dump(mode="json") if receipt is not None else {}
 
 
 def _task_to_dict(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> Dict[str, Any]:
@@ -919,9 +916,16 @@ def _evaluate_twin_policy(policy_case: PolicyCase) -> PolicyDecision | None:
                 policy_case.policy_snapshot,
                 risk_score=_policy_case_risk_score(policy_case, floor=0.8),
                 cognitive_assessment=policy_case.cognitive_assessment,
-                explanations=[f"revoked_twin={twin.twin_type}:{twin.twin_id}"],
+                explanations=[f"revoked_twin={twin.twin_kind}:{twin.twin_id}"],
             )
-        if twin.lockouts or twin.pending_exceptions or bool(twin.custody.get("quarantined")):
+        governance_state = twin.governance if isinstance(twin.governance, Mapping) else {}
+        lockouts = governance_state.get("lockouts") if isinstance(governance_state.get("lockouts"), list) else []
+        pending_exceptions = (
+            governance_state.get("pending_exceptions")
+            if isinstance(governance_state.get("pending_exceptions"), list)
+            else []
+        )
+        if lockouts or pending_exceptions or bool(twin.custody.get("quarantined")):
             return _deny_decision(
                 "Digital twin state blocks execution.",
                 FORBIDDEN_TWIN_STATE_DENY_CODE,
@@ -929,9 +933,9 @@ def _evaluate_twin_policy(policy_case: PolicyCase) -> PolicyDecision | None:
                 risk_score=_policy_case_risk_score(policy_case, floor=0.75),
                 cognitive_assessment=policy_case.cognitive_assessment,
                 explanations=[
-                    f"blocked_twin={twin.twin_type}:{twin.twin_id}",
-                    *[f"lockout={item}" for item in twin.lockouts],
-                    *[f"pending_exception={item}" for item in twin.pending_exceptions],
+                    f"blocked_twin={twin.twin_kind}:{twin.twin_id}",
+                    *[f"lockout={item}" for item in lockouts],
+                    *[f"pending_exception={item}" for item in pending_exceptions],
                 ],
             )
 
@@ -1223,10 +1227,10 @@ def _coerce_twin_snapshot(key: str, value: Any) -> TwinSnapshot:
         return value
     if isinstance(value, Mapping):
         payload = dict(value)
-        payload.setdefault("twin_type", key)
+        payload.setdefault("twin_kind", key)
         payload.setdefault("twin_id", str(payload.get("twin_id") or key))
         return TwinSnapshot(**payload)
-    return TwinSnapshot(twin_type=key, twin_id=str(value))
+    return TwinSnapshot(twin_kind=key, twin_id=str(value))
 
 
 def _coerce_policy_case_assessment(

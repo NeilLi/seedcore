@@ -10,7 +10,7 @@ try:
     from .task import Task as DatabaseTask, TaskStatus, Base as TaskBase
     from .fact import Fact, Base as FactBase
     from .asset_custody import AssetCustodyState
-    from .digital_twin import DigitalTwinHistory, DigitalTwinState
+    from .digital_twin import DigitalTwinEventJournal, DigitalTwinHistory, DigitalTwinState
     from .governance_audit import GovernedExecutionAudit
     from .source_registration import (
         SourceRegistration,
@@ -36,11 +36,10 @@ from .action_intent import (
     PolicyCase,
     PolicyCaseAssessment,
     PolicyDecision,
-    TwinAuthorityStatus,
-    TwinGovernedState,
+    TwinRevisionStage,
     TwinSnapshot,
 )
-from .evidence_bundle import EvidenceBundle, ExecutionReceipt
+from .evidence_bundle import EvidenceBundle, HALCaptureEnvelope, PolicyReceipt, TransitionReceipt
 from .task_api import Task
 from .task_payload import TaskPayload
 
@@ -55,11 +54,12 @@ __all__ = [
     "PolicyCase",
     "PolicyCaseAssessment",
     "PolicyDecision",
-    "TwinAuthorityStatus",
-    "TwinGovernedState",
+    "TwinRevisionStage",
     "TwinSnapshot",
     "EvidenceBundle",
-    "ExecutionReceipt",
+    "HALCaptureEnvelope",
+    "PolicyReceipt",
+    "TransitionReceipt",
     "Task",
     "TaskPayload",
 ]
@@ -73,6 +73,7 @@ try:
         "AssetCustodyState",
         "DigitalTwinState",
         "DigitalTwinHistory",
+        "DigitalTwinEventJournal",
         "GovernedExecutionAudit",
         "SourceRegistration",
         "SourceRegistrationArtifact",

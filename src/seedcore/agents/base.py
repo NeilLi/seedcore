@@ -36,6 +36,7 @@ from seedcore.hal.custody.transition_receipts import (
     verify_transition_receipt,
 )
 from seedcore.ops.evidence.builder import attach_evidence_bundle
+from seedcore.ops.evidence.verification import verify_evidence_bundle, verify_policy_receipt
 from .roles import (
     Specialization,
     SpecializationProtocol,
@@ -2384,7 +2385,7 @@ class BaseAgent:
         ledger_entry = {
             "task_id": result.get("task_id"),
             "record_type": "execution_receipt",
-            "intent_ref": evidence.get("intent_ref"),
+            "intent_id": evidence.get("intent_id"),
             "agent_id": self.agent_id,
             "organ_id": self.organ_id,
             "validation_status": "validated",
@@ -2481,7 +2482,7 @@ class BaseAgent:
         if not isinstance(evidence, dict):
             return False, "missing_evidence_bundle"
 
-        required = ("intent_ref", "executed_at", "telemetry_snapshot", "execution_receipt")
+        required = ("evidence_bundle_id", "task_id", "intent_id", "evidence_inputs", "created_at")
         for field in required:
             if field not in evidence:
                 return False, f"missing_{field}"
@@ -2492,58 +2493,60 @@ class BaseAgent:
         intent_id = action_intent.get("intent_id")
         if not intent_id:
             return False, "missing_action_intent_id"
-        if evidence.get("intent_ref") != f"governance://action-intent/{intent_id}":
-            return False, "intent_ref_mismatch"
+        if evidence.get("intent_id") != intent_id:
+            return False, "intent_id_mismatch"
 
-        executed_at = evidence.get("executed_at")
+        bundle_error = verify_evidence_bundle(evidence)
+        if bundle_error is not None:
+            return False, f"invalid_evidence_bundle:{bundle_error}"
+
+        executed_at = evidence.get("created_at")
         executed_ts = self._iso_to_ts(str(executed_at)) if executed_at else None
         if executed_ts is None:
             return False, "invalid_executed_at"
 
-        receipt = evidence.get("execution_receipt", {})
-        if not isinstance(receipt, dict):
-            return False, "invalid_execution_receipt"
-        if not receipt.get("payload_hash") or not receipt.get("signature"):
-            return False, "invalid_execution_receipt"
-        signed_payload = receipt.get("signed_payload")
-        if not isinstance(signed_payload, dict) or not signed_payload:
-            return False, "missing_signed_payload"
-        if signed_payload.get("intent_id") != intent_id:
-            return False, "receipt_intent_mismatch"
-        transition_receipt_hash = signed_payload.get("transition_receipt_hash")
-        transition_receipt = receipt.get("transition_receipt")
+        evidence_inputs = evidence.get("evidence_inputs", {})
+        if not isinstance(evidence_inputs, dict):
+            return False, "invalid_evidence_inputs"
+        execution_summary = evidence_inputs.get("execution_summary", {})
+        if not isinstance(execution_summary, dict):
+            return False, "missing_execution_summary"
+        if execution_summary.get("intent_id") != intent_id:
+            return False, "execution_summary_intent_mismatch"
+
+        policy_receipt = evidence_inputs.get("policy_receipt")
+        if isinstance(policy_receipt, dict):
+            policy_error = verify_policy_receipt(policy_receipt)
+            if policy_error is not None:
+                return False, f"invalid_policy_receipt:{policy_error}"
 
         execution_token = governance.get("execution_token", {})
         if isinstance(execution_token, dict):
             token_id = execution_token.get("token_id")
-            if token_id and signed_payload.get("token_id") != token_id:
-                return False, "receipt_token_mismatch"
+            if token_id and execution_summary.get("execution_token_id") != token_id:
+                return False, "execution_token_mismatch"
             valid_until = execution_token.get("valid_until")
             valid_until_ts = self._iso_to_ts(str(valid_until)) if valid_until else None
             if valid_until_ts is not None and executed_ts > valid_until_ts:
                 return False, "executed_after_token_expiry"
-            if is_attestable_transition_endpoint(receipt.get("actuator_endpoint")):
-                if not isinstance(transition_receipt, dict):
+            transition_receipts = evidence_inputs.get("transition_receipts")
+            if not isinstance(transition_receipts, list):
+                transition_receipts = []
+            endpoint_id = execution_summary.get("actuator_endpoint")
+            if is_attestable_transition_endpoint(endpoint_id):
+                if not transition_receipts:
                     return False, "missing_transition_receipt"
-                transition_error = verify_transition_receipt(
-                    transition_receipt,
-                    expected_intent_id=str(intent_id),
-                    expected_token_id=str(token_id) if token_id is not None else None,
-                    expected_endpoint_id=str(receipt.get("actuator_endpoint")),
-                )
-                if transition_error is not None:
-                    return False, f"invalid_transition_receipt:{transition_error}"
-                if (
-                    isinstance(transition_receipt_hash, str)
-                    and transition_receipt_hash
-                    and transition_receipt_hash
-                    != self._sha256_hex(self._canonical_json(transition_receipt))
-                ):
-                    return False, "transition_receipt_hash_mismatch"
-        policy_decision = governance.get("policy_decision")
-        if isinstance(policy_decision, dict):
-            if signed_payload.get("policy_decision") != policy_decision:
-                return False, "receipt_policy_decision_mismatch"
+                for transition_receipt in transition_receipts:
+                    if not isinstance(transition_receipt, dict):
+                        return False, "invalid_transition_receipt"
+                    transition_error = verify_transition_receipt(
+                        transition_receipt,
+                        expected_intent_id=str(intent_id),
+                        expected_token_id=str(token_id) if token_id is not None else None,
+                        expected_endpoint_id=str(endpoint_id),
+                    )
+                    if transition_error is not None:
+                        return False, f"invalid_transition_receipt:{transition_error}"
 
         return True, "ok"
 

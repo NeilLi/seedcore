@@ -54,8 +54,6 @@ class AuthorityLevel(str, Enum):
 
 
 class DelegationConstraint(BaseModel):
-    """Policy envelope constraints applied to delegated assistant authority."""
-
     max_value_usd: Optional[float] = None
     allowed_zones: List[str] = Field(default_factory=list)
     required_modality: List[str] = Field(default_factory=list)
@@ -63,8 +61,6 @@ class DelegationConstraint(BaseModel):
 
 
 class DelegatedAuthority(BaseModel):
-    """How a specific AI assistant may act on behalf of an owner twin."""
-
     assistant_id: str
     authority_level: AuthorityLevel = AuthorityLevel.OBSERVER
     scope: List[str] = Field(default_factory=list)
@@ -73,8 +69,6 @@ class DelegatedAuthority(BaseModel):
 
 
 class OwnerTwin(BaseModel):
-    """Root-of-trust owner twin that anchors assistant delegation policy."""
-
     owner_id: str = Field(description="did:seedcore:owner:uuid")
     public_key_fingerprint: Optional[str] = None
     delegations: List[DelegatedAuthority] = Field(default_factory=list)
@@ -83,36 +77,29 @@ class OwnerTwin(BaseModel):
     graph_ref: Optional[str] = None
 
 
-class TwinGovernedState(str, Enum):
-    UNVERIFIED = "UNVERIFIED"
-    CERTIFIED = "CERTIFIED"
-    IN_TRANSIT = "IN_TRANSIT"
-    DELIVERED = "DELIVERED"
-
-
-class TwinAuthorityStatus(str, Enum):
+class TwinRevisionStage(str, Enum):
+    PROPOSED = "PROPOSED"
     PENDING = "PENDING"
+    EXECUTED = "EXECUTED"
     AUTHORITATIVE = "AUTHORITATIVE"
+    DISPUTED = "DISPUTED"
 
 
 class TwinSnapshot(BaseModel):
-    twin_type: str
+    twin_kind: str
     twin_id: str
-    governed_state: TwinGovernedState = TwinGovernedState.UNVERIFIED
-    authority_status: TwinAuthorityStatus = TwinAuthorityStatus.AUTHORITATIVE
-    current_custodian_id: Optional[str] = None
-    parent_twin_id: Optional[str] = None
-    ancestry_path: List[str] = Field(default_factory=list)
+    revision_stage: TwinRevisionStage = TwinRevisionStage.PROPOSED
+    lifecycle_state: str = "UNKNOWN"
+    lineage_refs: List[str] = Field(default_factory=list)
+    evidence_refs: List[str] = Field(default_factory=list)
     freshness: TwinFreshness = Field(default_factory=TwinFreshness)
     identity: Dict[str, Any] = Field(default_factory=dict)
-    delegation: Dict[str, Any] = Field(default_factory=dict)
+    governance: Dict[str, Any] = Field(default_factory=dict)
     risk: Dict[str, Any] = Field(default_factory=dict)
+    delegation: Dict[str, Any] = Field(default_factory=dict)
     custody: Dict[str, Any] = Field(default_factory=dict)
     provenance: Dict[str, Any] = Field(default_factory=dict)
     telemetry: Dict[str, Any] = Field(default_factory=dict)
-    pending_exceptions: List[str] = Field(default_factory=list)
-    lockouts: List[str] = Field(default_factory=list)
-    conflicts: List[str] = Field(default_factory=list)
 
 
 class PolicyCaseAssessment(BaseModel):
