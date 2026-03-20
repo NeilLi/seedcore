@@ -20,10 +20,11 @@ All active routers are mounted under `/api/v1` in this order:
 2. Replay
 3. Source Registrations
 4. Tracking Events
-5. Control
-6. Advisory
-7. PKG
-8. Capabilities
+5. Identity
+6. Control
+7. Advisory
+8. PKG
+9. Capabilities
 
 Legacy routers still exist in the codebase under `src/seedcore/api/routers/legacy`, but they are not part of the active mounted surface returned by `get_active_routers()`.
 
@@ -144,7 +145,30 @@ Implemented in [tracking_events_router.py](/Users/ningli/project/seedcore/src/se
 
 Tracking events form the append-only provenance ingress stream used by source registration projection flows.
 
-## 8. Control API
+## 8. Identity And Delegation API
+
+Implemented in [identity_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/identity_router.py).
+
+This surface adds the missing external authority APIs needed for DID-style identity, delegation lifecycle management, and externally signed intent submission.
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/identities/dids` | Register or replace a DID document used for external intent signing. |
+| `PATCH` | `/api/v1/identities/dids/{did}` | Update a registered DID document. |
+| `GET` | `/api/v1/identities/dids/{did}` | Fetch the current DID document. |
+| `POST` | `/api/v1/delegations` | Grant delegated authority from an owner DID to an assistant DID. |
+| `GET` | `/api/v1/delegations/{delegation_id}` | Fetch a delegation record. |
+| `POST` | `/api/v1/delegations/{delegation_id}/revoke` | Revoke a delegation record. |
+| `POST` | `/api/v1/intents/submit-signed` | Verify an externally signed `ActionIntent` and run it through the current PDP flow. |
+
+### 8.1 Notes
+
+- DID and delegation records are currently persisted using the existing facts table in the `identity` namespace.
+- Externally signed intent submission currently supports `ed25519` and `hmac_sha256`.
+- Signed submission requires nonce protection and rejects replayed nonces.
+- Signed submission verifies ingress authenticity but still runs the normal PDP and delegation checks before issuing `ExecutionToken`.
+
+## 9. Control API
 
 Implemented in [control_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/control_router.py).
 
@@ -158,7 +182,7 @@ Implemented in [control_router.py](/Users/ningli/project/seedcore/src/seedcore/a
 
 This is the lightweight CRUD control-plane surface currently mounted in the active API.
 
-## 9. Advisory API
+## 10. Advisory API
 
 Implemented in [advisory_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/advisory_router.py).
 
@@ -168,7 +192,7 @@ Implemented in [advisory_router.py](/Users/ningli/project/seedcore/src/seedcore/
 
 This route is advisory-only. It does not replace the governed authorization path for controlled execution.
 
-## 10. PKG API
+## 11. PKG API
 
 Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py).
 
@@ -182,7 +206,7 @@ Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/r
 
 These endpoints support policy runtime inspection and snapshot-oriented operations.
 
-## 11. Capabilities API
+## 12. Capabilities API
 
 Implemented in [capabilities_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/capabilities_router.py).
 
@@ -192,10 +216,11 @@ Implemented in [capabilities_router.py](/Users/ningli/project/seedcore/src/seedc
 
 This endpoint is the active mounted capability-management surface at the moment.
 
-## 12. Quick Practical Rules
+## 13. Quick Practical Rules
 
 - Treat `/health` as process liveness and `/readyz` as dependency readiness.
 - Treat `/api/v1/replay*`, `/api/v1/trust*`, and `/api/v1/verify*` as the canonical replay/trust API family.
+- Treat `/api/v1/identities/dids*`, `/api/v1/delegations*`, and `/api/v1/intents/submit-signed` as the external authority ingress family.
 - Prefer `/api/v1/replay/jsonld` over older one-off JSON-LD generation paths for new integrations.
 - Use `/api/v1/tasks/{task_id}/logs` only for streaming clients that can consume SSE.
 - Do not assume legacy routers are mounted just because they exist in the repository.
