@@ -551,8 +551,8 @@ AS $$
     -- This won't match Python's json.dumps(params, indent=2) exactly, but
     -- allows us to create a functional index for performance optimization.
     SELECT encode(
-        digest(
-            convert_to(
+        public.digest(
+            pg_catalog.convert_to(
                 left(
                     concat_ws(
                         '\n',
