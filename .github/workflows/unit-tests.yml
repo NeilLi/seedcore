@@ -26,3 +26,9 @@ jobs:
           PYTHONWARNINGS: "ignore::DeprecationWarning"
         run: |
           pytest -q tests
+
+      - name: Run authz parity matrix
+        env:
+          PYTHONWARNINGS: "ignore::DeprecationWarning"
+        run: |
+          pytest -q tests/test_authz_parity_service.py

@@ -37,3 +37,7 @@ python scripts/host/verify_host_runtime.py
 echo
 echo "==> Running governance/authz live verification"
 bash scripts/host/verify_authz_governance_flow.sh
+
+echo
+echo "==> Running authz engine parity verification"
+bash scripts/host/verify_authz_engine_parity.sh

@@ -1,0 +1,94 @@
+[
+  {
+    "name": "allow_when_both_paths_agree",
+    "metadata": {
+      "category": "allow",
+      "snapshot_version": "snapshot:1"
+    },
+    "payload": {
+      "task_id": "task-parity-allow",
+      "type": "action",
+      "params": {
+        "interaction": {
+          "assigned_agent_id": "agent-1"
+        },
+        "resource": {
+          "asset_id": "asset-1"
+        },
+        "intent": "transport",
+        "governance": {
+          "action_intent": {
+            "intent_id": "intent-parity-allow",
+            "timestamp": "2099-03-20T12:00:00.900000+00:00",
+            "valid_until": "2099-03-20T12:10:00.900000+00:00",
+            "principal": {
+              "agent_id": "agent-1",
+              "role_profile": "ROBOT_OPERATOR",
+              "session_token": "sess-1"
+            },
+            "action": {
+              "type": "MOVE",
+              "parameters": {},
+              "security_contract": {
+                "hash": "h-1",
+                "version": "snapshot:1"
+              }
+            },
+            "resource": {
+              "asset_id": "asset-1",
+              "resource_uri": "seedcore://zones/vault-a/assets/asset-1",
+              "target_zone": "vault-a",
+              "provenance_hash": "prov-1"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "stale_intent_denied_before_engine_specific_logic",
+    "metadata": {
+      "category": "stale_intent",
+      "snapshot_version": "snapshot:1"
+    },
+    "payload": {
+      "task_id": "task-parity-stale",
+      "type": "action",
+      "params": {
+        "interaction": {
+          "assigned_agent_id": "agent-1"
+        },
+        "resource": {
+          "asset_id": "asset-1"
+        },
+        "intent": "transport",
+        "governance": {
+          "action_intent": {
+            "intent_id": "intent-parity-stale",
+            "timestamp": "2099-03-20T12:00:00+00:00",
+            "valid_until": "2099-03-20T12:10:00+00:00",
+            "principal": {
+              "agent_id": "agent-1",
+              "role_profile": "ROBOT_OPERATOR",
+              "session_token": "sess-1"
+            },
+            "action": {
+              "type": "MOVE",
+              "parameters": {},
+              "security_contract": {
+                "hash": "h-1",
+                "version": "snapshot:1"
+              }
+            },
+            "resource": {
+              "asset_id": "asset-1",
+              "resource_uri": "seedcore://zones/vault-a/assets/asset-1",
+              "target_zone": "vault-a",
+              "provenance_hash": "prov-1"
+            }
+          }
+        }
+      }
+    }
+  }
+]

@@ -59,6 +59,13 @@ from .evaluator import (
 from .compare_service import (
     PKGSnapshotCompareService,
 )
+from .authz_parity_service import (
+    AuthzParityFixture,
+    AuthzParityReport,
+    AuthzParityResult,
+    AuthzParityService,
+    NormalizedParityDecision,
+)
 from .result_utils import (
     PolicyGateBlockedError,
     normalize_policy_result,
@@ -98,6 +105,11 @@ __all__ = [
     "PKGEvaluator",
     # Comparison / result helpers
     "PKGSnapshotCompareService",
+    "AuthzParityFixture",
+    "AuthzParityReport",
+    "AuthzParityResult",
+    "AuthzParityService",
+    "NormalizedParityDecision",
     "PolicyGateBlockedError",
     "normalize_policy_result",
     "AuthzDecisionDisposition",
