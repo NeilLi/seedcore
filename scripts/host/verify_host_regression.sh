@@ -41,3 +41,7 @@ bash scripts/host/verify_authz_governance_flow.sh
 echo
 echo "==> Running authz engine parity verification"
 bash scripts/host/verify_authz_engine_parity.sh
+
+echo
+echo "==> Running zero-trust PDP contract verification"
+bash scripts/host/verify_zero_trust_pdp_contract.sh
