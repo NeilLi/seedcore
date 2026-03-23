@@ -359,7 +359,7 @@ def test_tool_manager_rejects_replayed_transition_receipt():
             prior_state={
                 "last_transition_seq": 1,
                 "last_receipt_hash": transition_receipt["payload_hash"],
-                "last_receipt_nonce": transition_receipt["signed_payload"]["receipt_nonce"],
+                "last_receipt_nonce": transition_receipt["receipt_nonce"],
             },
         )
     assert "replayed_transition_receipt" in str(exc.value)

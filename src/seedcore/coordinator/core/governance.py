@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -7,6 +8,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping
+from urllib.parse import quote
 
 from seedcore.models.action_intent import (
     ActionIntent,
@@ -14,6 +16,7 @@ from seedcore.models.action_intent import (
     DelegatedAuthority,
     ExecutionToken,
     IntentAction,
+    IntentEnvironment,
     IntentPrincipal,
     IntentResource,
     OwnerTwin,
@@ -65,6 +68,11 @@ OWNER_OBSERVER_DENY_CODE = "owner_observer_restricted"
 MISSING_MANDATORY_EVIDENCE_DENY_CODE = "missing_mandatory_evidence"
 COGNITIVE_DENY_CODE = "cognitive_policy_denied"
 POLICY_ESCALATION_CODE = "policy_escalation_required"
+STALE_INTENT_DENY_CODE = "stale_intent"
+INVALID_ACTOR_TOKEN_DENY_CODE = "invalid_actor_token"
+ACTOR_TOKEN_SUBJECT_MISMATCH_DENY_CODE = "actor_token_subject_mismatch"
+ACTOR_TOKEN_EXPIRED_DENY_CODE = "actor_token_expired"
+MISSING_ACTOR_TOKEN_DENY_CODE = "missing_actor_token"
 EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "action_type",
     "target_zone",
@@ -88,13 +96,37 @@ def requires_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any
 def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> ActionIntent:
     payload = _task_to_dict(task)
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    governance = params.get("governance") if isinstance(params.get("governance"), dict) else {}
+    embedded_intent = governance.get("action_intent")
+    derived_intent = _derive_action_intent_from_task(payload, params, governance)
+    if isinstance(embedded_intent, ActionIntent):
+        merged_payload = _merge_action_intent_payload(
+            derived_intent.model_dump(mode="json"),
+            embedded_intent.model_dump(mode="json"),
+        )
+        return ActionIntent(**merged_payload)
+    if isinstance(embedded_intent, Mapping) and embedded_intent:
+        merged_payload = _merge_action_intent_payload(
+            derived_intent.model_dump(mode="json"),
+            dict(embedded_intent),
+        )
+        return ActionIntent(**merged_payload)
+    return derived_intent
+
+
+def _derive_action_intent_from_task(
+    payload: Dict[str, Any],
+    params: Dict[str, Any],
+    governance: Dict[str, Any],
+) -> ActionIntent:
     routing = params.get("routing") if isinstance(params.get("routing"), dict) else {}
     interaction = params.get("interaction") if isinstance(params.get("interaction"), dict) else {}
     multimodal = params.get("multimodal") if isinstance(params.get("multimodal"), dict) else {}
-    governance = params.get("governance") if isinstance(params.get("governance"), dict) else {}
     resource = params.get("resource") if isinstance(params.get("resource"), dict) else {}
     executor = params.get("executor") if isinstance(params.get("executor"), dict) else {}
     cognitive = params.get("cognitive") if isinstance(params.get("cognitive"), dict) else {}
+    metadata = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+    trace = params.get("trace") if isinstance(params.get("trace"), dict) else {}
     source_registration = (
         params.get("source_registration")
         if isinstance(params.get("source_registration"), dict)
@@ -131,6 +163,11 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
         or payload.get("task_id")
         or f"session_{fallback_entropy}"
     )
+    actor_token = (
+        interaction.get("actor_token")
+        or interaction.get("principal_token")
+        or governance.get("actor_token")
+    )
 
     target_zone = (
         multimodal.get("location_context")
@@ -157,6 +194,26 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
                     "source": multimodal.get("source"),
                 }
             )
+        )
+    )
+    resource_uri = (
+        resource.get("resource_uri")
+        or params.get("resource_uri")
+        or _derive_resource_uri(asset_id=asset_id, target_zone=target_zone)
+    )
+    twin_inputs = (
+        governance.get("digital_twins")
+        if isinstance(governance.get("digital_twins"), dict)
+        else {}
+    )
+    resource_state_hash = (
+        resource.get("resource_state_hash")
+        or params.get("resource_state_hash")
+        or _derive_resource_state_hash(
+            asset_id=asset_id,
+            target_zone=target_zone,
+            twin_inputs=twin_inputs,
+            resource=resource,
         )
     )
     source_registration_id = (
@@ -189,6 +246,12 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
     product_id = (
         resource.get("product_id")
         or category_envelope.get("product_id")
+    )
+    origin_network = (
+        interaction.get("origin_network")
+        or trace.get("origin_network")
+        or metadata.get("origin_network")
+        or payload.get("origin_network")
     )
 
     contract_version = _derive_contract_version(payload, governance)
@@ -227,6 +290,7 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
             agent_id=str(principal_agent),
             role_profile=str(role_profile),
             session_token=str(session_token),
+            actor_token=str(actor_token) if actor_token is not None else None,
         ),
         action=IntentAction(
             type=action_type,
@@ -235,6 +299,12 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
         ),
         resource=IntentResource(
             asset_id=str(asset_id),
+            resource_uri=str(resource_uri) if resource_uri is not None else None,
+            resource_state_hash=(
+                str(resource_state_hash)
+                if resource_state_hash is not None
+                else None
+            ),
             target_zone=str(target_zone) if target_zone is not None else None,
             provenance_hash=str(provenance_hash),
             source_registration_id=(
@@ -254,6 +324,9 @@ def build_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) 
             ),
             product_id=(str(product_id) if product_id is not None else None),
             category_envelope=category_envelope,
+        ),
+        environment=IntentEnvironment(
+            origin_network=str(origin_network) if origin_network is not None else None,
         ),
     )
 
@@ -372,6 +445,13 @@ def apply_twin_overrides_to_action_intent(
         authoritative_zone = asset_twin.custody.get("target_zone")
         if isinstance(authoritative_zone, str) and authoritative_zone.strip():
             action_intent.resource.target_zone = authoritative_zone.strip()
+            action_intent.resource.resource_uri = _derive_resource_uri(
+                asset_id=action_intent.resource.asset_id,
+                target_zone=action_intent.resource.target_zone,
+            )
+        action_intent.resource.resource_state_hash = _sha256_hex(
+            _canonical_json(asset_twin.model_dump(mode="json"))
+        )
 
     action_intent.action.security_contract.hash = _sha256_hex(
         _canonical_json(
@@ -729,6 +809,16 @@ def evaluate_intent(
             risk_score=_policy_case_risk_score(policy_case),
             cognitive_assessment=policy_case.cognitive_assessment,
         )
+    intent_age_ms = (now - issued_at).total_seconds() * 1000.0
+    max_intent_age_ms = _pdp_max_intent_age_ms()
+    if max_intent_age_ms > 0 and intent_age_ms > max_intent_age_ms:
+        return _deny_decision(
+            f"ActionIntent is older than the permitted freshness window ({max_intent_age_ms}ms).",
+            STALE_INTENT_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
 
     if not action_intent.principal.agent_id.strip():
         return _deny_decision(
@@ -756,6 +846,15 @@ def evaluate_intent(
             risk_score=_policy_case_risk_score(policy_case),
             cognitive_assessment=policy_case.cognitive_assessment,
         )
+
+    actor_token_violation = _evaluate_actor_token_policy(
+        action_intent=action_intent,
+        now=now,
+        policy_snapshot=policy_snapshot,
+        policy_case=policy_case,
+    )
+    if actor_token_violation is not None:
+        return actor_token_violation
 
     registration_deny_code = _source_registration_deny_code(
         action_intent,
@@ -1375,6 +1474,193 @@ def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
     }
 
 
+def _merge_action_intent_payload(
+    baseline: Mapping[str, Any],
+    override: Mapping[str, Any],
+) -> Dict[str, Any]:
+    merged = dict(baseline)
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _merge_action_intent_payload(
+                dict(merged[key]),
+                dict(value),
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
+def _derive_resource_uri(*, asset_id: Any, target_zone: Any) -> str:
+    asset_segment = quote(str(asset_id), safe=":-_.")
+    if target_zone is not None and str(target_zone).strip():
+        zone_segment = quote(str(target_zone), safe=":-_.")
+        return f"seedcore://zones/{zone_segment}/assets/{asset_segment}"
+    return f"seedcore://assets/{asset_segment}"
+
+
+def _derive_resource_state_hash(
+    *,
+    asset_id: Any,
+    target_zone: Any,
+    twin_inputs: Mapping[str, Any],
+    resource: Mapping[str, Any],
+) -> str | None:
+    asset_twin = twin_inputs.get("asset") if isinstance(twin_inputs.get("asset"), Mapping) else {}
+    if isinstance(resource.get("state"), Mapping):
+        state_source = dict(resource["state"])
+    elif asset_twin:
+        state_source = dict(asset_twin)
+    else:
+        state_source = {}
+    if not state_source:
+        return None
+    state_source.setdefault("asset_id", str(asset_id))
+    if target_zone is not None:
+        state_source.setdefault("target_zone", str(target_zone))
+    return _sha256_hex(_canonical_json(state_source))
+
+
+def _derive_actor_token_claims(token: str) -> Dict[str, Any]:
+    try:
+        prefix, payload_segment, signature_segment = token.split(".", 2)
+        if prefix != "seedcore_hmac_v1":
+            raise ValueError("unsupported_actor_token_scheme")
+        signing_input = f"{prefix}.{payload_segment}".encode("utf-8")
+        secret = os.getenv("SEEDCORE_PDP_ACTOR_TOKEN_SECRET", "").strip()
+        if not secret:
+            raise ValueError("actor_token_secret_unconfigured")
+        expected = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        actual = base64.urlsafe_b64decode(_pad_base64(signature_segment))
+        if not hmac.compare_digest(actual, expected):
+            raise ValueError("actor_token_signature_invalid")
+        payload_bytes = base64.urlsafe_b64decode(_pad_base64(payload_segment))
+        claims = json.loads(payload_bytes.decode("utf-8"))
+        if not isinstance(claims, dict):
+            raise ValueError("actor_token_claims_invalid")
+        return claims
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("actor_token_malformed") from exc
+
+
+def _evaluate_actor_token_policy(
+    *,
+    action_intent: ActionIntent,
+    now: datetime,
+    policy_snapshot: str | None,
+    policy_case: PolicyCase,
+) -> PolicyDecision | None:
+    actor_token = action_intent.principal.actor_token
+    if _pdp_actor_token_required() and not actor_token:
+        return _deny_decision(
+            "ActionIntent is missing principal.actor_token.",
+            MISSING_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+    if not actor_token:
+        return None
+    try:
+        claims = _derive_actor_token_claims(actor_token)
+    except ValueError as exc:
+        return _deny_decision(
+            f"Actor token verification failed: {exc}.",
+            INVALID_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+
+    subject = str(claims.get("sub") or "").strip()
+    if subject != action_intent.principal.agent_id:
+        return _deny_decision(
+            "Actor token subject does not match principal.agent_id.",
+            ACTOR_TOKEN_SUBJECT_MISMATCH_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+
+    issued_at_raw = claims.get("iat")
+    expires_at_raw = claims.get("exp")
+    if not isinstance(issued_at_raw, (int, float)) or not isinstance(expires_at_raw, (int, float)):
+        return _deny_decision(
+            "Actor token is missing numeric iat/exp claims.",
+            INVALID_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+
+    skew_seconds = _pdp_actor_token_max_skew_seconds()
+    now_ts = now.timestamp()
+    if float(expires_at_raw) <= float(issued_at_raw):
+        return _deny_decision(
+            "Actor token expiry window is invalid.",
+            INVALID_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+    if now_ts > float(expires_at_raw) + skew_seconds:
+        return _deny_decision(
+            "Actor token is expired.",
+            ACTOR_TOKEN_EXPIRED_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+    if float(issued_at_raw) - skew_seconds > now_ts:
+        return _deny_decision(
+            "Actor token iat is in the future.",
+            INVALID_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+
+    audience = os.getenv("SEEDCORE_PDP_ACTOR_TOKEN_AUDIENCE", "").strip()
+    if audience:
+        token_audience = claims.get("aud")
+        if isinstance(token_audience, list):
+            valid_audience = audience in [str(item) for item in token_audience]
+        else:
+            valid_audience = str(token_audience or "").strip() == audience
+        if not valid_audience:
+            return _deny_decision(
+                "Actor token audience does not match PDP expectations.",
+                INVALID_ACTOR_TOKEN_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            )
+
+    origin_network = action_intent.environment.origin_network
+    token_origin = claims.get("origin_network")
+    if origin_network and token_origin and str(token_origin).strip() != origin_network:
+        return _deny_decision(
+            "Actor token origin_network does not match ActionIntent.environment.origin_network.",
+            INVALID_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+
+    session_claim = str(claims.get("session_token") or "").strip()
+    if session_claim and action_intent.principal.session_token and session_claim != action_intent.principal.session_token:
+        return _deny_decision(
+            "Actor token session_token does not match principal.session_token.",
+            INVALID_ACTOR_TOKEN_DENY_CODE,
+            policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+        )
+
+    return None
+
+
 def _derive_ttl_seconds(
     payload: Dict[str, Any],
     routing: Dict[str, Any],
@@ -1402,6 +1688,26 @@ def _derive_contract_version(payload: Dict[str, Any], governance: Dict[str, Any]
         or (f"snapshot:{snapshot_id}" if snapshot_id is not None else "")
         or os.getenv("SEEDCORE_POLICY_CONTRACT_VERSION", "policy:current")
     )
+
+
+def _pdp_max_intent_age_ms() -> int:
+    raw = os.getenv("SEEDCORE_PDP_MAX_INTENT_AGE_MS", "0").strip()
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pdp_actor_token_required() -> bool:
+    return os.getenv("SEEDCORE_PDP_REQUIRE_ACTOR_TOKEN", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pdp_actor_token_max_skew_seconds() -> float:
+    raw = os.getenv("SEEDCORE_PDP_ACTOR_TOKEN_MAX_SKEW_SECONDS", "1").strip()
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def _sign_payload(payload: Dict[str, Any]) -> str:
@@ -1438,3 +1744,8 @@ def _parse_iso8601(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _pad_base64(value: str) -> str:
+    padding = (-len(value)) % 4
+    return value + ("=" * padding)

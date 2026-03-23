@@ -2386,6 +2386,14 @@ class BaseAgent:
             "task_id": result.get("task_id"),
             "record_type": "execution_receipt",
             "intent_id": evidence.get("intent_id"),
+            "intent_ref": (
+                evidence.get("intent_ref")
+                or (
+                    f"governance://action-intent/{action_intent.get('intent_id')}"
+                    if action_intent.get("intent_id") is not None
+                    else None
+                )
+            ),
             "agent_id": self.agent_id,
             "organ_id": self.organ_id,
             "validation_status": "validated",

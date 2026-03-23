@@ -1026,6 +1026,8 @@ class ToolManager:
                 if isinstance(item, dict) and isinstance(item.get("inline"), dict):
                     telemetry = dict(item["inline"])
                     break
+        if not telemetry and isinstance(evidence_bundle.get("telemetry_snapshot"), dict):
+            telemetry = dict(evidence_bundle["telemetry_snapshot"])
         evidence_inputs = (
             evidence_bundle.get("evidence_inputs")
             if isinstance(evidence_bundle.get("evidence_inputs"), dict)
@@ -1042,6 +1044,20 @@ class ToolManager:
             else []
         )
         transition_receipt = next((item for item in transition_receipts if isinstance(item, dict)), None)
+        if transition_receipt is None:
+            execution_receipt = (
+                evidence_bundle.get("execution_receipt")
+                if isinstance(evidence_bundle.get("execution_receipt"), dict)
+                else {}
+            )
+            if isinstance(execution_receipt.get("transition_receipt"), dict):
+                transition_receipt = dict(execution_receipt["transition_receipt"])
+            if not execution_summary and execution_receipt:
+                execution_summary = {
+                    "actuator_endpoint": execution_receipt.get("actuator_endpoint"),
+                    "execution_token_id": execution_token.get("token_id"),
+                    "intent_id": action_intent.get("intent_id"),
+                }
         zone_checks = (
             telemetry.get("zone_checks")
             if isinstance(telemetry.get("zone_checks"), dict)

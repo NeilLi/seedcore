@@ -77,6 +77,7 @@ class EvidenceBundle(BaseModel):
     evidence_bundle_id: str
     task_id: str
     intent_id: str
+    intent_ref: Optional[str] = None
     execution_token_id: Optional[str] = None
     policy_receipt_id: Optional[str] = None
     transition_receipt_ids: List[str] = Field(default_factory=list)

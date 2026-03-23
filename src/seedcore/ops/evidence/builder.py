@@ -125,6 +125,11 @@ def build_evidence_bundle(
         "evidence_bundle_id": str(uuid.uuid4()),
         "task_id": str(task_dict.get("task_id") or task_dict.get("id") or "unknown_task"),
         "intent_id": str(action_intent.get("intent_id") or "unknown_intent"),
+        "intent_ref": (
+            f"governance://action-intent/{action_intent.get('intent_id')}"
+            if action_intent.get("intent_id") is not None
+            else None
+        ),
         "execution_token_id": (
             str(execution_token.get("token_id"))
             if execution_token.get("token_id") is not None

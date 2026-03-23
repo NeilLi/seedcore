@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -9,7 +14,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies  # noqa: F401
 import mock_eventizer_dependencies  # noqa: F401
 
+import seedcore.coordinator.core.governance as governance_mod
 from seedcore.coordinator.core.governance import (
+    build_action_intent,
     build_governance_context,
     build_twin_snapshot,
     evaluate_intent,
@@ -28,8 +35,8 @@ def _base_payload() -> dict:
             "governance": {
                 "action_intent": {
                     "intent_id": "intent-1",
-                    "timestamp": "2026-03-20T12:00:00+00:00",
-                    "valid_until": "2026-03-20T12:10:00+00:00",
+                    "timestamp": "2099-03-20T12:00:00+00:00",
+                    "valid_until": "2099-03-20T12:10:00+00:00",
                     "principal": {
                         "agent_id": "agent-1",
                         "role_profile": "ROBOT_OPERATOR",
@@ -49,6 +56,33 @@ def _base_payload() -> dict:
             },
         },
     }
+
+
+def _build_actor_token(
+    *,
+    secret: str,
+    subject: str,
+    issued_at: datetime,
+    expires_at: datetime,
+    session_token: str,
+    origin_network: str | None = None,
+) -> str:
+    claims = {
+        "sub": subject,
+        "iat": int(issued_at.timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "session_token": session_token,
+    }
+    if origin_network is not None:
+        claims["origin_network"] = origin_network
+    payload = base64.urlsafe_b64encode(
+        json.dumps(claims, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signing_input = f"seedcore_hmac_v1.{payload}".encode("utf-8")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    ).decode("ascii").rstrip("=")
+    return f"seedcore_hmac_v1.{payload}.{signature}"
 
 
 def test_build_twin_snapshot_uses_typed_lifecycle_schema():
@@ -140,3 +174,60 @@ def test_merge_authoritative_twins_overrides_untrusted_data():
     assert merged["assistant"].risk["score"] == pytest.approx(0.91)
     assert merged["asset"].custody["quarantined"] is True
     assert merged["asset"].custody["target_zone"] == "quarantine-lab"
+
+
+def test_build_action_intent_uses_embedded_payload_as_canonical():
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        "seedcore://node-cluster-alpha/memory-bank/4"
+    )
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "origin_network": "mesh://lab-a"
+    }
+
+    action_intent = build_action_intent(payload)
+
+    assert action_intent.intent_id == "intent-1"
+    assert action_intent.principal.agent_id == "agent-1"
+    assert action_intent.resource.resource_uri == "seedcore://node-cluster-alpha/memory-bank/4"
+    assert action_intent.environment.origin_network == "mesh://lab-a"
+
+
+def test_evaluate_intent_denies_stale_timestamp_when_window_enabled(monkeypatch):
+    payload = _base_payload()
+    monkeypatch.setenv("SEEDCORE_PDP_MAX_INTENT_AGE_MS", "500")
+    monkeypatch.setattr(
+        governance_mod,
+        "_utcnow",
+        lambda: datetime(2099, 3, 20, 12, 0, 1, tzinfo=timezone.utc),
+    )
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "stale_intent"
+
+
+def test_evaluate_intent_allows_valid_actor_token(monkeypatch):
+    payload = _base_payload()
+    issued_at = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    actor_secret = "actor-secret"
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "origin_network": "mesh://lab-a"
+    }
+    payload["params"]["governance"]["action_intent"]["principal"]["actor_token"] = _build_actor_token(
+        secret=actor_secret,
+        subject="agent-1",
+        issued_at=issued_at,
+        expires_at=datetime(2099, 3, 20, 12, 0, 5, tzinfo=timezone.utc),
+        session_token="sess-1",
+        origin_network="mesh://lab-a",
+    )
+
+    monkeypatch.setenv("SEEDCORE_PDP_ACTOR_TOKEN_SECRET", actor_secret)
+    monkeypatch.setattr(governance_mod, "_utcnow", lambda: issued_at)
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is True
+    assert decision.execution_token is not None
