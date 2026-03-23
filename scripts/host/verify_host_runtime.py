@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the host-local SeedCore runtime surfaces impacted by recent commits."""
+"""Verify core host-local SeedCore runtime surfaces."""
 
 from __future__ import annotations
 
@@ -26,12 +26,6 @@ def _url(base_env: str, default: str, path: str) -> str:
 
 def _get_json(url: str, timeout: float = 5.0) -> dict[str, Any]:
     response = requests.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
-
-
-def _post_json(url: str, timeout: float = 10.0) -> dict[str, Any]:
-    response = requests.post(url, timeout=timeout)
     response.raise_for_status()
     return response.json()
 

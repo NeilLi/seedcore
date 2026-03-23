@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Targeted verification bundle for the most recent SeedCore commit themes.
+# Targeted host-local regression bundle for the active SeedCore governance/authz stack.
 
 set -euo pipefail
 
@@ -31,8 +31,8 @@ echo "==> Running targeted pytest bundle"
 pytest "${PYTEST_TARGETS[@]}"
 
 echo
-echo "==> Running live runtime verification"
-python scripts/host/verify_recent_runtime.py
+echo "==> Running host runtime verification"
+python scripts/host/verify_host_runtime.py
 
 echo
 echo "==> Running governance/authz live verification"
