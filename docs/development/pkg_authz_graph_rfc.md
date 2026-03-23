@@ -23,6 +23,8 @@ This RFC introduces an **Authorization Graph** as a projection layer inside PKG.
 - The authorization graph becomes a rebuildable operational projection.
 - The synchronous PDP consumes a compiled in-memory authorization index derived from that graph.
 
+For SeedCore's initial provenance and high-trust supply-chain wedge, this graph should be explicitly asset-centric. The system should treat high-value assets and their twins not as passive records, but as active participants in each authorization handshake. In practice, that means the PDP should evaluate identity, custody, lineage, telemetry, and state-transition validity together before issuing an execution token.
+
 ## Motivation
 
 The current PKG in SeedCore is primarily a policy snapshot and rule-execution system, not yet a low-latency graph-native authorization engine. The repository already contains:
@@ -34,6 +36,29 @@ The current PKG in SeedCore is primarily a policy snapshot and rule-execution sy
 
 That makes SeedCore a good fit for a graph-backed authorization projection, but not for replacing the current PKG control plane.
 
+## Strategic Alignment: Asset-Centric Zero Trust
+
+The near-term market wedge is provenance and high-trust supply chains where trust must be enforced at runtime rather than reconstructed after the fact. SeedCore should therefore evolve toward an asset-centric zero-trust model.
+
+This changes the primary authorization question from:
+
+> Is this actor allowed to perform this class of action?
+
+to:
+
+> Is this actor allowed to perform this specific state transition on this specific asset, with an intact custody and evidence chain, under the currently governed context?
+
+This is not plain RBAC. It is closer to attribute-based and lineage-based access control, where the decision depends on:
+
+- actor identity and role
+- asset identity and twin state
+- current and prior custodians
+- route, zone, and facility context
+- telemetry and inspection freshness
+- authoritative attestations and registrations
+
+For the supply-chain wedge, each high-value batch should behave like a sovereign root in the graph with a hardened, traversable history. The PDP should be able to prove that the requested action preserves the asset's governed trust chain before issuing any new execution token.
+
 ## Design Goals
 
 1. Preserve the synchronous, stateless PDP contract.
@@ -41,6 +66,8 @@ That makes SeedCore a good fit for a graph-backed authorization projection, but 
 3. Make authorization relationships explicit and traversable.
 4. Keep AI and GraphRAG outside the CONTROL hot path.
 5. Allow event-driven projection updates without making the PDP depend on live database traversals.
+6. Treat asset state transitions, custody continuity, and lineage integrity as first-class authorization concerns.
+7. Produce governed decision artifacts that can be reused as regulator-facing or consumer-facing proof.
 
 ## Non-Goals
 
@@ -83,9 +110,11 @@ Introduce a rebuildable graph projection that stores authorization-relevant rela
 
 - principals
 - role profiles
-- resources and zones
+- assets, twins, resources, and zones
 - networks
+- custody points and transfer paths
 - source registrations and tracking evidence
+- attestations, telemetry, and inspections
 - twins and delegated authorities
 - snapshot-scoped permission edges
 
@@ -98,7 +127,10 @@ For the synchronous hot path, the active authorization graph snapshot is compile
 - adjacency sets
 - role membership closure
 - permission rules by principal or role
+- lineage and custody continuity summaries
 - zone and network constraints
+- asset state and transferability flags
+- attestation and inspection validity windows
 - validity windows
 
 The PDP reads this compiled index directly in-process.
@@ -110,6 +142,7 @@ This split preserves the current SeedCore contract:
 - the graph database is good at relationship storage and projection
 - the compiled index is good at single-digit-millisecond reads
 - PostgreSQL snapshots remain the governance root
+- governed receipts can be minted from deterministic PDP state without requiring a second evaluation path
 
 Without this split, the system risks creating two competing sources of policy truth or pushing graph latency into the synchronous PDP.
 
@@ -126,6 +159,7 @@ Phase 1 contains:
 - a strict ontology for nodes, edges, and graph snapshots
 - deterministic projectors for current SeedCore models
 - a compiler that produces a read-only permission index
+- initial decision receipt schemas for allowed and quarantined actions
 - unit tests
 
 This phase does not yet wire the compiler into the PDP.
@@ -175,20 +209,34 @@ The initial ontology should support the following entity classes.
 
 - `principal`
 - `role_profile`
+- `asset`
+- `asset_batch`
 - `resource`
 - `zone`
 - `network_segment`
+- `custody_point`
 - `registration`
+- `attestation`
+- `inspection`
+- `sensor_observation`
+- `handshake_intent`
+- `digital_passport_fragment`
 - `tracking_event`
 - `fact`
 - `policy_snapshot`
 - `twin`
+- `receipt`
 
 ### Edge Kinds
 
 - `has_role`
 - `delegated_to`
 - `can`
+- `held_by`
+- `transferred_from`
+- `attested_by`
+- `observed_in`
+- `sealed_with`
 - `located_in`
 - `requested`
 - `backed_by`
@@ -206,6 +254,17 @@ Phase 1 treats `can` edges as deterministic permission edges with:
 - `valid_to`
 - provenance metadata
 
+For the supply-chain wedge, the compiler should also support asset-centric decision predicates that are derived deterministically from projected state, including:
+
+- current custodian continuity
+- asset transferability and restricted-state flags
+- route or zone compliance
+- inspection freshness
+- telemetry coverage windows
+- attestation validity
+
+These predicates should remain deterministic compiled facts. Advisory systems may contribute evidence-quality signals, but they must not become a probabilistic allow primitive in the CONTROL path.
+
 ## Projection Inputs
 
 The first deterministic projection inputs should be:
@@ -214,6 +273,8 @@ The first deterministic projection inputs should be:
 - `Fact`
 - `SourceRegistration`
 - `TrackingEvent`
+- `Twin` or equivalent digital asset state
+- inspection and attestation records when available
 
 Supported fact predicates in Phase 1:
 
@@ -221,8 +282,64 @@ Supported fact predicates in Phase 1:
 - `delegatedTo`
 - `allowedOperation`
 - `locatedInZone`
+- `heldBy`
+- `transferredFrom`
+- `attestedBy`
+- `observedIn`
+- `sealedWith`
 
 These predicates are sufficient to stand up a coherent first compiler and test path.
+
+## Decision Semantics
+
+The PDP should move toward asset-centric state-transition decisions rather than coarse subject-action checks. A principal should not be allowed to move an asset merely because they have a role label. They should be allowed only when the compiled graph proves that:
+
+- they are an authorized current or delegated custodian
+- the asset is in a transferable state
+- the intended transfer preserves custody and policy invariants
+- required telemetry, inspection, and attestation conditions are satisfied for the current snapshot
+
+### Trust Gaps and Quarantine
+
+Supply-chain operations often contain incomplete or stale evidence. The compiler should therefore model trust gaps explicitly instead of collapsing all missing context into a generic deny.
+
+The PDP should support three deterministic outcomes:
+
+- `allow`: the transition is permitted and an execution token may be issued
+- `deny`: the transition violates governed policy and no execution token is issued
+- `quarantine`: the transition is operationally tolerated but the asset is moved into a restricted governed state pending remediation
+
+A quarantine outcome is appropriate when the trust chain is incomplete but not yet contradictory, for example:
+
+- telemetry coverage is stale
+- an inspection window has expired
+- an expected custody checkpoint is missing
+- an evidence source is temporarily degraded
+
+Quarantine must remain a governed outcome, not an informal side effect. If supported by the surrounding workflow, it should mint a restricted-scope token and mark the twin or asset state as restricted until a remediation event resolves the gap.
+
+## Governed Receipt and Mutable Digital Passport
+
+For this wedge, the decision artifact is a product surface, not just an internal audit log. Every `allow` decision should mint a signed governed receipt payload. Internally, this can evolve toward a Mutable Digital Passport (MDP) assembled from successive governed receipt fragments over the asset lifecycle.
+
+The governed receipt should bind:
+
+- a stable decision hash
+- the policy snapshot version
+- the principal and asset or twin identifiers
+- the approved operation or state transition
+- the compiled decision basis
+- provenance or custody proof references
+- supporting evidence references
+- timestamps, validity, and signer metadata
+
+The receipt may also include advisory fields such as an evidence quality score, provided those fields are clearly marked as advisory and are not the sole determinant of an allow decision.
+
+The MDP concept fits naturally with the projection model:
+
+- each allowed transition appends a new governed passport fragment
+- fragments remain traceable to authoritative facts, events, and attestations
+- consumer or regulator views can be derived from the same governed receipt chain without changing CONTROL-path semantics
 
 ## PDP Guardrails
 
@@ -254,6 +371,49 @@ Longer-term option:
 - allowing graph projection drift across snapshot versions
 - leaking advisory AI outputs into CONTROL authorization
 - letting direct graph queries creep into the PDP hot path
+- overfitting ontology and compiler behavior to one vertical before the core projection contract stabilizes
+- conflating customer-facing passport rendering with the deterministic receipt contract that backs it
+
+## Canonical Wedge Scenarios
+
+The following scenarios help anchor the architecture in high-trust supply-chain workflows without changing the core control-plane principles.
+
+### A. Harvest-to-Vault Handshake
+
+Flow:
+
+- a harvester scans and mints a new batch in the field
+- the system binds the scan, the actor identity, the location, and the anti-counterfeit or seal identifier into a single handshake intent
+
+PDP expectations:
+
+- validate zone membership, permit status, and registration freshness
+- validate that the batch or twin is not already active under a conflicting seal
+- issue an authorization result that mints the governed asset state
+
+### B. Anomalous Diversion Block
+
+Flow:
+
+- a logistics actor attempts to receive or transfer a shipment at an unexpected facility
+
+PDP expectations:
+
+- validate the compiled custody chain and route or zone constraints
+- allow advisory systems to contribute governed risk markers through prior projection, but not through live calls
+- return a hard deny when the transition breaks lineage or route policy
+
+### C. Consumer Truth Reveal
+
+Flow:
+
+- a downstream consumer or inspector scans a product and requests a bounded authenticity view
+
+PDP expectations:
+
+- validate the single-use handshake intent and any presentation constraints
+- verify custody continuity and the governed receipt chain
+- return an allow result with a derived, presentation-safe receipt or passport view
 
 ## Acceptance Criteria
 
@@ -261,8 +421,11 @@ Phase 1 is successful when:
 
 1. authorization-relevant objects can be projected into a strict graph ontology
 2. a compiled permission index can answer deterministic allow/deny checks
-3. the implementation is snapshot-scoped and test-covered
-4. no changes are required to the current synchronous PDP contract
+3. asset-centric lineage and custody constraints can be represented without live graph traversal in the PDP
+4. governed receipt payloads can be minted from compiled decision state
+5. quarantine or trust-gap outcomes are modeled explicitly if the workflow enables them
+6. the implementation is snapshot-scoped and test-covered
+7. no changes are required to the current synchronous PDP contract
 
 ## Open Questions
 
@@ -270,3 +433,6 @@ Phase 1 is successful when:
 - How should deny edges be represented and prioritized relative to allow edges?
 - Which twin relationships should be elevated into the authorization graph first?
 - When should region-local Ray caches be introduced versus keeping a single in-process compiled snapshot?
+- Which asset and custody concepts should be first-class in Phase 1 versus represented as resource specializations?
+- Should governed receipt fragments be stored directly in PKG tables, graph projections, or both?
+- What is the minimal deterministic representation of lineage proof for a governed receipt: graph path, Merkle proof, or a hybrid?
