@@ -78,6 +78,48 @@ class MaterializedCustodyEventRead(BaseModel):
     audit_record: Dict[str, Any]
     custody_event_jsonld: Dict[str, Any]
 
+
+def _authz_transition_summary(entry: Dict[str, Any]) -> Dict[str, Any] | None:
+    policy_decision = entry.get("policy_decision") if isinstance(entry.get("policy_decision"), dict) else {}
+    authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+    governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
+    if not authz_graph and not governed_receipt:
+        return None
+    trust_gap_codes: List[str] = []
+    receipt_codes = governed_receipt.get("trust_gap_codes")
+    if isinstance(receipt_codes, list):
+        for code in receipt_codes:
+            if isinstance(code, str) and code.strip() and code not in trust_gap_codes:
+                trust_gap_codes.append(code.strip())
+    trust_gaps = authz_graph.get("trust_gaps")
+    if isinstance(trust_gaps, list):
+        for item in trust_gaps:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code")
+            if isinstance(code, str) and code.strip() and code not in trust_gap_codes:
+                trust_gap_codes.append(code.strip())
+    return {
+        "mode": authz_graph.get("mode"),
+        "disposition": authz_graph.get("disposition") or governed_receipt.get("disposition"),
+        "reason": authz_graph.get("reason") or governed_receipt.get("reason"),
+        "asset_ref": authz_graph.get("asset_ref") or governed_receipt.get("asset_ref"),
+        "resource_ref": authz_graph.get("resource_ref") or governed_receipt.get("resource_ref"),
+        "current_custodian": authz_graph.get("current_custodian"),
+        "restricted_token_recommended": bool(authz_graph.get("restricted_token_recommended")),
+        "governed_receipt_hash": governed_receipt.get("decision_hash"),
+        "trust_gap_codes": trust_gap_codes,
+        "custody_proof_count": len(governed_receipt.get("custody_proof") or []),
+    }
+
+
+def _decorate_governance_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(entry)
+    summary = _authz_transition_summary(result)
+    if summary is not None:
+        result["authz_transition_summary"] = summary
+    return result
+
 # --- Helpers ---
 async def _ensure_task_node_mapping(session: AsyncSession, task_id: uuid.UUID, call_site: str) -> int:
     """Invoke ensure_task_node SQL function to create graph node mapping."""
@@ -242,6 +284,7 @@ async def get_task_governance(
         task_id=str(uid),
         limit=limit,
     )
+    entries = [_decorate_governance_entry(entry) for entry in entries]
     latest = entries[0] if entries else None
     task_governance = None
     if task.result and isinstance(task.result, dict):

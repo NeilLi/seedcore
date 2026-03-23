@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_database_dependencies  # noqa: F401
+import mock_ray_dependencies  # noqa: F401
 
 import pytest
 
@@ -44,6 +45,9 @@ def _build_policy_receipt(*, task_id: str, intent_id: str, asset_id: str | None 
         "evaluated_rules": ["zone_match"],
         "subject_ref": "agent:test",
         "asset_ref": asset_id,
+        "authz_disposition": None,
+        "governed_receipt_hash": None,
+        "trust_gap_codes": [],
         "timestamp": "2026-03-20T10:00:00+00:00",
     }
     _, signer_metadata, signature = build_signed_artifact(
@@ -69,6 +73,7 @@ def _build_evidence_bundle(
         "evidence_bundle_id": f"bundle-{intent_id}",
         "task_id": task_id,
         "intent_id": intent_id,
+        "intent_ref": None,
         "execution_token_id": token_id,
         "policy_receipt_id": f"policy-{intent_id}",
         "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
@@ -162,6 +167,62 @@ def _build_audit_record(*, task_id: str, intent_id: str, asset_id: str | None = 
         "evidence_hash": "evidence-hash",
         "recorded_at": "2026-03-20T10:04:00+00:00",
     }
+
+
+def _apply_transition_metadata(
+    record: Dict[str, Any],
+    *,
+    disposition: str = "quarantine",
+    reason: str = "trust_gap_quarantine",
+    trust_gap_codes: List[str] | None = None,
+) -> Dict[str, Any]:
+    codes = list(trust_gap_codes or ["stale_telemetry"])
+    record["policy_decision"] = {
+        **dict(record.get("policy_decision") or {}),
+        "allowed": disposition != "deny",
+        "disposition": disposition,
+        "authz_graph": {
+            "mode": "transition_evaluation",
+            "disposition": disposition,
+            "reason": reason,
+            "asset_ref": record.get("policy_receipt", {}).get("asset_ref"),
+            "resource_ref": f"seedcore://zones/vault-a/assets/{record.get('policy_receipt', {}).get('asset_ref')}",
+            "current_custodian": "principal:agent:test",
+            "restricted_token_recommended": disposition == "quarantine",
+            "trust_gaps": [
+                {
+                    "code": code,
+                    "message": f"Gap detected: {code}",
+                    "details": {},
+                }
+                for code in codes
+            ],
+        },
+        "governed_receipt": {
+            "decision_hash": f"receipt-{record['intent_id']}",
+            "disposition": disposition,
+            "snapshot_ref": "authz_graph@snapshot:1",
+            "snapshot_id": "snapshot:1",
+            "snapshot_version": "snapshot:1",
+            "principal_ref": "principal:agent:test",
+            "operation": "MOVE",
+            "asset_ref": record.get("policy_receipt", {}).get("asset_ref"),
+            "resource_ref": f"seedcore://zones/vault-a/assets/{record.get('policy_receipt', {}).get('asset_ref')}",
+            "twin_ref": (
+                f"asset:{record.get('policy_receipt', {}).get('asset_ref')}"
+                if record.get("policy_receipt", {}).get("asset_ref")
+                else None
+            ),
+            "reason": reason,
+            "generated_at": "2026-03-20T10:00:00+00:00",
+            "custody_proof": ["custody:handoff-1", "custody:handoff-2"],
+            "evidence_refs": ["telemetry:temp-1"],
+            "trust_gap_codes": codes,
+            "provenance_sources": ["tracking_event:telemetry-1"],
+            "advisory": {"evidence_quality_score": 0.73},
+        },
+    }
+    return record
 
 
 @pytest.mark.asyncio
@@ -260,6 +321,30 @@ async def test_public_projection_redacts_internal_details_and_internal_projectio
     assert "audit_record" not in replay.public_projection
     assert "signer_chain" not in replay.public_projection
     assert replay.public_projection["fingerprint_summary"]["fingerprint_hash"] == "hash-intent-redact-1"
+
+
+@pytest.mark.asyncio
+async def test_replay_surfaces_authz_transition_metadata_for_quarantine() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-graph-1", intent_id="intent-graph-1", asset_id="asset-graph-1")
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-graph-1", "current_zone": "vault-a"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.authz_graph["reason"] == "trust_gap_quarantine"
+    assert replay.governed_receipt["decision_hash"] == "receipt-intent-graph-1"
+    assert replay.internal_projection["governed_receipt"]["custody_proof"] == ["custody:handoff-1", "custody:handoff-2"]
+    assert replay.internal_projection["authz_graph"]["current_custodian"] == "principal:agent:test"
+    assert replay.public_projection["policy_summary"]["governed_receipt_hash"] == "receipt-intent-graph-1"
+    assert replay.public_projection["policy_summary"]["trust_gap_codes"] == ["stale_telemetry"]
+    assert replay.public_projection["custody_summary"]["quarantined"] is True
+    assert replay.public_projection["custody_summary"]["custody_proof_count"] == 2
+    assert any(item.event_type == "authz_transition_evaluated" for item in replay.replay_timeline)
 
 
 @pytest.mark.asyncio

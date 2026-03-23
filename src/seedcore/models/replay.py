@@ -41,6 +41,8 @@ class ReplayRecord(BaseModel):
     task_id: str
     intent_id: str
     audit_record_id: str
+    authz_graph: Dict[str, Any] = Field(default_factory=dict)
+    governed_receipt: Dict[str, Any] = Field(default_factory=dict)
     policy_receipt: Dict[str, Any] = Field(default_factory=dict)
     evidence_bundle: Dict[str, Any] = Field(default_factory=dict)
     transition_receipts: List[Dict[str, Any]] = Field(default_factory=list)

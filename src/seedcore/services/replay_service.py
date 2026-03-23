@@ -158,6 +158,8 @@ class ReplayService:
             )
 
         policy_receipt = record.get("policy_receipt") if isinstance(record.get("policy_receipt"), dict) else {}
+        authz_graph = self._extract_authz_graph(record=record)
+        governed_receipt = self._extract_governed_receipt(record=record)
         transition_receipts = self._extract_transition_receipts(evidence_bundle=evidence_bundle)
         subject_type, subject_id = self._derive_subject(record=record, evidence_bundle=evidence_bundle, policy_receipt=policy_receipt)
         asset_custody_state = await self._load_asset_custody_state(session, subject_type=subject_type, subject_id=subject_id)
@@ -186,6 +188,8 @@ class ReplayService:
         )
         replay_timeline = self._build_replay_timeline(
             record=record,
+            authz_graph=authz_graph,
+            governed_receipt=governed_receipt,
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
@@ -201,6 +205,8 @@ class ReplayService:
             task_id=str(record.get("task_id") or ""),
             intent_id=str(record.get("intent_id") or ""),
             audit_record_id=str(record.get("id") or ""),
+            authz_graph=authz_graph,
+            governed_receipt=governed_receipt,
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
@@ -234,6 +240,8 @@ class ReplayService:
                 "task_id": replay.task_id,
                 "intent_id": replay.intent_id,
                 "audit_record_id": replay.audit_record_id,
+                "authz_graph": replay.authz_graph,
+                "governed_receipt": replay.governed_receipt,
                 "verification_status": replay.verification_status.model_dump(mode="json"),
                 "policy_receipt": replay.policy_receipt,
                 "evidence_bundle": replay.evidence_bundle,
@@ -254,6 +262,8 @@ class ReplayService:
                 "task_id": replay.task_id,
                 "intent_id": replay.intent_id,
                 "audit_record_id": replay.audit_record_id,
+                "authz_graph": replay.authz_graph,
+                "governed_receipt": replay.governed_receipt,
                 "verification_status": replay.verification_status.model_dump(mode="json"),
                 "policy_receipt": replay.policy_receipt,
                 "evidence_bundle": self._auditor_safe_evidence_bundle(replay.evidence_bundle),
@@ -709,6 +719,16 @@ class ReplayService:
         receipts = evidence_inputs.get("transition_receipts") if isinstance(evidence_inputs.get("transition_receipts"), list) else []
         return [dict(item) for item in receipts if isinstance(item, dict)]
 
+    def _extract_authz_graph(self, *, record: Mapping[str, Any]) -> Dict[str, Any]:
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        authz_graph = policy_decision.get("authz_graph")
+        return dict(authz_graph) if isinstance(authz_graph, dict) else {}
+
+    def _extract_governed_receipt(self, *, record: Mapping[str, Any]) -> Dict[str, Any]:
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        governed_receipt = policy_decision.get("governed_receipt")
+        return dict(governed_receipt) if isinstance(governed_receipt, dict) else {}
+
     def _build_signer_chain(
         self,
         *,
@@ -831,6 +851,8 @@ class ReplayService:
         self,
         *,
         record: Mapping[str, Any],
+        authz_graph: Mapping[str, Any],
+        governed_receipt: Mapping[str, Any],
         policy_receipt: Mapping[str, Any],
         evidence_bundle: Mapping[str, Any],
         transition_receipts: Sequence[Mapping[str, Any]],
@@ -839,6 +861,31 @@ class ReplayService:
         dispute_refs: Sequence[Mapping[str, Any]],
     ) -> List[ReplayTimelineEvent]:
         events: List[ReplayTimelineEvent] = []
+        if authz_graph and (policy_receipt.get("timestamp") or governed_receipt.get("generated_at") or record.get("recorded_at")):
+            disposition = str(authz_graph.get("disposition") or governed_receipt.get("disposition") or "unknown")
+            summary = "Authorization graph evaluated transition for governed action"
+            if disposition == "quarantine":
+                summary = "Authorization graph quarantined asset transition pending trust-gap resolution"
+            elif disposition == "deny":
+                summary = "Authorization graph denied asset transition"
+            elif disposition == "allow":
+                summary = "Authorization graph authorized asset transition"
+            events.append(
+                ReplayTimelineEvent(
+                    event_id=str(governed_receipt.get("decision_hash") or policy_receipt.get("policy_decision_id") or "authz_transition"),
+                    event_type="authz_transition_evaluated",
+                    timestamp=str(policy_receipt.get("timestamp") or governed_receipt.get("generated_at") or record.get("recorded_at")),
+                    summary=summary,
+                    artifact_ref=str(governed_receipt.get("decision_hash") or ""),
+                    details={
+                        "disposition": disposition,
+                        "reason": authz_graph.get("reason") or governed_receipt.get("reason"),
+                        "asset_ref": governed_receipt.get("asset_ref") or authz_graph.get("asset_ref"),
+                        "resource_ref": governed_receipt.get("resource_ref") or authz_graph.get("resource_ref"),
+                        "trust_gap_codes": self._trust_gap_codes(replay_authz_graph=authz_graph, replay_governed_receipt=governed_receipt),
+                    },
+                )
+            )
         if policy_receipt.get("timestamp"):
             events.append(
                 ReplayTimelineEvent(
@@ -963,7 +1010,9 @@ class ReplayService:
         claims = self._build_verifiable_claims(replay)
         media_refs = self._public_media_refs(replay.evidence_bundle)
         subject_label = "Asset" if replay.subject_type == "asset" else "Transaction"
-        if audience == ReplayProjectionKind.BUYER:
+        if replay.governed_receipt.get("disposition") == "quarantine":
+            subject_summary = f"{subject_label} {replay.subject_id} is restricted pending trust-gap resolution, with governed evidence preserved."
+        elif audience == ReplayProjectionKind.BUYER:
             subject_summary = f"{subject_label} {replay.subject_id} has a governed replay record with trust-safe evidence."
         else:
             subject_summary = f"{subject_label} {replay.subject_id} can be verified from governed policy and evidence records."
@@ -983,14 +1032,21 @@ class ReplayService:
     def _build_custody_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
         asset_state = replay.asset_custody_state or {}
         transition = replay.transition_receipts[-1] if replay.transition_receipts else {}
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+        )
         return {
             "current_zone": asset_state.get("current_zone") or transition.get("to_zone") or transition.get("target_zone"),
             "previous_zone": transition.get("from_zone"),
-            "quarantined": bool(asset_state.get("is_quarantined")),
+            "quarantined": bool(asset_state.get("is_quarantined")) or replay.governed_receipt.get("disposition") == "quarantine",
             "authority_source": asset_state.get("authority_source"),
             "last_transition_seq": asset_state.get("last_transition_seq"),
             "lineage_events": len(replay.custody_transition_refs),
             "linked_disputes": len(replay.dispute_refs),
+            "current_custodian": replay.authz_graph.get("current_custodian"),
+            "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
+            "trust_gap_codes": trust_gap_codes,
         }
 
     def _build_fingerprint_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -1005,6 +1061,10 @@ class ReplayService:
     def _build_policy_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
         receipt = replay.policy_receipt
         decision = receipt.get("decision") if isinstance(receipt.get("decision"), dict) else {}
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+        )
         return {
             "policy_receipt_id": receipt.get("policy_receipt_id"),
             "policy_decision_id": receipt.get("policy_decision_id"),
@@ -1012,6 +1072,11 @@ class ReplayService:
             "disposition": decision.get("disposition"),
             "allowed": decision.get("allowed"),
             "timestamp": receipt.get("timestamp"),
+            "authz_reason": replay.authz_graph.get("reason") or replay.governed_receipt.get("reason"),
+            "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
+            "trust_gap_codes": trust_gap_codes,
+            "restricted_token_recommended": bool(replay.authz_graph.get("restricted_token_recommended")),
+            "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
         }
 
     def _build_dispute_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -1024,6 +1089,7 @@ class ReplayService:
         }
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
+        governed_receipt_hash = replay.governed_receipt.get("decision_hash")
         claims = [
             {
                 "claim": "governed_policy_verified",
@@ -1041,6 +1107,14 @@ class ReplayService:
                 "source": replay.audit_record_id,
             },
         ]
+        if governed_receipt_hash:
+            claims.append(
+                {
+                    "claim": "governed_receipt_available",
+                    "value": True,
+                    "source": governed_receipt_hash,
+                }
+            )
         if replay.subject_type == "asset":
             claims.append(
                 {
@@ -1049,7 +1123,41 @@ class ReplayService:
                     "source": replay.audit_record_id,
                 }
             )
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+        )
+        if trust_gap_codes:
+            claims.append(
+                {
+                    "claim": "trust_gap_detected",
+                    "value": True,
+                    "source": governed_receipt_hash or replay.audit_record_id,
+                }
+            )
         return claims
+
+    def _trust_gap_codes(
+        self,
+        *,
+        replay_authz_graph: Mapping[str, Any],
+        replay_governed_receipt: Mapping[str, Any],
+    ) -> List[str]:
+        codes: List[str] = []
+        receipt_codes = replay_governed_receipt.get("trust_gap_codes")
+        if isinstance(receipt_codes, list):
+            for code in receipt_codes:
+                if isinstance(code, str) and code.strip() and code not in codes:
+                    codes.append(code.strip())
+        trust_gaps = replay_authz_graph.get("trust_gaps")
+        if isinstance(trust_gaps, list):
+            for item in trust_gaps:
+                if not isinstance(item, dict):
+                    continue
+                code = item.get("code")
+                if isinstance(code, str) and code.strip() and code not in codes:
+                    codes.append(code.strip())
+        return codes
 
     def _public_media_refs(self, evidence_bundle: Mapping[str, Any]) -> List[Dict[str, Any]]:
         refs = evidence_bundle.get("media_refs") if isinstance(evidence_bundle.get("media_refs"), list) else []

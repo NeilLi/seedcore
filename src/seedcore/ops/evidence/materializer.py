@@ -38,6 +38,10 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
     zone_checks = telemetry_ref.get("zone_checks") if isinstance(telemetry_ref.get("zone_checks"), dict) else {}
 
     signer_metadata = evidence_bundle.get("signer_metadata") if isinstance(evidence_bundle.get("signer_metadata"), dict) else {}
+    policy_decision = audit_record.get("policy_decision") if isinstance(audit_record.get("policy_decision"), dict) else {}
+    authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+    governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
+    trust_gap_codes = _resolve_trust_gap_codes(authz_graph=authz_graph, governed_receipt=governed_receipt)
 
     return {
         "@context": {
@@ -63,6 +67,12 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
             "policy_decision_id": policy_receipt.get("policy_decision_id"),
             "policy_hash": policy_receipt.get("policy_decision_id") or policy_receipt.get("policy_decision_hash"),
             "authorization_token": evidence_bundle.get("execution_token_id"),
+            "authz_disposition": authz_graph.get("disposition") or governed_receipt.get("disposition"),
+            "authz_reason": authz_graph.get("reason") or governed_receipt.get("reason"),
+            "governed_receipt_hash": governed_receipt.get("decision_hash"),
+            "trust_gap_codes": trust_gap_codes,
+            "custody_proof_count": len(governed_receipt.get("custody_proof") or []),
+            "provenance_sources": list(governed_receipt.get("provenance_sources") or []),
         },
         "custody_transition": {
             "from": transition_receipt.get("from_zone") or zone_checks.get("current_zone") or "unknown_zone",
@@ -163,3 +173,21 @@ def _first_inline_ref(refs: Any) -> Dict[str, Any]:
         if isinstance(item, dict) and isinstance(item.get("inline"), dict):
             return item["inline"]
     return {}
+
+
+def _resolve_trust_gap_codes(*, authz_graph: Dict[str, Any], governed_receipt: Dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    receipt_codes = governed_receipt.get("trust_gap_codes")
+    if isinstance(receipt_codes, list):
+        for code in receipt_codes:
+            if isinstance(code, str) and code.strip() and code not in codes:
+                codes.append(code.strip())
+    trust_gaps = authz_graph.get("trust_gaps")
+    if isinstance(trust_gaps, list):
+        for item in trust_gaps:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code")
+            if isinstance(code, str) and code.strip() and code not in codes:
+                codes.append(code.strip())
+    return codes

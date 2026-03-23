@@ -181,6 +181,8 @@ async def get_replay_artifacts(
         "lookup_value": lookup_value,
         "projection": projection.value,
         "verification_status": replay.verification_status.model_dump(mode="json"),
+        "authz_graph": replay.authz_graph,
+        "governed_receipt": replay.governed_receipt,
         "policy_receipt": replay.policy_receipt,
         "evidence_bundle": replay.evidence_bundle,
         "transition_receipts": replay.transition_receipts,
