@@ -27,6 +27,7 @@ from .service import (
     AuthzProjectionSources,
 )
 from .manager import AuthzGraphManager
+from .ray_cache import AuthzGraphCacheActor
 
 __all__ = [
     "PolicyEdgeManifest",
@@ -53,4 +54,5 @@ __all__ = [
     "AuthzProjectionResult",
     "AuthzProjectionSources",
     "AuthzGraphManager",
+    "AuthzGraphCacheActor",
 ]

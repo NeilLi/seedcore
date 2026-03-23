@@ -907,7 +907,7 @@ def evaluate_intent(
     if cognitive_violation is not None:
         return cognitive_violation
 
-    authz_graph_violation, break_glass_context, transition_evaluation = _evaluate_compiled_authz_graph_policy(
+    authz_graph_violation, break_glass_context, transition_evaluation, authz_evaluator = _evaluate_compiled_authz_graph_policy(
         action_intent=action_intent,
         policy_case=policy_case,
         compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
@@ -961,6 +961,7 @@ def evaluate_intent(
         authz_graph=_authz_graph_decision_metadata(
             transition_evaluation=transition_evaluation,
             compiled_match=None,
+            evaluator=authz_evaluator,
         ),
         governed_receipt=_serialize_governed_receipt(transition_evaluation),
     )
@@ -1362,9 +1363,9 @@ def _evaluate_compiled_authz_graph_policy(
     action_intent: ActionIntent,
     policy_case: PolicyCase,
     compiled_authz_index: CompiledAuthzIndex | None,
-) -> tuple[PolicyDecision | None, BreakGlassDecisionContext, CompiledTransitionEvaluation | None]:
+) -> tuple[PolicyDecision | None, BreakGlassDecisionContext, CompiledTransitionEvaluation | None, str]:
     if compiled_authz_index is None:
-        return None, BreakGlassDecisionContext(), None
+        return None, BreakGlassDecisionContext(), None, "disabled"
 
     expected_snapshot = (policy_case.policy_snapshot or "").strip()
     compiled_snapshot = (compiled_authz_index.snapshot_version or "").strip()
@@ -1383,6 +1384,7 @@ def _evaluate_compiled_authz_graph_policy(
             ),
             BreakGlassDecisionContext(),
             None,
+            "compiled_index",
         )
 
     break_glass_violation, break_glass_context = _evaluate_break_glass_context(
@@ -1392,10 +1394,40 @@ def _evaluate_compiled_authz_graph_policy(
         policy_case=policy_case,
     )
     if break_glass_violation is not None:
-        return break_glass_violation, break_glass_context, None
+        return break_glass_violation, break_glass_context, None, "compiled_index"
 
     transition_evaluation: CompiledTransitionEvaluation | None = None
-    if _pdp_use_authz_graph_transitions():
+    authz_evaluator = "compiled_index"
+    if _pdp_use_ray_authz_cache():
+        ray_result = _evaluate_compiled_authz_graph_with_ray(
+            action_intent=action_intent,
+            policy_case=policy_case,
+            break_glass=break_glass_context.validated,
+        )
+        if ray_result is not None:
+            transition_evaluation = ray_result.get("transition_evaluation")
+            match = ray_result["match"]
+            authz_evaluator = str(ray_result.get("source") or "ray_actor")
+        elif _pdp_use_authz_graph_transitions():
+            transition_evaluation = compiled_authz_index.evaluate_transition(
+                _compiled_authz_transition_request(
+                    action_intent=action_intent,
+                    break_glass=break_glass_context.validated,
+                )
+            )
+            match = transition_evaluation.permission_match
+        else:
+            match = compiled_authz_index.can_access(
+                principal_ref=_compiled_authz_principal_ref(action_intent),
+                operation=_compiled_authz_operation(action_intent),
+                resource_ref=_compiled_authz_resource_ref(action_intent),
+                zone_ref=_compiled_authz_zone_ref(action_intent),
+                network_ref=_compiled_authz_network_ref(action_intent),
+                resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+                at=_parse_iso8601(action_intent.timestamp),
+                break_glass=break_glass_context.validated,
+            )
+    elif _pdp_use_authz_graph_transitions():
         transition_evaluation = compiled_authz_index.evaluate_transition(
             _compiled_authz_transition_request(
                 action_intent=action_intent,
@@ -1424,28 +1456,32 @@ def _evaluate_compiled_authz_graph_policy(
     )
     if transition_evaluation is not None:
         if transition_evaluation.disposition == AuthzDecisionDisposition.ALLOW:
-            return None, break_glass_context, transition_evaluation
+            return None, break_glass_context, transition_evaluation, authz_evaluator
         if transition_evaluation.disposition == AuthzDecisionDisposition.QUARANTINE:
-            return None, break_glass_context, transition_evaluation
+            return None, break_glass_context, transition_evaluation, authz_evaluator
         return (
             _compiled_authz_transition_deny_decision(
                 policy_case=policy_case,
                 evaluation=transition_evaluation,
                 break_glass=break_glass_context,
+                authz_evaluator=authz_evaluator,
             ),
             break_glass_context,
             transition_evaluation,
+            authz_evaluator,
         )
     if match.allowed:
-        return None, break_glass_context, None
+        return None, break_glass_context, None, authz_evaluator
     return (
         _compiled_authz_deny_decision(
             policy_case=policy_case,
             match=match,
             break_glass=break_glass_context,
+            authz_evaluator=authz_evaluator,
         ),
         break_glass_context,
         None,
+        authz_evaluator,
     )
 
 
@@ -1467,6 +1503,52 @@ def _resolve_compiled_authz_index(
     if getter is None:
         return None
     return getter()
+
+
+def _evaluate_compiled_authz_graph_with_ray(
+    *,
+    action_intent: ActionIntent,
+    policy_case: PolicyCase,
+    break_glass: bool,
+) -> Dict[str, Any] | None:
+    try:
+        from seedcore.ops.pkg.authz_graph.ray_cache import evaluate_authz_with_ray_cache
+    except Exception:
+        return None
+
+    payload: Dict[str, Any]
+    if _pdp_use_authz_graph_transitions():
+        payload = {
+            "principal_ref": _compiled_authz_principal_ref(action_intent),
+            "operation": _compiled_authz_operation(action_intent),
+            "resource_ref": _compiled_authz_resource_ref(action_intent),
+            "asset_ref": _compiled_authz_asset_ref(action_intent),
+            "zone_ref": _compiled_authz_zone_ref(action_intent),
+            "network_ref": _compiled_authz_network_ref(action_intent),
+            "custody_point_ref": _compiled_authz_custody_point_ref(action_intent),
+            "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
+            "at": action_intent.timestamp,
+            "break_glass": break_glass,
+        }
+    else:
+        payload = {
+            "principal_ref": _compiled_authz_principal_ref(action_intent),
+            "operation": _compiled_authz_operation(action_intent),
+            "resource_ref": _compiled_authz_resource_ref(action_intent),
+            "zone_ref": _compiled_authz_zone_ref(action_intent),
+            "network_ref": _compiled_authz_network_ref(action_intent),
+            "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
+            "at": action_intent.timestamp,
+            "break_glass": break_glass,
+        }
+    return evaluate_authz_with_ray_cache(
+        snapshot_id=None,
+        snapshot_version=(policy_case.policy_snapshot or "").strip() or None,
+        snapshot_ref=(f"authz_graph@{policy_case.policy_snapshot}" if policy_case.policy_snapshot else None),
+        payload=payload,
+        transitions=_pdp_use_authz_graph_transitions(),
+        timeout_seconds=_pdp_ray_authz_cache_timeout_seconds(),
+    )
 
 
 def _missing_mandatory_evidence(policy_case: PolicyCase) -> list[str]:
@@ -1662,6 +1744,7 @@ def _compiled_authz_deny_decision(
     policy_case: PolicyCase,
     match: CompiledPermissionMatch,
     break_glass: BreakGlassDecisionContext | None = None,
+    authz_evaluator: str = "compiled_index",
 ) -> PolicyDecision:
     matched_subjects = ", ".join(match.matched_subjects) if match.matched_subjects else "none"
     deny_count = len(match.deny_permissions)
@@ -1694,6 +1777,7 @@ def _compiled_authz_deny_decision(
         authz_graph=_authz_graph_decision_metadata(
             transition_evaluation=None,
             compiled_match=match,
+            evaluator=authz_evaluator,
         ),
     )
 
@@ -1703,6 +1787,7 @@ def _compiled_authz_transition_deny_decision(
     policy_case: PolicyCase,
     evaluation: CompiledTransitionEvaluation,
     break_glass: BreakGlassDecisionContext | None = None,
+    authz_evaluator: str = "compiled_index",
 ) -> PolicyDecision:
     trust_gap_codes = [gap.code for gap in evaluation.trust_gaps]
     if evaluation.reason == "principal_not_current_custodian":
@@ -1739,6 +1824,7 @@ def _compiled_authz_transition_deny_decision(
         authz_graph=_authz_graph_decision_metadata(
             transition_evaluation=evaluation,
             compiled_match=evaluation.permission_match,
+            evaluator=authz_evaluator,
         ),
         governed_receipt=_serialize_governed_receipt(evaluation),
     )
@@ -1752,6 +1838,20 @@ def _pdp_use_active_authz_graph() -> bool:
 def _pdp_use_authz_graph_transitions() -> bool:
     raw = os.getenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "false")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pdp_use_ray_authz_cache() -> bool:
+    raw = os.getenv("SEEDCORE_PDP_USE_RAY_AUTHZ_CACHE", "false")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pdp_ray_authz_cache_timeout_seconds() -> float:
+    raw = os.getenv("SEEDCORE_PDP_RAY_AUTHZ_CACHE_TIMEOUT_SECONDS", "1.0")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.1, value)
 
 
 def _coerce_twin_snapshot(key: str, value: Any) -> TwinSnapshot:
@@ -1868,18 +1968,22 @@ def _authz_graph_decision_metadata(
     *,
     transition_evaluation: CompiledTransitionEvaluation | None,
     compiled_match: CompiledPermissionMatch | None,
+    evaluator: str | None = None,
 ) -> Dict[str, Any]:
     if transition_evaluation is None:
         if compiled_match is None:
-            return {}
-        return {
+            return {"evaluator": evaluator} if evaluator else {}
+        payload = {
             "mode": "permission_match",
             "match_reason": compiled_match.reason,
             "matched_subjects": list(compiled_match.matched_subjects),
             "break_glass_required": compiled_match.break_glass_required,
             "break_glass_used": compiled_match.break_glass_used,
         }
-    return {
+        if evaluator:
+            payload["evaluator"] = evaluator
+        return payload
+    payload = {
         "mode": "transition_evaluation",
         "disposition": transition_evaluation.disposition.value,
         "reason": transition_evaluation.reason,
@@ -1898,6 +2002,9 @@ def _authz_graph_decision_metadata(
             for gap in transition_evaluation.trust_gaps
         ],
     }
+    if evaluator:
+        payload["evaluator"] = evaluator
+    return payload
 
 
 def _transition_execution_constraints(

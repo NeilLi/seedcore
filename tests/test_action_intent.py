@@ -22,7 +22,12 @@ from seedcore.coordinator.core.governance import (
     evaluate_intent,
     merge_authoritative_twins,
 )
-from seedcore.ops.pkg.authz_graph import AuthzDecisionDisposition, AuthzGraphCompiler, AuthzGraphProjector
+from seedcore.ops.pkg.authz_graph import (
+    AuthzDecisionDisposition,
+    AuthzGraphCompiler,
+    AuthzGraphProjector,
+    CompiledPermissionMatch,
+)
 
 
 def _base_payload() -> dict:
@@ -395,6 +400,58 @@ def test_evaluate_intent_denies_when_compiled_authz_graph_has_no_permission():
 
     assert decision.allowed is False
     assert decision.deny_code == "authz_graph_denied"
+
+
+def test_evaluate_intent_can_use_ray_backed_authz_cache(monkeypatch):
+    payload = _base_payload()
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "ROBOT_OPERATOR"},
+            },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "role:ROBOT_OPERATOR",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "MOVE",
+                    "resource": "resource:asset-1",
+                    "zones": ["zone:vault-a", "vault-a"],
+                },
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_RAY_AUTHZ_CACHE", "true")
+    monkeypatch.setattr(
+        governance_mod,
+        "_evaluate_compiled_authz_graph_with_ray",
+        lambda **kwargs: {
+            "source": "ray_actor",
+            "match": CompiledPermissionMatch(
+                allowed=True,
+                matched_subjects=("principal:agent-1", "role:ROBOT_OPERATOR"),
+                reason="matched_allow_permission",
+            ),
+            "transition_evaluation": None,
+        },
+    )
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.execution_token is not None
+    assert decision.authz_graph["evaluator"] == "ray_actor"
 
 
 def test_evaluate_intent_denies_when_compiled_authz_snapshot_mismatches():
