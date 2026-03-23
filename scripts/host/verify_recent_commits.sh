@@ -33,3 +33,7 @@ pytest "${PYTEST_TARGETS[@]}"
 echo
 echo "==> Running live runtime verification"
 python scripts/host/verify_recent_runtime.py
+
+echo
+echo "==> Running governance/authz live verification"
+bash scripts/host/verify_authz_governance_flow.sh

@@ -682,11 +682,11 @@ class GovernedExecutionAuditDAO:
             filtered_predicates.append(
                 """
                 (
-                    COALESCE(policy_decision->'governed_receipt'->'trust_gap_codes', '[]'::jsonb) @> jsonb_build_array(:trust_gap_code)
+                    COALESCE(policy_decision->'governed_receipt'->'trust_gap_codes', '[]'::jsonb) @> jsonb_build_array(CAST(:trust_gap_code AS text))
                     OR EXISTS (
                         SELECT 1
                         FROM jsonb_array_elements(COALESCE(policy_decision->'authz_graph'->'trust_gaps', '[]'::jsonb)) AS trust_gap
-                        WHERE trust_gap->>'code' = :trust_gap_code
+                        WHERE trust_gap->>'code' = CAST(:trust_gap_code AS text)
                     )
                 )
                 """
