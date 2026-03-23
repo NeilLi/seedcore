@@ -14,15 +14,22 @@ def _iso(dt: datetime) -> str:
 
 
 class _FakeSnapshot:
-    def __init__(self, snapshot_id: int, version: str) -> None:
+    def __init__(self, snapshot_id: int, version: str, graph_manifests: list[dict] | None = None) -> None:
         self.id = snapshot_id
         self.version = version
+        self.graph_manifests = list(graph_manifests or [])
 
 
 class _FakePKGClient:
-    def __init__(self, facts: list[dict], snapshot_id: int = 9, version: str = "rules@9.0.0") -> None:
+    def __init__(
+        self,
+        facts: list[dict],
+        snapshot_id: int = 9,
+        version: str = "rules@9.0.0",
+        graph_manifests: list[dict] | None = None,
+    ) -> None:
         self._facts = facts
-        self._snapshot = _FakeSnapshot(snapshot_id, version)
+        self._snapshot = _FakeSnapshot(snapshot_id, version, graph_manifests=graph_manifests)
 
     async def get_active_governed_facts(self, **kwargs):
         snapshot_id = kwargs.get("snapshot_id")
@@ -32,6 +39,11 @@ class _FakePKGClient:
 
     async def get_snapshot_by_version(self, version: str):
         if version != self._snapshot.version:
+            return None
+        return self._snapshot
+
+    async def get_snapshot_by_id(self, snapshot_id: int):
+        if snapshot_id != self._snapshot.id:
             return None
         return self._snapshot
 
@@ -198,6 +210,47 @@ async def test_projection_service_resolves_snapshot_version_and_compiles_index()
 
     assert result.snapshot.snapshot_version == "rules@9.0.0"
     assert compiled.snapshot_id == snapshot_id
+    assert match.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_projection_service_projects_snapshot_graph_manifests() -> None:
+    snapshot_id = 9
+    graph_manifests = [
+        {
+            "source_selector": "role:warehouse_operator",
+            "target_selector": "resource:asset-42",
+            "relationship": "can",
+            "operation": "PICK",
+            "conditions": {"zones": ["cold-room"], "networks": ["plant-a"]},
+            "rule_id": "rule-authz-1",
+            "rule_name": "warehouse_pick_allow",
+        }
+    ]
+    service = AuthzGraphProjectionService(
+        pkg_client=_FakePKGClient(
+            facts=[],
+            snapshot_id=snapshot_id,
+            version="rules@9.0.0",
+            graph_manifests=graph_manifests,
+        ),
+        registrations_loader=lambda **kwargs: _empty_async_list(),
+        tracking_events_loader=lambda **kwargs: _empty_async_list(),
+    )
+
+    compiled, result = await service.build_compiled_index(
+        snapshot_ref="pkg-authz@phase2",
+        snapshot_id=snapshot_id,
+    )
+    match = compiled.can_access(
+        principal_ref="role:warehouse_operator",
+        operation="PICK",
+        resource_ref="resource:asset-42",
+        zone_ref="zone:cold-room",
+        network_ref="network:plant-a",
+    )
+
+    assert result.stats["graph_manifests_count"] == 1
     assert match.allowed is True
 
 

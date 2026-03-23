@@ -1,3 +1,4 @@
+from .manifest import PolicyEdgeManifest, extract_policy_edge_manifests
 from .ontology import (
     AuthzEdge,
     AuthzGraphSnapshot,
@@ -22,6 +23,8 @@ from .service import (
 from .manager import AuthzGraphManager
 
 __all__ = [
+    "PolicyEdgeManifest",
+    "extract_policy_edge_manifests",
     "AuthzEdge",
     "AuthzGraphSnapshot",
     "AuthzNode",

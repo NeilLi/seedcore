@@ -11,6 +11,8 @@ from seedcore.ops.pkg.authz_graph import (
     AuthzGraphProjector,
     EdgeKind,
     NodeKind,
+    PermissionEffect,
+    PolicyEdgeManifest,
 )
 
 
@@ -166,3 +168,197 @@ def test_projector_projects_source_registration_backing_edges() -> None:
     assert "principal:producer-7" in refs
     assert "resource:lot:lot-2026-01" in refs
     assert (EdgeKind.RECORDED_BY, f"registration:{registration.id}", "principal:producer-7") in edge_kinds
+
+
+def test_projector_projects_explicit_policy_edge_manifest_before_dynamic_facts() -> None:
+    manifest = PolicyEdgeManifest(
+        source_selector="role:warehouse_operator",
+        target_selector="resource:asset-42",
+        operation="PICK",
+        conditions={"zones": ["cold-room"], "networks": ["plant-a"]},
+        rule_id="rule-authz-1",
+        rule_name="warehouse_pick_allow",
+    )
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_id=7,
+        snapshot_version="rules@2.1.0",
+        policy_edge_manifests=[manifest],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    match = compiled.can_access(
+        principal_ref="role:warehouse_operator",
+        operation="PICK",
+        resource_ref="resource:asset-42",
+        zone_ref="zone:cold-room",
+        network_ref="network:plant-a",
+    )
+
+    assert any(
+        edge.kind == EdgeKind.CAN
+        and edge.src == "role:warehouse_operator"
+        and edge.dst == "resource:asset-42"
+        and edge.effect == PermissionEffect.ALLOW
+        for edge in graph.edges
+    )
+    assert match.allowed is True
+
+
+def test_projector_warns_when_legacy_inferred_permission_fact_is_used(caplog) -> None:
+    now = datetime.now(timezone.utc)
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="role permission",
+            snapshot_id=7,
+            namespace="authz",
+            subject="role:warehouse_operator",
+            predicate="allowedOperation",
+            object_data={"operation": "PICK", "resource": "asset-42"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        )
+    ]
+
+    with caplog.at_level("WARNING"):
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@test",
+            snapshot_id=7,
+            snapshot_version="rules@2.0.0",
+            facts=facts,
+        )
+
+    assert any("legacy fact predicate 'allowedoperation'" in message.lower() for message in caplog.messages)
+
+
+def test_compiler_explicit_deny_overrides_allow() -> None:
+    manifests = [
+        PolicyEdgeManifest(
+            source_selector="role:warehouse_operator",
+            target_selector="resource:asset-42",
+            operation="PICK",
+            conditions={"zones": ["cold-room"]},
+            rule_id="allow-1",
+            rule_name="warehouse_pick_allow",
+        ),
+        PolicyEdgeManifest(
+            source_selector="role:warehouse_operator",
+            target_selector="resource:asset-42",
+            operation="PICK",
+            effect=PermissionEffect.DENY,
+            conditions={"zones": ["cold-room"]},
+            rule_id="deny-1",
+            rule_name="warehouse_pick_deny",
+        ),
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@test",
+            snapshot_version="rules@2.1.0",
+            policy_edge_manifests=manifests,
+        )
+    )
+    match = compiled.can_access(
+        principal_ref="role:warehouse_operator",
+        operation="PICK",
+        resource_ref="resource:asset-42",
+        zone_ref="zone:cold-room",
+    )
+
+    assert match.allowed is False
+    assert match.reason == "explicit_deny"
+    assert len(match.deny_permissions) == 1
+
+
+def test_compiler_requires_break_glass_when_only_bypass_permission_exists() -> None:
+    manifests = [
+        PolicyEdgeManifest(
+            source_selector="role:warehouse_operator",
+            target_selector="resource:asset-42",
+            relationship="can_bypass",
+            operation="PICK",
+            conditions={
+                "zones": ["cold-room"],
+                "requires_break_glass": True,
+                "bypass_deny": True,
+            },
+            rule_id="bg-1",
+            rule_name="warehouse_pick_break_glass",
+        )
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@test",
+            snapshot_version="rules@2.1.0",
+            policy_edge_manifests=manifests,
+        )
+    )
+    denied = compiled.can_access(
+        principal_ref="role:warehouse_operator",
+        operation="PICK",
+        resource_ref="resource:asset-42",
+        zone_ref="zone:cold-room",
+    )
+    allowed = compiled.can_access(
+        principal_ref="role:warehouse_operator",
+        operation="PICK",
+        resource_ref="resource:asset-42",
+        zone_ref="zone:cold-room",
+        break_glass=True,
+    )
+
+    assert denied.allowed is False
+    assert denied.reason == "break_glass_required"
+    assert denied.break_glass_required is True
+    assert allowed.allowed is True
+    assert allowed.reason == "matched_break_glass_permission"
+
+
+def test_compiler_break_glass_bypass_overrides_explicit_deny() -> None:
+    manifests = [
+        PolicyEdgeManifest(
+            source_selector="role:warehouse_operator",
+            target_selector="resource:asset-42",
+            operation="PICK",
+            effect=PermissionEffect.DENY,
+            conditions={"zones": ["cold-room"]},
+            rule_id="deny-1",
+            rule_name="warehouse_pick_deny",
+        ),
+        PolicyEdgeManifest(
+            source_selector="role:warehouse_operator",
+            target_selector="resource:asset-42",
+            relationship="can_bypass",
+            operation="PICK",
+            conditions={
+                "zones": ["cold-room"],
+                "requires_break_glass": True,
+                "bypass_deny": True,
+            },
+            rule_id="bg-1",
+            rule_name="warehouse_pick_break_glass",
+        ),
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@test",
+            snapshot_version="rules@2.1.0",
+            policy_edge_manifests=manifests,
+        )
+    )
+    match = compiled.can_access(
+        principal_ref="role:warehouse_operator",
+        operation="PICK",
+        resource_ref="resource:asset-42",
+        zone_ref="zone:cold-room",
+        break_glass=True,
+    )
+
+    assert match.allowed is True
+    assert match.reason == "break_glass_override"
+    assert match.break_glass_used is True

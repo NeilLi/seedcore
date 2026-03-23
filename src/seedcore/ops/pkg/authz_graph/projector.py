@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
@@ -7,6 +8,7 @@ from seedcore.models.action_intent import ActionIntent
 from seedcore.models.fact import Fact
 from seedcore.models.source_registration import SourceRegistration, TrackingEvent
 
+from .manifest import PolicyEdgeManifest
 from .ontology import (
     AuthzEdge,
     AuthzGraphSnapshot,
@@ -16,6 +18,8 @@ from .ontology import (
     NodeKind,
     PermissionEffect,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -67,6 +71,7 @@ class _ProjectionBuffer:
     def __init__(self) -> None:
         self.nodes: Dict[str, AuthzNode] = {}
         self.edges: Dict[tuple[Any, ...], AuthzEdge] = {}
+        self.legacy_predicates_warned: set[str] = set()
 
     def add_node(self, node: AuthzNode) -> None:
         self.nodes[node.ref] = node
@@ -97,6 +102,7 @@ class AuthzGraphProjector:
         snapshot_ref: str,
         snapshot_id: Optional[int] = None,
         snapshot_version: Optional[str] = None,
+        policy_edge_manifests: Optional[Iterable[PolicyEdgeManifest | Dict[str, Any]]] = None,
         action_intents: Optional[Iterable[ActionIntent]] = None,
         facts: Optional[Iterable[Fact | Dict[str, Any]]] = None,
         registrations: Optional[Iterable[SourceRegistration | Dict[str, Any]]] = None,
@@ -104,6 +110,13 @@ class AuthzGraphProjector:
     ) -> AuthzGraphSnapshot:
         buffer = _ProjectionBuffer()
 
+        for manifest in policy_edge_manifests or []:
+            self._project_policy_edge_manifest(
+                manifest,
+                buffer,
+                snapshot_id=snapshot_id,
+                snapshot_version=snapshot_version,
+            )
         for intent in action_intents or []:
             self._project_action_intent(intent, buffer, snapshot_id=snapshot_id, snapshot_version=snapshot_version)
         for fact in facts or []:
@@ -121,6 +134,82 @@ class AuthzGraphProjector:
             nodes=list(buffer.nodes.values()),
             edges=list(buffer.edges.values()),
         ).deduplicated()
+
+    def _project_policy_edge_manifest(
+        self,
+        manifest: PolicyEdgeManifest | Dict[str, Any],
+        buffer: _ProjectionBuffer,
+        *,
+        snapshot_id: Optional[int],
+        snapshot_version: Optional[str],
+    ) -> None:
+        resolved = manifest if isinstance(manifest, PolicyEdgeManifest) else PolicyEdgeManifest(**manifest)
+        if resolved.relationship not in {"can", "can_bypass"}:
+            return
+
+        provenance = GraphProvenance(
+            source_type="snapshot_rule_manifest",
+            source_ref=resolved.rule_id or resolved.rule_name or resolved.source_selector,
+            snapshot_id=snapshot_id,
+            snapshot_version=snapshot_version,
+            metadata={
+                "rule_name": resolved.rule_name,
+                "relationship": resolved.relationship,
+                **resolved.metadata,
+            },
+        )
+        source_ref = _normalize_selector_ref(resolved.source_selector)
+        target_ref = _normalize_selector_ref(resolved.target_selector)
+        if not source_ref or not target_ref:
+            return
+
+        buffer.add_node(
+            AuthzNode(
+                kind=_infer_selector_kind(source_ref),
+                ref=source_ref,
+                provenance=provenance,
+            )
+        )
+        buffer.add_node(
+            AuthzNode(
+                kind=_infer_selector_kind(target_ref),
+                ref=target_ref,
+                provenance=provenance,
+            )
+        )
+        conditions = dict(resolved.conditions or {})
+        zones = [_zone_ref(value) for value in conditions.get("zones", []) if str(value).strip()]
+        networks = [_network_ref(value) for value in conditions.get("networks", []) if str(value).strip()]
+        for zone_ref in zones:
+            buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
+        for network_ref in networks:
+            buffer.add_node(AuthzNode(kind=NodeKind.NETWORK_SEGMENT, ref=network_ref, provenance=provenance))
+
+        buffer.add_edge(
+            AuthzEdge(
+                kind=EdgeKind.CAN,
+                src=source_ref,
+                dst=target_ref,
+                operation=resolved.operation,
+                effect=resolved.effect,
+                constraints={
+                    "zones": zones,
+                    "networks": networks,
+                    "resource_state_hash": conditions.get("resource_state_hash"),
+                    "requires_break_glass": resolved.requires_break_glass,
+                    "bypass_deny": resolved.bypass_deny,
+                },
+                attributes={
+                    "relationship": resolved.relationship,
+                    "rule_id": resolved.rule_id,
+                    "rule_name": resolved.rule_name,
+                    **resolved.metadata,
+                },
+                valid_from=_serialize_datetime(conditions.get("valid_from")),
+                valid_to=_serialize_datetime(conditions.get("valid_to")),
+                provenance=provenance,
+            )
+        )
 
     def _project_action_intent(
         self,
@@ -252,6 +341,8 @@ class AuthzGraphProjector:
         )
 
         predicate_lower = str(predicate).strip().lower()
+        if predicate_lower in {"hasrole", "delegatedto", "allowedoperation", "locatedinzone"}:
+            self._warn_legacy_inferred_predicate(predicate_lower, buffer)
         if predicate_lower == "hasrole":
             principal_ref = _principal_ref(subject)
             role_value = object_data.get("role") or object_data.get("role_profile")
@@ -334,6 +425,16 @@ class AuthzGraphProjector:
             buffer.add_node(AuthzNode(kind=NodeKind.RESOURCE, ref=resource_ref, provenance=provenance))
             buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
             buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=resource_ref, dst=zone_ref, provenance=provenance))
+
+    def _warn_legacy_inferred_predicate(self, predicate: str, buffer: _ProjectionBuffer) -> None:
+        if predicate in buffer.legacy_predicates_warned:
+            return
+        buffer.legacy_predicates_warned.add(predicate)
+        logger.warning(
+            "Authz graph is deriving edges from legacy fact predicate '%s'. "
+            "Migrate this relationship into snapshot rule metadata authz_graph.edge_manifests.",
+            predicate,
+        )
 
     def _project_registration(
         self,
@@ -430,3 +531,30 @@ def _infer_subject_kind(subject_ref: str) -> NodeKind:
     if subject_ref.startswith("role:"):
         return NodeKind.ROLE_PROFILE
     return NodeKind.PRINCIPAL
+
+
+def _normalize_selector_ref(selector: str) -> str:
+    selector = str(selector).strip()
+    if not selector:
+        return ""
+    if selector.startswith("principal:"):
+        return _principal_ref(selector)
+    if selector.startswith("role:"):
+        return _role_ref(selector)
+    if selector.startswith("zone:"):
+        return _zone_ref(selector)
+    if selector.startswith("network:"):
+        return _network_ref(selector)
+    return _resource_ref(selector)
+
+
+def _infer_selector_kind(selector_ref: str) -> NodeKind:
+    if selector_ref.startswith("principal:"):
+        return NodeKind.PRINCIPAL
+    if selector_ref.startswith("role:"):
+        return NodeKind.ROLE_PROFILE
+    if selector_ref.startswith("zone:"):
+        return NodeKind.ZONE
+    if selector_ref.startswith("network:"):
+        return NodeKind.NETWORK_SEGMENT
+    return NodeKind.RESOURCE

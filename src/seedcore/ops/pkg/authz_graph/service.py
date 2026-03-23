@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
 
 from sqlalchemy import select  # pyright: ignore[reportMissingImports]
@@ -11,6 +12,7 @@ from seedcore.models.source_registration import SourceRegistration, TrackingEven
 from seedcore.ops.pkg.client import PKGClient
 
 from .compiler import AuthzGraphCompiler, CompiledAuthzIndex
+from .manifest import PolicyEdgeManifest
 from .ontology import AuthzGraphSnapshot
 from .projector import AuthzGraphProjector
 
@@ -24,6 +26,7 @@ class AuthzProjectionSources:
     registrations: List[SourceRegistration | Dict[str, Any]] = field(default_factory=list)
     tracking_events: List[TrackingEvent | Dict[str, Any]] = field(default_factory=list)
     action_intents: List[ActionIntent] = field(default_factory=list)
+    graph_manifests: List[PolicyEdgeManifest | Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -73,10 +76,8 @@ class AuthzGraphProjectionService:
         include_tracking_events: bool = True,
         action_intents: Optional[Iterable[ActionIntent]] = None,
     ) -> AuthzProjectionSources:
-        if snapshot_id is None and snapshot_version is not None:
-            snapshot = await self.pkg_client.get_snapshot_by_version(snapshot_version)
-            if snapshot is None:
-                raise LookupError(f"PKG snapshot version '{snapshot_version}' not found")
+        snapshot = await self._resolve_snapshot(snapshot_id=snapshot_id, snapshot_version=snapshot_version)
+        if snapshot is not None:
             snapshot_id = snapshot.id
             snapshot_version = snapshot.version
 
@@ -100,6 +101,7 @@ class AuthzGraphProjectionService:
             registrations=list(registrations),
             tracking_events=list(tracking_events),
             action_intents=list(action_intents or []),
+            graph_manifests=list(getattr(snapshot, "graph_manifests", []) or []),
         )
 
     async def build_snapshot(
@@ -123,12 +125,10 @@ class AuthzGraphProjectionService:
             include_tracking_events=include_tracking_events,
             action_intents=action_intents,
         )
+        snapshot = await self._resolve_snapshot(snapshot_id=snapshot_id, snapshot_version=snapshot_version)
         effective_snapshot_id = snapshot_id
         effective_snapshot_version = snapshot_version
-        if effective_snapshot_id is None and snapshot_version is not None:
-            snapshot = await self.pkg_client.get_snapshot_by_version(snapshot_version)
-            if snapshot is None:
-                raise LookupError(f"PKG snapshot version '{snapshot_version}' not found")
+        if snapshot is not None:
             effective_snapshot_id = snapshot.id
             effective_snapshot_version = snapshot.version
 
@@ -136,6 +136,7 @@ class AuthzGraphProjectionService:
             snapshot_ref=snapshot_ref,
             snapshot_id=effective_snapshot_id,
             snapshot_version=effective_snapshot_version,
+            policy_edge_manifests=sources.graph_manifests,
             action_intents=sources.action_intents,
             facts=sources.facts,
             registrations=sources.registrations,
@@ -149,6 +150,7 @@ class AuthzGraphProjectionService:
             "registrations_count": len(sources.registrations),
             "tracking_events_count": len(sources.tracking_events),
             "action_intents_count": len(sources.action_intents),
+            "graph_manifests_count": len(sources.graph_manifests),
             "graph_nodes_count": len(snapshot.nodes),
             "graph_edges_count": len(snapshot.edges),
             "governed_only": governed_only,
@@ -192,3 +194,35 @@ class AuthzGraphProjectionService:
                 .order_by(TrackingEvent.captured_at.asc(), TrackingEvent.id.asc())
             )
             return list(result.scalars().all())
+
+    async def _resolve_snapshot(
+        self,
+        *,
+        snapshot_id: Optional[int],
+        snapshot_version: Optional[str],
+    ) -> Any:
+        if snapshot_version is not None:
+            getter = getattr(self.pkg_client, "get_snapshot_by_version", None)
+            if getter is None:
+                return SimpleNamespace(
+                    id=snapshot_id,
+                    version=snapshot_version,
+                    graph_manifests=[],
+                )
+            snapshot = await getter(snapshot_version)
+            if snapshot is None:
+                raise LookupError(f"PKG snapshot version '{snapshot_version}' not found")
+            return snapshot
+        if snapshot_id is not None:
+            getter = getattr(self.pkg_client, "get_snapshot_by_id", None)
+            if getter is None:
+                return SimpleNamespace(
+                    id=snapshot_id,
+                    version=snapshot_version,
+                    graph_manifests=[],
+                )
+            snapshot = await getter(snapshot_id)
+            if snapshot is None:
+                raise LookupError(f"PKG snapshot id '{snapshot_id}' not found")
+            return snapshot
+        return None

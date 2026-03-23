@@ -32,6 +32,8 @@ class CompiledPermission:
     zones: frozenset[str] = frozenset()
     networks: frozenset[str] = frozenset()
     resource_state_hash: Optional[str] = None
+    requires_break_glass: bool = False
+    bypass_deny: bool = False
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
     provenance_source: Optional[str] = None
@@ -43,6 +45,9 @@ class CompiledPermissionMatch:
     matched_subjects: Tuple[str, ...] = ()
     matched_permissions: Tuple[CompiledPermission, ...] = ()
     deny_permissions: Tuple[CompiledPermission, ...] = ()
+    break_glass_permissions: Tuple[CompiledPermission, ...] = ()
+    break_glass_required: bool = False
+    break_glass_used: bool = False
     reason: str = "no_matching_permission"
 
 
@@ -80,11 +85,13 @@ class CompiledAuthzIndex:
         network_ref: Optional[str] = None,
         resource_state_hash: Optional[str] = None,
         at: Optional[datetime] = None,
+        break_glass: bool = False,
     ) -> CompiledPermissionMatch:
         effective_at = at.astimezone(timezone.utc) if at and at.tzinfo else at or datetime.now(timezone.utc)
         subject_refs = self.resolve_subjects(principal_ref)
         allow_matches: List[CompiledPermission] = []
         deny_matches: List[CompiledPermission] = []
+        break_glass_matches: List[CompiledPermission] = []
         expected_op = str(operation).strip().upper()
         effective_zone = _normalize_optional_ref(zone_ref)
         effective_network = _normalize_optional_ref(network_ref)
@@ -113,15 +120,30 @@ class CompiledAuthzIndex:
                     continue
                 if permission.effect == PermissionEffect.DENY:
                     deny_matches.append(permission)
+                elif permission.requires_break_glass or permission.bypass_deny:
+                    break_glass_matches.append(permission)
                 else:
                     allow_matches.append(permission)
 
         if deny_matches:
+            if break_glass and break_glass_matches and any(item.bypass_deny for item in break_glass_matches):
+                return CompiledPermissionMatch(
+                    allowed=True,
+                    matched_subjects=subject_refs,
+                    matched_permissions=tuple(allow_matches),
+                    deny_permissions=tuple(deny_matches),
+                    break_glass_permissions=tuple(break_glass_matches),
+                    break_glass_required=True,
+                    break_glass_used=True,
+                    reason="break_glass_override",
+                )
             return CompiledPermissionMatch(
                 allowed=False,
                 matched_subjects=subject_refs,
                 matched_permissions=tuple(allow_matches),
                 deny_permissions=tuple(deny_matches),
+                break_glass_permissions=tuple(break_glass_matches),
+                break_glass_required=bool(break_glass_matches),
                 reason="explicit_deny",
             )
         if allow_matches:
@@ -130,13 +152,41 @@ class CompiledAuthzIndex:
                 matched_subjects=subject_refs,
                 matched_permissions=tuple(allow_matches),
                 deny_permissions=(),
+                break_glass_permissions=tuple(break_glass_matches),
+                break_glass_required=False,
+                break_glass_used=False,
                 reason="matched_allow_permission",
+            )
+        if break_glass_matches:
+            if break_glass:
+                return CompiledPermissionMatch(
+                    allowed=True,
+                    matched_subjects=subject_refs,
+                    matched_permissions=tuple(allow_matches),
+                    deny_permissions=(),
+                    break_glass_permissions=tuple(break_glass_matches),
+                    break_glass_required=True,
+                    break_glass_used=True,
+                    reason="matched_break_glass_permission",
+                )
+            return CompiledPermissionMatch(
+                allowed=False,
+                matched_subjects=subject_refs,
+                matched_permissions=tuple(allow_matches),
+                deny_permissions=(),
+                break_glass_permissions=tuple(break_glass_matches),
+                break_glass_required=True,
+                break_glass_used=False,
+                reason="break_glass_required",
             )
         return CompiledPermissionMatch(
             allowed=False,
             matched_subjects=subject_refs,
             matched_permissions=(),
             deny_permissions=(),
+            break_glass_permissions=(),
+            break_glass_required=False,
+            break_glass_used=False,
             reason="no_matching_permission",
         )
 
@@ -180,6 +230,8 @@ class AuthzGraphCompiler:
             zones=zones,
             networks=networks,
             resource_state_hash=_normalize_optional_ref(edge.constraints.get("resource_state_hash")),
+            requires_break_glass=bool(edge.constraints.get("requires_break_glass")),
+            bypass_deny=bool(edge.constraints.get("bypass_deny")),
             valid_from=_parse_iso8601(edge.valid_from),
             valid_to=_parse_iso8601(edge.valid_to),
             provenance_source=edge.provenance.source_ref if edge.provenance else None,

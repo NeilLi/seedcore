@@ -86,6 +86,30 @@ def _build_actor_token(
     return f"seedcore_hmac_v1.{payload}.{signature}"
 
 
+def _build_break_glass_token(
+    *,
+    secret: str,
+    subject: str,
+    issued_at: datetime,
+    expires_at: datetime,
+    require_reason: bool = True,
+) -> str:
+    claims = {
+        "sub": subject,
+        "iat": int(issued_at.timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "require_reason": require_reason,
+    }
+    payload = base64.urlsafe_b64encode(
+        json.dumps(claims, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signing_input = f"seedcore_break_glass_v1.{payload}".encode("utf-8")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    ).decode("ascii").rstrip("=")
+    return f"seedcore_break_glass_v1.{payload}.{signature}"
+
+
 def test_build_twin_snapshot_uses_typed_lifecycle_schema():
     payload = _base_payload()
     payload["params"]["resource"]["parent_twin_id"] = "batch:lot-10"
@@ -323,3 +347,120 @@ def test_evaluate_intent_denies_when_compiled_authz_snapshot_mismatches():
 
     assert decision.allowed is False
     assert decision.deny_code == "authz_graph_snapshot_mismatch"
+
+
+def test_evaluate_intent_denies_when_break_glass_is_required_but_missing():
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        "seedcore://zones/vault-a/assets/asset-1"
+    )
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        policy_edge_manifests=[
+            {
+                "source_selector": "principal:agent-1",
+                "target_selector": "seedcore://zones/vault-a/assets/asset-1",
+                "relationship": "can_bypass",
+                "operation": "MUTATE",
+                "conditions": {"requires_break_glass": True, "bypass_deny": True, "zones": ["vault-a"]},
+            }
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "authz_graph_denied"
+    assert any("compiled_authz_result=break_glass_required" in item for item in decision.explanations)
+    assert decision.break_glass.present is False
+    assert decision.break_glass.required is True
+    assert decision.break_glass.outcome == "break_glass_required"
+
+
+def test_evaluate_intent_allows_break_glass_override_with_valid_token(monkeypatch):
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        "seedcore://zones/vault-a/assets/asset-1"
+    )
+    issued_at = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    break_glass_secret = "break-glass-secret"
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "break_glass_token": _build_break_glass_token(
+            secret=break_glass_secret,
+            subject="agent-1",
+            issued_at=issued_at,
+            expires_at=datetime(2099, 3, 20, 12, 0, 5, tzinfo=timezone.utc),
+        ),
+        "break_glass_reason": "operator approved emergency release",
+    }
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        policy_edge_manifests=[
+            {
+                "source_selector": "principal:agent-1",
+                "target_selector": "seedcore://zones/vault-a/assets/asset-1",
+                "relationship": "can",
+                "operation": "MUTATE",
+                "effect": "deny",
+                "conditions": {"zones": ["vault-a"]},
+            },
+            {
+                "source_selector": "principal:agent-1",
+                "target_selector": "seedcore://zones/vault-a/assets/asset-1",
+                "relationship": "can_bypass",
+                "operation": "MUTATE",
+                "conditions": {"requires_break_glass": True, "bypass_deny": True, "zones": ["vault-a"]},
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_BREAK_GLASS_SECRET", break_glass_secret)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.execution_token is not None
+    assert decision.break_glass.present is True
+    assert decision.break_glass.validated is True
+    assert decision.break_glass.used is True
+    assert decision.break_glass.override_applied is True
+    assert decision.break_glass.outcome == "break_glass_override"
+
+
+def test_evaluate_intent_denies_invalid_break_glass_token(monkeypatch):
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        "seedcore://zones/vault-a/assets/asset-1"
+    )
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "break_glass_token": "seedcore_break_glass_v1.invalid.invalid",
+        "break_glass_reason": "operator approved emergency release",
+    }
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        policy_edge_manifests=[
+            {
+                "source_selector": "principal:agent-1",
+                "target_selector": "seedcore://zones/vault-a/assets/asset-1",
+                "relationship": "can_bypass",
+                "operation": "MUTATE",
+                "conditions": {"requires_break_glass": True, "bypass_deny": True, "zones": ["vault-a"]},
+            }
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_BREAK_GLASS_SECRET", "break-glass-secret")
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "invalid_break_glass_token"
+    assert decision.break_glass.present is True
+    assert decision.break_glass.validated is False
+    assert decision.break_glass.outcome == "verification_failed"

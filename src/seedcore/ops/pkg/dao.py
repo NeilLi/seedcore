@@ -17,7 +17,7 @@ import json
 import logging
 import inspect
 from typing import Optional, List, Dict, Any, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import text  # pyright: ignore[reportMissingImports]
@@ -26,6 +26,35 @@ from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissing
 from ...database import get_async_pg_session_factory
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_graph_manifests_from_rule_metadata(
+    *,
+    rule_id: Any,
+    rule_name: Any,
+    metadata: Any,
+) -> List[Dict[str, Any]]:
+    if not isinstance(metadata, Mapping):
+        return []
+
+    authz_graph = metadata.get("authz_graph")
+    if isinstance(authz_graph, Mapping):
+        raw_manifests = authz_graph.get("edge_manifests")
+    else:
+        raw_manifests = metadata.get("edge_manifests")
+
+    if not isinstance(raw_manifests, list):
+        return []
+
+    manifests: List[Dict[str, Any]] = []
+    for item in raw_manifests:
+        if not isinstance(item, Mapping):
+            continue
+        payload = dict(item)
+        payload.setdefault("rule_id", str(rule_id) if rule_id is not None else None)
+        payload.setdefault("rule_name", str(rule_name) if rule_name is not None else None)
+        manifests.append(payload)
+    return manifests
 
 
 async def _maybe_await(value):
@@ -80,6 +109,7 @@ class PKGSnapshotData:
     wasm_artifact: Optional[bytes]
     checksum: Optional[str]
     rules: List[Dict[str, Any]]  # For the 'native' engine [cite: 93]
+    graph_manifests: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # =========================
@@ -905,6 +935,7 @@ class PKGSnapshotsDAO:
 
         engine: str
         rules_list: List[Dict[str, Any]] = []
+        graph_manifests: List[Dict[str, Any]] = []
 
         if wasm_artifact:
             # This is a WASM snapshot
@@ -912,6 +943,7 @@ class PKGSnapshotsDAO:
             logger.info(
                 f"Building 'wasm' snapshot {snapshot_row['version']} (id={snapshot_id})"
             )
+            graph_manifests = await self._load_graph_manifests(session, snapshot_id=snapshot_id)
         else:
             # This is a Native snapshot
             engine = "native"
@@ -1028,6 +1060,7 @@ class PKGSnapshotsDAO:
                 rule_dict["emissions"] = unique_emissions
 
             rules_list = list(rules_dict.values())
+            graph_manifests = self._extract_graph_manifests_from_rules(rules_list)
 
             elapsed = time.perf_counter() - start
             logger.info(
@@ -1041,7 +1074,46 @@ class PKGSnapshotsDAO:
             wasm_artifact=wasm_artifact,
             checksum=snapshot_row["checksum"],
             rules=rules_list,
+            graph_manifests=graph_manifests,
         )
+
+    @staticmethod
+    def _extract_graph_manifests_from_rules(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        manifests: List[Dict[str, Any]] = []
+        for rule in rules:
+            manifests.extend(
+                _extract_graph_manifests_from_rule_metadata(
+                    rule_id=rule.get("id"),
+                    rule_name=rule.get("rule_name"),
+                    metadata=rule.get("metadata"),
+                )
+            )
+        return manifests
+
+    async def _load_graph_manifests(
+        self,
+        session: AsyncSession,
+        *,
+        snapshot_id: int,
+    ) -> List[Dict[str, Any]]:
+        sql = text("""
+            SELECT r.id AS rule_id, r.rule_name, r.metadata
+            FROM pkg_policy_rules r
+            WHERE r.snapshot_id = :snapshot_id AND r.disabled = FALSE
+            ORDER BY r.priority DESC, r.rule_name
+        """)
+        result = await session.execute(sql, {"snapshot_id": snapshot_id})
+        manifests: List[Dict[str, Any]] = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            manifests.extend(
+                _extract_graph_manifests_from_rule_metadata(
+                    rule_id=row_dict.get("rule_id"),
+                    rule_name=row_dict.get("rule_name"),
+                    metadata=row_dict.get("metadata"),
+                )
+            )
+        return manifests
 
     async def get_active_artifact(self, env: str = "prod") -> Optional[Dict[str, Any]]:
         """

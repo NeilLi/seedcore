@@ -79,7 +79,19 @@ class TestPKGSnapshotsDAO:
             'compiled_rule': None,
             'engine': 'native',
             'rule_hash': 'hash1',
-            'metadata': {},
+            'metadata': {
+                'authz_graph': {
+                    'edge_manifests': [
+                        {
+                            'source_selector': 'role:warehouse_operator',
+                            'target_selector': 'resource:asset-42',
+                            'relationship': 'can',
+                            'operation': 'PICK',
+                            'conditions': {'zones': ['cold-room'], 'networks': ['plant-a']},
+                        }
+                    ]
+                }
+            },
             'disabled': False,
             'condition_type': 'TAG',
             'condition_key': 'vip',
@@ -141,7 +153,10 @@ class TestPKGSnapshotsDAO:
         artifact_result = AsyncMock()
         artifact_result.first.return_value = mock_wasm_artifact_row
 
-        session.execute.side_effect = [snapshot_result, artifact_result]
+        manifests_result = AsyncMock()
+        manifests_result.__iter__ = Mock(return_value=iter([]))
+
+        session.execute.side_effect = [snapshot_result, artifact_result, manifests_result]
 
         snapshot = await dao.get_active_snapshot()
         
@@ -152,6 +167,7 @@ class TestPKGSnapshotsDAO:
         assert snapshot.wasm_artifact == b'wasm_binary_data'
         assert snapshot.checksum == 'abc123def456'
         assert snapshot.rules == []
+        assert snapshot.graph_manifests == []
     
     @pytest.mark.asyncio
     async def test_get_active_snapshot_native(self, dao, mock_session_factory, mock_snapshot_row, mock_native_rules_rows):
@@ -180,6 +196,8 @@ class TestPKGSnapshotsDAO:
         assert snapshot.rules[0]['rule_name'] == 'high_priority_vip'
         assert len(snapshot.rules[0]['conditions']) > 0
         assert len(snapshot.rules[0]['emissions']) > 0
+        assert len(snapshot.graph_manifests) == 1
+        assert snapshot.graph_manifests[0]["source_selector"] == "role:warehouse_operator"
     
     @pytest.mark.asyncio
     async def test_get_active_snapshot_not_found(self, dao, mock_session_factory):
@@ -207,7 +225,10 @@ class TestPKGSnapshotsDAO:
         artifact_result = AsyncMock()
         artifact_result.first.return_value = mock_wasm_artifact_row
 
-        session.execute.side_effect = [snapshot_result, artifact_result]
+        manifests_result = AsyncMock()
+        manifests_result.__iter__ = Mock(return_value=iter([]))
+
+        session.execute.side_effect = [snapshot_result, artifact_result, manifests_result]
 
         snapshot = await dao.get_snapshot_by_version('rules@1.4.0')
         

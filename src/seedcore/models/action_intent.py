@@ -161,10 +161,12 @@ class IntentEnvironment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     origin_network: Optional[str] = None
+    break_glass_token: Optional[str] = None
+    break_glass_reason: Optional[str] = None
 
-    @field_validator("origin_network")
+    @field_validator("origin_network", "break_glass_token", "break_glass_reason")
     @classmethod
-    def _validate_origin_network(cls, value: Optional[str]) -> Optional[str]:
+    def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)
 
 
@@ -298,6 +300,19 @@ class ExecutionToken(BaseModel):
     constraints: Dict[str, Any] = Field(default_factory=dict)
 
 
+class BreakGlassDecisionContext(BaseModel):
+    present: bool = False
+    validated: bool = False
+    used: bool = False
+    override_applied: bool = False
+    required: bool = False
+    reason: Optional[str] = None
+    principal_id: Optional[str] = None
+    token_issued_at: Optional[str] = None
+    token_expires_at: Optional[str] = None
+    outcome: Optional[str] = None
+
+
 class PolicyDecision(BaseModel):
     allowed: bool
     execution_token: Optional[ExecutionToken] = None
@@ -310,6 +325,7 @@ class PolicyDecision(BaseModel):
     required_approvals: List[str] = Field(default_factory=list)
     evidence_gaps: List[str] = Field(default_factory=list)
     cognitive_trace_ref: Optional[str] = None
+    break_glass: BreakGlassDecisionContext = Field(default_factory=BreakGlassDecisionContext)
 
 
 def _coerce_operation(action_type: str) -> GovernedOperation:

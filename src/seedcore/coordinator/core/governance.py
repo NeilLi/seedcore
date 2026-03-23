@@ -13,6 +13,7 @@ from urllib.parse import quote
 from seedcore.models.action_intent import (
     ActionIntent,
     AuthorityLevel,
+    BreakGlassDecisionContext,
     DelegatedAuthority,
     ExecutionToken,
     IntentAction,
@@ -74,6 +75,9 @@ INVALID_ACTOR_TOKEN_DENY_CODE = "invalid_actor_token"
 ACTOR_TOKEN_SUBJECT_MISMATCH_DENY_CODE = "actor_token_subject_mismatch"
 ACTOR_TOKEN_EXPIRED_DENY_CODE = "actor_token_expired"
 MISSING_ACTOR_TOKEN_DENY_CODE = "missing_actor_token"
+INVALID_BREAK_GLASS_TOKEN_DENY_CODE = "invalid_break_glass_token"
+BREAK_GLASS_TOKEN_SUBJECT_MISMATCH_DENY_CODE = "break_glass_token_subject_mismatch"
+BREAK_GLASS_TOKEN_EXPIRED_DENY_CODE = "break_glass_token_expired"
 AUTHZ_GRAPH_DENY_CODE = "authz_graph_denied"
 AUTHZ_GRAPH_SNAPSHOT_MISMATCH_DENY_CODE = "authz_graph_snapshot_mismatch"
 EXECUTION_TOKEN_CONSTRAINT_KEYS = (
@@ -256,6 +260,16 @@ def _derive_action_intent_from_task(
         or metadata.get("origin_network")
         or payload.get("origin_network")
     )
+    break_glass_token = (
+        interaction.get("break_glass_token")
+        or governance.get("break_glass_token")
+        or metadata.get("break_glass_token")
+    )
+    break_glass_reason = (
+        interaction.get("break_glass_reason")
+        or governance.get("break_glass_reason")
+        or metadata.get("break_glass_reason")
+    )
 
     contract_version = _derive_contract_version(payload, governance)
     action_type = _derive_action_type(payload, params)
@@ -330,6 +344,12 @@ def _derive_action_intent_from_task(
         ),
         environment=IntentEnvironment(
             origin_network=str(origin_network) if origin_network is not None else None,
+            break_glass_token=(
+                str(break_glass_token) if break_glass_token is not None else None
+            ),
+            break_glass_reason=(
+                str(break_glass_reason) if break_glass_reason is not None else None
+            ),
         ),
     )
 
@@ -881,7 +901,7 @@ def evaluate_intent(
     if cognitive_violation is not None:
         return cognitive_violation
 
-    authz_graph_violation = _evaluate_compiled_authz_graph_policy(
+    authz_graph_violation, break_glass_context = _evaluate_compiled_authz_graph_policy(
         action_intent=action_intent,
         policy_case=policy_case,
         compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
@@ -932,6 +952,7 @@ def evaluate_intent(
             if policy_case.cognitive_assessment is not None
             else None
         ),
+        break_glass=break_glass_context,
     )
 
 
@@ -1331,24 +1352,36 @@ def _evaluate_compiled_authz_graph_policy(
     action_intent: ActionIntent,
     policy_case: PolicyCase,
     compiled_authz_index: CompiledAuthzIndex | None,
-) -> PolicyDecision | None:
+) -> tuple[PolicyDecision | None, BreakGlassDecisionContext]:
     if compiled_authz_index is None:
-        return None
+        return None, BreakGlassDecisionContext()
 
     expected_snapshot = (policy_case.policy_snapshot or "").strip()
     compiled_snapshot = (compiled_authz_index.snapshot_version or "").strip()
     if expected_snapshot and compiled_snapshot and compiled_snapshot != expected_snapshot:
-        return _deny_decision(
-            "Compiled authorization graph snapshot does not match the requested policy snapshot.",
-            AUTHZ_GRAPH_SNAPSHOT_MISMATCH_DENY_CODE,
-            policy_case.policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
-            explanations=_policy_case_explanations(
-                policy_case,
-                f"compiled_authz_snapshot_mismatch expected={expected_snapshot} actual={compiled_snapshot}",
+        return (
+            _deny_decision(
+                "Compiled authorization graph snapshot does not match the requested policy snapshot.",
+                AUTHZ_GRAPH_SNAPSHOT_MISMATCH_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=_policy_case_explanations(
+                    policy_case,
+                    f"compiled_authz_snapshot_mismatch expected={expected_snapshot} actual={compiled_snapshot}",
+                ),
             ),
+            BreakGlassDecisionContext(),
         )
+
+    break_glass_violation, break_glass_context = _evaluate_break_glass_context(
+        action_intent=action_intent,
+        now=_parse_iso8601(action_intent.timestamp),
+        policy_snapshot=policy_case.policy_snapshot,
+        policy_case=policy_case,
+    )
+    if break_glass_violation is not None:
+        return break_glass_violation, break_glass_context
 
     match = compiled_authz_index.can_access(
         principal_ref=_compiled_authz_principal_ref(action_intent),
@@ -1358,10 +1391,26 @@ def _evaluate_compiled_authz_graph_policy(
         network_ref=_compiled_authz_network_ref(action_intent),
         resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
         at=_parse_iso8601(action_intent.timestamp),
+        break_glass=break_glass_context.validated,
+    )
+    break_glass_context = break_glass_context.model_copy(
+        update={
+            "used": bool(match.break_glass_used),
+            "override_applied": match.reason == "break_glass_override",
+            "required": bool(match.break_glass_required),
+            "outcome": match.reason,
+        }
     )
     if match.allowed:
-        return None
-    return _compiled_authz_deny_decision(policy_case=policy_case, match=match)
+        return None, break_glass_context
+    return (
+        _compiled_authz_deny_decision(
+            policy_case=policy_case,
+            match=match,
+            break_glass=break_glass_context,
+        ),
+        break_glass_context,
+    )
 
 
 def _resolve_compiled_authz_index(
@@ -1432,6 +1481,7 @@ def _deny_decision(
     cognitive_assessment: PolicyCaseAssessment | None = None,
     explanations: list[str] | None = None,
     evidence_gaps: list[str] | None = None,
+    break_glass: BreakGlassDecisionContext | None = None,
 ) -> PolicyDecision:
     return PolicyDecision(
         allowed=False,
@@ -1452,6 +1502,7 @@ def _deny_decision(
         cognitive_trace_ref=(
             cognitive_assessment.trace_ref if cognitive_assessment is not None else None
         ),
+        break_glass=(break_glass or BreakGlassDecisionContext()),
     )
 
 
@@ -1461,6 +1512,7 @@ def _escalate_decision(
     *,
     cognitive_assessment: PolicyCaseAssessment | None = None,
     explanations: list[str] | None = None,
+    break_glass: BreakGlassDecisionContext | None = None,
 ) -> PolicyDecision:
     return PolicyDecision(
         allowed=False,
@@ -1479,6 +1531,7 @@ def _escalate_decision(
         cognitive_trace_ref=(
             cognitive_assessment.trace_ref if cognitive_assessment is not None else None
         ),
+        break_glass=(break_glass or BreakGlassDecisionContext()),
     )
 
 
@@ -1531,15 +1584,18 @@ def _compiled_authz_deny_decision(
     *,
     policy_case: PolicyCase,
     match: CompiledPermissionMatch,
+    break_glass: BreakGlassDecisionContext | None = None,
 ) -> PolicyDecision:
     matched_subjects = ", ".join(match.matched_subjects) if match.matched_subjects else "none"
     deny_count = len(match.deny_permissions)
     allow_count = len(match.matched_permissions)
-    reason = (
-        "Compiled authorization graph denied the ActionIntent."
-        if match.reason != "explicit_deny"
-        else "Compiled authorization graph returned an explicit deny for the ActionIntent."
-    )
+    break_glass_count = len(match.break_glass_permissions)
+    if match.reason == "explicit_deny":
+        reason = "Compiled authorization graph returned an explicit deny for the ActionIntent."
+    elif match.reason == "break_glass_required":
+        reason = "Compiled authorization graph requires a valid break-glass token for this ActionIntent."
+    else:
+        reason = "Compiled authorization graph denied the ActionIntent."
     return _deny_decision(
         reason,
         AUTHZ_GRAPH_DENY_CODE,
@@ -1554,7 +1610,10 @@ def _compiled_authz_deny_decision(
             f"compiled_authz_subjects={matched_subjects}",
             f"compiled_authz_allow_matches={allow_count}",
             f"compiled_authz_deny_matches={deny_count}",
+            f"compiled_authz_break_glass_matches={break_glass_count}",
+            f"compiled_authz_break_glass_required={match.break_glass_required}",
         ],
+        break_glass=break_glass,
     )
 
 
@@ -1660,28 +1719,103 @@ def _derive_resource_state_hash(
     return _sha256_hex(_canonical_json(state_source))
 
 
-def _derive_actor_token_claims(token: str) -> Dict[str, Any]:
+def _derive_hmac_token_claims(
+    *,
+    token: str,
+    prefix: str,
+    secret_env: str,
+) -> Dict[str, Any]:
     try:
-        prefix, payload_segment, signature_segment = token.split(".", 2)
-        if prefix != "seedcore_hmac_v1":
-            raise ValueError("unsupported_actor_token_scheme")
+        token_prefix, payload_segment, signature_segment = token.split(".", 2)
+        if token_prefix != prefix:
+            raise ValueError("unsupported_token_scheme")
         signing_input = f"{prefix}.{payload_segment}".encode("utf-8")
-        secret = os.getenv("SEEDCORE_PDP_ACTOR_TOKEN_SECRET", "").strip()
+        secret = os.getenv(secret_env, "").strip()
         if not secret:
-            raise ValueError("actor_token_secret_unconfigured")
+            raise ValueError("token_secret_unconfigured")
         expected = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
         actual = base64.urlsafe_b64decode(_pad_base64(signature_segment))
         if not hmac.compare_digest(actual, expected):
-            raise ValueError("actor_token_signature_invalid")
+            raise ValueError("token_signature_invalid")
         payload_bytes = base64.urlsafe_b64decode(_pad_base64(payload_segment))
         claims = json.loads(payload_bytes.decode("utf-8"))
         if not isinstance(claims, dict):
-            raise ValueError("actor_token_claims_invalid")
+            raise ValueError("token_claims_invalid")
         return claims
     except ValueError:
         raise
     except Exception as exc:
-        raise ValueError("actor_token_malformed") from exc
+        raise ValueError("token_malformed") from exc
+
+
+def _derive_actor_token_claims(token: str) -> Dict[str, Any]:
+    try:
+        return _derive_hmac_token_claims(
+            token=token,
+            prefix="seedcore_hmac_v1",
+            secret_env="SEEDCORE_PDP_ACTOR_TOKEN_SECRET",
+        )
+    except ValueError as exc:
+        mapping = {
+            "unsupported_token_scheme": "unsupported_actor_token_scheme",
+            "token_secret_unconfigured": "actor_token_secret_unconfigured",
+            "token_signature_invalid": "actor_token_signature_invalid",
+            "token_claims_invalid": "actor_token_claims_invalid",
+            "token_malformed": "actor_token_malformed",
+        }
+        raise ValueError(mapping.get(str(exc), str(exc))) from exc
+
+
+def _derive_break_glass_claims(token: str) -> Dict[str, Any]:
+    try:
+        return _derive_hmac_token_claims(
+            token=token,
+            prefix="seedcore_break_glass_v1",
+            secret_env="SEEDCORE_PDP_BREAK_GLASS_SECRET",
+        )
+    except ValueError as exc:
+        mapping = {
+            "unsupported_token_scheme": "unsupported_break_glass_token_scheme",
+            "token_secret_unconfigured": "break_glass_token_secret_unconfigured",
+            "token_signature_invalid": "break_glass_token_signature_invalid",
+            "token_claims_invalid": "break_glass_token_claims_invalid",
+            "token_malformed": "break_glass_token_malformed",
+        }
+        raise ValueError(mapping.get(str(exc), str(exc))) from exc
+
+
+def _build_break_glass_context(
+    action_intent: ActionIntent,
+    *,
+    claims: Mapping[str, Any] | None = None,
+    validated: bool = False,
+    used: bool = False,
+    override_applied: bool = False,
+    required: bool = False,
+    outcome: str | None = None,
+) -> BreakGlassDecisionContext:
+    token_issued_at = None
+    token_expires_at = None
+    if claims is not None:
+        issued_at_raw = claims.get("iat")
+        expires_at_raw = claims.get("exp")
+        if isinstance(issued_at_raw, (int, float)):
+            token_issued_at = _isoformat(datetime.fromtimestamp(float(issued_at_raw), tz=timezone.utc))
+        if isinstance(expires_at_raw, (int, float)):
+            token_expires_at = _isoformat(datetime.fromtimestamp(float(expires_at_raw), tz=timezone.utc))
+
+    return BreakGlassDecisionContext(
+        present=bool(action_intent.environment.break_glass_token),
+        validated=validated,
+        used=used,
+        override_applied=override_applied,
+        required=required,
+        reason=action_intent.environment.break_glass_reason,
+        principal_id=action_intent.principal.agent_id,
+        token_issued_at=token_issued_at,
+        token_expires_at=token_expires_at,
+        outcome=outcome,
+    )
 
 
 def _evaluate_actor_token_policy(
@@ -1801,6 +1935,154 @@ def _evaluate_actor_token_policy(
     return None
 
 
+def _evaluate_break_glass_context(
+    *,
+    action_intent: ActionIntent,
+    now: datetime,
+    policy_snapshot: str | None,
+    policy_case: PolicyCase,
+) -> tuple[PolicyDecision | None, BreakGlassDecisionContext]:
+    break_glass_token = action_intent.environment.break_glass_token
+    base_context = _build_break_glass_context(action_intent)
+    if not break_glass_token:
+        return None, base_context
+    try:
+        claims = _derive_break_glass_claims(break_glass_token)
+    except ValueError as exc:
+        context = base_context.model_copy(update={"outcome": "verification_failed"})
+        return (
+            _deny_decision(
+                f"Break-glass token verification failed: {exc}.",
+                INVALID_BREAK_GLASS_TOKEN_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+
+    subject = str(claims.get("sub") or "").strip()
+    if subject != action_intent.principal.agent_id:
+        context = _build_break_glass_context(action_intent, claims=claims, outcome="subject_mismatch")
+        return (
+            _deny_decision(
+                "Break-glass token subject does not match principal.agent_id.",
+                BREAK_GLASS_TOKEN_SUBJECT_MISMATCH_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+
+    issued_at_raw = claims.get("iat")
+    expires_at_raw = claims.get("exp")
+    if not isinstance(issued_at_raw, (int, float)) or not isinstance(expires_at_raw, (int, float)):
+        context = _build_break_glass_context(
+            action_intent,
+            claims=claims,
+            outcome="claims_invalid",
+        )
+        return (
+            _deny_decision(
+                "Break-glass token is missing numeric iat/exp claims.",
+                INVALID_BREAK_GLASS_TOKEN_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+
+    skew_seconds = _pdp_break_glass_token_max_skew_seconds()
+    now_ts = now.timestamp()
+    if float(expires_at_raw) <= float(issued_at_raw):
+        context = _build_break_glass_context(
+            action_intent,
+            claims=claims,
+            outcome="window_invalid",
+        )
+        return (
+            _deny_decision(
+                "Break-glass token expiry window is invalid.",
+                INVALID_BREAK_GLASS_TOKEN_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+    if now_ts > float(expires_at_raw) + skew_seconds:
+        context = _build_break_glass_context(
+            action_intent,
+            claims=claims,
+            outcome="expired",
+        )
+        return (
+            _deny_decision(
+                "Break-glass token is expired.",
+                BREAK_GLASS_TOKEN_EXPIRED_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+    if float(issued_at_raw) - skew_seconds > now_ts:
+        context = _build_break_glass_context(
+            action_intent,
+            claims=claims,
+            outcome="issued_in_future",
+        )
+        return (
+            _deny_decision(
+                "Break-glass token iat is in the future.",
+                INVALID_BREAK_GLASS_TOKEN_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+
+    required_reason = bool(claims.get("require_reason"))
+    if required_reason and not (action_intent.environment.break_glass_reason or "").strip():
+        context = _build_break_glass_context(
+            action_intent,
+            claims=claims,
+            required=True,
+            outcome="reason_required",
+        )
+        return (
+            _deny_decision(
+                "Break-glass token requires a non-empty break_glass_reason.",
+                INVALID_BREAK_GLASS_TOKEN_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                break_glass=context,
+            ),
+            context,
+        )
+
+    return (
+        None,
+        _build_break_glass_context(
+            action_intent,
+            claims=claims,
+            validated=True,
+            required=required_reason,
+            outcome="validated",
+        ),
+    )
+
+
 def _derive_ttl_seconds(
     payload: Dict[str, Any],
     routing: Dict[str, Any],
@@ -1844,6 +2126,14 @@ def _pdp_actor_token_required() -> bool:
 
 def _pdp_actor_token_max_skew_seconds() -> float:
     raw = os.getenv("SEEDCORE_PDP_ACTOR_TOKEN_MAX_SKEW_SECONDS", "1").strip()
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _pdp_break_glass_token_max_skew_seconds() -> float:
+    raw = os.getenv("SEEDCORE_PDP_BREAK_GLASS_TOKEN_MAX_SKEW_SECONDS", "1").strip()
     try:
         return max(0.0, float(raw))
     except (TypeError, ValueError):

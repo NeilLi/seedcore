@@ -47,6 +47,8 @@ from ..models.source_registration import (
     RegistrationDecisionStatus,
     SourceRegistration,
     SourceRegistrationStatus,
+    TrackingEventSourceKind,
+    TrackingEventType,
 )
 from ..coordinator.models import (
     AnomalyTriageRequest,
@@ -121,6 +123,7 @@ from ..ops.eventizer.utils.text_normalizer import TextNormalizer, NormalizationT
 # Multimodal Context Refinement (bridges perception to Unified Memory)
 from ..ops.eventizer.utils.context_refiner import MultimodalContextRefiner
 from ..ops.source_registration.normalizer import normalize_source_registration_context
+from ..ops.source_registration.projector import record_tracking_event
 
 from ..coordinator.core.signals import SignalEnricher
 from ..coordinator.metrics.registry import get_global_metrics_tracker
@@ -2523,7 +2526,7 @@ class Coordinator:
                 if asyncio.iscoroutine(begin_ctx):
                     begin_ctx = await begin_ctx
                 async with begin_ctx:
-                    await dao.append_record(
+                    append_result = await dao.append_record(
                         session,
                         task_id=str(task_id),
                         record_type=record_type,
@@ -2546,12 +2549,130 @@ class Coordinator:
                         actor_agent_id=actor_agent_id,
                         actor_organ_id=actor_organ_id,
                     )
+                    try:
+                        await self._record_break_glass_tracking_event(
+                            session=session,
+                            task_id=str(task_id),
+                            governance=governance,
+                            record_type=record_type,
+                            audit_append_result=append_result,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to append break-glass tracking event for task %s",
+                            task_id,
+                            exc_info=True,
+                        )
         except Exception:
             logger.warning(
                 "Failed to append governance audit record for task %s",
                 task_id,
                 exc_info=True,
             )
+
+    async def _record_break_glass_tracking_event(
+        self,
+        *,
+        session: Any,
+        task_id: str,
+        governance: Dict[str, Any],
+        record_type: str,
+        audit_append_result: Dict[str, Any] | None = None,
+    ) -> None:
+        action_intent = (
+            dict(governance.get("action_intent"))
+            if isinstance(governance.get("action_intent"), dict)
+            else {}
+        )
+        policy_decision = (
+            dict(governance.get("policy_decision"))
+            if isinstance(governance.get("policy_decision"), dict)
+            else {}
+        )
+        break_glass = (
+            dict(policy_decision.get("break_glass"))
+            if isinstance(policy_decision.get("break_glass"), dict)
+            else {}
+        )
+        if not break_glass.get("present"):
+            return
+
+        principal = (
+            dict(action_intent.get("principal"))
+            if isinstance(action_intent.get("principal"), dict)
+            else {}
+        )
+        resource = (
+            dict(action_intent.get("resource"))
+            if isinstance(action_intent.get("resource"), dict)
+            else {}
+        )
+        action = (
+            dict(action_intent.get("action"))
+            if isinstance(action_intent.get("action"), dict)
+            else {}
+        )
+        event_type = (
+            TrackingEventType.POLICY_DECISION_RECORDED
+            if break_glass.get("validated")
+            else TrackingEventType.RUNTIME_INCIDENT_DETECTED
+        )
+        payload = {
+            "task_id": task_id,
+            "intent_id": action_intent.get("intent_id"),
+            "record_type": record_type,
+            "policy_snapshot": policy_decision.get("policy_snapshot"),
+            "decision": {
+                "allowed": bool(policy_decision.get("allowed")),
+                "disposition": policy_decision.get("disposition"),
+                "deny_code": policy_decision.get("deny_code"),
+                "reason": policy_decision.get("reason"),
+            },
+            "break_glass": {
+                "present": bool(break_glass.get("present")),
+                "validated": bool(break_glass.get("validated")),
+                "used": bool(break_glass.get("used")),
+                "override_applied": bool(break_glass.get("override_applied")),
+                "required": bool(break_glass.get("required")),
+                "reason": break_glass.get("reason"),
+                "principal_id": break_glass.get("principal_id"),
+                "token_issued_at": break_glass.get("token_issued_at"),
+                "token_expires_at": break_glass.get("token_expires_at"),
+                "outcome": break_glass.get("outcome"),
+            },
+            "principal": {
+                "agent_id": principal.get("agent_id"),
+                "role_profile": principal.get("role_profile"),
+            },
+            "resource": {
+                "asset_id": resource.get("asset_id"),
+                "resource_uri": resource.get("resource_uri"),
+                "target_zone": resource.get("target_zone"),
+            },
+            "operation": action.get("operation") or action.get("type"),
+        }
+        if audit_append_result:
+            payload["governance_audit"] = {
+                "entry_id": audit_append_result.get("entry_id"),
+                "recorded_at": audit_append_result.get("recorded_at"),
+                "input_hash": audit_append_result.get("input_hash"),
+                "evidence_hash": audit_append_result.get("evidence_hash"),
+            }
+
+        await record_tracking_event(
+            session,
+            event_type=event_type,
+            source_kind=TrackingEventSourceKind.POLICY_MONITOR,
+            payload=payload,
+            producer_id="coordinator.pdp",
+            correlation_id=str(action_intent.get("intent_id") or task_id),
+            subject_type="principal",
+            subject_id=(
+                str(principal.get("agent_id"))
+                if principal.get("agent_id") is not None
+                else None
+            ),
+        )
 
     async def _persist_digital_twin_state(
         self,
