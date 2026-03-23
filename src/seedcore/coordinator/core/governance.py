@@ -1403,6 +1403,7 @@ def _evaluate_compiled_authz_graph_policy(
             action_intent=action_intent,
             policy_case=policy_case,
             break_glass=break_glass_context.validated,
+            compiled_authz_index=compiled_authz_index,
         )
         if ray_result is not None:
             transition_evaluation = ray_result.get("transition_evaluation")
@@ -1510,6 +1511,7 @@ def _evaluate_compiled_authz_graph_with_ray(
     action_intent: ActionIntent,
     policy_case: PolicyCase,
     break_glass: bool,
+    compiled_authz_index: CompiledAuthzIndex | None = None,
 ) -> Dict[str, Any] | None:
     try:
         from seedcore.ops.pkg.authz_graph.ray_cache import evaluate_authz_with_ray_cache
@@ -1542,9 +1544,16 @@ def _evaluate_compiled_authz_graph_with_ray(
             "break_glass": break_glass,
         }
     return evaluate_authz_with_ray_cache(
-        snapshot_id=None,
-        snapshot_version=(policy_case.policy_snapshot or "").strip() or None,
-        snapshot_ref=(f"authz_graph@{policy_case.policy_snapshot}" if policy_case.policy_snapshot else None),
+        snapshot_id=getattr(compiled_authz_index, "snapshot_id", None),
+        snapshot_version=(
+            getattr(compiled_authz_index, "snapshot_version", None)
+            or (policy_case.policy_snapshot or "").strip()
+            or None
+        ),
+        snapshot_ref=(
+            getattr(compiled_authz_index, "snapshot_ref", None)
+            or (f"authz_graph@{policy_case.policy_snapshot}" if policy_case.policy_snapshot else None)
+        ),
         payload=payload,
         transitions=_pdp_use_authz_graph_transitions(),
         timeout_seconds=_pdp_ray_authz_cache_timeout_seconds(),
