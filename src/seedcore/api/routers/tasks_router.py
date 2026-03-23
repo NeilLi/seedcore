@@ -79,6 +79,11 @@ class MaterializedCustodyEventRead(BaseModel):
     custody_event_jsonld: Dict[str, Any]
 
 
+class GovernanceSearchRead(BaseModel):
+    total: int
+    items: List[Dict[str, Any]]
+
+
 def _authz_transition_summary(entry: Dict[str, Any]) -> Dict[str, Any] | None:
     policy_decision = entry.get("policy_decision") if isinstance(entry.get("policy_decision"), dict) else {}
     authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
@@ -331,6 +336,33 @@ async def get_materialized_custody_event(
         audit_record=replay.audit_record,
         custody_event_jsonld=replay_service.build_jsonld_export(replay),
     )
+
+
+@router.get("/governance/search", response_model=GovernanceSearchRead)
+async def search_governance_transitions(
+    session: AsyncSession = Depends(get_async_pg_session),
+    asset_id: str | None = None,
+    disposition: str | None = None,
+    trust_gap_code: str | None = None,
+    current_only: bool = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> GovernanceSearchRead:
+    normalized_disposition = str(disposition).strip().lower() if isinstance(disposition, str) and disposition.strip() else None
+    if normalized_disposition not in {None, "allow", "deny", "quarantine"}:
+        raise HTTPException(status_code=422, detail="disposition must be one of allow, deny, or quarantine")
+
+    entries = await governance_audit_dao.search_transition_records(
+        session,
+        asset_id=asset_id,
+        disposition=normalized_disposition,
+        trust_gap_code=trust_gap_code,
+        current_only=current_only,
+        limit=limit,
+        offset=offset,
+    )
+    decorated = [_decorate_governance_entry(entry) for entry in entries]
+    return GovernanceSearchRead(total=len(decorated), items=decorated)
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskRead)

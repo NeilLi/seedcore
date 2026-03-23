@@ -418,3 +418,58 @@ class TestGovernedExecutionAuditDAO:
         assert row is not None
         assert row["id"] == "audit-3"
         assert row["policy_receipt"]["receipt_id"] == "policy-r-3"
+
+    @pytest.mark.asyncio
+    async def test_search_transition_records_uses_current_filters_and_normalizes_rows(self):
+        dao = GovernedExecutionAuditDAO()
+        session = AsyncMock()
+
+        mock_result = MagicMock()
+        mappings = MagicMock()
+        mappings.all.return_value = [
+            {
+                "id": "audit-4",
+                "task_id": "123e4567-e89b-12d3-a456-426614174000",
+                "record_type": "policy_decision",
+                "intent_id": "intent-4",
+                "token_id": "token-4",
+                "policy_snapshot": "snapshot:4",
+                "policy_decision": {
+                    "disposition": "quarantine",
+                    "authz_graph": {"disposition": "quarantine", "reason": "trust_gap_quarantine"},
+                    "governed_receipt": {"decision_hash": "receipt-4", "asset_ref": "asset-4", "trust_gap_codes": ["stale_telemetry"]},
+                },
+                "action_intent": {"intent_id": "intent-4", "resource": {"asset_id": "asset-4"}},
+                "policy_case": {},
+                "policy_receipt": {"asset_ref": "asset-4"},
+                "evidence_bundle": {},
+                "actor_agent_id": "agent-4",
+                "actor_organ_id": "organ-4",
+                "input_hash": "e" * 64,
+                "evidence_hash": None,
+                "recorded_at": MagicMock(isoformat=MagicMock(return_value="2026-03-16T13:00:00+00:00")),
+            }
+        ]
+        mock_result.mappings.return_value = mappings
+        session.execute = AsyncMock(return_value=mock_result)
+
+        rows = await dao.search_transition_records(
+            session,
+            asset_id="asset-4",
+            disposition="quarantine",
+            trust_gap_code="stale_telemetry",
+            current_only=True,
+            limit=10,
+            offset=2,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["policy_decision"]["governed_receipt"]["decision_hash"] == "receipt-4"
+        stmt, params = session.execute.await_args.args
+        assert "ROW_NUMBER() OVER" in str(stmt)
+        assert "row_num = 1" in str(stmt)
+        assert params["asset_id"] == "asset-4"
+        assert params["disposition"] == "quarantine"
+        assert params["trust_gap_code"] == "stale_telemetry"
+        assert params["limit"] == 10
+        assert params["offset"] == 2

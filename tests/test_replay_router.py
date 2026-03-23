@@ -69,6 +69,7 @@ def _make_client(
     *,
     session: Any | None = None,
     governance_entries: list[Dict[str, Any]] | None = None,
+    governance_search_entries: list[Dict[str, Any]] | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(replay_router_module.router)
@@ -88,7 +89,8 @@ def _make_client(
     replay_router_module.replay_service = _build_service(record)
     tasks_router_module.replay_service = replay_router_module.replay_service
     tasks_router_module.governance_audit_dao = SimpleNamespace(
-        list_for_task=AsyncMock(return_value=list(governance_entries or [record]))
+        list_for_task=AsyncMock(return_value=list(governance_entries or [record])),
+        search_transition_records=AsyncMock(return_value=list(governance_search_entries or governance_entries or [record])),
     )
 
     async def fake_get_async_redis_client():
@@ -197,3 +199,46 @@ def test_task_governance_endpoint_exposes_authz_transition_summary() -> None:
     assert body["latest"]["authz_transition_summary"]["reason"] == "trust_gap_quarantine"
     assert body["latest"]["authz_transition_summary"]["governed_receipt_hash"] == "receipt-intent-router-6"
     assert body["entries"][0]["authz_transition_summary"]["trust_gap_codes"] == ["stale_telemetry"]
+
+
+def test_governance_search_filters_quarantine_and_trust_gap_records() -> None:
+    quarantine = _apply_transition_metadata(
+        _build_audit_record(task_id="task-router-7", intent_id="intent-router-7", asset_id="asset-q-1"),
+        disposition="quarantine",
+        reason="trust_gap_quarantine",
+        trust_gap_codes=["stale_telemetry"],
+    )
+    client = _make_client(
+        quarantine,
+        governance_search_entries=[quarantine],
+    )
+
+    response = client.get(
+        "/governance/search",
+        params={"disposition": "quarantine", "trust_gap_code": "stale_telemetry", "current_only": "true"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["authz_transition_summary"]["governed_receipt_hash"] == "receipt-intent-router-7"
+    assert body["items"][0]["authz_transition_summary"]["trust_gap_codes"] == ["stale_telemetry"]
+
+    dao = tasks_router_module.governance_audit_dao
+    dao.search_transition_records.assert_awaited_once()
+    _, kwargs = dao.search_transition_records.await_args
+    assert kwargs["disposition"] == "quarantine"
+    assert kwargs["trust_gap_code"] == "stale_telemetry"
+    assert kwargs["current_only"] is True
+
+
+def test_governance_search_rejects_invalid_disposition() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-router-9", intent_id="intent-router-9", asset_id="asset-1")
+    )
+    client = _make_client(record)
+
+    response = client.get("/governance/search", params={"disposition": "blocked"})
+
+    assert response.status_code == 422
+    assert "disposition" in response.json()["detail"]

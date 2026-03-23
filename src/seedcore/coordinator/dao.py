@@ -537,6 +537,116 @@ class GovernedExecutionAuditDAO:
         rows = await self.list_for_task(session, task_id=task_id, limit=1)
         return rows[0] if rows else None
 
+    async def search_transition_records(
+        self,
+        session,
+        *,
+        asset_id: Optional[str] = None,
+        disposition: Optional[str] = None,
+        trust_gap_code: Optional[str] = None,
+        current_only: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        normalized_asset_id = str(asset_id).strip() if isinstance(asset_id, str) and asset_id.strip() else None
+        normalized_disposition = str(disposition).strip().lower() if isinstance(disposition, str) and disposition.strip() else None
+        normalized_trust_gap_code = (
+            str(trust_gap_code).strip() if isinstance(trust_gap_code, str) and trust_gap_code.strip() else None
+        )
+        normalized_limit = max(1, min(int(limit), 500))
+        normalized_offset = max(0, int(offset))
+
+        asset_expr = "COALESCE(policy_decision->'governed_receipt'->>'asset_ref', policy_decision->'authz_graph'->>'asset_ref', policy_receipt->>'asset_ref', action_intent->'resource'->>'asset_id')"
+        disposition_expr = "LOWER(COALESCE(policy_decision->'authz_graph'->>'disposition', policy_decision->'governed_receipt'->>'disposition', policy_decision->>'disposition'))"
+        base_predicates = [
+            f"({asset_expr}) IS NOT NULL",
+            f"COALESCE(policy_decision->'authz_graph', policy_decision->'governed_receipt') IS NOT NULL",
+        ]
+        filtered_predicates: List[str] = []
+        params: Dict[str, Any] = {
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+        if normalized_asset_id is not None:
+            base_predicates.append(f"({asset_expr}) = :asset_id")
+            params["asset_id"] = normalized_asset_id
+        if normalized_disposition is not None:
+            filtered_predicates.append(f"{disposition_expr} = :disposition")
+            params["disposition"] = normalized_disposition
+        if normalized_trust_gap_code is not None:
+            filtered_predicates.append(
+                """
+                (
+                    COALESCE(policy_decision->'governed_receipt'->'trust_gap_codes', '[]'::jsonb) @> jsonb_build_array(:trust_gap_code)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(COALESCE(policy_decision->'authz_graph'->'trust_gaps', '[]'::jsonb)) AS trust_gap
+                        WHERE trust_gap->>'code' = :trust_gap_code
+                    )
+                )
+                """
+            )
+            params["trust_gap_code"] = normalized_trust_gap_code
+
+        base_where_clause = " AND ".join(predicate.strip() for predicate in base_predicates)
+        filtered_where_clause = " AND ".join(predicate.strip() for predicate in filtered_predicates) or "TRUE"
+        select_columns = """
+                id,
+                task_id,
+                record_type,
+                intent_id,
+                token_id,
+                policy_snapshot,
+                policy_decision,
+                action_intent,
+                policy_case,
+                policy_receipt,
+                evidence_bundle,
+                actor_agent_id,
+                actor_organ_id,
+                input_hash,
+                evidence_hash,
+                recorded_at
+        """
+        if current_only:
+            stmt = text(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        {select_columns},
+                        ROW_NUMBER() OVER (
+                            PARTITION BY {asset_expr}
+                            ORDER BY recorded_at DESC, id DESC
+                        ) AS row_num
+                    FROM {self._TABLE_NAME}
+                    WHERE {base_where_clause}
+                )
+                SELECT
+                    {select_columns}
+                FROM ranked
+                WHERE row_num = 1
+                  AND {filtered_where_clause}
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT :limit
+                OFFSET :offset
+                """
+            )
+        else:
+            stmt = text(
+                f"""
+                SELECT
+                    {select_columns}
+                FROM {self._TABLE_NAME}
+                WHERE {base_where_clause}
+                  AND {filtered_where_clause}
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT :limit
+                OFFSET :offset
+                """
+            )
+        result = await session.execute(stmt, params)
+        return [self._mapping_to_dict(row) for row in result.mappings().all()]
+
     async def list_for_intent(
         self,
         session,
