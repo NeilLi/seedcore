@@ -2,11 +2,17 @@
 
 Unit-test workflow is currently set to manual runs only.
 
-## Zero-Trust Runtime for Governed Agents and Robotic Endpoints
+## Zero-Trust Runtime for Autonomous Systems
 
-SeedCore is a zero-trust runtime for governed AI-assisted operations. It sits between AI judgment, accountable agents, controlled endpoints, operators, and high-value physical or commercial assets. Actions that can affect custody, release, or external systems are denied by default until identity, policy, provenance, and execution conditions are verified.
+AI agents are becoming operational, but governance has not kept pace. Enterprises are under pressure to automate, yet they still lack reliable ways to control what autonomous systems are allowed to do, prove why an action was permitted, and contain failures before they become liabilities.
 
-The current focus is narrow and practical: prove one governed end-to-end workflow for release-style custody actions, with clear policy decisions, tokenized execution, and replayable evidence.
+SeedCore solves that problem. We are building the zero-trust runtime for autonomous systems: a deterministic control plane that sits between AI reasoning and real-world execution.
+
+SeedCore combines a synchronous Policy Decision Point, a Policy Knowledge Graph, and an advisory intelligence layer. AI can advise, but governance decides. Every governed action is evaluated in real time, either denied or issued a short-lived execution token, and recorded with auditable evidence.
+
+Our first wedge is provenance and high-trust supply chains, where trust must be continuously enforced rather than passively recorded. Over time, the same architecture extends to robotics, sovereign AI infrastructure, and multi-agent systems.
+
+We are not building another model layer. We are building the runtime that makes autonomous systems safe enough to trust.
 
 ## Current Codebase Snapshot
 
