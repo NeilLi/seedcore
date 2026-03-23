@@ -129,11 +129,19 @@ BOOTSTRAP_MODE=organism bash deploy/local/run-bootstrap.sh
 BOOTSTRAP_MODE=dispatchers DISPATCHER_COUNT=1 ENABLE_GRAPH_DISPATCHERS=false SEEDCORE_GRAPH_DISPATCHERS=0 bash deploy/local/run-bootstrap.sh
 ```
 
+If you specifically want local queued task execution through the coordinator pipeline,
+use the dedicated helper instead:
+
+```bash
+bash deploy/local/run-task-stack.sh start
+```
+
 Health checks:
 
 ```bash
 curl http://127.0.0.1:8000/organism/health
 curl http://127.0.0.1:8000/organism/init-status
+curl http://127.0.0.1:8000/-/routes
 ```
 
 Notes:

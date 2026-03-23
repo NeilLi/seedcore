@@ -11,6 +11,7 @@ Use these when you want to run SeedCore directly on your machine without Kuberne
 - `run-serve-app.py`
 - `run-bootstrap.sh`
 - `run-ray-stack.sh`
+- `run-task-stack.sh`
 
 These scripts are intentionally separate from the main `deploy/` entrypoints because they are:
 
@@ -97,11 +98,42 @@ Bootstrap one dispatcher with graph dispatchers disabled:
 BOOTSTRAP_MODE=dispatchers DISPATCHER_COUNT=1 ENABLE_GRAPH_DISPATCHERS=false SEEDCORE_GRAPH_DISPATCHERS=0 bash deploy/local/run-bootstrap.sh
 ```
 
+### Task execution stack
+
+Use this when you want queued tasks to execute locally through `/pipeline/route-and-execute`.
+
+It starts:
+
+- Ray head
+- Serve `organism`
+- Serve `coordinator`
+- organism bootstrap
+- one queue dispatcher
+
+Start:
+
+```bash
+bash deploy/local/run-task-stack.sh start
+```
+
+Status:
+
+```bash
+bash deploy/local/run-task-stack.sh status
+```
+
+Stop:
+
+```bash
+bash deploy/local/run-task-stack.sh stop
+```
+
 Quick checks:
 
 ```bash
 curl http://127.0.0.1:8000/organism/health
 curl http://127.0.0.1:8000/organism/init-status
+curl http://127.0.0.1:8000/-/routes
 ```
 
 ### Shutdown

@@ -7,7 +7,7 @@ CLAIM_BATCH_SQL = """
 WITH c AS (
   SELECT id
   FROM tasks
-  WHERE status IN ('created','queued','retry')
+  WHERE status IN ('queued','retry')
     AND (run_after IS NULL OR run_after <= NOW())
     AND NOT (type = ANY($3::text[]))
     AND attempts < $5  -- CRITICAL: Don't claim tasks that have exceeded max attempts
