@@ -49,6 +49,16 @@ def _resource_ref(value: str) -> str:
     return f"resource:{value}"
 
 
+def _asset_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("asset:") else f"asset:{value}"
+
+
+def _asset_batch_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("asset_batch:") else f"asset_batch:{value}"
+
+
 def _zone_ref(value: str) -> str:
     value = str(value).strip()
     return value if value.startswith("zone:") else f"zone:{value}"
@@ -57,6 +67,40 @@ def _zone_ref(value: str) -> str:
 def _network_ref(value: str) -> str:
     value = str(value).strip()
     return value if value.startswith("network:") else f"network:{value}"
+
+
+def _custody_point_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("custody_point:") else f"custody_point:{value}"
+
+
+def _attestation_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("attestation:") else f"attestation:{value}"
+
+
+def _inspection_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("inspection:") else f"inspection:{value}"
+
+
+def _sensor_observation_ref(value: str) -> str:
+    value = str(value).strip()
+    if value.startswith("sensor_observation:"):
+        return value
+    return f"sensor_observation:{value}"
+
+
+def _handshake_intent_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("handshake_intent:") else f"handshake_intent:{value}"
+
+
+def _passport_fragment_ref(value: str) -> str:
+    value = str(value).strip()
+    if value.startswith("digital_passport_fragment:"):
+        return value
+    return f"digital_passport_fragment:{value}"
 
 
 def _freeze_value(value: Any) -> Any:
@@ -180,10 +224,17 @@ class AuthzGraphProjector:
         conditions = dict(resolved.conditions or {})
         zones = [_zone_ref(value) for value in conditions.get("zones", []) if str(value).strip()]
         networks = [_network_ref(value) for value in conditions.get("networks", []) if str(value).strip()]
+        custody_points = [
+            _custody_point_ref(value)
+            for value in conditions.get("custody_points", [])
+            if str(value).strip()
+        ]
         for zone_ref in zones:
             buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
         for network_ref in networks:
             buffer.add_node(AuthzNode(kind=NodeKind.NETWORK_SEGMENT, ref=network_ref, provenance=provenance))
+        for custody_point_ref in custody_points:
+            buffer.add_node(AuthzNode(kind=NodeKind.CUSTODY_POINT, ref=custody_point_ref, provenance=provenance))
 
         buffer.add_edge(
             AuthzEdge(
@@ -195,9 +246,17 @@ class AuthzGraphProjector:
                 constraints={
                     "zones": zones,
                     "networks": networks,
+                    "custody_points": custody_points,
                     "resource_state_hash": conditions.get("resource_state_hash"),
                     "requires_break_glass": resolved.requires_break_glass,
                     "bypass_deny": resolved.bypass_deny,
+                    "required_current_custodian": bool(conditions.get("required_current_custodian")),
+                    "required_transferable_state": bool(conditions.get("required_transferable_state")),
+                    "max_telemetry_age_seconds": conditions.get("max_telemetry_age_seconds"),
+                    "max_inspection_age_seconds": conditions.get("max_inspection_age_seconds"),
+                    "require_attestation": bool(conditions.get("require_attestation")),
+                    "require_seal": bool(conditions.get("require_seal")),
+                    "allow_quarantine": conditions.get("allow_quarantine", True),
                 },
                 attributes={
                     "relationship": resolved.relationship,
@@ -225,9 +284,33 @@ class AuthzGraphProjector:
             snapshot_id=snapshot_id,
             snapshot_version=snapshot_version,
         )
+        handshake_ref = _handshake_intent_ref(intent.intent_id)
         principal_ref = _principal_ref(intent.principal.agent_id)
         role_ref = _role_ref(intent.principal.role_profile)
+        asset_ref = _asset_ref(intent.resource.asset_id)
         resource_ref = intent.resource.resource_uri or _resource_ref(intent.resource.asset_id)
+        twin_ref = (
+            f"twin:{intent.resource.batch_twin_id}"
+            if intent.resource.batch_twin_id and not str(intent.resource.batch_twin_id).startswith("twin:")
+            else intent.resource.batch_twin_id
+        )
+        batch_ref = _asset_batch_ref(intent.resource.lot_id) if intent.resource.lot_id else None
+
+        buffer.add_node(
+            AuthzNode(
+                kind=NodeKind.HANDSHAKE_INTENT,
+                ref=handshake_ref,
+                display_name=intent.intent_id,
+                attributes={
+                    "intent_id": intent.intent_id,
+                    "operation": intent.action.operation.value if intent.action.operation else intent.action.type,
+                    "security_contract_version": intent.action.security_contract.version,
+                },
+                valid_from=intent.timestamp,
+                valid_to=intent.valid_until,
+                provenance=provenance,
+            )
+        )
 
         buffer.add_node(
             AuthzNode(
@@ -247,15 +330,70 @@ class AuthzGraphProjector:
         )
         buffer.add_node(
             AuthzNode(
+                kind=NodeKind.ASSET,
+                ref=asset_ref,
+                display_name=intent.resource.asset_id,
+                attributes={
+                    "asset_id": intent.resource.asset_id,
+                    "lot_id": intent.resource.lot_id,
+                    "batch_twin_id": intent.resource.batch_twin_id,
+                    "source_registration_id": intent.resource.source_registration_id,
+                    "registration_decision_id": intent.resource.registration_decision_id,
+                    "product_id": intent.resource.product_id,
+                },
+                provenance=provenance,
+            )
+        )
+        buffer.add_node(
+            AuthzNode(
                 kind=NodeKind.RESOURCE,
                 ref=resource_ref,
                 display_name=intent.resource.asset_id,
                 attributes={
                     "asset_id": intent.resource.asset_id,
+                    "asset_ref": asset_ref,
                     "resource_state_hash": intent.resource.resource_state_hash,
                     "provenance_hash": intent.resource.provenance_hash,
+                    "batch_twin_id": intent.resource.batch_twin_id,
+                    "lot_id": intent.resource.lot_id,
                 },
                 provenance=provenance,
+            )
+        )
+        if twin_ref:
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.TWIN,
+                    ref=twin_ref,
+                    display_name=intent.resource.batch_twin_id,
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=twin_ref, provenance=provenance))
+        if batch_ref:
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.ASSET_BATCH,
+                    ref=batch_ref,
+                    display_name=intent.resource.lot_id,
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=batch_ref, provenance=provenance))
+        buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=resource_ref, provenance=provenance))
+        buffer.add_edge(
+            AuthzEdge(
+                kind=EdgeKind.REQUESTED,
+                src=handshake_ref,
+                dst=asset_ref,
+                operation=intent.action.operation.value if intent.action.operation else intent.action.type,
+                attributes={
+                    "intent_id": intent.intent_id,
+                    "principal_ref": principal_ref,
+                },
+                provenance=provenance,
+                valid_from=intent.timestamp,
+                valid_to=intent.valid_until,
             )
         )
         buffer.add_edge(
@@ -288,6 +426,7 @@ class AuthzGraphProjector:
             zone_ref = _zone_ref(intent.resource.target_zone)
             buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, display_name=intent.resource.target_zone, provenance=provenance))
             buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=resource_ref, dst=zone_ref, provenance=provenance))
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=asset_ref, dst=zone_ref, provenance=provenance))
         if intent.environment.origin_network:
             network_ref = _network_ref(intent.environment.origin_network)
             buffer.add_node(
@@ -386,16 +525,38 @@ class AuthzGraphProjector:
             resource_value = object_data.get("resource") or object_data.get("resource_uri") or object_data.get("asset_id")
             if not src_ref or not operation or not resource_value:
                 return
-            resource_ref = resource_value if "://" in str(resource_value) else _resource_ref(resource_value)
+            resource_text = str(resource_value)
+            resource_ref = resource_value if "://" in resource_text else _resource_ref(resource_text)
+            asset_ref = None if "://" in resource_text else _asset_ref(resource_text.removeprefix("resource:"))
             buffer.add_node(AuthzNode(kind=_infer_subject_kind(src_ref), ref=src_ref, provenance=provenance))
-            buffer.add_node(AuthzNode(kind=NodeKind.RESOURCE, ref=resource_ref, provenance=provenance))
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.RESOURCE,
+                    ref=resource_ref,
+                    attributes={
+                        "asset_id": resource_text.removeprefix("resource:") if asset_ref else None,
+                        "asset_ref": asset_ref,
+                    },
+                    provenance=provenance,
+                )
+            )
+            if asset_ref:
+                buffer.add_node(AuthzNode(kind=NodeKind.ASSET, ref=asset_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=resource_ref, provenance=provenance))
 
             zones = [_zone_ref(value) for value in object_data.get("zones", []) if str(value).strip()]
             networks = [_network_ref(value) for value in object_data.get("networks", []) if str(value).strip()]
+            custody_points = [
+                _custody_point_ref(value)
+                for value in object_data.get("custody_points", [])
+                if str(value).strip()
+            ]
             for zone_ref in zones:
                 buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
             for network_ref in networks:
                 buffer.add_node(AuthzNode(kind=NodeKind.NETWORK_SEGMENT, ref=network_ref, provenance=provenance))
+            for custody_point_ref in custody_points:
+                buffer.add_node(AuthzNode(kind=NodeKind.CUSTODY_POINT, ref=custody_point_ref, provenance=provenance))
 
             buffer.add_edge(
                 AuthzEdge(
@@ -407,7 +568,15 @@ class AuthzGraphProjector:
                     constraints={
                         "zones": zones,
                         "networks": networks,
+                        "custody_points": custody_points,
                         "resource_state_hash": object_data.get("resource_state_hash"),
+                        "required_current_custodian": bool(object_data.get("required_current_custodian")),
+                        "required_transferable_state": bool(object_data.get("required_transferable_state")),
+                        "max_telemetry_age_seconds": object_data.get("max_telemetry_age_seconds"),
+                        "max_inspection_age_seconds": object_data.get("max_inspection_age_seconds"),
+                        "require_attestation": bool(object_data.get("require_attestation")),
+                        "require_seal": bool(object_data.get("require_seal")),
+                        "allow_quarantine": object_data.get("allow_quarantine", True),
                     },
                     provenance=provenance,
                     valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
@@ -425,6 +594,186 @@ class AuthzGraphProjector:
             buffer.add_node(AuthzNode(kind=NodeKind.RESOURCE, ref=resource_ref, provenance=provenance))
             buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
             buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=resource_ref, dst=zone_ref, provenance=provenance))
+            return
+
+        if predicate_lower == "heldby":
+            asset_ref = _asset_ref(subject)
+            custodian_value = object_data.get("principal") or object_data.get("custodian") or object_data.get("held_by")
+            if not custodian_value:
+                return
+            custodian_ref = _principal_ref(custodian_value)
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.ASSET,
+                    ref=asset_ref,
+                    display_name=str(object_data.get("asset_id") or subject),
+                    attributes={
+                        "asset_id": str(subject),
+                        "batch_twin_id": object_data.get("batch_twin_id"),
+                        "lot_id": object_data.get("lot_id"),
+                        "transferable": object_data.get("transferable"),
+                        "restricted": object_data.get("restricted"),
+                        "state": object_data.get("state"),
+                    },
+                    provenance=provenance,
+                )
+            )
+            buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=custodian_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.HELD_BY,
+                    src=asset_ref,
+                    dst=custodian_ref,
+                    attributes={
+                        "state": object_data.get("state"),
+                        "transferable": object_data.get("transferable"),
+                        "restricted": object_data.get("restricted"),
+                    },
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            custody_point = object_data.get("custody_point")
+            if custody_point:
+                custody_point_ref = _custody_point_ref(custody_point)
+                buffer.add_node(AuthzNode(kind=NodeKind.CUSTODY_POINT, ref=custody_point_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=asset_ref, dst=custody_point_ref, provenance=provenance))
+            zone = object_data.get("zone") or object_data.get("target_zone")
+            if zone:
+                zone_ref = _zone_ref(zone)
+                buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=asset_ref, dst=zone_ref, provenance=provenance))
+            twin_id = object_data.get("batch_twin_id") or object_data.get("twin_id")
+            if twin_id:
+                twin_ref = twin_id if str(twin_id).startswith("twin:") else f"twin:{twin_id}"
+                buffer.add_node(AuthzNode(kind=NodeKind.TWIN, ref=twin_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=twin_ref, provenance=provenance))
+            return
+
+        if predicate_lower == "transferredfrom":
+            asset_ref = _asset_ref(subject)
+            previous_custodian = object_data.get("principal") or object_data.get("custodian") or object_data.get("transferred_from")
+            if not previous_custodian:
+                return
+            previous_ref = _principal_ref(previous_custodian)
+            buffer.add_node(AuthzNode(kind=NodeKind.ASSET, ref=asset_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=previous_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.TRANSFERRED_FROM,
+                    src=asset_ref,
+                    dst=previous_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
+        if predicate_lower == "attestedby":
+            asset_ref = _asset_ref(subject)
+            attestation_id = object_data.get("attestation_id") or f"{subject}:{fact_id}"
+            attestation_ref = _attestation_ref(attestation_id)
+            attestor = object_data.get("principal") or object_data.get("attestor") or object_data.get("issuer")
+            buffer.add_node(AuthzNode(kind=NodeKind.ASSET, ref=asset_ref, provenance=provenance))
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.ATTESTATION,
+                    ref=attestation_ref,
+                    attributes={
+                        "attestation_type": object_data.get("attestation_type"),
+                        "status": object_data.get("status"),
+                        "authority": object_data.get("authority"),
+                        "evidence_ref": object_data.get("evidence_ref"),
+                    },
+                    valid_from=_serialize_datetime(object_data.get("valid_from") or _value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(object_data.get("valid_to") or _value_from(fact, "valid_to")),
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.ATTESTED_BY,
+                    src=asset_ref,
+                    dst=attestation_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(object_data.get("valid_from") or _value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(object_data.get("valid_to") or _value_from(fact, "valid_to")),
+                )
+            )
+            if attestor:
+                attestor_ref = _principal_ref(attestor)
+                buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=attestor_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.RECORDED_BY, src=attestation_ref, dst=attestor_ref, provenance=provenance))
+            return
+
+        if predicate_lower == "observedin":
+            asset_ref = _asset_ref(subject)
+            observation_id = object_data.get("observation_id") or f"{subject}:{fact_id}"
+            observation_ref = _sensor_observation_ref(observation_id)
+            observed_at = _serialize_datetime(
+                object_data.get("observed_at")
+                or object_data.get("captured_at")
+                or _value_from(fact, "valid_from")
+            )
+            buffer.add_node(AuthzNode(kind=NodeKind.ASSET, ref=asset_ref, provenance=provenance))
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.SENSOR_OBSERVATION,
+                    ref=observation_ref,
+                    attributes={
+                        "measurement_type": object_data.get("measurement_type"),
+                        "quality_score": object_data.get("quality_score"),
+                        "value": object_data.get("value"),
+                        "unit": object_data.get("unit"),
+                        "custody_point": object_data.get("custody_point"),
+                    },
+                    valid_from=observed_at,
+                    valid_to=observed_at,
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.OBSERVED_IN,
+                    src=asset_ref,
+                    dst=observation_ref,
+                    attributes={
+                        "measurement_type": object_data.get("measurement_type"),
+                        "quality_score": object_data.get("quality_score"),
+                    },
+                    provenance=provenance,
+                    valid_from=observed_at,
+                    valid_to=observed_at,
+                )
+            )
+            custody_point = object_data.get("custody_point")
+            if custody_point:
+                custody_point_ref = _custody_point_ref(custody_point)
+                buffer.add_node(AuthzNode(kind=NodeKind.CUSTODY_POINT, ref=custody_point_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=asset_ref, dst=custody_point_ref, provenance=provenance))
+            return
+
+        if predicate_lower == "sealedwith":
+            asset_ref = _asset_ref(subject)
+            seal_value = object_data.get("seal_id") or object_data.get("nfc_uid") or object_data.get("uid")
+            if not seal_value:
+                return
+            seal_ref = f"registration:seal:{seal_value}"
+            buffer.add_node(AuthzNode(kind=NodeKind.ASSET, ref=asset_ref, provenance=provenance))
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.REGISTRATION,
+                    ref=seal_ref,
+                    attributes={
+                        "seal_id": seal_value,
+                        "seal_kind": object_data.get("seal_kind", "anti_counterfeit"),
+                    },
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.SEALED_WITH, src=asset_ref, dst=seal_ref, provenance=provenance))
 
     def _warn_legacy_inferred_predicate(self, predicate: str, buffer: _ProjectionBuffer) -> None:
         if predicate in buffer.legacy_predicates_warned:
@@ -460,6 +809,7 @@ class AuthzGraphProjector:
         registration_ref = f"registration:{registration_id}"
         producer_ref = _principal_ref(producer_id)
         lot_ref = _resource_ref(f"lot:{lot_id}")
+        batch_ref = _asset_batch_ref(lot_id)
 
         buffer.add_node(AuthzNode(kind=NodeKind.REGISTRATION, ref=registration_ref, provenance=provenance))
         buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=producer_ref, provenance=provenance))
@@ -472,8 +822,22 @@ class AuthzGraphProjector:
                 provenance=provenance,
             )
         )
+        buffer.add_node(
+            AuthzNode(
+                kind=NodeKind.ASSET_BATCH,
+                ref=batch_ref,
+                display_name=str(lot_id),
+                attributes={
+                    "lot_id": lot_id,
+                    "rare_grade_profile_id": _value_from(registration, "rare_grade_profile_id"),
+                    "status": str(_value_from(registration, "status") or ""),
+                },
+                provenance=provenance,
+            )
+        )
         buffer.add_edge(AuthzEdge(kind=EdgeKind.RECORDED_BY, src=registration_ref, dst=producer_ref, provenance=provenance))
         buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=lot_ref, dst=registration_ref, provenance=provenance))
+        buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=batch_ref, dst=registration_ref, provenance=provenance))
 
     def _project_tracking_event(
         self,
@@ -495,7 +859,26 @@ class AuthzGraphProjector:
             snapshot_version=snapshot_version,
         )
         event_ref = f"tracking_event:{event_id}"
-        buffer.add_node(AuthzNode(kind=NodeKind.TRACKING_EVENT, ref=event_ref, provenance=provenance))
+        payload = _value_from(tracking_event, "payload", {}) or {}
+        captured_at = _serialize_datetime(_value_from(tracking_event, "captured_at"))
+        subject_id = _value_from(tracking_event, "subject_id")
+        subject_type = str(_value_from(tracking_event, "subject_type") or "").strip().lower()
+        buffer.add_node(
+            AuthzNode(
+                kind=NodeKind.TRACKING_EVENT,
+                ref=event_ref,
+                attributes={
+                    "event_type": _value_from(tracking_event, "event_type"),
+                    "source_kind": _value_from(tracking_event, "source_kind"),
+                    "subject_type": subject_type,
+                    "subject_id": subject_id,
+                    "sha256": _value_from(tracking_event, "sha256"),
+                },
+                valid_from=captured_at,
+                valid_to=captured_at,
+                provenance=provenance,
+            )
+        )
         if registration_id is not None:
             registration_ref = f"registration:{registration_id}"
             buffer.add_node(AuthzNode(kind=NodeKind.REGISTRATION, ref=registration_ref, provenance=provenance))
@@ -504,6 +887,91 @@ class AuthzGraphProjector:
             producer_ref = _principal_ref(producer_id)
             buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=producer_ref, provenance=provenance))
             buffer.add_edge(AuthzEdge(kind=EdgeKind.RECORDED_BY, src=event_ref, dst=producer_ref, provenance=provenance))
+        asset_key = payload.get("asset_id") or subject_id
+        if asset_key and subject_type in {"asset", "lot", "batch", ""}:
+            asset_ref = _asset_ref(asset_key)
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.ASSET,
+                    ref=asset_ref,
+                    display_name=str(asset_key),
+                    attributes={"asset_id": asset_key},
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=event_ref, provenance=provenance))
+
+            custody_point = payload.get("custody_point") or payload.get("facility_id") or payload.get("warehouse_id")
+            if custody_point:
+                custody_point_ref = _custody_point_ref(custody_point)
+                buffer.add_node(AuthzNode(kind=NodeKind.CUSTODY_POINT, ref=custody_point_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=asset_ref, dst=custody_point_ref, provenance=provenance))
+
+            zone = payload.get("zone")
+            if zone:
+                zone_ref = _zone_ref(zone)
+                buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.LOCATED_IN, src=asset_ref, dst=zone_ref, provenance=provenance))
+
+            seal_value = payload.get("seal_id") or payload.get("nfc_uid")
+            if seal_value:
+                seal_ref = f"registration:seal:{seal_value}"
+                buffer.add_node(
+                    AuthzNode(
+                        kind=NodeKind.REGISTRATION,
+                        ref=seal_ref,
+                        attributes={"seal_id": seal_value, "source_event_id": str(event_id)},
+                        provenance=provenance,
+                    )
+                )
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.SEALED_WITH, src=asset_ref, dst=seal_ref, provenance=provenance))
+
+            if payload.get("measurement_type") or payload.get("sensor_id"):
+                observation_ref = _sensor_observation_ref(str(event_id))
+                buffer.add_node(
+                    AuthzNode(
+                        kind=NodeKind.SENSOR_OBSERVATION,
+                        ref=observation_ref,
+                        attributes={
+                            "measurement_type": payload.get("measurement_type"),
+                            "quality_score": payload.get("quality_score"),
+                            "value": payload.get("value"),
+                            "unit": payload.get("unit"),
+                            "sensor_id": payload.get("sensor_id"),
+                        },
+                        valid_from=captured_at,
+                        valid_to=captured_at,
+                        provenance=provenance,
+                    )
+                )
+                buffer.add_edge(
+                    AuthzEdge(
+                        kind=EdgeKind.OBSERVED_IN,
+                        src=asset_ref,
+                        dst=observation_ref,
+                        attributes={"quality_score": payload.get("quality_score")},
+                        valid_from=captured_at,
+                        valid_to=captured_at,
+                        provenance=provenance,
+                    )
+                )
+
+            if payload.get("decision_hash"):
+                fragment_ref = _passport_fragment_ref(str(event_id))
+                buffer.add_node(
+                    AuthzNode(
+                        kind=NodeKind.DIGITAL_PASSPORT_FRAGMENT,
+                        ref=fragment_ref,
+                        attributes={
+                            "decision_hash": payload.get("decision_hash"),
+                            "decision": payload.get("decision"),
+                        },
+                        valid_from=captured_at,
+                        valid_to=captured_at,
+                        provenance=provenance,
+                    )
+                )
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=fragment_ref, provenance=provenance))
 
 
 def _serialize_datetime(value: Any) -> Optional[str]:
@@ -541,6 +1009,20 @@ def _normalize_selector_ref(selector: str) -> str:
         return _principal_ref(selector)
     if selector.startswith("role:"):
         return _role_ref(selector)
+    if selector.startswith("asset:"):
+        return _asset_ref(selector)
+    if selector.startswith("asset_batch:"):
+        return _asset_batch_ref(selector)
+    if selector.startswith("custody_point:"):
+        return _custody_point_ref(selector)
+    if selector.startswith("attestation:"):
+        return _attestation_ref(selector)
+    if selector.startswith("inspection:"):
+        return _inspection_ref(selector)
+    if selector.startswith("sensor_observation:"):
+        return _sensor_observation_ref(selector)
+    if selector.startswith("handshake_intent:"):
+        return _handshake_intent_ref(selector)
     if selector.startswith("zone:"):
         return _zone_ref(selector)
     if selector.startswith("network:"):
@@ -553,6 +1035,20 @@ def _infer_selector_kind(selector_ref: str) -> NodeKind:
         return NodeKind.PRINCIPAL
     if selector_ref.startswith("role:"):
         return NodeKind.ROLE_PROFILE
+    if selector_ref.startswith("asset:"):
+        return NodeKind.ASSET
+    if selector_ref.startswith("asset_batch:"):
+        return NodeKind.ASSET_BATCH
+    if selector_ref.startswith("custody_point:"):
+        return NodeKind.CUSTODY_POINT
+    if selector_ref.startswith("attestation:"):
+        return NodeKind.ATTESTATION
+    if selector_ref.startswith("inspection:"):
+        return NodeKind.INSPECTION
+    if selector_ref.startswith("sensor_observation:"):
+        return NodeKind.SENSOR_OBSERVATION
+    if selector_ref.startswith("handshake_intent:"):
+        return NodeKind.HANDSHAKE_INTENT
     if selector_ref.startswith("zone:"):
         return NodeKind.ZONE
     if selector_ref.startswith("network:"):

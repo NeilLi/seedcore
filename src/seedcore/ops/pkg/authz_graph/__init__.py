@@ -10,9 +10,15 @@ from .ontology import (
 )
 from .projector import AuthzGraphProjector
 from .compiler import (
+    AuthzDecisionDisposition,
+    AuthzTransitionRequest,
     CompiledAuthzIndex,
+    CompiledAssetState,
     CompiledPermission,
     CompiledPermissionMatch,
+    CompiledTransitionEvaluation,
+    CompiledTrustGap,
+    GovernedDecisionReceipt,
     AuthzGraphCompiler,
 )
 from .service import (
@@ -33,9 +39,15 @@ __all__ = [
     "NodeKind",
     "PermissionEffect",
     "AuthzGraphProjector",
+    "AuthzDecisionDisposition",
+    "AuthzTransitionRequest",
     "CompiledAuthzIndex",
+    "CompiledAssetState",
     "CompiledPermission",
     "CompiledPermissionMatch",
+    "CompiledTransitionEvaluation",
+    "CompiledTrustGap",
+    "GovernedDecisionReceipt",
     "AuthzGraphCompiler",
     "AuthzGraphProjectionService",
     "AuthzProjectionResult",

@@ -64,9 +64,13 @@ from .result_utils import (
     normalize_policy_result,
 )
 from .authz_graph import (
+    AuthzDecisionDisposition,
     AuthzGraphManager,
     AuthzGraphProjectionService,
+    AuthzTransitionRequest,
     CompiledAuthzIndex,
+    CompiledTransitionEvaluation,
+    GovernedDecisionReceipt,
 )
 
 __all__ = [
@@ -96,7 +100,11 @@ __all__ = [
     "PKGSnapshotCompareService",
     "PolicyGateBlockedError",
     "normalize_policy_result",
+    "AuthzDecisionDisposition",
     "AuthzGraphManager",
     "AuthzGraphProjectionService",
+    "AuthzTransitionRequest",
     "CompiledAuthzIndex",
+    "CompiledTransitionEvaluation",
+    "GovernedDecisionReceipt",
 ]

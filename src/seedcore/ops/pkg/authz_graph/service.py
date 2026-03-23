@@ -58,7 +58,7 @@ class AuthzGraphProjectionService:
         tracking_events_loader: Optional[Loader] = None,
     ) -> None:
         self.pkg_client = pkg_client or PKGClient(session_factory)
-        self._sf = session_factory or get_async_pg_session_factory()
+        self._sf = session_factory or getattr(self.pkg_client, "_sf", None)
         self.projector = projector or AuthzGraphProjector()
         self.compiler = compiler or AuthzGraphCompiler()
         self._facts_loader = facts_loader or self._load_governed_facts
@@ -178,6 +178,8 @@ class AuthzGraphProjectionService:
         )
 
     async def _load_registrations(self, *, snapshot_id: int) -> List[SourceRegistration]:
+        if self._sf is None:
+            self._sf = get_async_pg_session_factory()
         async with self._sf() as session:
             result = await session.execute(
                 select(SourceRegistration)
@@ -187,6 +189,8 @@ class AuthzGraphProjectionService:
             return list(result.scalars().all())
 
     async def _load_tracking_events(self, *, snapshot_id: int) -> List[TrackingEvent]:
+        if self._sf is None:
+            self._sf = get_async_pg_session_factory()
         async with self._sf() as session:
             result = await session.execute(
                 select(TrackingEvent)
