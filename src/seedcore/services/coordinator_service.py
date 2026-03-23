@@ -2550,7 +2550,7 @@ class Coordinator:
                         actor_organ_id=actor_organ_id,
                     )
                     try:
-                        await self._record_break_glass_tracking_event(
+                        await self._record_policy_tracking_event(
                             session=session,
                             task_id=str(task_id),
                             governance=governance,
@@ -2559,7 +2559,7 @@ class Coordinator:
                         )
                     except Exception:
                         logger.warning(
-                            "Failed to append break-glass tracking event for task %s",
+                            "Failed to append policy tracking event for task %s",
                             task_id,
                             exc_info=True,
                         )
@@ -2570,7 +2570,7 @@ class Coordinator:
                 exc_info=True,
             )
 
-    async def _record_break_glass_tracking_event(
+    async def _record_policy_tracking_event(
         self,
         *,
         session: Any,
@@ -2589,12 +2589,26 @@ class Coordinator:
             if isinstance(governance.get("policy_decision"), dict)
             else {}
         )
+        authz_graph = (
+            dict(policy_decision.get("authz_graph"))
+            if isinstance(policy_decision.get("authz_graph"), dict)
+            else {}
+        )
+        governed_receipt = (
+            dict(policy_decision.get("governed_receipt"))
+            if isinstance(policy_decision.get("governed_receipt"), dict)
+            else {}
+        )
         break_glass = (
             dict(policy_decision.get("break_glass"))
             if isinstance(policy_decision.get("break_glass"), dict)
             else {}
         )
-        if not break_glass.get("present"):
+        if (
+            not break_glass.get("present")
+            and not authz_graph
+            and not governed_receipt
+        ):
             return
 
         principal = (
@@ -2612,19 +2626,20 @@ class Coordinator:
             if isinstance(action_intent.get("action"), dict)
             else {}
         )
-        event_type = (
-            TrackingEventType.POLICY_DECISION_RECORDED
-            if break_glass.get("validated")
-            else TrackingEventType.RUNTIME_INCIDENT_DETECTED
-        )
+        allowed = bool(policy_decision.get("allowed"))
+        disposition = policy_decision.get("disposition")
+        if not allowed and disposition != "quarantine":
+            event_type = TrackingEventType.RUNTIME_INCIDENT_DETECTED
+        else:
+            event_type = TrackingEventType.POLICY_DECISION_RECORDED
         payload = {
             "task_id": task_id,
             "intent_id": action_intent.get("intent_id"),
             "record_type": record_type,
             "policy_snapshot": policy_decision.get("policy_snapshot"),
             "decision": {
-                "allowed": bool(policy_decision.get("allowed")),
-                "disposition": policy_decision.get("disposition"),
+                "allowed": allowed,
+                "disposition": disposition,
                 "deny_code": policy_decision.get("deny_code"),
                 "reason": policy_decision.get("reason"),
             },
@@ -2651,6 +2666,34 @@ class Coordinator:
             },
             "operation": action.get("operation") or action.get("type"),
         }
+        if authz_graph:
+            payload["authz_graph"] = {
+                "mode": authz_graph.get("mode"),
+                "disposition": authz_graph.get("disposition"),
+                "reason": authz_graph.get("reason"),
+                "asset_ref": authz_graph.get("asset_ref"),
+                "resource_ref": authz_graph.get("resource_ref"),
+                "current_custodian": authz_graph.get("current_custodian"),
+                "restricted_token_recommended": bool(authz_graph.get("restricted_token_recommended")),
+                "trust_gaps": (
+                    list(authz_graph.get("trust_gaps"))
+                    if isinstance(authz_graph.get("trust_gaps"), list)
+                    else []
+                ),
+            }
+        if governed_receipt:
+            payload["governed_receipt"] = {
+                "decision_hash": governed_receipt.get("decision_hash"),
+                "disposition": governed_receipt.get("disposition"),
+                "asset_ref": governed_receipt.get("asset_ref"),
+                "resource_ref": governed_receipt.get("resource_ref"),
+                "reason": governed_receipt.get("reason"),
+                "trust_gap_codes": (
+                    list(governed_receipt.get("trust_gap_codes"))
+                    if isinstance(governed_receipt.get("trust_gap_codes"), list)
+                    else []
+                ),
+            }
         if audit_append_result:
             payload["governance_audit"] = {
                 "entry_id": audit_append_result.get("entry_id"),

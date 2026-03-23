@@ -35,6 +35,12 @@ def build_policy_receipt_artifact(
     action_intent = governance.get("action_intent") if isinstance(governance.get("action_intent"), dict) else {}
     execution_token = governance.get("execution_token") if isinstance(governance.get("execution_token"), dict) else {}
     policy_case = governance.get("policy_case") if isinstance(governance.get("policy_case"), dict) else {}
+    authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+    governed_receipt = (
+        policy_decision.get("governed_receipt")
+        if isinstance(policy_decision.get("governed_receipt"), dict)
+        else {}
+    )
     resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
     principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
 
@@ -63,6 +69,17 @@ def build_policy_receipt_artifact(
             if resource.get("asset_id") is not None
             else None
         ),
+        "authz_disposition": (
+            str(policy_decision.get("disposition"))
+            if policy_decision.get("disposition") is not None
+            else None
+        ),
+        "governed_receipt_hash": (
+            str(governed_receipt.get("decision_hash"))
+            if governed_receipt.get("decision_hash") is not None
+            else None
+        ),
+        "trust_gap_codes": _extract_trust_gap_codes(governed_receipt, authz_graph),
         "timestamp": timestamp,
     }
     endpoint_id = (
@@ -237,6 +254,23 @@ def _extract_evaluated_rules(policy_decision: Dict[str, Any]) -> List[str]:
     reason = policy_decision.get("reason")
     if isinstance(reason, str) and reason.strip():
         return [reason.strip()]
+    return []
+
+
+def _extract_trust_gap_codes(
+    governed_receipt: Dict[str, Any],
+    authz_graph: Dict[str, Any],
+) -> List[str]:
+    receipt_codes = governed_receipt.get("trust_gap_codes")
+    if isinstance(receipt_codes, list):
+        return [str(item) for item in receipt_codes if str(item).strip()]
+    trust_gaps = authz_graph.get("trust_gaps")
+    if isinstance(trust_gaps, list):
+        codes: List[str] = []
+        for item in trust_gaps:
+            if isinstance(item, dict) and item.get("code") is not None:
+                codes.append(str(item.get("code")))
+        return codes
     return []
 
 

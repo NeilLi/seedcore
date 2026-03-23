@@ -170,6 +170,69 @@ def test_build_governance_context_emits_signed_policy_receipt():
     assert governance["execution_token"]["contract_version"]
 
 
+def test_build_governance_context_carries_governed_receipt_hash_into_policy_receipt(monkeypatch):
+    payload = _base_payload()
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "ROBOT_OPERATOR"},
+            },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "role:ROBOT_OPERATOR",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "MUTATE",
+                    "resource": "seedcore://zones/vault-a/assets/asset-1",
+                    "required_current_custodian": True,
+                    "required_transferable_state": True,
+                    "max_telemetry_age_seconds": 300,
+                    "allow_quarantine": True,
+                },
+            },
+            {
+                "id": "fact-held",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "heldBy",
+                "object_data": {"custodian": "agent-1", "transferable": True},
+            },
+            {
+                "id": "fact-telemetry",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "observedIn",
+                "object_data": {
+                    "observation_id": "obs-1",
+                    "measurement_type": "temperature",
+                    "observed_at": "2099-03-20T11:30:00+00:00",
+                },
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    governance = build_governance_context(payload, compiled_authz_index=compiled)
+
+    assert governance["policy_decision"]["disposition"] == "quarantine"
+    assert governance["policy_receipt"]["authz_disposition"] == "quarantine"
+    assert governance["policy_receipt"]["governed_receipt_hash"] == governance["policy_decision"]["governed_receipt"]["decision_hash"]
+    assert governance["policy_receipt"]["trust_gap_codes"] == ["stale_telemetry"]
+
+
 def test_merge_authoritative_twins_overrides_untrusted_data():
     payload = _base_payload()
     payload["params"]["governance"]["digital_twins"] = {

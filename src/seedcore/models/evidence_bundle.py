@@ -42,6 +42,9 @@ class PolicyReceipt(BaseModel):
     evaluated_rules: List[str] = Field(default_factory=list)
     subject_ref: Optional[str] = None
     asset_ref: Optional[str] = None
+    authz_disposition: Optional[str] = None
+    governed_receipt_hash: Optional[str] = None
+    trust_gap_codes: List[str] = Field(default_factory=list)
     timestamp: str
     signer_metadata: SignerMetadata
     signature: str

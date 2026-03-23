@@ -267,6 +267,86 @@ async def test_record_governance_audit_emits_break_glass_incident_for_invalid_at
     assert kwargs["payload"]["break_glass"]["validated"] is False
 
 
+@pytest.mark.asyncio
+async def test_record_governance_audit_emits_transition_tracking_event_for_quarantine():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+
+    coordinator._session_factory = _session_factory
+    coordinator.governance_audit_dao = SimpleNamespace(
+        append_record=AsyncMock(
+            return_value={
+                "entry_id": "audit-3",
+                "recorded_at": "2026-03-23T04:16:27+00:00",
+                "input_hash": "hash-3",
+                "evidence_hash": None,
+            }
+        )
+    )
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-3",
+            "principal": {"agent_id": "agent-10", "role_profile": "CARRIER"},
+            "action": {"type": "MOVE", "operation": "MOVE"},
+            "resource": {
+                "asset_id": "asset-22",
+                "resource_uri": "seedcore://zones/vault-a/assets/asset-22",
+                "target_zone": "vault-a",
+            },
+        },
+        "policy_decision": {
+            "allowed": True,
+            "policy_snapshot": "snapshot:1",
+            "disposition": "quarantine",
+            "reason": "quarantine",
+            "authz_graph": {
+                "mode": "transition_evaluation",
+                "disposition": "quarantine",
+                "reason": "trust_gap_quarantine",
+                "asset_ref": "asset:asset-22",
+                "resource_ref": "seedcore://zones/vault-a/assets/asset-22",
+                "current_custodian": "principal:agent-10",
+                "restricted_token_recommended": True,
+                "trust_gaps": [
+                    {
+                        "code": "stale_telemetry",
+                        "message": "telemetry is stale",
+                        "details": {"max_age_seconds": 300},
+                    }
+                ],
+            },
+            "governed_receipt": {
+                "decision_hash": "receipt-22",
+                "disposition": "quarantine",
+                "asset_ref": "asset:asset-22",
+                "resource_ref": "seedcore://zones/vault-a/assets/asset-22",
+                "reason": "trust_gap_quarantine",
+                "trust_gap_codes": ["stale_telemetry"],
+            },
+            "break_glass": {},
+        },
+        "policy_case": {},
+        "policy_receipt": {},
+    }
+
+    with patch.object(cs, "record_tracking_event", new=AsyncMock()) as mock_record_event:
+        await coordinator._record_governance_audit(
+            task_id="00000000-0000-0000-0000-0000000000a3",
+            governance=governance,
+            record_type="policy_decision",
+        )
+
+    mock_record_event.assert_awaited_once()
+    _, kwargs = mock_record_event.await_args
+    assert kwargs["event_type"] == TrackingEventType.POLICY_DECISION_RECORDED
+    assert kwargs["payload"]["decision"]["disposition"] == "quarantine"
+    assert kwargs["payload"]["authz_graph"]["reason"] == "trust_gap_quarantine"
+    assert kwargs["payload"]["authz_graph"]["restricted_token_recommended"] is True
+    assert kwargs["payload"]["governed_receipt"]["decision_hash"] == "receipt-22"
+    assert kwargs["payload"]["governed_receipt"]["trust_gap_codes"] == ["stale_telemetry"]
+
+
 # Note: _dispatch_hgnn method no longer exists in Coordinator.
 # Graph task dispatch is now handled through persist_and_register_dependencies
 # in coordinator.core.plan, which is tested in test_coordinator_core_plan.py
