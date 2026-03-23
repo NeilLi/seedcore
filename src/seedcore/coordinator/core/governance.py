@@ -30,7 +30,13 @@ from seedcore.models.action_intent import (
 )
 from seedcore.models.task_payload import TaskPayload
 from seedcore.ops.evidence.builder import build_policy_receipt_artifact
-from seedcore.ops.pkg.authz_graph.compiler import CompiledAuthzIndex, CompiledPermissionMatch
+from seedcore.ops.pkg.authz_graph.compiler import (
+    AuthzDecisionDisposition,
+    AuthzTransitionRequest,
+    CompiledAuthzIndex,
+    CompiledPermissionMatch,
+    CompiledTransitionEvaluation,
+)
 
 
 SYSTEM_PARAM_KEYS = {
@@ -901,7 +907,7 @@ def evaluate_intent(
     if cognitive_violation is not None:
         return cognitive_violation
 
-    authz_graph_violation, break_glass_context = _evaluate_compiled_authz_graph_policy(
+    authz_graph_violation, break_glass_context, transition_evaluation = _evaluate_compiled_authz_graph_policy(
         action_intent=action_intent,
         policy_case=policy_case,
         compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
@@ -913,28 +919,27 @@ def evaluate_intent(
         valid_until,
         now + timedelta(seconds=_execution_token_ttl_seconds()),
     )
-
-    token_payload = {
-        "token_id": str(uuid.uuid4()),
-        "intent_id": action_intent.intent_id,
-        "issued_at": _isoformat(now),
-        "valid_until": _isoformat(token_valid_until),
-        "contract_version": action_intent.action.security_contract.version,
-        "constraints": _build_execution_constraints(action_intent),
-    }
-    signature = _sign_payload(token_payload)
-    token = ExecutionToken(signature=signature, **token_payload)
-    allow_reason = (
-        EXPLICIT_ALLOW_RULE
-        if _requires_approved_source_registration(action_intent)
-        else "allowed"
+    token = _mint_execution_token(
+        action_intent=action_intent,
+        issued_at=now,
+        valid_until=token_valid_until,
+        extra_constraints=(
+            _transition_execution_constraints(transition_evaluation)
+            if transition_evaluation is not None
+            else None
+        ),
     )
+    allow_reason = _allow_reason(action_intent)
+    disposition = "allow"
+    if transition_evaluation is not None and transition_evaluation.disposition == AuthzDecisionDisposition.QUARANTINE:
+        allow_reason = "quarantine"
+        disposition = "quarantine"
     return PolicyDecision(
         allowed=True,
         execution_token=token,
         reason=allow_reason,
         policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
-        disposition="allow",
+        disposition=disposition,
         risk_score=_policy_case_risk_score(policy_case),
         explanations=_policy_case_explanations(policy_case, allow_reason),
         required_approvals=(
@@ -953,6 +958,11 @@ def evaluate_intent(
             else None
         ),
         break_glass=break_glass_context,
+        authz_graph=_authz_graph_decision_metadata(
+            transition_evaluation=transition_evaluation,
+            compiled_match=None,
+        ),
+        governed_receipt=_serialize_governed_receipt(transition_evaluation),
     )
 
 
@@ -1352,9 +1362,9 @@ def _evaluate_compiled_authz_graph_policy(
     action_intent: ActionIntent,
     policy_case: PolicyCase,
     compiled_authz_index: CompiledAuthzIndex | None,
-) -> tuple[PolicyDecision | None, BreakGlassDecisionContext]:
+) -> tuple[PolicyDecision | None, BreakGlassDecisionContext, CompiledTransitionEvaluation | None]:
     if compiled_authz_index is None:
-        return None, BreakGlassDecisionContext()
+        return None, BreakGlassDecisionContext(), None
 
     expected_snapshot = (policy_case.policy_snapshot or "").strip()
     compiled_snapshot = (compiled_authz_index.snapshot_version or "").strip()
@@ -1372,6 +1382,7 @@ def _evaluate_compiled_authz_graph_policy(
                 ),
             ),
             BreakGlassDecisionContext(),
+            None,
         )
 
     break_glass_violation, break_glass_context = _evaluate_break_glass_context(
@@ -1381,18 +1392,28 @@ def _evaluate_compiled_authz_graph_policy(
         policy_case=policy_case,
     )
     if break_glass_violation is not None:
-        return break_glass_violation, break_glass_context
+        return break_glass_violation, break_glass_context, None
 
-    match = compiled_authz_index.can_access(
-        principal_ref=_compiled_authz_principal_ref(action_intent),
-        operation=_compiled_authz_operation(action_intent),
-        resource_ref=_compiled_authz_resource_ref(action_intent),
-        zone_ref=_compiled_authz_zone_ref(action_intent),
-        network_ref=_compiled_authz_network_ref(action_intent),
-        resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
-        at=_parse_iso8601(action_intent.timestamp),
-        break_glass=break_glass_context.validated,
-    )
+    transition_evaluation: CompiledTransitionEvaluation | None = None
+    if _pdp_use_authz_graph_transitions():
+        transition_evaluation = compiled_authz_index.evaluate_transition(
+            _compiled_authz_transition_request(
+                action_intent=action_intent,
+                break_glass=break_glass_context.validated,
+            )
+        )
+        match = transition_evaluation.permission_match
+    else:
+        match = compiled_authz_index.can_access(
+            principal_ref=_compiled_authz_principal_ref(action_intent),
+            operation=_compiled_authz_operation(action_intent),
+            resource_ref=_compiled_authz_resource_ref(action_intent),
+            zone_ref=_compiled_authz_zone_ref(action_intent),
+            network_ref=_compiled_authz_network_ref(action_intent),
+            resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+            at=_parse_iso8601(action_intent.timestamp),
+            break_glass=break_glass_context.validated,
+        )
     break_glass_context = break_glass_context.model_copy(
         update={
             "used": bool(match.break_glass_used),
@@ -1401,8 +1422,22 @@ def _evaluate_compiled_authz_graph_policy(
             "outcome": match.reason,
         }
     )
+    if transition_evaluation is not None:
+        if transition_evaluation.disposition == AuthzDecisionDisposition.ALLOW:
+            return None, break_glass_context, transition_evaluation
+        if transition_evaluation.disposition == AuthzDecisionDisposition.QUARANTINE:
+            return None, break_glass_context, transition_evaluation
+        return (
+            _compiled_authz_transition_deny_decision(
+                policy_case=policy_case,
+                evaluation=transition_evaluation,
+                break_glass=break_glass_context,
+            ),
+            break_glass_context,
+            transition_evaluation,
+        )
     if match.allowed:
-        return None, break_glass_context
+        return None, break_glass_context, None
     return (
         _compiled_authz_deny_decision(
             policy_case=policy_case,
@@ -1410,6 +1445,7 @@ def _evaluate_compiled_authz_graph_policy(
             break_glass=break_glass_context,
         ),
         break_glass_context,
+        None,
     )
 
 
@@ -1482,6 +1518,8 @@ def _deny_decision(
     explanations: list[str] | None = None,
     evidence_gaps: list[str] | None = None,
     break_glass: BreakGlassDecisionContext | None = None,
+    authz_graph: Mapping[str, Any] | None = None,
+    governed_receipt: Mapping[str, Any] | None = None,
 ) -> PolicyDecision:
     return PolicyDecision(
         allowed=False,
@@ -1503,6 +1541,8 @@ def _deny_decision(
             cognitive_assessment.trace_ref if cognitive_assessment is not None else None
         ),
         break_glass=(break_glass or BreakGlassDecisionContext()),
+        authz_graph=dict(authz_graph or {}),
+        governed_receipt=dict(governed_receipt or {}),
     )
 
 
@@ -1513,6 +1553,8 @@ def _escalate_decision(
     cognitive_assessment: PolicyCaseAssessment | None = None,
     explanations: list[str] | None = None,
     break_glass: BreakGlassDecisionContext | None = None,
+    authz_graph: Mapping[str, Any] | None = None,
+    governed_receipt: Mapping[str, Any] | None = None,
 ) -> PolicyDecision:
     return PolicyDecision(
         allowed=False,
@@ -1532,6 +1574,8 @@ def _escalate_decision(
             cognitive_assessment.trace_ref if cognitive_assessment is not None else None
         ),
         break_glass=(break_glass or BreakGlassDecisionContext()),
+        authz_graph=dict(authz_graph or {}),
+        governed_receipt=dict(governed_receipt or {}),
     )
 
 
@@ -1575,9 +1619,42 @@ def _compiled_authz_network_ref(action_intent: ActionIntent) -> str | None:
     return f"network:{network}" if network else None
 
 
+def _compiled_authz_asset_ref(action_intent: ActionIntent) -> str | None:
+    asset_id = (action_intent.resource.asset_id or "").strip()
+    return f"asset:{asset_id}" if asset_id else None
+
+
+def _compiled_authz_custody_point_ref(action_intent: ActionIntent) -> str | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
+    for key in ("custody_point", "custody_point_id", "facility_id", "warehouse_id"):
+        value = parameters.get(key)
+        if value is not None and str(value).strip():
+            return f"custody_point:{str(value).strip()}"
+    return None
+
+
 def _compiled_authz_resource_state_hash(action_intent: ActionIntent) -> str | None:
     resource_state_hash = (action_intent.resource.resource_state_hash or "").strip()
     return resource_state_hash or None
+
+
+def _compiled_authz_transition_request(
+    *,
+    action_intent: ActionIntent,
+    break_glass: bool,
+) -> AuthzTransitionRequest:
+    return AuthzTransitionRequest(
+        principal_ref=_compiled_authz_principal_ref(action_intent),
+        operation=_compiled_authz_operation(action_intent),
+        resource_ref=_compiled_authz_resource_ref(action_intent),
+        asset_ref=_compiled_authz_asset_ref(action_intent),
+        zone_ref=_compiled_authz_zone_ref(action_intent),
+        network_ref=_compiled_authz_network_ref(action_intent),
+        custody_point_ref=_compiled_authz_custody_point_ref(action_intent),
+        resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+        at=_parse_iso8601(action_intent.timestamp),
+        break_glass=break_glass,
+    )
 
 
 def _compiled_authz_deny_decision(
@@ -1614,11 +1691,66 @@ def _compiled_authz_deny_decision(
             f"compiled_authz_break_glass_required={match.break_glass_required}",
         ],
         break_glass=break_glass,
+        authz_graph=_authz_graph_decision_metadata(
+            transition_evaluation=None,
+            compiled_match=match,
+        ),
+    )
+
+
+def _compiled_authz_transition_deny_decision(
+    *,
+    policy_case: PolicyCase,
+    evaluation: CompiledTransitionEvaluation,
+    break_glass: BreakGlassDecisionContext | None = None,
+) -> PolicyDecision:
+    trust_gap_codes = [gap.code for gap in evaluation.trust_gaps]
+    if evaluation.reason == "principal_not_current_custodian":
+        reason = "Compiled authorization graph denied the requested asset transition because the principal is not the current custodian."
+    elif evaluation.reason == "expected_custodian_mismatch":
+        reason = "Compiled authorization graph denied the requested asset transition because the expected custodian does not match the compiled custody chain."
+    elif evaluation.reason == "asset_not_transferable":
+        reason = "Compiled authorization graph denied the requested asset transition because the asset is not in a transferable state."
+    elif evaluation.reason == "asset_restricted":
+        reason = "Compiled authorization graph denied the requested asset transition because the asset is already restricted."
+    elif evaluation.reason == "trust_gap_denied":
+        reason = "Compiled authorization graph denied the requested asset transition because required trust evidence is incomplete."
+    else:
+        reason = "Compiled authorization graph denied the requested asset transition."
+    return _deny_decision(
+        reason,
+        AUTHZ_GRAPH_DENY_CODE,
+        policy_case.policy_snapshot,
+        risk_score=_policy_case_risk_score(policy_case),
+        cognitive_assessment=policy_case.cognitive_assessment,
+        explanations=_policy_case_explanations(
+            policy_case,
+            f"compiled_authz_transition_result={evaluation.reason}",
+        )
+        + [
+            f"compiled_authz_transition_disposition={evaluation.disposition.value}",
+            f"compiled_authz_transition_asset_ref={evaluation.asset_ref or 'none'}",
+            f"compiled_authz_transition_resource_ref={evaluation.resource_ref or 'none'}",
+            f"compiled_authz_transition_current_custodian={evaluation.current_custodian or 'none'}",
+            f"compiled_authz_transition_trust_gaps={','.join(trust_gap_codes) if trust_gap_codes else 'none'}",
+        ],
+        evidence_gaps=trust_gap_codes or None,
+        break_glass=break_glass,
+        authz_graph=_authz_graph_decision_metadata(
+            transition_evaluation=evaluation,
+            compiled_match=evaluation.permission_match,
+        ),
+        governed_receipt=_serialize_governed_receipt(evaluation),
     )
 
 
 def _pdp_use_active_authz_graph() -> bool:
     raw = os.getenv("SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH", "false")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pdp_use_authz_graph_transitions() -> bool:
+    raw = os.getenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "false")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -1671,6 +1803,122 @@ def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
         key: values[key]
         for key in EXECUTION_TOKEN_CONSTRAINT_KEYS
     }
+
+
+def _mint_execution_token(
+    *,
+    action_intent: ActionIntent,
+    issued_at: datetime,
+    valid_until: datetime,
+    extra_constraints: Mapping[str, Any] | None = None,
+) -> ExecutionToken:
+    constraints = _build_execution_constraints(action_intent)
+    if extra_constraints:
+        constraints.update(
+            {
+                key: value
+                for key, value in extra_constraints.items()
+                if value is not None
+            }
+        )
+    token_payload = {
+        "token_id": str(uuid.uuid4()),
+        "intent_id": action_intent.intent_id,
+        "issued_at": _isoformat(issued_at),
+        "valid_until": _isoformat(valid_until),
+        "contract_version": action_intent.action.security_contract.version,
+        "constraints": constraints,
+    }
+    signature = _sign_payload(token_payload)
+    return ExecutionToken(signature=signature, **token_payload)
+
+
+def _allow_reason(action_intent: ActionIntent) -> str:
+    return EXPLICIT_ALLOW_RULE if _requires_approved_source_registration(action_intent) else "allowed"
+
+
+def _serialize_governed_receipt(
+    evaluation: CompiledTransitionEvaluation | None,
+) -> Dict[str, Any]:
+    if evaluation is None:
+        return {}
+    receipt = evaluation.receipt
+    return {
+        "decision_hash": receipt.decision_hash,
+        "disposition": receipt.disposition.value,
+        "snapshot_ref": receipt.snapshot_ref,
+        "snapshot_id": receipt.snapshot_id,
+        "snapshot_version": receipt.snapshot_version,
+        "principal_ref": receipt.principal_ref,
+        "operation": receipt.operation,
+        "asset_ref": receipt.asset_ref,
+        "resource_ref": receipt.resource_ref,
+        "twin_ref": receipt.twin_ref,
+        "reason": receipt.reason,
+        "generated_at": receipt.generated_at,
+        "custody_proof": list(receipt.custody_proof),
+        "evidence_refs": list(receipt.evidence_refs),
+        "trust_gap_codes": list(receipt.trust_gap_codes),
+        "provenance_sources": list(receipt.provenance_sources),
+        "advisory": dict(receipt.advisory),
+    }
+
+
+def _authz_graph_decision_metadata(
+    *,
+    transition_evaluation: CompiledTransitionEvaluation | None,
+    compiled_match: CompiledPermissionMatch | None,
+) -> Dict[str, Any]:
+    if transition_evaluation is None:
+        if compiled_match is None:
+            return {}
+        return {
+            "mode": "permission_match",
+            "match_reason": compiled_match.reason,
+            "matched_subjects": list(compiled_match.matched_subjects),
+            "break_glass_required": compiled_match.break_glass_required,
+            "break_glass_used": compiled_match.break_glass_used,
+        }
+    return {
+        "mode": "transition_evaluation",
+        "disposition": transition_evaluation.disposition.value,
+        "reason": transition_evaluation.reason,
+        "asset_ref": transition_evaluation.asset_ref,
+        "resource_ref": transition_evaluation.resource_ref,
+        "current_custodian": transition_evaluation.current_custodian,
+        "restricted_token_recommended": transition_evaluation.restricted_token_recommended,
+        "permission_match_reason": transition_evaluation.permission_match.reason,
+        "matched_subjects": list(transition_evaluation.permission_match.matched_subjects),
+        "trust_gaps": [
+            {
+                "code": gap.code,
+                "message": gap.message,
+                "details": dict(gap.details),
+            }
+            for gap in transition_evaluation.trust_gaps
+        ],
+    }
+
+
+def _transition_execution_constraints(
+    evaluation: CompiledTransitionEvaluation | None,
+) -> Dict[str, Any]:
+    if evaluation is None:
+        return {}
+    payload = {
+        "authz_disposition": evaluation.disposition.value,
+        "authz_reason": evaluation.reason,
+        "governed_receipt_hash": evaluation.receipt.decision_hash,
+        "asset_ref": evaluation.asset_ref,
+    }
+    if evaluation.disposition == AuthzDecisionDisposition.QUARANTINE:
+        payload.update(
+            {
+                "restricted_state": True,
+                "trust_gap_codes": [gap.code for gap in evaluation.trust_gaps],
+            }
+        )
+    return payload
 
 
 def _merge_action_intent_payload(

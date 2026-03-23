@@ -22,7 +22,7 @@ from seedcore.coordinator.core.governance import (
     evaluate_intent,
     merge_authoritative_twins,
 )
-from seedcore.ops.pkg.authz_graph import AuthzGraphCompiler, AuthzGraphProjector
+from seedcore.ops.pkg.authz_graph import AuthzDecisionDisposition, AuthzGraphCompiler, AuthzGraphProjector
 
 
 def _base_payload() -> dict:
@@ -464,3 +464,159 @@ def test_evaluate_intent_denies_invalid_break_glass_token(monkeypatch):
     assert decision.break_glass.present is True
     assert decision.break_glass.validated is False
     assert decision.break_glass.outcome == "verification_failed"
+
+
+def test_evaluate_intent_quarantines_when_transition_has_trust_gap(monkeypatch):
+    payload = _base_payload()
+    canonical_resource_uri = "seedcore://zones/vault-a/assets/asset-1"
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "ROBOT_OPERATOR"},
+                "valid_from": "2099-03-20T11:50:00+00:00",
+                "valid_to": "2099-03-20T12:20:00+00:00",
+            },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "role:ROBOT_OPERATOR",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "MUTATE",
+                    "resource": canonical_resource_uri,
+                    "required_current_custodian": True,
+                    "required_transferable_state": True,
+                    "max_telemetry_age_seconds": 300,
+                    "require_attestation": True,
+                    "require_seal": True,
+                    "allow_quarantine": True,
+                },
+                "valid_from": "2099-03-20T11:50:00+00:00",
+                "valid_to": "2099-03-20T12:20:00+00:00",
+            },
+            {
+                "id": "fact-held",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "heldBy",
+                "object_data": {
+                    "custodian": "agent-1",
+                    "transferable": True,
+                },
+                "valid_from": "2099-03-20T11:55:00+00:00",
+                "valid_to": "2099-03-20T12:20:00+00:00",
+            },
+            {
+                "id": "fact-attest",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "attestedBy",
+                "object_data": {
+                    "attestation_id": "attest-1",
+                    "attestor": "lab-1",
+                    "valid_from": "2099-03-19T12:00:00+00:00",
+                    "valid_to": "2099-03-21T12:00:00+00:00",
+                },
+            },
+            {
+                "id": "fact-seal",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "sealedWith",
+                "object_data": {"seal_id": "seal-1"},
+            },
+            {
+                "id": "fact-telemetry",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "observedIn",
+                "object_data": {
+                    "observation_id": "obs-1",
+                    "measurement_type": "temperature",
+                    "quality_score": 0.88,
+                    "observed_at": "2099-03-20T11:30:00+00:00",
+                },
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.disposition == "quarantine"
+    assert decision.execution_token is not None
+    assert decision.execution_token.constraints["authz_disposition"] == "quarantine"
+    assert decision.execution_token.constraints["restricted_state"] is True
+    assert decision.governed_receipt["disposition"] == "quarantine"
+    assert decision.authz_graph["mode"] == "transition_evaluation"
+    assert any(item["code"] == "stale_telemetry" for item in decision.authz_graph["trust_gaps"])
+
+
+def test_evaluate_intent_denies_when_transition_custody_mismatch(monkeypatch):
+    payload = _base_payload()
+    canonical_resource_uri = "seedcore://zones/vault-a/assets/asset-1"
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "ROBOT_OPERATOR"},
+            },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "role:ROBOT_OPERATOR",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "MUTATE",
+                    "resource": canonical_resource_uri,
+                    "required_current_custodian": True,
+                    "required_transferable_state": True,
+                },
+            },
+            {
+                "id": "fact-held",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "heldBy",
+                "object_data": {
+                    "custodian": "agent-2",
+                    "transferable": True,
+                },
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "authz_graph_denied"
+    assert decision.disposition == "deny"
+    assert decision.governed_receipt["disposition"] == AuthzDecisionDisposition.DENY.value
+    assert decision.authz_graph["mode"] == "transition_evaluation"
+    assert decision.authz_graph["reason"] == "principal_not_current_custodian"

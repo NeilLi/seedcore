@@ -319,13 +319,15 @@ class PolicyDecision(BaseModel):
     reason: Optional[str] = None
     policy_snapshot: Optional[str] = None
     deny_code: Optional[str] = None
-    disposition: Literal["allow", "deny", "escalate"] = "deny"
+    disposition: Literal["allow", "deny", "escalate", "quarantine"] = "deny"
     risk_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     explanations: List[str] = Field(default_factory=list)
     required_approvals: List[str] = Field(default_factory=list)
     evidence_gaps: List[str] = Field(default_factory=list)
     cognitive_trace_ref: Optional[str] = None
     break_glass: BreakGlassDecisionContext = Field(default_factory=BreakGlassDecisionContext)
+    authz_graph: Dict[str, Any] = Field(default_factory=dict)
+    governed_receipt: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _coerce_operation(action_type: str) -> GovernedOperation:
