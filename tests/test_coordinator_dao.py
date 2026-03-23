@@ -473,3 +473,47 @@ class TestGovernedExecutionAuditDAO:
         assert params["trust_gap_code"] == "stale_telemetry"
         assert params["limit"] == 10
         assert params["offset"] == 2
+
+    @pytest.mark.asyncio
+    async def test_summarize_transition_records_returns_disposition_and_trust_gap_facets(self):
+        dao = GovernedExecutionAuditDAO()
+        session = AsyncMock()
+
+        summary_result = MagicMock()
+        summary_mappings = MagicMock()
+        summary_mappings.one.return_value = {
+            "total": 3,
+            "allow_count": 1,
+            "deny_count": 1,
+            "quarantine_count": 1,
+        }
+        summary_result.mappings.return_value = summary_mappings
+
+        trust_gap_result = MagicMock()
+        trust_gap_mappings = MagicMock()
+        trust_gap_mappings.all.return_value = [
+            {"trust_gap_code": "stale_telemetry", "count": 2},
+            {"trust_gap_code": "route_violation", "count": 1},
+        ]
+        trust_gap_result.mappings.return_value = trust_gap_mappings
+        session.execute = AsyncMock(side_effect=[summary_result, trust_gap_result])
+
+        facets = await dao.summarize_transition_records(
+            session,
+            disposition="quarantine",
+            trust_gap_code="stale_telemetry",
+            current_only=True,
+        )
+
+        assert facets["total"] == 3
+        assert facets["restricted_count"] == 2
+        assert facets["dispositions"] == [
+            {"value": "allow", "count": 1},
+            {"value": "deny", "count": 1},
+            {"value": "quarantine", "count": 1},
+        ]
+        assert facets["trust_gap_codes"] == [
+            {"value": "stale_telemetry", "count": 2},
+            {"value": "route_violation", "count": 1},
+        ]
+        assert session.execute.await_count == 2

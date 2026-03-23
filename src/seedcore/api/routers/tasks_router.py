@@ -81,6 +81,7 @@ class MaterializedCustodyEventRead(BaseModel):
 
 class GovernanceSearchRead(BaseModel):
     total: int
+    facets: Dict[str, Any]
     items: List[Dict[str, Any]]
 
 
@@ -361,8 +362,15 @@ async def search_governance_transitions(
         limit=limit,
         offset=offset,
     )
+    facets = await governance_audit_dao.summarize_transition_records(
+        session,
+        asset_id=asset_id,
+        disposition=normalized_disposition,
+        trust_gap_code=trust_gap_code,
+        current_only=current_only,
+    )
     decorated = [_decorate_governance_entry(entry) for entry in entries]
-    return GovernanceSearchRead(total=len(decorated), items=decorated)
+    return GovernanceSearchRead(total=len(decorated), facets=facets, items=decorated)
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=TaskRead)

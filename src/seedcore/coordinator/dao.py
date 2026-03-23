@@ -548,14 +548,122 @@ class GovernedExecutionAuditDAO:
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
+        components = self._build_transition_search_components(
+            asset_id=asset_id,
+            disposition=disposition,
+            trust_gap_code=trust_gap_code,
+            current_only=current_only,
+        )
+        normalized_limit = max(1, min(int(limit), 500))
+        normalized_offset = max(0, int(offset))
+        params: Dict[str, Any] = {
+            **components["params"],
+            "limit": normalized_limit,
+            "offset": normalized_offset,
+        }
+        stmt = text(
+            f"""
+            {components["dataset_sql"]}
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT :limit
+            OFFSET :offset
+            """
+        )
+        result = await session.execute(stmt, params)
+        return [self._mapping_to_dict(row) for row in result.mappings().all()]
+
+    async def summarize_transition_records(
+        self,
+        session,
+        *,
+        asset_id: Optional[str] = None,
+        disposition: Optional[str] = None,
+        trust_gap_code: Optional[str] = None,
+        current_only: bool = True,
+    ) -> Dict[str, Any]:
+        components = self._build_transition_search_components(
+            asset_id=asset_id,
+            disposition=disposition,
+            trust_gap_code=trust_gap_code,
+            current_only=current_only,
+        )
+        params = dict(components["params"])
+        disposition_expr = components["disposition_expr"]
+        summary_stmt = text(
+            f"""
+            WITH dataset AS (
+                {components["dataset_sql"]}
+            )
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN {disposition_expr} = 'allow' THEN 1 ELSE 0 END), 0) AS allow_count,
+                COALESCE(SUM(CASE WHEN {disposition_expr} = 'deny' THEN 1 ELSE 0 END), 0) AS deny_count,
+                COALESCE(SUM(CASE WHEN {disposition_expr} = 'quarantine' THEN 1 ELSE 0 END), 0) AS quarantine_count
+            FROM dataset
+            """
+        )
+        summary_result = await session.execute(summary_stmt, params)
+        summary_row = summary_result.mappings().one()
+
+        trust_gap_stmt = text(
+            f"""
+            WITH dataset AS (
+                {components["dataset_sql"]}
+            ),
+            trust_gap_rows AS (
+                SELECT DISTINCT
+                    dataset.id,
+                    trust_gap_code
+                FROM dataset
+                CROSS JOIN LATERAL (
+                    SELECT jsonb_array_elements_text(COALESCE(dataset.policy_decision->'governed_receipt'->'trust_gap_codes', '[]'::jsonb)) AS trust_gap_code
+                    UNION
+                    SELECT trust_gap->>'code' AS trust_gap_code
+                    FROM jsonb_array_elements(COALESCE(dataset.policy_decision->'authz_graph'->'trust_gaps', '[]'::jsonb)) AS trust_gap
+                    WHERE trust_gap->>'code' IS NOT NULL
+                ) AS codes
+            )
+            SELECT
+                trust_gap_code,
+                COUNT(*) AS count
+            FROM trust_gap_rows
+            WHERE trust_gap_code IS NOT NULL AND trust_gap_code <> ''
+            GROUP BY trust_gap_code
+            ORDER BY count DESC, trust_gap_code ASC
+            """
+        )
+        trust_gap_result = await session.execute(trust_gap_stmt, params)
+        trust_gap_rows = trust_gap_result.mappings().all()
+        allow_count = int(summary_row["allow_count"] or 0)
+        deny_count = int(summary_row["deny_count"] or 0)
+        quarantine_count = int(summary_row["quarantine_count"] or 0)
+        return {
+            "total": int(summary_row["total"] or 0),
+            "restricted_count": deny_count + quarantine_count,
+            "dispositions": [
+                {"value": "allow", "count": allow_count},
+                {"value": "deny", "count": deny_count},
+                {"value": "quarantine", "count": quarantine_count},
+            ],
+            "trust_gap_codes": [
+                {"value": str(row["trust_gap_code"]), "count": int(row["count"] or 0)}
+                for row in trust_gap_rows
+            ],
+        }
+
+    def _build_transition_search_components(
+        self,
+        *,
+        asset_id: Optional[str],
+        disposition: Optional[str],
+        trust_gap_code: Optional[str],
+        current_only: bool,
+    ) -> Dict[str, Any]:
         normalized_asset_id = str(asset_id).strip() if isinstance(asset_id, str) and asset_id.strip() else None
         normalized_disposition = str(disposition).strip().lower() if isinstance(disposition, str) and disposition.strip() else None
         normalized_trust_gap_code = (
             str(trust_gap_code).strip() if isinstance(trust_gap_code, str) and trust_gap_code.strip() else None
         )
-        normalized_limit = max(1, min(int(limit), 500))
-        normalized_offset = max(0, int(offset))
-
         asset_expr = "COALESCE(policy_decision->'governed_receipt'->>'asset_ref', policy_decision->'authz_graph'->>'asset_ref', policy_receipt->>'asset_ref', action_intent->'resource'->>'asset_id')"
         disposition_expr = "LOWER(COALESCE(policy_decision->'authz_graph'->>'disposition', policy_decision->'governed_receipt'->>'disposition', policy_decision->>'disposition'))"
         base_predicates = [
@@ -563,10 +671,7 @@ class GovernedExecutionAuditDAO:
             f"COALESCE(policy_decision->'authz_graph', policy_decision->'governed_receipt') IS NOT NULL",
         ]
         filtered_predicates: List[str] = []
-        params: Dict[str, Any] = {
-            "limit": normalized_limit,
-            "offset": normalized_offset,
-        }
+        params: Dict[str, Any] = {}
         if normalized_asset_id is not None:
             base_predicates.append(f"({asset_expr}) = :asset_id")
             params["asset_id"] = normalized_asset_id
@@ -587,7 +692,6 @@ class GovernedExecutionAuditDAO:
                 """
             )
             params["trust_gap_code"] = normalized_trust_gap_code
-
         base_where_clause = " AND ".join(predicate.strip() for predicate in base_predicates)
         filtered_where_clause = " AND ".join(predicate.strip() for predicate in filtered_predicates) or "TRUE"
         select_columns = """
@@ -609,8 +713,7 @@ class GovernedExecutionAuditDAO:
                 recorded_at
         """
         if current_only:
-            stmt = text(
-                f"""
+            dataset_sql = f"""
                 WITH ranked AS (
                     SELECT
                         {select_columns},
@@ -626,26 +729,20 @@ class GovernedExecutionAuditDAO:
                 FROM ranked
                 WHERE row_num = 1
                   AND {filtered_where_clause}
-                ORDER BY recorded_at DESC, id DESC
-                LIMIT :limit
-                OFFSET :offset
-                """
-            )
+            """
         else:
-            stmt = text(
-                f"""
+            dataset_sql = f"""
                 SELECT
                     {select_columns}
                 FROM {self._TABLE_NAME}
                 WHERE {base_where_clause}
                   AND {filtered_where_clause}
-                ORDER BY recorded_at DESC, id DESC
-                LIMIT :limit
-                OFFSET :offset
-                """
-            )
-        result = await session.execute(stmt, params)
-        return [self._mapping_to_dict(row) for row in result.mappings().all()]
+            """
+        return {
+            "params": params,
+            "dataset_sql": dataset_sql.strip(),
+            "disposition_expr": disposition_expr,
+        }
 
     async def list_for_intent(
         self,

@@ -70,6 +70,7 @@ def _make_client(
     session: Any | None = None,
     governance_entries: list[Dict[str, Any]] | None = None,
     governance_search_entries: list[Dict[str, Any]] | None = None,
+    governance_search_facets: Dict[str, Any] | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(replay_router_module.router)
@@ -91,6 +92,17 @@ def _make_client(
     tasks_router_module.governance_audit_dao = SimpleNamespace(
         list_for_task=AsyncMock(return_value=list(governance_entries or [record])),
         search_transition_records=AsyncMock(return_value=list(governance_search_entries or governance_entries or [record])),
+        summarize_transition_records=AsyncMock(
+            return_value=dict(
+                governance_search_facets
+                or {
+                    "total": len(list(governance_search_entries or governance_entries or [record])),
+                    "restricted_count": 1,
+                    "dispositions": [{"value": "allow", "count": 0}, {"value": "deny", "count": 0}, {"value": "quarantine", "count": 1}],
+                    "trust_gap_codes": [{"value": "stale_telemetry", "count": 1}],
+                }
+            )
+        ),
     )
 
     async def fake_get_async_redis_client():
@@ -221,15 +233,23 @@ def test_governance_search_filters_quarantine_and_trust_gap_records() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 1
+    assert body["facets"]["restricted_count"] == 1
+    assert body["facets"]["dispositions"][-1] == {"value": "quarantine", "count": 1}
+    assert body["facets"]["trust_gap_codes"] == [{"value": "stale_telemetry", "count": 1}]
     assert body["items"][0]["authz_transition_summary"]["governed_receipt_hash"] == "receipt-intent-router-7"
     assert body["items"][0]["authz_transition_summary"]["trust_gap_codes"] == ["stale_telemetry"]
 
     dao = tasks_router_module.governance_audit_dao
     dao.search_transition_records.assert_awaited_once()
+    dao.summarize_transition_records.assert_awaited_once()
     _, kwargs = dao.search_transition_records.await_args
     assert kwargs["disposition"] == "quarantine"
     assert kwargs["trust_gap_code"] == "stale_telemetry"
     assert kwargs["current_only"] is True
+    _, facet_kwargs = dao.summarize_transition_records.await_args
+    assert facet_kwargs["disposition"] == "quarantine"
+    assert facet_kwargs["trust_gap_code"] == "stale_telemetry"
+    assert facet_kwargs["current_only"] is True
 
 
 def test_governance_search_rejects_invalid_disposition() -> None:
