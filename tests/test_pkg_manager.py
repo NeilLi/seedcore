@@ -29,6 +29,7 @@ from seedcore.ops.pkg.manager import (
     initialize_global_pkg_manager,
     get_global_pkg_manager,
     PKG_REDIS_CHANNEL,
+    PKG_UPDATE_AUTHZ_REFRESH_KIND,
     MAX_EVALUATOR_CACHE_SIZE,
 )
 from seedcore.ops.pkg.client import PKGClient
@@ -263,6 +264,61 @@ async def test_redis_listener_handles_activate(
     # ✅ Core behavioral assertion (the only one that matters)
     mock_pkg_client.get_snapshot_by_version.assert_called_with("rules@redis")
 
+
+@pytest.mark.asyncio
+async def test_parse_pkg_update_message_supports_legacy_and_json(manager):
+    legacy = manager._parse_pkg_update_message("activate:rules@2.0.0")
+    authz = manager._parse_pkg_update_message("authz_graph_refresh")
+    structured = manager._parse_pkg_update_message(
+        json.dumps({"kind": "activate", "version": "rules@json"})
+    )
+
+    assert legacy == {"kind": "activate", "version": "rules@2.0.0"}
+    assert authz == {"kind": PKG_UPDATE_AUTHZ_REFRESH_KIND, "version": None}
+    assert structured == {"kind": "activate", "version": "rules@json"}
+
+
+@pytest.mark.asyncio
+async def test_refresh_active_authz_graph_uses_active_snapshot(manager):
+    snap = make_native_snapshot("rules@1.0.0")
+    manager.authz_graph.activate_snapshot = AsyncMock()
+    await manager._load_and_activate_snapshot(snap, source="test")
+
+    result = await manager.refresh_active_authz_graph()
+
+    assert result["success"] is True
+    manager.authz_graph.activate_snapshot.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_redis_listener_handles_authz_graph_refresh_message(
+    manager, mock_redis_client
+):
+    manager.refresh_active_authz_graph = AsyncMock(return_value={"success": True})
+
+    async def listen_once():
+        yield {
+            "type": "message",
+            "data": b"authz_graph_refresh",
+        }
+        await asyncio.sleep(0.01)
+
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock()
+    pubsub.listen = listen_once
+
+    mock_redis_client.pubsub = MagicMock(return_value=pubsub)
+
+    task = asyncio.create_task(manager._redis_listen_loop())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert manager.refresh_active_authz_graph.call_count >= 1
+
 # ---------------------------------------------------------------------
 # Stop Logic
 # ---------------------------------------------------------------------
@@ -300,5 +356,6 @@ async def test_global_manager_lifecycle():
 
 def test_constants():
     assert PKG_REDIS_CHANNEL == "pkg_updates"
+    assert PKG_UPDATE_AUTHZ_REFRESH_KIND == "authz_graph_refresh"
     assert isinstance(MAX_EVALUATOR_CACHE_SIZE, int)
     assert MAX_EVALUATOR_CACHE_SIZE > 0

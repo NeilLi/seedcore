@@ -63,6 +63,11 @@ from .result_utils import (
     PolicyGateBlockedError,
     normalize_policy_result,
 )
+from .authz_graph import (
+    AuthzGraphManager,
+    AuthzGraphProjectionService,
+    CompiledAuthzIndex,
+)
 
 __all__ = [
     # Manager (main entry point)
@@ -91,4 +96,7 @@ __all__ = [
     "PKGSnapshotCompareService",
     "PolicyGateBlockedError",
     "normalize_policy_result",
+    "AuthzGraphManager",
+    "AuthzGraphProjectionService",
+    "CompiledAuthzIndex",
 ]

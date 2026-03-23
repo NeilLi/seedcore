@@ -53,6 +53,58 @@ async def pkg_reload() -> Dict[str, Any]:
     return result
 
 
+@router.post("/pkg/authz-graph/refresh", response_model=Dict[str, Any])
+async def pkg_authz_graph_refresh() -> Dict[str, Any]:
+    """
+    Manually refresh the active compiled authorization graph for the current PKG snapshot.
+    """
+    pkg_mgr = get_global_pkg_manager()
+
+    if not pkg_mgr:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PKG manager not initialized",
+                "message": "PKG manager needs to be initialized before refreshing the authz graph.",
+            },
+        )
+
+    result = await pkg_mgr.refresh_active_authz_graph()
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result)
+    return result
+
+
+@router.get("/pkg/authz-graph/status", response_model=Dict[str, Any])
+async def pkg_authz_graph_status() -> Dict[str, Any]:
+    """
+    Get active authorization graph runtime status.
+    """
+    pkg_mgr = get_global_pkg_manager()
+    if not pkg_mgr:
+        return {
+            "available": False,
+            "manager_exists": False,
+            "authz_graph_ready": False,
+            "error": "PKG manager not initialized",
+        }
+
+    metadata = pkg_mgr.get_metadata()
+    authz_status = metadata.get("authz_graph", {})
+    compiled = pkg_mgr.get_active_compiled_authz_index()
+
+    return {
+        "available": bool(authz_status.get("healthy")),
+        "manager_exists": True,
+        "authz_graph_ready": compiled is not None and bool(authz_status.get("healthy")),
+        "active_snapshot_id": authz_status.get("active_snapshot_id"),
+        "active_snapshot_version": authz_status.get("active_snapshot_version"),
+        "graph_nodes_count": authz_status.get("graph_nodes_count", 0),
+        "graph_edges_count": authz_status.get("graph_edges_count", 0),
+        "error": authz_status.get("error"),
+    }
+
+
 @router.get("/pkg/status", response_model=Dict[str, Any])
 async def pkg_status() -> Dict[str, Any]:
     """
@@ -69,6 +121,7 @@ async def pkg_status() -> Dict[str, Any]:
             "available": False,
             "manager_exists": False,
             "evaluator_ready": False,
+            "authz_graph_ready": False,
             "error": "PKG manager not initialized",
             "suggestion": "PKG manager needs to be initialized. Check application startup logs.",
         }
@@ -110,10 +163,12 @@ async def pkg_status() -> Dict[str, Any]:
             "available": False,
             "manager_exists": True,
             "evaluator_ready": False,
+            "authz_graph_ready": False,
             "mode": metadata.get("mode", "unknown"),
             "status": status_info,
             "active_version": metadata.get("active_version"),
             "cached_versions": metadata.get("cached_versions", []),
+            "authz_graph": metadata.get("authz_graph", {}),
             "error": last_error or "No active evaluator available",
             "message": error_message,
             "suggestion": suggestion,
@@ -150,6 +205,7 @@ async def pkg_status() -> Dict[str, Any]:
         "available": True,
         "manager_exists": True,
         "evaluator_ready": True,
+        "authz_graph_ready": bool(metadata.get("authz_graph", {}).get("healthy")),
         "version": evaluator.version,
         "engine_type": evaluator.engine_type,
         "snapshot_id": evaluator.snapshot_id,
@@ -158,6 +214,7 @@ async def pkg_status() -> Dict[str, Any]:
         "active_version": metadata.get("active_version"),
         "cached_versions": metadata.get("cached_versions", []),
         "cortex_enabled": metadata.get("cortex_enabled", False),
+        "authz_graph": metadata.get("authz_graph", {}),
         "artifact_info": artifact_info,  # Diagnostic info about artifact
     }
 

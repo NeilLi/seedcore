@@ -22,6 +22,7 @@ from seedcore.coordinator.core.governance import (
     evaluate_intent,
     merge_authoritative_twins,
 )
+from seedcore.ops.pkg.authz_graph import AuthzGraphCompiler, AuthzGraphProjector
 
 
 def _base_payload() -> dict:
@@ -231,3 +232,94 @@ def test_evaluate_intent_allows_valid_actor_token(monkeypatch):
 
     assert decision.allowed is True
     assert decision.execution_token is not None
+
+
+def test_evaluate_intent_allows_when_compiled_authz_graph_matches():
+    payload = _base_payload()
+    canonical_resource_uri = "seedcore://zones/vault-a/assets/asset-1"
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        canonical_resource_uri
+    )
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "ROBOT_OPERATOR"},
+                "valid_from": "2099-03-20T11:50:00+00:00",
+                "valid_to": "2099-03-20T12:20:00+00:00",
+            },
+                {
+                    "id": "fact-zone",
+                    "snapshot_id": 1,
+                    "namespace": "authz",
+                    "subject": canonical_resource_uri,
+                    "predicate": "locatedInZone",
+                    "object_data": {"zone": "vault-a"},
+                },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                    "subject": "role:ROBOT_OPERATOR",
+                    "predicate": "allowedOperation",
+                    "object_data": {
+                        "operation": "MUTATE",
+                        "resource": canonical_resource_uri,
+                        "zones": ["vault-a"],
+                    },
+                "valid_from": "2099-03-20T11:50:00+00:00",
+                "valid_to": "2099-03-20T12:20:00+00:00",
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.execution_token is not None
+
+
+def test_evaluate_intent_denies_when_compiled_authz_graph_has_no_permission():
+    payload = _base_payload()
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "ROBOT_OPERATOR"},
+            }
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "authz_graph_denied"
+
+
+def test_evaluate_intent_denies_when_compiled_authz_snapshot_mismatches():
+    payload = _base_payload()
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:other",
+        facts=[],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "authz_graph_snapshot_mismatch"

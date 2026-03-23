@@ -20,6 +20,7 @@ Control PKG Compliance:
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 import threading
@@ -38,11 +39,14 @@ from .evaluator import PKGEvaluator
 from .client import PKGClient
 from .dao import PKGSnapshotData  # Assuming legacy DAO mapped to new models
 from .capability_registry import CapabilityRegistry
+from .authz_graph import AuthzGraphManager, AuthzGraphProjectionService
 
 logger = logging.getLogger(__name__)
 
 # Constants
 PKG_REDIS_CHANNEL = "pkg_updates"
+PKG_UPDATE_ACTIVATE_KIND = "activate"
+PKG_UPDATE_AUTHZ_REFRESH_KIND = "authz_graph_refresh"
 MAX_EVALUATOR_CACHE_SIZE = 3
 MAX_RECONNECT_BACKOFF = 60
 REDIS_RECONNECT_BASE_DELAY = 1.0
@@ -81,7 +85,8 @@ class PKGManager:
         self, 
         pkg_client: PKGClient, 
         redis_client: Any,
-        mode: PKGMode = PKGMode.CONTROL
+        mode: PKGMode = PKGMode.CONTROL,
+        authz_graph_manager: Optional[AuthzGraphManager] = None,
     ):
         self._client = pkg_client  # Now used for both Snapshots AND Cortex queries
         self._redis_client = redis_client
@@ -90,6 +95,12 @@ class PKGManager:
         # Capability registry (DNA -> executor hints)
         # Refreshed on snapshot activation (startup + hot-swap).
         self.capabilities = CapabilityRegistry(pkg_client)
+        self.authz_graph = authz_graph_manager or AuthzGraphManager(
+            AuthzGraphProjectionService(
+                pkg_client=pkg_client,
+                session_factory=getattr(pkg_client, "_sf", None),
+            )
+        )
         
         # P2: True LRU Cache using OrderedDict
         # OrderedDict maintains insertion order, we move to end on access
@@ -212,6 +223,21 @@ class PKGManager:
                     "CapabilityRegistry refresh failed for snapshot_id=%s: %s",
                     snapshot.id,
                     e,
+                )
+
+            try:
+                await self.authz_graph.activate_snapshot(
+                    snapshot_id=snapshot.id,
+                    snapshot_version=snapshot.version,
+                    snapshot_ref=f"authz_graph@{snapshot.version}",
+                )
+            except Exception as e:
+                logger.warning(
+                    "AuthzGraph activation failed for snapshot_id=%s version=%s: %s",
+                    snapshot.id,
+                    snapshot.version,
+                    e,
+                    exc_info=True,
                 )
             
             duration = (time.perf_counter() - start) * 1000
@@ -411,7 +437,52 @@ class PKGManager:
                 "cache_size": len(self._evaluators),
                 "status": self._status,
                 "mode": self._mode.value,
-                "cortex_enabled": self._client is not None
+                "cortex_enabled": self._client is not None,
+                "authz_graph": self.authz_graph.get_status(),
+            }
+
+    def get_active_compiled_authz_index(self):
+        return self.authz_graph.get_active_compiled_index()
+
+    async def refresh_active_authz_graph(self) -> Dict[str, Any]:
+        with self._swap_lock:
+            active_version = self._active_version
+            evaluator_entry = self._evaluators.get(active_version) if active_version else None
+        if not active_version or evaluator_entry is None:
+            return {
+                "success": False,
+                "message": "No active PKG snapshot available for authz graph refresh",
+                "error": "no_active_snapshot",
+            }
+        evaluator, _ = evaluator_entry
+        snapshot_id = getattr(evaluator, "snapshot_id", None)
+        if snapshot_id is None:
+            return {
+                "success": False,
+                "message": f"Active evaluator for {active_version} is missing snapshot_id",
+                "error": "missing_snapshot_id",
+                "version": active_version,
+            }
+        try:
+            await self.authz_graph.activate_snapshot(
+                snapshot_id=snapshot_id,
+                snapshot_version=active_version,
+                snapshot_ref=f"authz_graph@{active_version}",
+            )
+            return {
+                "success": True,
+                "message": f"Successfully refreshed authz graph for {active_version}",
+                "version": active_version,
+                "snapshot_id": snapshot_id,
+            }
+        except Exception as e:
+            logger.error("Active authz graph refresh failed for %s: %s", active_version, e, exc_info=True)
+            return {
+                "success": False,
+                "message": f"Failed to refresh authz graph for {active_version}: {e}",
+                "error": str(e),
+                "version": active_version,
+                "snapshot_id": snapshot_id,
             }
     
     async def reload_active_snapshot(self) -> Dict[str, Any]:
@@ -555,14 +626,7 @@ class PKGManager:
                     async for msg in pubsub.listen():
                         if msg['type'] == 'message':
                             data = msg['data'].decode('utf-8') if isinstance(msg['data'], bytes) else msg['data']
-                            
-                            if data.startswith("activate:"):
-                                version = data.split(":", 1)[1]
-                                logger.info(f"Hot-swap requested for {version}")
-                                
-                                snap = await self._client.get_snapshot_by_version(version)
-                                if snap:
-                                    await self._load_and_activate_snapshot(snap, source="redis")
+                            await self._handle_pkg_update_message(data)
                 except asyncio.CancelledError:
                     # Normal shutdown
                     raise
@@ -597,6 +661,71 @@ class PKGManager:
                     backoff_delay * REDIS_RECONNECT_MULTIPLIER,
                     REDIS_RECONNECT_MAX_DELAY
                 )
+
+    async def _handle_pkg_update_message(self, data: Any) -> None:
+        payload = self._parse_pkg_update_message(data)
+        if payload is None:
+            return
+
+        kind = payload.get("kind")
+        version = payload.get("version")
+        if kind == PKG_UPDATE_ACTIVATE_KIND:
+            if not version:
+                logger.warning("Ignoring PKG activate message without version: %s", payload)
+                return
+            logger.info("Hot-swap requested for %s", version)
+            snap = await self._client.get_snapshot_by_version(version)
+            if snap:
+                await self._load_and_activate_snapshot(snap, source="redis")
+            return
+
+        if kind == PKG_UPDATE_AUTHZ_REFRESH_KIND:
+            if version and version != self._active_version:
+                logger.info(
+                    "Ignoring authz graph refresh for inactive version %s (active=%s)",
+                    version,
+                    self._active_version,
+                )
+                return
+            logger.info("Authz graph refresh requested for %s", version or self._active_version)
+            await self.refresh_active_authz_graph()
+            return
+
+        logger.debug("Ignoring unknown PKG update message: %s", payload)
+
+    def _parse_pkg_update_message(self, data: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
+        if not isinstance(data, str):
+            logger.debug("Ignoring non-string PKG update message: %r", data)
+            return None
+
+        raw = data.strip()
+        if not raw:
+            return None
+        if raw.startswith("activate:"):
+            return {"kind": PKG_UPDATE_ACTIVATE_KIND, "version": raw.split(":", 1)[1].strip()}
+        if raw.startswith("authz_graph_refresh:"):
+            return {"kind": PKG_UPDATE_AUTHZ_REFRESH_KIND, "version": raw.split(":", 1)[1].strip()}
+        if raw == "authz_graph_refresh":
+            return {"kind": PKG_UPDATE_AUTHZ_REFRESH_KIND, "version": None}
+        if raw.startswith("{"):
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("Ignoring malformed PKG update JSON: %s", raw)
+                return None
+            if not isinstance(payload, dict):
+                logger.warning("Ignoring non-object PKG update JSON: %s", raw)
+                return None
+            kind = str(payload.get("kind") or "").strip()
+            version = payload.get("version")
+            return {
+                "kind": kind,
+                "version": str(version).strip() if version is not None else None,
+            }
+        logger.debug("Ignoring unsupported PKG update message: %s", raw)
+        return None
     
     # --- P0: Schema Validation ---
     

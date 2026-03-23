@@ -29,6 +29,7 @@ from seedcore.models.action_intent import (
 )
 from seedcore.models.task_payload import TaskPayload
 from seedcore.ops.evidence.builder import build_policy_receipt_artifact
+from seedcore.ops.pkg.authz_graph.compiler import CompiledAuthzIndex, CompiledPermissionMatch
 
 
 SYSTEM_PARAM_KEYS = {
@@ -73,6 +74,8 @@ INVALID_ACTOR_TOKEN_DENY_CODE = "invalid_actor_token"
 ACTOR_TOKEN_SUBJECT_MISMATCH_DENY_CODE = "actor_token_subject_mismatch"
 ACTOR_TOKEN_EXPIRED_DENY_CODE = "actor_token_expired"
 MISSING_ACTOR_TOKEN_DENY_CODE = "missing_actor_token"
+AUTHZ_GRAPH_DENY_CODE = "authz_graph_denied"
+AUTHZ_GRAPH_SNAPSHOT_MISMATCH_DENY_CODE = "authz_graph_snapshot_mismatch"
 EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "action_type",
     "target_zone",
@@ -759,6 +762,7 @@ def evaluate_intent(
     action_intent: ActionIntent | PolicyCase,
     *,
     policy_snapshot: str | None = None,
+    compiled_authz_index: CompiledAuthzIndex | None = None,
     approved_source_registrations: Mapping[str, str | None] | None = None,
     relevant_twin_snapshot: Mapping[str, Any] | None = None,
     telemetry_summary: Mapping[str, Any] | None = None,
@@ -877,6 +881,14 @@ def evaluate_intent(
     if cognitive_violation is not None:
         return cognitive_violation
 
+    authz_graph_violation = _evaluate_compiled_authz_graph_policy(
+        action_intent=action_intent,
+        policy_case=policy_case,
+        compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
+    )
+    if authz_graph_violation is not None:
+        return authz_graph_violation
+
     token_valid_until = min(
         valid_until,
         now + timedelta(seconds=_execution_token_ttl_seconds()),
@@ -926,6 +938,7 @@ def evaluate_intent(
 def build_governance_context(
     task: TaskPayload | Mapping[str, Any] | Dict[str, Any],
     *,
+    compiled_authz_index: CompiledAuthzIndex | None = None,
     approved_source_registrations: Mapping[str, str | None] | None = None,
     relevant_twin_snapshot: Mapping[str, Any] | None = None,
     telemetry_summary: Mapping[str, Any] | None = None,
@@ -941,7 +954,7 @@ def build_governance_context(
         evidence_summary=evidence_summary,
     )
     intent = policy_case.action_intent
-    decision = evaluate_intent(policy_case)
+    decision = evaluate_intent(policy_case, compiled_authz_index=compiled_authz_index)
     policy_receipt = build_policy_receipt(
         policy_case=policy_case,
         policy_decision=decision,
@@ -1313,6 +1326,64 @@ def _evaluate_cognitive_policy(policy_case: PolicyCase) -> PolicyDecision | None
     return None
 
 
+def _evaluate_compiled_authz_graph_policy(
+    *,
+    action_intent: ActionIntent,
+    policy_case: PolicyCase,
+    compiled_authz_index: CompiledAuthzIndex | None,
+) -> PolicyDecision | None:
+    if compiled_authz_index is None:
+        return None
+
+    expected_snapshot = (policy_case.policy_snapshot or "").strip()
+    compiled_snapshot = (compiled_authz_index.snapshot_version or "").strip()
+    if expected_snapshot and compiled_snapshot and compiled_snapshot != expected_snapshot:
+        return _deny_decision(
+            "Compiled authorization graph snapshot does not match the requested policy snapshot.",
+            AUTHZ_GRAPH_SNAPSHOT_MISMATCH_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=_policy_case_explanations(
+                policy_case,
+                f"compiled_authz_snapshot_mismatch expected={expected_snapshot} actual={compiled_snapshot}",
+            ),
+        )
+
+    match = compiled_authz_index.can_access(
+        principal_ref=_compiled_authz_principal_ref(action_intent),
+        operation=_compiled_authz_operation(action_intent),
+        resource_ref=_compiled_authz_resource_ref(action_intent),
+        zone_ref=_compiled_authz_zone_ref(action_intent),
+        network_ref=_compiled_authz_network_ref(action_intent),
+        resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+        at=_parse_iso8601(action_intent.timestamp),
+    )
+    if match.allowed:
+        return None
+    return _compiled_authz_deny_decision(policy_case=policy_case, match=match)
+
+
+def _resolve_compiled_authz_index(
+    explicit_index: CompiledAuthzIndex | None,
+) -> CompiledAuthzIndex | None:
+    if explicit_index is not None:
+        return explicit_index
+    if not _pdp_use_active_authz_graph():
+        return None
+    try:
+        from seedcore.ops.pkg.manager import get_global_pkg_manager
+    except Exception:
+        return None
+    manager = get_global_pkg_manager()
+    if manager is None:
+        return None
+    getter = getattr(manager, "get_active_compiled_authz_index", None)
+    if getter is None:
+        return None
+    return getter()
+
+
 def _missing_mandatory_evidence(policy_case: PolicyCase) -> list[str]:
     evidence = policy_case.evidence_summary
     required = evidence.get("required") if isinstance(evidence.get("required"), list) else []
@@ -1421,6 +1492,75 @@ def _decision_explanations(
             explanations.append(cognitive_assessment.explanation)
         explanations.extend([f"risk_factor={item}" for item in cognitive_assessment.risk_factors])
     return explanations
+
+
+def _compiled_authz_principal_ref(action_intent: ActionIntent) -> str:
+    return f"principal:{action_intent.principal.agent_id.strip()}"
+
+
+def _compiled_authz_operation(action_intent: ActionIntent) -> str:
+    operation = action_intent.action.operation
+    if operation is not None:
+        return str(operation.value).strip().upper()
+    return str(action_intent.action.type).strip().upper()
+
+
+def _compiled_authz_resource_ref(action_intent: ActionIntent) -> str:
+    resource_uri = (action_intent.resource.resource_uri or "").strip()
+    if resource_uri:
+        return resource_uri
+    return f"resource:{action_intent.resource.asset_id.strip()}"
+
+
+def _compiled_authz_zone_ref(action_intent: ActionIntent) -> str | None:
+    zone = (action_intent.resource.target_zone or "").strip()
+    return f"zone:{zone}" if zone else None
+
+
+def _compiled_authz_network_ref(action_intent: ActionIntent) -> str | None:
+    network = (action_intent.environment.origin_network or "").strip()
+    return f"network:{network}" if network else None
+
+
+def _compiled_authz_resource_state_hash(action_intent: ActionIntent) -> str | None:
+    resource_state_hash = (action_intent.resource.resource_state_hash or "").strip()
+    return resource_state_hash or None
+
+
+def _compiled_authz_deny_decision(
+    *,
+    policy_case: PolicyCase,
+    match: CompiledPermissionMatch,
+) -> PolicyDecision:
+    matched_subjects = ", ".join(match.matched_subjects) if match.matched_subjects else "none"
+    deny_count = len(match.deny_permissions)
+    allow_count = len(match.matched_permissions)
+    reason = (
+        "Compiled authorization graph denied the ActionIntent."
+        if match.reason != "explicit_deny"
+        else "Compiled authorization graph returned an explicit deny for the ActionIntent."
+    )
+    return _deny_decision(
+        reason,
+        AUTHZ_GRAPH_DENY_CODE,
+        policy_case.policy_snapshot,
+        risk_score=_policy_case_risk_score(policy_case),
+        cognitive_assessment=policy_case.cognitive_assessment,
+        explanations=_policy_case_explanations(
+            policy_case,
+            f"compiled_authz_result={match.reason}",
+        )
+        + [
+            f"compiled_authz_subjects={matched_subjects}",
+            f"compiled_authz_allow_matches={allow_count}",
+            f"compiled_authz_deny_matches={deny_count}",
+        ],
+    )
+
+
+def _pdp_use_active_authz_graph() -> bool:
+    raw = os.getenv("SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH", "false")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _coerce_twin_snapshot(key: str, value: Any) -> TwinSnapshot:

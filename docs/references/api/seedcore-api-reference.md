@@ -223,12 +223,22 @@ Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/r
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
 | `POST` | `/api/v1/pkg/reload` | Reload the active PKG evaluator state. |
+| `POST` | `/api/v1/pkg/authz-graph/refresh` | Refresh the active compiled authorization graph for the current PKG snapshot. |
 | `GET` | `/api/v1/pkg/status` | Report PKG runtime status. |
+| `GET` | `/api/v1/pkg/authz-graph/status` | Report active authorization graph runtime status. |
 | `POST` | `/api/v1/pkg/evaluate_async` | Run asynchronous policy evaluation. |
 | `POST` | `/api/v1/pkg/snapshots/compare` | Compare two policy snapshots. |
 | `POST` | `/api/v1/pkg/snapshots/{snapshot_id}/compile-rules` | Compile rules for a specific snapshot. |
 
 These endpoints support policy runtime inspection and snapshot-oriented operations.
+
+### 12.1 Notes
+
+- `GET /api/v1/pkg/status` now includes `authz_graph_ready` plus an `authz_graph` summary when the PKG manager is initialized.
+- `GET /api/v1/pkg/authz-graph/status` is the focused operational status view for the active compiled authorization graph.
+- `POST /api/v1/pkg/authz-graph/refresh` rebuilds the active compiled authorization graph from snapshot-scoped sources without requiring a full PKG evaluator reload.
+- The PDP only auto-consumes the active compiled authorization graph when `SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=true`.
+- Redis PKG control-plane messages now support both evaluator activation and authz-graph refresh semantics.
 
 ## 13. Capabilities API
 
@@ -248,4 +258,5 @@ This endpoint is the active mounted capability-management surface at the moment.
 - Treat `/api/v1/custody*` as the canonical lineage, graph, and dispute workflow family.
 - Prefer `/api/v1/replay/jsonld` over older one-off JSON-LD generation paths for new integrations.
 - Use `/api/v1/tasks/{task_id}/logs` only for streaming clients that can consume SSE.
+- Use `/api/v1/pkg/authz-graph/status` and `/api/v1/pkg/authz-graph/refresh` for authz-graph operations instead of inferring state from general PKG logs.
 - Do not assume legacy routers are mounted just because they exist in the repository.

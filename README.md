@@ -443,6 +443,7 @@ curl http://localhost:8265/api/version
 
 # PKG status
 curl http://localhost:8002/api/v1/pkg/status
+curl http://localhost:8002/api/v1/pkg/authz-graph/status
 ```
 
 ### Demo-Focused Setup Checks
@@ -472,6 +473,7 @@ API_PORT=8002
 HAL_REQUIRE_EXECUTION_TOKEN=true
 SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS=5
 SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS=300
+SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=false
 SEEDCORE_HAL_ADMIN_TOKEN=change-me
 SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64=
 SEEDCORE_HAL_RECEIPT_KEY_ID=
@@ -489,6 +491,7 @@ Execution token enforcement is now designed for fast expiry and immediate operat
 
 - `SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS` caps issued token lifetime at the PDP and HAL boundary
 - `SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS` controls how long per-token revocation entries stay in Redis
+- `SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH` enables automatic PDP use of the active compiled authorization graph from the PKG manager
 - `SEEDCORE_HAL_ADMIN_TOKEN` protects HAL admin revocation and emergency-stop endpoints when set
 
 ---
@@ -544,7 +547,9 @@ Versioned governed API surface under `/api/v1`:
   - `POST /api/v1/advisory`
 - `PKG`
   - `GET /api/v1/pkg/status`
+  - `GET /api/v1/pkg/authz-graph/status`
   - `POST /api/v1/pkg/reload`
+  - `POST /api/v1/pkg/authz-graph/refresh`
   - `POST /api/v1/pkg/evaluate_async`
   - `POST /api/v1/pkg/snapshots/compare`
   - `POST /api/v1/pkg/snapshots/{snapshot_id}/compile-rules`
