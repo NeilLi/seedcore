@@ -2,7 +2,7 @@
 # ==========================================
 # SeedCore Environment Bootstrap Script
 # Ubuntu 20.04+ | EC2 / Bare Metal
-# Installs: Docker, Python 3.11, Kind, kubectl, Helm
+# Installs: Docker, Python 3.12, Kind, kubectl, Helm
 # ==========================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ IFS=$'\n\t'
 
 # -------- Config -------
 CLUSTER_NAME="${CLUSTER_NAME:-seedcore-cluster}"
-# PYTHON_VERSION="3.11"  # (unused, safe to remove)
+# PYTHON_VERSION="3.12"  # (unused, safe to remove)
 HELM_VERSION="v3.15.4"
 KIND_VERSION="v0.24.0"
 KIND_NODE_IMAGE="kindest/node:v1.30.0"
@@ -73,14 +73,14 @@ if ! id -nG "$USER" | grep -qw docker; then
   warn "Docker group added. Run: newgrp docker OR re-login."
 fi
 
-# -------- Python 3.11 --------
-if have python3.11; then
-  log "Python 3.11 already installed: $(python3.11 --version)"
+# -------- Python 3.12 --------
+if have python3.12; then
+  log "Python 3.12 already installed: $(python3.12 --version)"
 else
-  log "Installing Python 3.11 via deadsnakes..."
+  log "Installing Python 3.12 via deadsnakes..."
   sudo add-apt-repository -y ppa:deadsnakes/ppa
   sudo apt update -qq
-  sudo apt install -y python3.11 python3.11-venv python3.11-dev python3.11-distutils
+  sudo apt install -y python3.12 python3.12-venv python3.12-dev
 fi
 
 # -------- kubectl --------

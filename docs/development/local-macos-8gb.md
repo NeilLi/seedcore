@@ -71,7 +71,7 @@ bash deploy/local/init-full-db-direct.sh
 Keep the install CPU-only and skip optional ML extras.
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -e .

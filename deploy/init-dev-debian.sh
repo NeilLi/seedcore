@@ -2,7 +2,7 @@
 # ==========================================
 # SeedCore Environment Bootstrap Script
 # Debian 11/12 | Google Cloud Compute Engine
-# Installs: Docker, Python 3.11, kind, kubectl, Helm
+# Installs: Docker, Python 3.12, kind, kubectl, Helm
 # ==========================================
 
 set -euo pipefail
@@ -78,20 +78,20 @@ if ! id -nG "$USER" | grep -qw docker; then
   warn "Run: newgrp docker OR logout/login to activate docker group."
 fi
 
-# -------- Python 3.11 (Debian-native, correct way) --------
-if have python3.11; then
-  log "Python 3.11 already installed: $(python3.11 --version)"
+# -------- Python 3.12 (Debian-native, correct way) --------
+if have python3.12; then
+  log "Python 3.12 already installed: $(python3.12 --version)"
 else
-  log "Installing Python 3.11 from Debian backports..."
+  log "Installing Python 3.12 from Debian backports..."
 
   echo "deb http://deb.debian.org/debian bookworm-backports main" | \
     sudo tee /etc/apt/sources.list.d/backports.list >/dev/null
 
   sudo apt update -qq
   sudo apt install -y -t bookworm-backports \
-    python3.11 python3.11-venv python3.11-dev
+    python3.12 python3.12-venv python3.12-dev
 
-  sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+  sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 fi
 
 # -------- kubectl --------

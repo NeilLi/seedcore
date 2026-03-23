@@ -9,7 +9,7 @@ description = "Dynamic Cognitive Architecture - Energy-governed, organ-aware, hi
 authors = [{name = "SeedCore Contributors", email = "contributors@seedcore.ai"}]
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -17,7 +17,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",

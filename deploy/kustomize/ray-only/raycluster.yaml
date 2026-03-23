@@ -39,11 +39,10 @@ spec:
       spec:
         containers:
         - name: ray-worker
-          image: rayproject/ray:2.53.0-py311
+          image: rayproject/ray:2.53.0-py312
           envFrom:
             - configMapRef:
                 name: seedcore-env
           resources:
             requests: { cpu: "500m", memory: "1Gi" }
             limits:   { cpu: "1",    memory: "2Gi" }
-

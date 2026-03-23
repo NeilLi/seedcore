@@ -81,7 +81,7 @@ build_nim_retrieval() {
         warn "NIM Retrieval directory not found. Creating placeholder..."
         mkdir -p "$nim_dir"
         cat > "$nim_dir/Dockerfile" << 'EOF'
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -322,5 +322,4 @@ main() {
 
 # Run main function
 main "$@"
-
 

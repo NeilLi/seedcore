@@ -9,7 +9,7 @@ spec:
   serviceUnhealthySecondThreshold: 300 
   deploymentUnhealthySecondThreshold: 300
   # ===================================================================
-  #  Serve Configuration (Optimized for Ray 2.53 + Py3.11)
+  #  Serve Configuration (Optimized for Ray 2.53 + Py3.12)
   # ===================================================================
   serveConfigV2: |
     http_options:

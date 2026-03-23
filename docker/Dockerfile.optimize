@@ -1,8 +1,8 @@
 # docker/Dockerfile.optimize
-# Python 3.11 + Ray (multi-arch capable: arm64 / amd64)
-# Uses python:3.11-slim base + pip-installed Ray for native arm64 support
+# Python 3.12 + Ray (multi-arch capable: arm64 / amd64)
+# Uses python:3.12-slim base + pip-installed Ray for native arm64 support
 # BuildKit automatically uses the target platform from build context
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -10,8 +10,8 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG ENABLE_ML=0
 LABEL org.opencontainers.image.title="seedcore-serve" \
-      org.opencontainers.image.description="SeedCore Serve on Ray (Py3.11, native arm64/amd64)" \
-      org.opencontainers.image.version="2.53.0-py311" \
+      org.opencontainers.image.description="SeedCore Serve on Ray (Py3.12, native arm64/amd64)" \
+      org.opencontainers.image.version="2.53.0-py312" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="seedcore"
