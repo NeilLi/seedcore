@@ -5,6 +5,47 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
+DEFAULT_ENV_FILE="${PROJECT_ROOT}/docker/.env"
+if [[ -n "${ENV_FILE:-}" && -f "${ENV_FILE}" ]]; then
+  ENV_FILE="${ENV_FILE}"
+else
+  ENV_FILE="${DEFAULT_ENV_FILE}"
+fi
+
+# Import only model/provider credentials from docker/.env.
+# Full docker/.env loading is unsafe for host mode because it contains
+# container-oriented hosts/namespaces like `postgresql`, `redis`, and
+# cluster-specific Ray settings.
+if [[ -f "${ENV_FILE}" ]]; then
+  import_env_key() {
+    local env_key="$1"
+    local env_value=""
+    [[ -z "${!env_key:-}" ]] || return 0
+    env_value="$(grep -E "^${env_key}=" "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+    [[ -n "${env_value}" ]] || return 0
+    if [[ "${env_value}" == \"*\" && "${env_value}" == *\" ]]; then
+      env_value="${env_value:1:${#env_value}-2}"
+    elif [[ "${env_value}" == \'*\' && "${env_value}" == *\' ]]; then
+      env_value="${env_value:1:${#env_value}-2}"
+    fi
+    export "${env_key}=${env_value}"
+  }
+
+  for env_key in \
+    OPENAI_API_KEY \
+    ANTHROPIC_API_KEY \
+    GOOGLE_API_KEY \
+    GOOGLE_VERTEX_MODEL \
+    GOOGLE_API_TIMEOUT_S \
+    GOOGLE_PLANNER_TEMPERATURE; do
+    import_env_key "${env_key}"
+  done
+
+  while IFS='=' read -r env_key _; do
+    [[ "${env_key}" == GOOGLE_LLM_* ]] || continue
+    import_env_key "${env_key}"
+  done < <(grep -E '^GOOGLE_LLM_[A-Z0-9_]*=' "${ENV_FILE}" || true)
+fi
 
 export PROJECT_ROOT
 export PYTHONPATH="${PROJECT_ROOT}/src"
