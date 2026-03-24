@@ -25,6 +25,7 @@ PYTEST_TARGETS=(
   tests/test_pkg_router.py
   tests/test_replay_router.py
   tests/test_replay_service.py
+  tests/test_end_to_end_product_verification.py
   tests/test_evidence_signing_verification.py
   tests/test_twin_lifecycle_verification.py
   tests/test_zero_trust_boundaries.py
@@ -60,3 +61,7 @@ bash scripts/host/verify_evidence_signing.sh
 echo
 echo "==> Running twin lifecycle verification"
 bash scripts/host/verify_twin_lifecycle.sh
+
+echo
+echo "==> Running end-to-end product verification"
+bash scripts/host/verify_end_to_end_product.sh
