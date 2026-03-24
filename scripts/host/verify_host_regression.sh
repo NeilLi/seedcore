@@ -25,6 +25,7 @@ PYTEST_TARGETS=(
   tests/test_pkg_router.py
   tests/test_replay_router.py
   tests/test_replay_service.py
+  tests/test_evidence_signing_verification.py
   tests/test_zero_trust_boundaries.py
 )
 
@@ -50,3 +51,7 @@ bash scripts/host/verify_zero_trust_pdp_contract.sh
 echo
 echo "==> Running zero-trust boundary verification"
 bash scripts/host/verify_zero_trust_boundaries.sh
+
+echo
+echo "==> Running evidence/signing verification"
+bash scripts/host/verify_evidence_signing.sh
