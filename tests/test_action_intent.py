@@ -685,8 +685,10 @@ def test_evaluate_intent_quarantines_when_transition_has_trust_gap(monkeypatch):
     assert decision.governed_receipt["disposition"] == "quarantine"
     assert decision.authz_graph["mode"] == "transition_evaluation"
     assert ("principal:agent-1", "role:ROBOT_OPERATOR") in [tuple(path) for path in decision.authz_graph["authority_paths"]]
+    assert "fact-allow" in decision.authz_graph["matched_policy_refs"]
     assert any(item["code"] == "stale_telemetry" for item in decision.authz_graph["trust_gaps"])
     assert any(item["code"] == "telemetry_freshness" and item["outcome"] == "failed" for item in decision.authz_graph["checked_constraints"])
+    assert any(item["code"] == "telemetry_freshness" and item["outcome"] == "failed" for item in decision.authz_graph["missing_prerequisites"])
 
 
 def test_evaluate_intent_phase1_release_requires_approved_registration_and_stage(monkeypatch):
@@ -777,6 +779,7 @@ def test_evaluate_intent_phase1_release_requires_approved_registration_and_stage
     assert decision.allowed is True
     assert decision.disposition == "allow"
     assert any(tuple(path) == ("principal:agent-1", "role:RELEASE_OPERATOR") for path in decision.authz_graph["authority_paths"])
+    assert "fact-allow" in decision.authz_graph["matched_policy_refs"]
     assert any(item["code"] == "source_registration" and item["outcome"] == "passed" for item in decision.authz_graph["checked_constraints"])
     assert "registration:reg-1" in decision.governed_receipt["evidence_refs"]
     assert "registration_decision:decision-1" in decision.governed_receipt["evidence_refs"]
@@ -896,3 +899,5 @@ def test_evaluate_intent_denies_when_transition_custody_mismatch(monkeypatch):
     assert decision.governed_receipt["disposition"] == AuthzDecisionDisposition.DENY.value
     assert decision.authz_graph["mode"] == "transition_evaluation"
     assert decision.authz_graph["reason"] == "principal_not_current_custodian"
+    assert "fact-allow" in decision.authz_graph["matched_policy_refs"]
+    assert any(item["code"] == "current_custodian" for item in decision.authz_graph["missing_prerequisites"])

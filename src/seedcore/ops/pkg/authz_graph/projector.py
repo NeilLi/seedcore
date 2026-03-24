@@ -62,6 +62,11 @@ def _certification_ref(value: str) -> str:
     return value if value.startswith("certification:") else f"certification:{value}"
 
 
+def _policy_rule_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("policy_rule:") else f"policy_rule:{value}"
+
+
 def _product_ref(value: str) -> str:
     value = str(value).strip()
     return value if value.startswith("product:") else f"product:{value}"
@@ -149,6 +154,24 @@ def _freeze_value(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_freeze_value(item) for item in value)
     return value
+
+
+def _constraint_token(value: Any) -> str:
+    text = str(value).strip()
+    if not text:
+        return "value"
+    return (
+        text.replace("://", "_")
+        .replace(":", "_")
+        .replace("/", "_")
+        .replace(" ", "_")
+    )
+
+
+def _constraint_ref(anchor_ref: str, code: str, qualifier: Any | None = None) -> str:
+    anchor = _constraint_token(anchor_ref)
+    suffix = f":{_constraint_token(qualifier)}" if qualifier is not None else ""
+    return f"constraint:{anchor}:{code}{suffix}"
 
 
 class _ProjectionBuffer:
@@ -272,6 +295,27 @@ class AuthzGraphProjector:
         if not source_ref or not target_ref:
             return
 
+        policy_rule_ref = _policy_rule_ref(
+            resolved.rule_id
+            or resolved.rule_name
+            or f"{source_ref}:{resolved.operation}:{target_ref}"
+        )
+        buffer.add_node(
+            AuthzNode(
+                kind=NodeKind.POLICY_RULE,
+                ref=policy_rule_ref,
+                display_name=resolved.rule_name or resolved.rule_id or resolved.operation,
+                attributes={
+                    "rule_id": resolved.rule_id,
+                    "rule_name": resolved.rule_name,
+                    "relationship": resolved.relationship,
+                    "operation": resolved.operation,
+                    "effect": resolved.effect.value,
+                },
+                provenance=provenance,
+            )
+        )
+
         buffer.add_node(
             AuthzNode(
                 kind=_infer_selector_kind(source_ref),
@@ -344,6 +388,28 @@ class AuthzGraphProjector:
                 valid_to=_serialize_datetime(conditions.get("valid_to")),
                 provenance=provenance,
             )
+        )
+        buffer.add_edge(AuthzEdge(kind=EdgeKind.GOVERNED_BY, src=target_ref, dst=policy_rule_ref, provenance=provenance))
+        self._project_constraint_nodes(
+            buffer,
+            anchor_ref=policy_rule_ref,
+            target_ref=target_ref,
+            provenance=provenance,
+            constraints={
+                "zones": zones,
+                "networks": networks,
+                "custody_points": custody_points,
+                "workflow_stages": workflow_stages,
+                "required_current_custodian": bool(conditions.get("required_current_custodian")),
+                "required_transferable_state": bool(conditions.get("required_transferable_state")),
+                "max_telemetry_age_seconds": conditions.get("max_telemetry_age_seconds"),
+                "max_inspection_age_seconds": conditions.get("max_inspection_age_seconds"),
+                "require_attestation": bool(conditions.get("require_attestation")),
+                "require_seal": bool(conditions.get("require_seal")),
+                "require_approved_source_registration": bool(
+                    conditions.get("require_approved_source_registration")
+                ),
+            },
         )
 
     def _project_action_intent(
@@ -866,10 +932,24 @@ class AuthzGraphProjector:
             resource_value = object_data.get("resource") or object_data.get("resource_uri") or object_data.get("asset_id")
             if not src_ref or not operation or not resource_value:
                 return
+            policy_rule_ref = _policy_rule_ref(str(fact_id))
             resource_text = str(resource_value)
             resource_ref = resource_value if "://" in resource_text else _resource_ref(resource_text)
             asset_ref = None if "://" in resource_text else _asset_ref(resource_text.removeprefix("resource:"))
             buffer.add_node(AuthzNode(kind=_infer_subject_kind(src_ref), ref=src_ref, provenance=provenance))
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.POLICY_RULE,
+                    ref=policy_rule_ref,
+                    display_name=str(object_data.get("rule_name") or operation),
+                    attributes={
+                        "source_fact_ref": fact_ref,
+                        "operation": operation,
+                        "effect": str(object_data.get("effect", "allow")).lower(),
+                    },
+                    provenance=provenance,
+                )
+            )
             buffer.add_node(
                 AuthzNode(
                     kind=NodeKind.RESOURCE,
@@ -931,6 +1011,32 @@ class AuthzGraphProjector:
                     valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
                     valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
                 )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.GOVERNED_BY, src=resource_ref, dst=policy_rule_ref, provenance=provenance))
+            self._project_constraint_nodes(
+                buffer,
+                anchor_ref=policy_rule_ref,
+                target_ref=resource_ref,
+                provenance=provenance,
+                constraints={
+                    "zones": zones,
+                    "networks": networks,
+                    "custody_points": custody_points,
+                    "workflow_stages": [
+                        _workflow_stage_ref(value)
+                        for value in object_data.get("workflow_stages", [])
+                        if str(value).strip()
+                    ],
+                    "required_current_custodian": bool(object_data.get("required_current_custodian")),
+                    "required_transferable_state": bool(object_data.get("required_transferable_state")),
+                    "max_telemetry_age_seconds": object_data.get("max_telemetry_age_seconds"),
+                    "max_inspection_age_seconds": object_data.get("max_inspection_age_seconds"),
+                    "require_attestation": bool(object_data.get("require_attestation")),
+                    "require_seal": bool(object_data.get("require_seal")),
+                    "require_approved_source_registration": bool(
+                        object_data.get("require_approved_source_registration")
+                    ),
+                },
             )
             return
 
@@ -1133,6 +1239,60 @@ class AuthzGraphProjector:
             "Migrate this relationship into snapshot rule metadata authz_graph.edge_manifests.",
             predicate,
         )
+
+    def _project_constraint_nodes(
+        self,
+        buffer: _ProjectionBuffer,
+        *,
+        anchor_ref: str,
+        target_ref: str,
+        provenance: GraphProvenance,
+        constraints: Dict[str, Any],
+    ) -> None:
+        def _add_constraint(code: str, *, qualifier: Any | None = None, **attributes: Any) -> None:
+            constraint_ref = _constraint_ref(anchor_ref, code, qualifier)
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.CONSTRAINT,
+                    ref=constraint_ref,
+                    display_name=code,
+                    attributes={"constraint_code": code, **attributes},
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.REQUIRES, src=anchor_ref, dst=constraint_ref, provenance=provenance))
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.GOVERNED_BY, src=target_ref, dst=constraint_ref, provenance=provenance))
+
+        for zone_ref in constraints.get("zones", []) or []:
+            _add_constraint("allowed_zone", qualifier=zone_ref, expected_ref=zone_ref)
+        for network_ref in constraints.get("networks", []) or []:
+            _add_constraint("allowed_network", qualifier=network_ref, expected_ref=network_ref)
+        for custody_point_ref in constraints.get("custody_points", []) or []:
+            _add_constraint("required_custody_point", qualifier=custody_point_ref, expected_ref=custody_point_ref)
+        for workflow_stage_ref in constraints.get("workflow_stages", []) or []:
+            _add_constraint("required_workflow_stage", qualifier=workflow_stage_ref, expected_ref=workflow_stage_ref)
+        if constraints.get("required_current_custodian"):
+            _add_constraint("required_current_custodian", expected_value=True)
+        if constraints.get("required_transferable_state"):
+            _add_constraint("required_transferable_state", expected_value=True)
+        if constraints.get("max_telemetry_age_seconds") is not None:
+            _add_constraint(
+                "max_telemetry_age_seconds",
+                qualifier=constraints.get("max_telemetry_age_seconds"),
+                expected_value=constraints.get("max_telemetry_age_seconds"),
+            )
+        if constraints.get("max_inspection_age_seconds") is not None:
+            _add_constraint(
+                "max_inspection_age_seconds",
+                qualifier=constraints.get("max_inspection_age_seconds"),
+                expected_value=constraints.get("max_inspection_age_seconds"),
+            )
+        if constraints.get("require_attestation"):
+            _add_constraint("require_attestation", expected_value=True)
+        if constraints.get("require_seal"):
+            _add_constraint("require_seal", expected_value=True)
+        if constraints.get("require_approved_source_registration"):
+            _add_constraint("require_approved_source_registration", expected_value=True)
 
     def _project_registration(
         self,

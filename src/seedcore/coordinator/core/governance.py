@@ -2032,6 +2032,10 @@ def _authz_graph_decision_metadata(
             "match_reason": compiled_match.reason,
             "matched_subjects": list(compiled_match.matched_subjects),
             "authority_paths": [list(path) for path in compiled_match.authority_paths],
+            "matched_policy_refs": _policy_refs(compiled_match.matched_permissions),
+            "deny_policy_refs": _policy_refs(compiled_match.deny_permissions),
+            "break_glass_policy_refs": _policy_refs(compiled_match.break_glass_permissions),
+            "missing_prerequisites": [],
             "break_glass_required": compiled_match.break_glass_required,
             "break_glass_used": compiled_match.break_glass_used,
         }
@@ -2049,6 +2053,9 @@ def _authz_graph_decision_metadata(
         "permission_match_reason": transition_evaluation.permission_match.reason,
         "matched_subjects": list(transition_evaluation.permission_match.matched_subjects),
         "authority_paths": [list(path) for path in transition_evaluation.permission_match.authority_paths],
+        "matched_policy_refs": _policy_refs(transition_evaluation.permission_match.matched_permissions),
+        "deny_policy_refs": _policy_refs(transition_evaluation.permission_match.deny_permissions),
+        "break_glass_policy_refs": _policy_refs(transition_evaluation.permission_match.break_glass_permissions),
         "trust_gaps": [
             {
                 "code": gap.code,
@@ -2066,10 +2073,28 @@ def _authz_graph_decision_metadata(
             }
             for check in transition_evaluation.checked_constraints
         ],
+        "missing_prerequisites": _missing_prerequisites(transition_evaluation),
     }
     if evaluator:
         payload["evaluator"] = evaluator
     return payload
+
+
+def _policy_refs(permissions: Iterable[CompiledPermission]) -> list[str]:
+    return sorted({item.provenance_source for item in permissions if item.provenance_source})
+
+
+def _missing_prerequisites(evaluation: CompiledTransitionEvaluation) -> list[dict[str, Any]]:
+    return [
+        {
+            "code": check.code,
+            "outcome": check.outcome,
+            "message": check.message,
+            "details": dict(check.details),
+        }
+        for check in evaluation.checked_constraints
+        if check.outcome in {"missing", "failed"}
+    ]
 
 
 def _transition_execution_constraints(

@@ -120,6 +120,51 @@ def test_projector_projects_phase1_provenance_wedge_entities() -> None:
     assert (EdgeKind.AT_STAGE, f"handshake_intent:{intent.intent_id}", "workflow_stage:release_review") in edge_kinds
 
 
+def test_projector_projects_phase3_constraint_nodes_for_policy_rule() -> None:
+    snapshot = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@phase3",
+        snapshot_version="rules@3.0.0",
+        facts=[
+            {
+                "id": "fact-allow",
+                "snapshot_id": 3,
+                "namespace": "authz",
+                "subject": "role:warehouse_operator",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "PICK",
+                    "resource": "asset-42",
+                    "zones": ["cold-room"],
+                    "workflow_stages": ["pick_ready"],
+                    "required_current_custodian": True,
+                    "max_telemetry_age_seconds": 300,
+                    "require_attestation": True,
+                },
+            }
+        ],
+    )
+
+    policy_rule_nodes = [node for node in snapshot.nodes if node.kind == NodeKind.POLICY_RULE]
+    constraint_nodes = [node for node in snapshot.nodes if node.kind == NodeKind.CONSTRAINT]
+    required_edges = {(edge.kind, edge.src, edge.dst) for edge in snapshot.edges if edge.kind == EdgeKind.REQUIRES}
+
+    assert any(node.ref == "policy_rule:fact-allow" for node in policy_rule_nodes)
+    assert any(
+        node.attributes.get("constraint_code") == "allowed_zone"
+        and node.attributes.get("expected_ref") == "zone:cold-room"
+        for node in constraint_nodes
+    )
+    assert any(
+        node.attributes.get("constraint_code") == "required_workflow_stage"
+        and node.attributes.get("expected_ref") == "workflow_stage:pick_ready"
+        for node in constraint_nodes
+    )
+    assert any(node.attributes.get("constraint_code") == "required_current_custodian" for node in constraint_nodes)
+    assert any(node.attributes.get("constraint_code") == "max_telemetry_age_seconds" for node in constraint_nodes)
+    assert any(node.attributes.get("constraint_code") == "require_attestation" for node in constraint_nodes)
+    assert any(edge[0] == EdgeKind.REQUIRES and edge[1] == "policy_rule:fact-allow" for edge in required_edges)
+
+
 def test_compiler_materializes_role_based_permission_index() -> None:
     now = datetime.now(timezone.utc)
     projector = AuthzGraphProjector()

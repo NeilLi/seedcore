@@ -40,6 +40,8 @@ def _freeze_value(value: Any) -> Any:
 
 
 class NodeKind(str, Enum):
+    POLICY_RULE = "policy_rule"
+    CONSTRAINT = "constraint"
     ORG = "org"
     PRINCIPAL = "principal"
     ROLE_PROFILE = "role_profile"
@@ -78,6 +80,7 @@ class EdgeKind(str, Enum):
     CONTROLS = "controls"
     BOUND_TO_DEVICE = "bound_to_device"
     CERTIFIED_FOR = "certified_for"
+    REQUIRES = "requires"
     PART_OF = "part_of"
     CAN = "can"
     HELD_BY = "held_by"
