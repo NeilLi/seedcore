@@ -376,7 +376,49 @@ Outputs are generated in the `demo-output/` folder.
 
 ---
 
-## Quick Start (Kind + Kubernetes)
+## Quick Start
+
+### Host-Mode Local Runtime (Recommended For Day-To-Day Development)
+
+For local macOS or laptop development, use the host-mode helpers under [deploy/local/README.md](/Users/ningli/project/seedcore/deploy/local/README.md). They avoid the full Kind/Kubernetes footprint and are the best path for routine runtime bring-up and verification.
+
+Typical startup sequence:
+
+```bash
+brew services start postgresql@17
+brew services start redis
+PGUSER=$(whoami) bash deploy/local/init-full-db-direct.sh
+bash deploy/local/run-api.sh
+bash deploy/local/run-hal.sh
+bash deploy/local/run-task-stack.sh start
+```
+
+Core local endpoints:
+
+- API: `http://127.0.0.1:8002`
+- HAL: `http://127.0.0.1:8003`
+- Serve apps: `http://127.0.0.1:8000`
+
+Focused RFC-phase verification:
+
+```bash
+bash scripts/host/verify_authz_graph_rfc_phases.sh
+```
+
+This verifier currently checks the staged authz-graph rollout through:
+
+- Phase 0: baseline hardening
+- Phase 1: decision-centric ontology and release/provenance wedge
+- Phase 2: multihop authority traversal
+- Phase 3: first-class constraints and explanation payloads
+- Phase 4: decision-graph vs enrichment-graph split
+- Phase 5: shard-aware Ray authz cache routing
+
+Current focused suite result:
+
+- `51 passed`
+
+### Kind + Kubernetes
 
 ### Prerequisites
 
