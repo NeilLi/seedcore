@@ -42,6 +42,7 @@ class AuthzGraphManager:
             snapshot_ref=ref,
             snapshot_id=snapshot_id,
             snapshot_version=snapshot_version,
+            include_registration_decisions=True,
         )
         with self._lock:
             self._active_compiled_index = compiled

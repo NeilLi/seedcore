@@ -689,6 +689,99 @@ def test_evaluate_intent_quarantines_when_transition_has_trust_gap(monkeypatch):
     assert any(item["code"] == "telemetry_freshness" and item["outcome"] == "failed" for item in decision.authz_graph["checked_constraints"])
 
 
+def test_evaluate_intent_phase1_release_requires_approved_registration_and_stage(monkeypatch):
+    payload = _base_payload()
+    payload["params"]["governance"]["requires_approved_source_registration"] = True
+    payload["params"]["governance"]["action_intent"]["action"]["type"] = "RELEASE"
+    payload["params"]["governance"]["action_intent"]["action"]["parameters"] = {
+        "workflow_stage": "release_review"
+    }
+    payload["params"]["governance"]["action_intent"]["resource"].update(
+        {
+            "resource_uri": "resource:asset-1",
+            "lot_id": "lot-1",
+            "source_registration_id": "reg-1",
+            "registration_decision_id": "decision-1",
+            "product_id": "sku-1",
+        }
+    )
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-role",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "hasRole",
+                "object_data": {"role": "RELEASE_OPERATOR"},
+            },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "role:RELEASE_OPERATOR",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "RELEASE",
+                    "resource": "asset-1",
+                    "required_current_custodian": True,
+                    "required_transferable_state": True,
+                    "require_approved_source_registration": True,
+                    "workflow_stages": ["release_review"],
+                },
+            },
+            {
+                "id": "fact-held",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "heldBy",
+                "object_data": {
+                    "custodian": "agent-1",
+                    "transferable": True,
+                    "lot_id": "lot-1",
+                },
+            },
+        ],
+        registrations=[
+            {
+                "id": "reg-1",
+                "snapshot_id": 1,
+                "lot_id": "lot-1",
+                "producer_id": "producer-1",
+                "status": "approved",
+            }
+        ],
+        registration_decisions=[
+            {
+                "id": "decision-1",
+                "registration_id": "reg-1",
+                "decision": "approved",
+                "policy_snapshot_id": 1,
+                "decided_at": "2099-03-20T11:59:00+00:00",
+            }
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    decision = evaluate_intent(
+        payload,
+        compiled_authz_index=compiled,
+        approved_source_registrations={"reg-1": "decision-1"},
+    )
+
+    assert decision.allowed is True
+    assert decision.disposition == "allow"
+    assert any(tuple(path) == ("principal:agent-1", "role:RELEASE_OPERATOR") for path in decision.authz_graph["authority_paths"])
+    assert any(item["code"] == "source_registration" and item["outcome"] == "passed" for item in decision.authz_graph["checked_constraints"])
+    assert "registration:reg-1" in decision.governed_receipt["evidence_refs"]
+    assert "registration_decision:decision-1" in decision.governed_receipt["evidence_refs"]
+
+
 def test_evaluate_intent_denies_when_transition_custody_mismatch(monkeypatch):
     payload = _base_payload()
     canonical_resource_uri = "seedcore://zones/vault-a/assets/asset-1"

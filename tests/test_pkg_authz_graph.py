@@ -70,6 +70,56 @@ def test_projector_projects_action_intent_into_requested_subgraph() -> None:
     assert (EdgeKind.BACKED_BY, "asset:asset-42", "twin:batch-42") in edge_kinds
 
 
+def test_projector_projects_phase1_provenance_wedge_entities() -> None:
+    now = datetime.now(timezone.utc)
+    intent = ActionIntent(
+        intent_id=str(uuid4()),
+        timestamp=_iso(now),
+        valid_until=_iso(now + timedelta(seconds=30)),
+        principal={
+            "agent_id": "agent-alpha",
+            "role_profile": "warehouse_operator",
+            "actor_token": "seedcore_hmac_v1.test.payload.sig",
+        },
+        action={
+            "type": "release",
+            "parameters": {"workflow_stage": "release_review", "requires_approved_source_registration": True},
+            "security_contract": {"hash": "abc123", "version": "rules@2.0.0"},
+        },
+        resource={
+            "asset_id": "asset-42",
+            "resource_uri": "seedcore://shipments/release/asset-42",
+            "resource_state_hash": "state-hash-1",
+            "target_zone": "export-vault",
+            "provenance_hash": "prov-1",
+            "lot_id": "lot-2026-01",
+            "batch_twin_id": "batch-42",
+            "source_registration_id": "reg-42",
+            "registration_decision_id": "decision-42",
+            "product_id": "sku-42",
+        },
+        environment={"origin_network": "plant-a"},
+    )
+
+    snapshot = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@phase1",
+        snapshot_version="rules@2.0.0",
+        action_intents=[intent],
+    )
+
+    node_kinds = {node.ref: node.kind for node in snapshot.nodes}
+    edge_kinds = {(edge.kind, edge.src, edge.dst) for edge in snapshot.edges}
+
+    assert node_kinds["product:sku-42"] == NodeKind.PRODUCT
+    assert node_kinds["workflow_stage:release_review"] == NodeKind.WORKFLOW_STAGE
+    assert node_kinds["registration:reg-42"] == NodeKind.REGISTRATION
+    assert node_kinds["registration_decision:decision-42"] == NodeKind.REGISTRATION_DECISION
+    assert (EdgeKind.PART_OF, "asset_batch:lot-2026-01", "product:sku-42") in edge_kinds
+    assert (EdgeKind.BACKED_BY, "asset_batch:lot-2026-01", "registration:reg-42") in edge_kinds
+    assert (EdgeKind.BACKED_BY, "registration:reg-42", "registration_decision:decision-42") in edge_kinds
+    assert (EdgeKind.AT_STAGE, f"handshake_intent:{intent.intent_id}", "workflow_stage:release_review") in edge_kinds
+
+
 def test_compiler_materializes_role_based_permission_index() -> None:
     now = datetime.now(timezone.utc)
     projector = AuthzGraphProjector()
@@ -802,3 +852,117 @@ def test_transition_evaluation_allows_when_lineage_and_evidence_are_intact() -> 
     assert evaluation.receipt.disposition == AuthzDecisionDisposition.ALLOW
     assert "attestation:lab-cert-99" in evaluation.receipt.evidence_refs
     assert any(item.startswith("current_custodian:principal:driver-9") for item in evaluation.receipt.custody_proof)
+
+
+def test_transition_evaluation_requires_approved_source_registration_and_workflow_stage() -> None:
+    now = datetime.now(timezone.utc)
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="role",
+            snapshot_id=14,
+            namespace="authz",
+            subject="operator-7",
+            predicate="hasRole",
+            object_data={"role": "release_operator"},
+            valid_from=now - timedelta(hours=1),
+            valid_to=now + timedelta(hours=1),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="release asset",
+            snapshot_id=14,
+            namespace="authz",
+            subject="role:release_operator",
+            predicate="allowedOperation",
+            object_data={
+                "operation": "RELEASE",
+                "resource": "asset-77",
+                "required_current_custodian": True,
+                "required_transferable_state": True,
+                "require_approved_source_registration": True,
+                "workflow_stages": ["release_review"],
+            },
+            valid_from=now - timedelta(hours=1),
+            valid_to=now + timedelta(hours=1),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="custody",
+            snapshot_id=14,
+            namespace="authz",
+            subject="asset-77",
+            predicate="heldBy",
+            object_data={
+                "custodian": "operator-7",
+                "transferable": True,
+                "lot_id": "lot-77",
+            },
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=20),
+            created_by="test",
+        ),
+    ]
+    registrations = [
+        {
+            "id": "reg-77",
+            "snapshot_id": 14,
+            "lot_id": "lot-77",
+            "producer_id": "producer-77",
+            "status": "approved",
+        }
+    ]
+    registration_decisions = [
+        {
+            "id": "decision-77",
+            "registration_id": "reg-77",
+            "decision": "approved",
+            "policy_snapshot_id": 14,
+            "decided_at": _iso(now - timedelta(minutes=1)),
+        }
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@phase1",
+            snapshot_id=14,
+            snapshot_version="rules@14.0.0",
+            facts=facts,
+            registrations=registrations,
+            registration_decisions=registration_decisions,
+        )
+    )
+
+    allowed = compiled.evaluate_transition(
+        AuthzTransitionRequest(
+            principal_ref="principal:operator-7",
+            operation="RELEASE",
+            resource_ref="resource:asset-77",
+            asset_ref="asset:asset-77",
+            source_registration_ref="registration:reg-77",
+            registration_decision_ref="registration_decision:decision-77",
+            workflow_stage_ref="workflow_stage:release_review",
+            at=now,
+        )
+    )
+    denied = compiled.evaluate_transition(
+        AuthzTransitionRequest(
+            principal_ref="principal:operator-7",
+            operation="RELEASE",
+            resource_ref="resource:asset-77",
+            asset_ref="asset:asset-77",
+            source_registration_ref="registration:reg-77",
+            registration_decision_ref="registration_decision:decision-77",
+            workflow_stage_ref="workflow_stage:pack_ready",
+            at=now,
+        )
+    )
+
+    assert allowed.disposition == AuthzDecisionDisposition.ALLOW
+    assert any(check.code == "source_registration" and check.outcome == "passed" for check in allowed.checked_constraints)
+    assert "registration:reg-77" in allowed.receipt.evidence_refs
+    assert "registration_decision:decision-77" in allowed.receipt.evidence_refs
+    assert denied.disposition == AuthzDecisionDisposition.DENY
+    assert denied.reason == "no_matching_permission"

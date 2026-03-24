@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, Optional
 
 from seedcore.models.action_intent import ActionIntent
 from seedcore.models.fact import Fact
-from seedcore.models.source_registration import SourceRegistration, TrackingEvent
+from seedcore.models.source_registration import RegistrationDecision, SourceRegistration, TrackingEvent
 
 from .manifest import PolicyEdgeManifest
 from .ontology import (
@@ -60,6 +60,26 @@ def _facility_ref(value: str) -> str:
 def _certification_ref(value: str) -> str:
     value = str(value).strip()
     return value if value.startswith("certification:") else f"certification:{value}"
+
+
+def _product_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("product:") else f"product:{value}"
+
+
+def _workflow_stage_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("workflow_stage:") else f"workflow_stage:{value}"
+
+
+def _registration_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("registration:") else f"registration:{value}"
+
+
+def _registration_decision_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("registration_decision:") else f"registration_decision:{value}"
 
 
 def _resource_ref(value: str) -> str:
@@ -138,7 +158,24 @@ class _ProjectionBuffer:
         self.legacy_predicates_warned: set[str] = set()
 
     def add_node(self, node: AuthzNode) -> None:
-        self.nodes[node.ref] = node
+        existing = self.nodes.get(node.ref)
+        if existing is None:
+            self.nodes[node.ref] = node
+            return
+        if existing.kind != node.kind:
+            self.nodes[node.ref] = node
+            return
+        merged_attributes = dict(existing.attributes)
+        merged_attributes.update(node.attributes)
+        self.nodes[node.ref] = existing.model_copy(
+            update={
+                "display_name": node.display_name or existing.display_name,
+                "attributes": merged_attributes,
+                "valid_from": node.valid_from or existing.valid_from,
+                "valid_to": node.valid_to or existing.valid_to,
+                "provenance": node.provenance or existing.provenance,
+            }
+        )
 
     def add_edge(self, edge: AuthzEdge) -> None:
         key = (
@@ -170,6 +207,7 @@ class AuthzGraphProjector:
         action_intents: Optional[Iterable[ActionIntent]] = None,
         facts: Optional[Iterable[Fact | Dict[str, Any]]] = None,
         registrations: Optional[Iterable[SourceRegistration | Dict[str, Any]]] = None,
+        registration_decisions: Optional[Iterable[RegistrationDecision | Dict[str, Any]]] = None,
         tracking_events: Optional[Iterable[TrackingEvent | Dict[str, Any]]] = None,
     ) -> AuthzGraphSnapshot:
         buffer = _ProjectionBuffer()
@@ -187,6 +225,13 @@ class AuthzGraphProjector:
             self._project_fact(fact, buffer, snapshot_id=snapshot_id, snapshot_version=snapshot_version)
         for registration in registrations or []:
             self._project_registration(registration, buffer, snapshot_id=snapshot_id, snapshot_version=snapshot_version)
+        for registration_decision in registration_decisions or []:
+            self._project_registration_decision(
+                registration_decision,
+                buffer,
+                snapshot_id=snapshot_id,
+                snapshot_version=snapshot_version,
+            )
         for tracking_event in tracking_events or []:
             self._project_tracking_event(tracking_event, buffer, snapshot_id=snapshot_id, snapshot_version=snapshot_version)
 
@@ -249,12 +294,19 @@ class AuthzGraphProjector:
             for value in conditions.get("custody_points", [])
             if str(value).strip()
         ]
+        workflow_stages = [
+            _workflow_stage_ref(value)
+            for value in conditions.get("workflow_stages", [])
+            if str(value).strip()
+        ]
         for zone_ref in zones:
             buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
         for network_ref in networks:
             buffer.add_node(AuthzNode(kind=NodeKind.NETWORK_SEGMENT, ref=network_ref, provenance=provenance))
         for custody_point_ref in custody_points:
             buffer.add_node(AuthzNode(kind=NodeKind.CUSTODY_POINT, ref=custody_point_ref, provenance=provenance))
+        for workflow_stage_ref in workflow_stages:
+            buffer.add_node(AuthzNode(kind=NodeKind.WORKFLOW_STAGE, ref=workflow_stage_ref, provenance=provenance))
 
         buffer.add_edge(
             AuthzEdge(
@@ -276,6 +328,10 @@ class AuthzGraphProjector:
                     "max_inspection_age_seconds": conditions.get("max_inspection_age_seconds"),
                     "require_attestation": bool(conditions.get("require_attestation")),
                     "require_seal": bool(conditions.get("require_seal")),
+                    "workflow_stages": workflow_stages,
+                    "require_approved_source_registration": bool(
+                        conditions.get("require_approved_source_registration")
+                    ),
                     "allow_quarantine": conditions.get("allow_quarantine", True),
                 },
                 attributes={
@@ -315,6 +371,25 @@ class AuthzGraphProjector:
             else intent.resource.batch_twin_id
         )
         batch_ref = _asset_batch_ref(intent.resource.lot_id) if intent.resource.lot_id else None
+        product_ref = _product_ref(intent.resource.product_id) if intent.resource.product_id else None
+        source_registration_ref = (
+            _registration_ref(intent.resource.source_registration_id)
+            if intent.resource.source_registration_id
+            else None
+        )
+        registration_decision_ref = (
+            _registration_decision_ref(intent.resource.registration_decision_id)
+            if intent.resource.registration_decision_id
+            else None
+        )
+        action_parameters = intent.action.parameters if isinstance(intent.action.parameters, dict) else {}
+        workflow_stage_value = (
+            action_parameters.get("workflow_stage")
+            or action_parameters.get("stage")
+            or action_parameters.get("workflow_step")
+            or action_parameters.get("step")
+        )
+        workflow_stage_ref = _workflow_stage_ref(workflow_stage_value) if workflow_stage_value else None
 
         buffer.add_node(
             AuthzNode(
@@ -400,6 +475,60 @@ class AuthzGraphProjector:
                 )
             )
             buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=batch_ref, provenance=provenance))
+        if product_ref:
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.PRODUCT,
+                    ref=product_ref,
+                    display_name=intent.resource.product_id,
+                    attributes={"product_id": intent.resource.product_id},
+                    provenance=provenance,
+                )
+            )
+            if batch_ref:
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.PART_OF, src=batch_ref, dst=product_ref, provenance=provenance))
+            else:
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.PART_OF, src=asset_ref, dst=product_ref, provenance=provenance))
+        if source_registration_ref:
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.REGISTRATION,
+                    ref=source_registration_ref,
+                    display_name=intent.resource.source_registration_id,
+                    attributes={
+                        "registration_id": intent.resource.source_registration_id,
+                        "registration_decision_id": intent.resource.registration_decision_id,
+                    },
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=source_registration_ref, provenance=provenance))
+            if batch_ref:
+                buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=batch_ref, dst=source_registration_ref, provenance=provenance))
+        if registration_decision_ref:
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.REGISTRATION_DECISION,
+                    ref=registration_decision_ref,
+                    display_name=intent.resource.registration_decision_id,
+                    attributes={"registration_decision_id": intent.resource.registration_decision_id},
+                    provenance=provenance,
+                )
+            )
+            if source_registration_ref:
+                buffer.add_edge(
+                    AuthzEdge(kind=EdgeKind.BACKED_BY, src=source_registration_ref, dst=registration_decision_ref, provenance=provenance)
+                )
+        if workflow_stage_ref:
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.WORKFLOW_STAGE,
+                    ref=workflow_stage_ref,
+                    display_name=str(workflow_stage_value),
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(AuthzEdge(kind=EdgeKind.AT_STAGE, src=handshake_ref, dst=workflow_stage_ref, provenance=provenance))
         buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=asset_ref, dst=resource_ref, provenance=provenance))
         buffer.add_edge(
             AuthzEdge(
@@ -711,6 +840,14 @@ class AuthzGraphProjector:
                         "max_inspection_age_seconds": object_data.get("max_inspection_age_seconds"),
                         "require_attestation": bool(object_data.get("require_attestation")),
                         "require_seal": bool(object_data.get("require_seal")),
+                        "workflow_stages": [
+                            _workflow_stage_ref(value)
+                            for value in object_data.get("workflow_stages", [])
+                            if str(value).strip()
+                        ],
+                        "require_approved_source_registration": bool(
+                            object_data.get("require_approved_source_registration")
+                        ),
                         "allow_quarantine": object_data.get("allow_quarantine", True),
                     },
                     provenance=provenance,
@@ -941,12 +1078,24 @@ class AuthzGraphProjector:
             snapshot_version=snapshot_version,
             metadata={"status": _value_from(registration, "status")},
         )
-        registration_ref = f"registration:{registration_id}"
+        registration_ref = _registration_ref(str(registration_id))
         producer_ref = _principal_ref(producer_id)
         lot_ref = _resource_ref(f"lot:{lot_id}")
         batch_ref = _asset_batch_ref(lot_id)
 
-        buffer.add_node(AuthzNode(kind=NodeKind.REGISTRATION, ref=registration_ref, provenance=provenance))
+        buffer.add_node(
+            AuthzNode(
+                kind=NodeKind.REGISTRATION,
+                ref=registration_ref,
+                attributes={
+                    "registration_id": str(registration_id),
+                    "status": str(_value_from(registration, "status") or ""),
+                    "lot_id": lot_id,
+                    "producer_id": producer_id,
+                },
+                provenance=provenance,
+            )
+        )
         buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=producer_ref, provenance=provenance))
         buffer.add_node(
             AuthzNode(
@@ -973,6 +1122,47 @@ class AuthzGraphProjector:
         buffer.add_edge(AuthzEdge(kind=EdgeKind.RECORDED_BY, src=registration_ref, dst=producer_ref, provenance=provenance))
         buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=lot_ref, dst=registration_ref, provenance=provenance))
         buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=batch_ref, dst=registration_ref, provenance=provenance))
+
+    def _project_registration_decision(
+        self,
+        registration_decision: RegistrationDecision | Dict[str, Any],
+        buffer: _ProjectionBuffer,
+        *,
+        snapshot_id: Optional[int],
+        snapshot_version: Optional[str],
+    ) -> None:
+        decision_id = _value_from(registration_decision, "id")
+        registration_id = _value_from(registration_decision, "registration_id")
+        if decision_id is None or registration_id is None:
+            return
+
+        provenance = GraphProvenance(
+            source_type="registration_decision",
+            source_ref=str(decision_id),
+            snapshot_id=snapshot_id or _value_from(registration_decision, "policy_snapshot_id"),
+            snapshot_version=snapshot_version,
+            metadata={"decision": _value_from(registration_decision, "decision")},
+        )
+        decision_ref = _registration_decision_ref(str(decision_id))
+        registration_ref = _registration_ref(str(registration_id))
+
+        buffer.add_node(
+            AuthzNode(
+                kind=NodeKind.REGISTRATION_DECISION,
+                ref=decision_ref,
+                attributes={
+                    "registration_id": str(registration_id),
+                    "decision": str(_value_from(registration_decision, "decision") or ""),
+                    "confidence": _value_from(registration_decision, "confidence"),
+                    "grade_result": _value_from(registration_decision, "grade_result"),
+                },
+                valid_from=_serialize_datetime(_value_from(registration_decision, "decided_at")),
+                valid_to=_serialize_datetime(_value_from(registration_decision, "decided_at")),
+                provenance=provenance,
+            )
+        )
+        buffer.add_node(AuthzNode(kind=NodeKind.REGISTRATION, ref=registration_ref, provenance=provenance))
+        buffer.add_edge(AuthzEdge(kind=EdgeKind.BACKED_BY, src=registration_ref, dst=decision_ref, provenance=provenance))
 
     def _project_tracking_event(
         self,
@@ -1135,6 +1325,14 @@ def _normalize_permission_subject(subject: str) -> str:
         return _facility_ref(subject)
     if subject.startswith("certification:"):
         return _certification_ref(subject)
+    if subject.startswith("product:"):
+        return _product_ref(subject)
+    if subject.startswith("workflow_stage:"):
+        return _workflow_stage_ref(subject)
+    if subject.startswith("registration_decision:"):
+        return _registration_decision_ref(subject)
+    if subject.startswith("registration:"):
+        return _registration_ref(subject)
     return _principal_ref(subject)
 
 
@@ -1149,6 +1347,14 @@ def _infer_subject_kind(subject_ref: str) -> NodeKind:
         return NodeKind.FACILITY
     if subject_ref.startswith("certification:"):
         return NodeKind.CERTIFICATION
+    if subject_ref.startswith("product:"):
+        return NodeKind.PRODUCT
+    if subject_ref.startswith("workflow_stage:"):
+        return NodeKind.WORKFLOW_STAGE
+    if subject_ref.startswith("registration_decision:"):
+        return NodeKind.REGISTRATION_DECISION
+    if subject_ref.startswith("registration:"):
+        return NodeKind.REGISTRATION
     return NodeKind.PRINCIPAL
 
 
@@ -1168,6 +1374,14 @@ def _normalize_selector_ref(selector: str) -> str:
         return _facility_ref(selector)
     if selector.startswith("certification:"):
         return _certification_ref(selector)
+    if selector.startswith("product:"):
+        return _product_ref(selector)
+    if selector.startswith("workflow_stage:"):
+        return _workflow_stage_ref(selector)
+    if selector.startswith("registration_decision:"):
+        return _registration_decision_ref(selector)
+    if selector.startswith("registration:"):
+        return _registration_ref(selector)
     if selector.startswith("asset:"):
         return _asset_ref(selector)
     if selector.startswith("asset_batch:"):
@@ -1202,6 +1416,14 @@ def _infer_selector_kind(selector_ref: str) -> NodeKind:
         return NodeKind.FACILITY
     if selector_ref.startswith("certification:"):
         return NodeKind.CERTIFICATION
+    if selector_ref.startswith("product:"):
+        return NodeKind.PRODUCT
+    if selector_ref.startswith("workflow_stage:"):
+        return NodeKind.WORKFLOW_STAGE
+    if selector_ref.startswith("registration_decision:"):
+        return NodeKind.REGISTRATION_DECISION
+    if selector_ref.startswith("registration:"):
+        return NodeKind.REGISTRATION
     if selector_ref.startswith("asset:"):
         return NodeKind.ASSET
     if selector_ref.startswith("asset_batch:"):

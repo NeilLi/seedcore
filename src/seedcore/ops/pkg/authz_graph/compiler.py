@@ -97,6 +97,25 @@ def _canonical_json(data: Dict[str, Any]) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _operation_matches(permission_operation: str, requested_operation: str) -> bool:
+    permission_op = str(permission_operation).strip().upper()
+    requested_op = str(requested_operation).strip().upper()
+    if permission_op == requested_op:
+        return True
+    if permission_op == "ACTION":
+        return True
+    if permission_op == "MUTATE" and requested_op in {
+        "MOVE",
+        "PICK",
+        "PLACE",
+        "SCAN",
+        "PACK",
+        "RELEASE",
+    }:
+        return True
+    return False
+
+
 class AuthzDecisionDisposition(str, Enum):
     ALLOW = "allow"
     DENY = "deny"
@@ -145,6 +164,9 @@ class AuthzTransitionRequest:
     operation: str
     resource_ref: Optional[str] = None
     asset_ref: Optional[str] = None
+    source_registration_ref: Optional[str] = None
+    registration_decision_ref: Optional[str] = None
+    workflow_stage_ref: Optional[str] = None
     zone_ref: Optional[str] = None
     network_ref: Optional[str] = None
     custody_point_ref: Optional[str] = None
@@ -156,6 +178,7 @@ class AuthzTransitionRequest:
     max_inspection_age_seconds: Optional[int] = None
     require_attestation: bool = False
     require_seal: bool = False
+    require_approved_source_registration: bool = False
     allow_quarantine: bool = True
     break_glass: bool = False
     at: Optional[datetime] = None
@@ -165,6 +188,9 @@ class AuthzTransitionRequest:
         object.__setattr__(self, "operation", _normalize_required_ref(self.operation, field_name="operation").upper())
         object.__setattr__(self, "resource_ref", _normalize_optional_ref(self.resource_ref))
         object.__setattr__(self, "asset_ref", _normalize_optional_ref(self.asset_ref))
+        object.__setattr__(self, "source_registration_ref", _normalize_optional_ref(self.source_registration_ref))
+        object.__setattr__(self, "registration_decision_ref", _normalize_optional_ref(self.registration_decision_ref))
+        object.__setattr__(self, "workflow_stage_ref", _normalize_optional_ref(self.workflow_stage_ref))
         object.__setattr__(self, "zone_ref", _normalize_optional_ref(self.zone_ref))
         object.__setattr__(self, "network_ref", _normalize_optional_ref(self.network_ref))
         object.__setattr__(self, "custody_point_ref", _normalize_optional_ref(self.custody_point_ref))
@@ -201,6 +227,7 @@ class CompiledAssetState:
     asset_ref: str
     twin_ref: Optional[str] = None
     batch_ref: Optional[str] = None
+    product_ref: Optional[str] = None
     state: Optional[str] = None
     transferable: Optional[bool] = None
     restricted: Optional[bool] = None
@@ -212,6 +239,9 @@ class CompiledAssetState:
     inspection_refs: Set[str] = field(default_factory=set)
     seal_refs: Set[str] = field(default_factory=set)
     evidence_refs: Set[str] = field(default_factory=set)
+    registration_refs: Set[str] = field(default_factory=set)
+    approved_registration_refs: Set[str] = field(default_factory=set)
+    registration_decision_refs: Set[str] = field(default_factory=set)
     last_telemetry_at: Optional[datetime] = None
     last_inspection_at: Optional[datetime] = None
     evidence_quality_score: Optional[float] = None
@@ -226,6 +256,7 @@ class CompiledPermission:
     zones: frozenset[str] = frozenset()
     networks: frozenset[str] = frozenset()
     custody_points: frozenset[str] = frozenset()
+    workflow_stages: frozenset[str] = frozenset()
     resource_state_hash: Optional[str] = None
     requires_break_glass: bool = False
     bypass_deny: bool = False
@@ -235,6 +266,7 @@ class CompiledPermission:
     max_inspection_age_seconds: Optional[int] = None
     require_attestation: bool = False
     require_seal: bool = False
+    require_approved_source_registration: bool = False
     allow_quarantine: bool = True
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
@@ -265,8 +297,10 @@ class CompiledAuthzIndex:
     resource_zones: Dict[str, Set[str]] = field(default_factory=dict)
     permissions_by_subject: Dict[str, List[CompiledPermission]] = field(default_factory=dict)
     resource_to_asset: Dict[str, str] = field(default_factory=dict)
+    resource_aliases_by_asset: Dict[str, Set[str]] = field(default_factory=dict)
     asset_states: Dict[str, CompiledAssetState] = field(default_factory=dict)
     nodes_by_ref: Dict[str, AuthzNode] = field(default_factory=dict)
+    registration_decisions_by_registration: Dict[str, Set[str]] = field(default_factory=dict)
 
     def resolve_subject_paths(self, principal_ref: str) -> Dict[str, Tuple[str, ...]]:
         paths: Dict[str, Tuple[str, ...]] = {principal_ref: (principal_ref,)}
@@ -294,6 +328,7 @@ class CompiledAuthzIndex:
         resource_ref: str,
         zone_ref: Optional[str] = None,
         network_ref: Optional[str] = None,
+        workflow_stage_ref: Optional[str] = None,
         resource_state_hash: Optional[str] = None,
         at: Optional[datetime] = None,
         break_glass: bool = False,
@@ -309,12 +344,13 @@ class CompiledAuthzIndex:
         expected_op = str(operation).strip().upper()
         effective_zone = _normalize_optional_ref(zone_ref)
         effective_network = _normalize_optional_ref(network_ref)
+        effective_workflow_stage = _normalize_optional_ref(workflow_stage_ref)
         effective_hash = _normalize_optional_ref(resource_state_hash)
         known_zones = self.resource_zones.get(resource_ref, set())
 
         for subject_ref in subject_refs:
             for permission in self.permissions_by_subject.get(subject_ref, []):
-                if permission.operation != expected_op:
+                if not _operation_matches(permission.operation, expected_op):
                     continue
                 if permission.resource_ref != resource_ref:
                     continue
@@ -329,6 +365,8 @@ class CompiledAuthzIndex:
                     elif known_zones and permission.zones.isdisjoint(known_zones):
                         continue
                 if permission.networks and effective_network not in permission.networks:
+                    continue
+                if permission.workflow_stages and effective_workflow_stage not in permission.workflow_stages:
                     continue
                 if permission.resource_state_hash and effective_hash != permission.resource_state_hash:
                     continue
@@ -832,6 +870,79 @@ class CompiledAuthzIndex:
                     )
                 )
 
+        if requirements.require_approved_source_registration:
+            effective_registration_refs, effective_approved_registration_refs, effective_registration_decision_refs = (
+                self._resolve_registration_scope(asset_state)
+            )
+            if request.source_registration_ref is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="source_registration",
+                        outcome="missing",
+                        message="The transition requires a source registration reference but none was provided.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
+                deny_reasons.append("missing_source_registration")
+            elif request.source_registration_ref not in effective_registration_refs:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="source_registration",
+                        outcome="failed",
+                        message="The requested source registration is not linked to the asset or its batch lineage.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "source_registration_ref": request.source_registration_ref,
+                            "known_registration_refs": sorted(effective_registration_refs),
+                        },
+                    )
+                )
+                deny_reasons.append("missing_source_registration")
+            elif request.source_registration_ref not in effective_approved_registration_refs:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="source_registration",
+                        outcome="failed",
+                        message="The requested source registration is linked but not approved.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "source_registration_ref": request.source_registration_ref,
+                            "approved_registration_refs": sorted(effective_approved_registration_refs),
+                        },
+                    )
+                )
+                deny_reasons.append("unapproved_source_registration")
+            elif (
+                request.registration_decision_ref is not None
+                and request.registration_decision_ref not in effective_registration_decision_refs
+            ):
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="registration_decision",
+                        outcome="failed",
+                        message="The requested registration decision does not match the approved registration lineage.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "registration_decision_ref": request.registration_decision_ref,
+                            "known_registration_decision_refs": sorted(effective_registration_decision_refs),
+                        },
+                    )
+                )
+                deny_reasons.append("mismatched_registration_decision")
+            else:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="source_registration",
+                        outcome="passed",
+                        message="The asset lineage includes an approved source registration for this transition.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "source_registration_ref": request.source_registration_ref,
+                            "registration_decision_ref": request.registration_decision_ref,
+                        },
+                    )
+                )
+
         if deny_reasons:
             disposition = AuthzDecisionDisposition.DENY
             reason = deny_reasons[0]
@@ -872,6 +983,11 @@ class CompiledAuthzIndex:
             candidates.append(request.resource_ref)
         if request.asset_ref:
             candidates.append(request.asset_ref)
+        effective_asset_ref = request.asset_ref
+        if effective_asset_ref is None and request.resource_ref:
+            effective_asset_ref = self.resource_to_asset.get(request.resource_ref)
+        if effective_asset_ref is not None:
+            candidates.extend(sorted(self.resource_aliases_by_asset.get(effective_asset_ref, set())))
         if not candidates:
             return None, CompiledPermissionMatch(allowed=False, reason="no_permission_target")
 
@@ -889,6 +1005,7 @@ class CompiledAuthzIndex:
                 resource_ref=candidate,
                 zone_ref=request.zone_ref,
                 network_ref=request.network_ref,
+                workflow_stage_ref=request.workflow_stage_ref,
                 resource_state_hash=request.resource_state_hash,
                 at=request.at,
                 break_glass=request.break_glass,
@@ -912,6 +1029,7 @@ class CompiledAuthzIndex:
             max_inspection_age_seconds=request.max_inspection_age_seconds,
             require_attestation=request.require_attestation,
             require_seal=request.require_seal,
+            require_approved_source_registration=request.require_approved_source_registration,
             allow_quarantine=request.allow_quarantine,
             custody_points={request.custody_point_ref} if request.custody_point_ref else set(),
         )
@@ -934,9 +1052,39 @@ class CompiledAuthzIndex:
                 requirements.require_attestation = True
             if permission.require_seal:
                 requirements.require_seal = True
+            if permission.require_approved_source_registration:
+                requirements.require_approved_source_registration = True
             requirements.allow_quarantine = requirements.allow_quarantine and permission.allow_quarantine
             requirements.custody_points.update(permission.custody_points)
         return requirements
+
+    def _resolve_registration_scope(
+        self,
+        asset_state: Optional[CompiledAssetState],
+    ) -> tuple[Set[str], Set[str], Set[str]]:
+        registration_refs: Set[str] = set()
+        approved_registration_refs: Set[str] = set()
+        registration_decision_refs: Set[str] = set()
+
+        def _merge_state(state: Optional[CompiledAssetState]) -> None:
+            if state is None:
+                return
+            registration_refs.update(state.registration_refs)
+            approved_registration_refs.update(state.approved_registration_refs)
+            registration_decision_refs.update(state.registration_decision_refs)
+            for registration_ref in state.registration_refs:
+                for decision_ref in self.registration_decisions_by_registration.get(registration_ref, set()):
+                    registration_decision_refs.add(decision_ref)
+                    decision_node = self.nodes_by_ref.get(decision_ref)
+                    if decision_node is not None and str(decision_node.attributes.get("decision") or "").strip().lower() == "approved":
+                        approved_registration_refs.add(registration_ref)
+
+        _merge_state(asset_state)
+        batch_ref = asset_state.batch_ref if asset_state is not None else None
+        if batch_ref is not None:
+            _merge_state(self.asset_states.get(batch_ref))
+
+        return registration_refs, approved_registration_refs, registration_decision_refs
 
     def _mint_receipt(
         self,
@@ -973,7 +1121,16 @@ class CompiledAuthzIndex:
             if asset_state.twin_ref:
                 custody_refs.append(f"twin:{asset_state.twin_ref}")
             custody_proof = tuple(custody_refs)
-            evidence_refs = tuple(sorted(asset_state.evidence_refs | asset_state.attestation_refs | asset_state.seal_refs))
+            registration_refs, _, registration_decision_refs = self._resolve_registration_scope(asset_state)
+            evidence_refs = tuple(
+                sorted(
+                    asset_state.evidence_refs
+                    | asset_state.attestation_refs
+                    | asset_state.seal_refs
+                    | registration_refs
+                    | registration_decision_refs
+                )
+            )
             if asset_state.evidence_quality_score is not None:
                 advisory["evidence_quality_score"] = asset_state.evidence_quality_score
 
@@ -1022,6 +1179,7 @@ class _TransitionRequirements:
     max_inspection_age_seconds: Optional[int] = None
     require_attestation: bool = False
     require_seal: bool = False
+    require_approved_source_registration: bool = False
     allow_quarantine: bool = True
     custody_points: Set[str] = field(default_factory=set)
 
@@ -1070,6 +1228,9 @@ class AuthzGraphCompiler:
             lot_id = _normalize_optional_ref(node.attributes.get("lot_id"))
             if lot_id is not None:
                 state.batch_ref = lot_id if lot_id.startswith("asset_batch:") else f"asset_batch:{lot_id}"
+            product_id = _normalize_optional_ref(node.attributes.get("product_id"))
+            if product_id is not None:
+                state.product_ref = product_id if product_id.startswith("product:") else f"product:{product_id}"
             return
 
         if node.kind == NodeKind.RESOURCE:
@@ -1079,6 +1240,7 @@ class AuthzGraphCompiler:
                 asset_ref = asset_id if asset_id.startswith("asset:") else f"asset:{asset_id}"
             if asset_ref is not None:
                 index.resource_to_asset[node.ref] = asset_ref
+                index.resource_aliases_by_asset.setdefault(asset_ref, set()).add(node.ref)
                 _ensure_asset_state(index, asset_ref)
             return
 
@@ -1104,13 +1266,20 @@ class AuthzGraphCompiler:
             return
         if edge.kind == EdgeKind.LOCATED_IN:
             index.resource_zones.setdefault(edge.src, set()).add(edge.dst)
-            if edge.src.startswith("asset:"):
+            if edge.src.startswith("asset:") or edge.src.startswith("asset_batch:"):
                 state = _ensure_asset_state(index, edge.src)
                 dst_node = index.nodes_by_ref.get(edge.dst)
                 if dst_node and dst_node.kind == NodeKind.CUSTODY_POINT:
                     state.custody_points.add(edge.dst)
                 else:
                     state.zones.add(edge.dst)
+            return
+        if edge.kind == EdgeKind.PART_OF:
+            if edge.src.startswith("asset:") or edge.src.startswith("asset_batch:"):
+                state = _ensure_asset_state(index, edge.src)
+                dst_node = index.nodes_by_ref.get(edge.dst)
+                if dst_node and dst_node.kind == NodeKind.PRODUCT:
+                    state.product_ref = edge.dst
             return
         if edge.kind == EdgeKind.HELD_BY:
             state = _ensure_asset_state(index, edge.src)
@@ -1162,7 +1331,7 @@ class AuthzGraphCompiler:
             state.seal_refs.add(edge.dst)
             state.evidence_refs.add(edge.dst)
             return
-        if edge.kind == EdgeKind.BACKED_BY and edge.src.startswith("asset:"):
+        if edge.kind == EdgeKind.BACKED_BY and (edge.src.startswith("asset:") or edge.src.startswith("asset_batch:")):
             state = _ensure_asset_state(index, edge.src)
             dst_node = index.nodes_by_ref.get(edge.dst)
             if dst_node is not None:
@@ -1170,6 +1339,11 @@ class AuthzGraphCompiler:
                     state.twin_ref = edge.dst
                 elif dst_node.kind == NodeKind.ASSET_BATCH:
                     state.batch_ref = edge.dst
+                elif dst_node.kind == NodeKind.RESOURCE and edge.src.startswith("asset:"):
+                    index.resource_to_asset[edge.dst] = edge.src
+                    index.resource_aliases_by_asset.setdefault(edge.src, set()).add(edge.dst)
+                elif dst_node.kind == NodeKind.PRODUCT:
+                    state.product_ref = edge.dst
                 elif dst_node.kind in {
                     NodeKind.REGISTRATION,
                     NodeKind.TRACKING_EVENT,
@@ -1179,6 +1353,19 @@ class AuthzGraphCompiler:
                     NodeKind.RECEIPT,
                 }:
                     state.evidence_refs.add(edge.dst)
+                    if dst_node.kind == NodeKind.REGISTRATION:
+                        state.registration_refs.add(edge.dst)
+                        status = str(dst_node.attributes.get("status") or "").strip().lower()
+                        if status == "approved":
+                            state.approved_registration_refs.add(edge.dst)
+                elif dst_node.kind == NodeKind.REGISTRATION_DECISION:
+                    state.registration_decision_refs.add(edge.dst)
+                    state.evidence_refs.add(edge.dst)
+            return
+        if edge.kind == EdgeKind.BACKED_BY and edge.src.startswith("registration:"):
+            dst_node = index.nodes_by_ref.get(edge.dst)
+            if dst_node is not None and dst_node.kind == NodeKind.REGISTRATION_DECISION:
+                index.registration_decisions_by_registration.setdefault(edge.src, set()).add(edge.dst)
             return
         if edge.kind != EdgeKind.CAN or not edge.operation:
             return
@@ -1188,6 +1375,9 @@ class AuthzGraphCompiler:
         custody_points = frozenset(
             str(value) for value in edge.constraints.get("custody_points", []) if str(value).strip()
         )
+        workflow_stages = frozenset(
+            str(value) for value in edge.constraints.get("workflow_stages", []) if str(value).strip()
+        )
         permission = CompiledPermission(
             subject_ref=edge.src,
             resource_ref=edge.dst,
@@ -1196,6 +1386,7 @@ class AuthzGraphCompiler:
             zones=zones,
             networks=networks,
             custody_points=custody_points,
+            workflow_stages=workflow_stages,
             resource_state_hash=_normalize_optional_ref(edge.constraints.get("resource_state_hash")),
             requires_break_glass=bool(edge.constraints.get("requires_break_glass")),
             bypass_deny=bool(edge.constraints.get("bypass_deny")),
@@ -1205,6 +1396,7 @@ class AuthzGraphCompiler:
             max_inspection_age_seconds=_coerce_optional_int(edge.constraints.get("max_inspection_age_seconds")),
             require_attestation=bool(edge.constraints.get("require_attestation")),
             require_seal=bool(edge.constraints.get("require_seal")),
+            require_approved_source_registration=bool(edge.constraints.get("require_approved_source_registration")),
             allow_quarantine=bool(edge.constraints.get("allow_quarantine", True)),
             valid_from=_parse_iso8601(edge.valid_from),
             valid_to=_parse_iso8601(edge.valid_to),

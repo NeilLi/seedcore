@@ -348,6 +348,7 @@ class AuthzGraphCacheActor:
             snapshot_ref=effective_ref,
             snapshot_id=snapshot_id,
             snapshot_version=snapshot_version,
+            include_registration_decisions=True,
         )
         self._compiled_index = compiled
         self._status = _index_status(compiled, source="snapshot")
@@ -402,6 +403,7 @@ class AuthzGraphCacheActor:
             resource_ref=str(payload["resource_ref"]),
             zone_ref=payload.get("zone_ref"),
             network_ref=payload.get("network_ref"),
+            workflow_stage_ref=payload.get("workflow_stage_ref"),
             resource_state_hash=payload.get("resource_state_hash"),
             at=_parse_optional_datetime(payload.get("at")),
             break_glass=bool(payload.get("break_glass", False)),
@@ -416,6 +418,9 @@ class AuthzGraphCacheActor:
             operation=str(payload["operation"]),
             resource_ref=payload.get("resource_ref"),
             asset_ref=payload.get("asset_ref"),
+            source_registration_ref=payload.get("source_registration_ref"),
+            registration_decision_ref=payload.get("registration_decision_ref"),
+            workflow_stage_ref=payload.get("workflow_stage_ref"),
             zone_ref=payload.get("zone_ref"),
             network_ref=payload.get("network_ref"),
             custody_point_ref=payload.get("custody_point_ref"),
@@ -427,6 +432,7 @@ class AuthzGraphCacheActor:
             max_inspection_age_seconds=payload.get("max_inspection_age_seconds"),
             require_attestation=bool(payload.get("require_attestation", False)),
             require_seal=bool(payload.get("require_seal", False)),
+            require_approved_source_registration=bool(payload.get("require_approved_source_registration", False)),
             allow_quarantine=bool(payload.get("allow_quarantine", True)),
             break_glass=bool(payload.get("break_glass", False)),
             at=_parse_optional_datetime(payload.get("at")),

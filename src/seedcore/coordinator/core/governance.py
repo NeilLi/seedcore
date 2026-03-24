@@ -1424,6 +1424,7 @@ def _evaluate_compiled_authz_graph_policy(
                 resource_ref=_compiled_authz_resource_ref(action_intent),
                 zone_ref=_compiled_authz_zone_ref(action_intent),
                 network_ref=_compiled_authz_network_ref(action_intent),
+                workflow_stage_ref=_compiled_authz_workflow_stage_ref(action_intent),
                 resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
                 at=_parse_iso8601(action_intent.timestamp),
                 break_glass=break_glass_context.validated,
@@ -1443,6 +1444,7 @@ def _evaluate_compiled_authz_graph_policy(
             resource_ref=_compiled_authz_resource_ref(action_intent),
             zone_ref=_compiled_authz_zone_ref(action_intent),
             network_ref=_compiled_authz_network_ref(action_intent),
+            workflow_stage_ref=_compiled_authz_workflow_stage_ref(action_intent),
             resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
             at=_parse_iso8601(action_intent.timestamp),
             break_glass=break_glass_context.validated,
@@ -1525,10 +1527,14 @@ def _evaluate_compiled_authz_graph_with_ray(
             "operation": _compiled_authz_operation(action_intent),
             "resource_ref": _compiled_authz_resource_ref(action_intent),
             "asset_ref": _compiled_authz_asset_ref(action_intent),
+            "source_registration_ref": _compiled_authz_source_registration_ref(action_intent),
+            "registration_decision_ref": _compiled_authz_registration_decision_ref(action_intent),
+            "workflow_stage_ref": _compiled_authz_workflow_stage_ref(action_intent),
             "zone_ref": _compiled_authz_zone_ref(action_intent),
             "network_ref": _compiled_authz_network_ref(action_intent),
             "custody_point_ref": _compiled_authz_custody_point_ref(action_intent),
             "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
+            "require_approved_source_registration": _requires_approved_source_registration(action_intent),
             "at": action_intent.timestamp,
             "break_glass": break_glass,
         }
@@ -1539,6 +1545,7 @@ def _evaluate_compiled_authz_graph_with_ray(
             "resource_ref": _compiled_authz_resource_ref(action_intent),
             "zone_ref": _compiled_authz_zone_ref(action_intent),
             "network_ref": _compiled_authz_network_ref(action_intent),
+            "workflow_stage_ref": _compiled_authz_workflow_stage_ref(action_intent),
             "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
             "at": action_intent.timestamp,
             "break_glass": break_glass,
@@ -1710,6 +1717,25 @@ def _compiled_authz_network_ref(action_intent: ActionIntent) -> str | None:
     return f"network:{network}" if network else None
 
 
+def _compiled_authz_source_registration_ref(action_intent: ActionIntent) -> str | None:
+    registration_id = (action_intent.resource.source_registration_id or "").strip()
+    return f"registration:{registration_id}" if registration_id else None
+
+
+def _compiled_authz_registration_decision_ref(action_intent: ActionIntent) -> str | None:
+    decision_id = (action_intent.resource.registration_decision_id or "").strip()
+    return f"registration_decision:{decision_id}" if decision_id else None
+
+
+def _compiled_authz_workflow_stage_ref(action_intent: ActionIntent) -> str | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
+    for key in ("workflow_stage", "stage", "workflow_step", "step"):
+        value = parameters.get(key)
+        if value is not None and str(value).strip():
+            return f"workflow_stage:{str(value).strip()}"
+    return None
+
+
 def _compiled_authz_asset_ref(action_intent: ActionIntent) -> str | None:
     asset_id = (action_intent.resource.asset_id or "").strip()
     return f"asset:{asset_id}" if asset_id else None
@@ -1739,10 +1765,14 @@ def _compiled_authz_transition_request(
         operation=_compiled_authz_operation(action_intent),
         resource_ref=_compiled_authz_resource_ref(action_intent),
         asset_ref=_compiled_authz_asset_ref(action_intent),
+        source_registration_ref=_compiled_authz_source_registration_ref(action_intent),
+        registration_decision_ref=_compiled_authz_registration_decision_ref(action_intent),
+        workflow_stage_ref=_compiled_authz_workflow_stage_ref(action_intent),
         zone_ref=_compiled_authz_zone_ref(action_intent),
         network_ref=_compiled_authz_network_ref(action_intent),
         custody_point_ref=_compiled_authz_custody_point_ref(action_intent),
         resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+        require_approved_source_registration=_requires_approved_source_registration(action_intent),
         at=_parse_iso8601(action_intent.timestamp),
         break_glass=break_glass,
     )
@@ -1807,6 +1837,12 @@ def _compiled_authz_transition_deny_decision(
         reason = "Compiled authorization graph denied the requested asset transition because the asset is not in a transferable state."
     elif evaluation.reason == "asset_restricted":
         reason = "Compiled authorization graph denied the requested asset transition because the asset is already restricted."
+    elif evaluation.reason == "missing_source_registration":
+        reason = "Compiled authorization graph denied the requested asset transition because a required source registration was missing from the asset lineage."
+    elif evaluation.reason == "unapproved_source_registration":
+        reason = "Compiled authorization graph denied the requested asset transition because the linked source registration is not approved."
+    elif evaluation.reason == "mismatched_registration_decision":
+        reason = "Compiled authorization graph denied the requested asset transition because the provided registration decision does not match the approved lineage."
     elif evaluation.reason == "trust_gap_denied":
         reason = "Compiled authorization graph denied the requested asset transition because required trust evidence is incomplete."
     else:
@@ -2061,6 +2097,12 @@ def _merge_action_intent_payload(
             )
         else:
             merged[key] = value
+    action_override = override.get("action")
+    action_merged = merged.get("action")
+    if isinstance(action_override, Mapping) and isinstance(action_merged, Mapping):
+        if action_override.get("type") is not None and "operation" not in action_override:
+            merged["action"] = dict(action_merged)
+            merged["action"].pop("operation", None)
     return merged
 
 

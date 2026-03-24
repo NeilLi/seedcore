@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
 
@@ -8,13 +9,15 @@ from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 
 from seedcore.database import get_async_pg_session_factory
 from seedcore.models.action_intent import ActionIntent
-from seedcore.models.source_registration import SourceRegistration, TrackingEvent
+from seedcore.models.source_registration import RegistrationDecision, SourceRegistration, TrackingEvent
 from seedcore.ops.pkg.client import PKGClient
 
 from .compiler import AuthzGraphCompiler, CompiledAuthzIndex
 from .manifest import PolicyEdgeManifest
 from .ontology import AuthzGraphSnapshot
 from .projector import AuthzGraphProjector
+
+logger = logging.getLogger(__name__)
 
 
 Loader = Callable[..., Awaitable[List[Any]]]
@@ -24,6 +27,7 @@ Loader = Callable[..., Awaitable[List[Any]]]
 class AuthzProjectionSources:
     facts: List[Dict[str, Any]] = field(default_factory=list)
     registrations: List[SourceRegistration | Dict[str, Any]] = field(default_factory=list)
+    registration_decisions: List[RegistrationDecision | Dict[str, Any]] = field(default_factory=list)
     tracking_events: List[TrackingEvent | Dict[str, Any]] = field(default_factory=list)
     action_intents: List[ActionIntent] = field(default_factory=list)
     graph_manifests: List[PolicyEdgeManifest | Dict[str, Any]] = field(default_factory=list)
@@ -55,6 +59,7 @@ class AuthzGraphProjectionService:
         compiler: Optional[AuthzGraphCompiler] = None,
         facts_loader: Optional[Loader] = None,
         registrations_loader: Optional[Loader] = None,
+        registration_decisions_loader: Optional[Loader] = None,
         tracking_events_loader: Optional[Loader] = None,
     ) -> None:
         self.pkg_client = pkg_client or PKGClient(session_factory)
@@ -63,6 +68,9 @@ class AuthzGraphProjectionService:
         self.compiler = compiler or AuthzGraphCompiler()
         self._facts_loader = facts_loader or self._load_governed_facts
         self._registrations_loader = registrations_loader or self._load_registrations
+        self._registration_decisions_loader = (
+            registration_decisions_loader or self._load_registration_decisions
+        )
         self._tracking_events_loader = tracking_events_loader or self._load_tracking_events
 
     async def collect_sources(
@@ -73,6 +81,7 @@ class AuthzGraphProjectionService:
         governed_only: bool = True,
         fact_namespace: Optional[str] = None,
         include_registrations: bool = True,
+        include_registration_decisions: bool = False,
         include_tracking_events: bool = True,
         action_intents: Optional[Iterable[ActionIntent]] = None,
     ) -> AuthzProjectionSources:
@@ -90,15 +99,19 @@ class AuthzGraphProjectionService:
             governed_only=governed_only,
         )
         registrations: List[SourceRegistration | Dict[str, Any]] = []
+        registration_decisions: List[RegistrationDecision | Dict[str, Any]] = []
         tracking_events: List[TrackingEvent | Dict[str, Any]] = []
         if include_registrations:
             registrations = await self._registrations_loader(snapshot_id=snapshot_id)
+        if include_registration_decisions:
+            registration_decisions = await self._registration_decisions_loader(snapshot_id=snapshot_id)
         if include_tracking_events:
             tracking_events = await self._tracking_events_loader(snapshot_id=snapshot_id)
 
         return AuthzProjectionSources(
             facts=list(facts),
             registrations=list(registrations),
+            registration_decisions=list(registration_decisions),
             tracking_events=list(tracking_events),
             action_intents=list(action_intents or []),
             graph_manifests=list(getattr(snapshot, "graph_manifests", []) or []),
@@ -113,6 +126,7 @@ class AuthzGraphProjectionService:
         governed_only: bool = True,
         fact_namespace: Optional[str] = None,
         include_registrations: bool = True,
+        include_registration_decisions: bool = False,
         include_tracking_events: bool = True,
         action_intents: Optional[Iterable[ActionIntent]] = None,
     ) -> AuthzProjectionResult:
@@ -122,6 +136,7 @@ class AuthzGraphProjectionService:
             governed_only=governed_only,
             fact_namespace=fact_namespace,
             include_registrations=include_registrations,
+            include_registration_decisions=include_registration_decisions,
             include_tracking_events=include_tracking_events,
             action_intents=action_intents,
         )
@@ -140,6 +155,7 @@ class AuthzGraphProjectionService:
             action_intents=sources.action_intents,
             facts=sources.facts,
             registrations=sources.registrations,
+            registration_decisions=sources.registration_decisions,
             tracking_events=sources.tracking_events,
         )
         stats = {
@@ -148,6 +164,7 @@ class AuthzGraphProjectionService:
             "snapshot_version": effective_snapshot_version,
             "facts_count": len(sources.facts),
             "registrations_count": len(sources.registrations),
+            "registration_decisions_count": len(sources.registration_decisions),
             "tracking_events_count": len(sources.tracking_events),
             "action_intents_count": len(sources.action_intents),
             "graph_manifests_count": len(sources.graph_manifests),
@@ -186,7 +203,7 @@ class AuthzGraphProjectionService:
                 .where(SourceRegistration.snapshot_id == snapshot_id)
                 .order_by(SourceRegistration.created_at.asc(), SourceRegistration.id.asc())
             )
-            return list(result.scalars().all())
+            return _result_items(result)
 
     async def _load_tracking_events(self, *, snapshot_id: int) -> List[TrackingEvent]:
         if self._sf is None:
@@ -197,7 +214,26 @@ class AuthzGraphProjectionService:
                 .where(TrackingEvent.snapshot_id == snapshot_id)
                 .order_by(TrackingEvent.captured_at.asc(), TrackingEvent.id.asc())
             )
-            return list(result.scalars().all())
+            return _result_items(result)
+
+    async def _load_registration_decisions(self, *, snapshot_id: int) -> List[RegistrationDecision]:
+        try:
+            if self._sf is None:
+                self._sf = get_async_pg_session_factory()
+            async with self._sf() as session:
+                result = await session.execute(
+                    select(RegistrationDecision)
+                    .where(RegistrationDecision.policy_snapshot_id == snapshot_id)
+                    .order_by(RegistrationDecision.decided_at.asc(), RegistrationDecision.id.asc())
+                )
+                return _result_items(result)
+        except Exception as exc:
+            logger.warning(
+                "Authz graph registration-decision enrichment unavailable for snapshot_id=%s: %s",
+                snapshot_id,
+                exc,
+            )
+            return []
 
     async def _resolve_snapshot(
         self,
@@ -230,3 +266,23 @@ class AuthzGraphProjectionService:
                 raise LookupError(f"PKG snapshot id '{snapshot_id}' not found")
             return snapshot
         return None
+
+
+def _result_items(result: Any) -> List[Any]:
+    scalars = getattr(result, "scalars", None)
+    if callable(scalars):
+        scalar_result = scalars()
+        scalar_all = getattr(scalar_result, "all", None)
+        if callable(scalar_all):
+            return list(scalar_all())
+
+    fetchall = getattr(result, "fetchall", None)
+    if callable(fetchall):
+        return list(fetchall())
+
+    scalar = getattr(result, "scalar", None)
+    if callable(scalar):
+        value = scalar()
+        return [] if value is None else [value]
+
+    return []

@@ -46,6 +46,8 @@ class NodeKind(str, Enum):
     DEVICE = "device"
     FACILITY = "facility"
     CERTIFICATION = "certification"
+    PRODUCT = "product"
+    WORKFLOW_STAGE = "workflow_stage"
     ASSET = "asset"
     ASSET_BATCH = "asset_batch"
     RESOURCE = "resource"
@@ -63,6 +65,7 @@ class NodeKind(str, Enum):
     POLICY_SNAPSHOT = "policy_snapshot"
     TWIN = "twin"
     RECEIPT = "receipt"
+    REGISTRATION_DECISION = "registration_decision"
 
 
 class EdgeKind(str, Enum):
@@ -72,6 +75,7 @@ class EdgeKind(str, Enum):
     OPERATES = "operates"
     BOUND_TO_DEVICE = "bound_to_device"
     CERTIFIED_FOR = "certified_for"
+    PART_OF = "part_of"
     CAN = "can"
     HELD_BY = "held_by"
     TRANSFERRED_FROM = "transferred_from"
@@ -79,6 +83,7 @@ class EdgeKind(str, Enum):
     OBSERVED_IN = "observed_in"
     SEALED_WITH = "sealed_with"
     LOCATED_IN = "located_in"
+    AT_STAGE = "at_stage"
     REQUESTED = "requested"
     BACKED_BY = "backed_by"
     RECORDED_BY = "recorded_by"
