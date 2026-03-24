@@ -907,7 +907,7 @@ def evaluate_intent(
     if cognitive_violation is not None:
         return cognitive_violation
 
-    authz_graph_violation, break_glass_context, transition_evaluation, authz_evaluator = _evaluate_compiled_authz_graph_policy(
+    authz_graph_violation, break_glass_context, transition_evaluation, compiled_match, authz_evaluator = _evaluate_compiled_authz_graph_policy(
         action_intent=action_intent,
         policy_case=policy_case,
         compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
@@ -960,7 +960,7 @@ def evaluate_intent(
         break_glass=break_glass_context,
         authz_graph=_authz_graph_decision_metadata(
             transition_evaluation=transition_evaluation,
-            compiled_match=None,
+            compiled_match=compiled_match,
             evaluator=authz_evaluator,
         ),
         governed_receipt=_serialize_governed_receipt(transition_evaluation),
@@ -1363,9 +1363,15 @@ def _evaluate_compiled_authz_graph_policy(
     action_intent: ActionIntent,
     policy_case: PolicyCase,
     compiled_authz_index: CompiledAuthzIndex | None,
-) -> tuple[PolicyDecision | None, BreakGlassDecisionContext, CompiledTransitionEvaluation | None, str]:
+) -> tuple[
+    PolicyDecision | None,
+    BreakGlassDecisionContext,
+    CompiledTransitionEvaluation | None,
+    CompiledPermissionMatch | None,
+    str,
+]:
     if compiled_authz_index is None:
-        return None, BreakGlassDecisionContext(), None, "disabled"
+        return None, BreakGlassDecisionContext(), None, None, "disabled"
 
     expected_snapshot = (policy_case.policy_snapshot or "").strip()
     compiled_snapshot = (compiled_authz_index.snapshot_version or "").strip()
@@ -1384,6 +1390,7 @@ def _evaluate_compiled_authz_graph_policy(
             ),
             BreakGlassDecisionContext(),
             None,
+            None,
             "compiled_index",
         )
 
@@ -1394,7 +1401,7 @@ def _evaluate_compiled_authz_graph_policy(
         policy_case=policy_case,
     )
     if break_glass_violation is not None:
-        return break_glass_violation, break_glass_context, None, "compiled_index"
+        return break_glass_violation, break_glass_context, None, None, "compiled_index"
 
     transition_evaluation: CompiledTransitionEvaluation | None = None
     authz_evaluator = "compiled_index"
@@ -1459,9 +1466,9 @@ def _evaluate_compiled_authz_graph_policy(
     )
     if transition_evaluation is not None:
         if transition_evaluation.disposition == AuthzDecisionDisposition.ALLOW:
-            return None, break_glass_context, transition_evaluation, authz_evaluator
+            return None, break_glass_context, transition_evaluation, transition_evaluation.permission_match, authz_evaluator
         if transition_evaluation.disposition == AuthzDecisionDisposition.QUARANTINE:
-            return None, break_glass_context, transition_evaluation, authz_evaluator
+            return None, break_glass_context, transition_evaluation, transition_evaluation.permission_match, authz_evaluator
         return (
             _compiled_authz_transition_deny_decision(
                 policy_case=policy_case,
@@ -1471,10 +1478,11 @@ def _evaluate_compiled_authz_graph_policy(
             ),
             break_glass_context,
             transition_evaluation,
+            transition_evaluation.permission_match,
             authz_evaluator,
         )
     if match.allowed:
-        return None, break_glass_context, None, authz_evaluator
+        return None, break_glass_context, None, match, authz_evaluator
     return (
         _compiled_authz_deny_decision(
             policy_case=policy_case,
@@ -1484,6 +1492,7 @@ def _evaluate_compiled_authz_graph_policy(
         ),
         break_glass_context,
         None,
+        match,
         authz_evaluator,
     )
 

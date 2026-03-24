@@ -632,6 +632,7 @@ class AuthzGraphProjector:
         if predicate_lower in {
             "hasrole",
             "delegatedto",
+            "delegatedby",
             "allowedoperation",
             "locatedinzone",
         }:
@@ -693,6 +694,38 @@ class AuthzGraphProjector:
             )
             return
 
+        if predicate_lower == "delegatedby":
+            principal_ref = _principal_ref(subject)
+            delegator_value = (
+                object_data.get("org")
+                or object_data.get("organization")
+                or object_data.get("principal")
+                or object_data.get("delegator")
+                or object_data.get("delegated_by")
+            )
+            if not delegator_value:
+                return
+            delegator_text = str(delegator_value).strip()
+            if delegator_text.startswith("org:") or object_data.get("org") or object_data.get("organization"):
+                delegator_ref = _org_ref(delegator_text)
+                delegator_kind = NodeKind.ORG
+            else:
+                delegator_ref = _principal_ref(delegator_text)
+                delegator_kind = NodeKind.PRINCIPAL
+            buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=principal_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=delegator_kind, ref=delegator_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.DELEGATED_BY,
+                    src=principal_ref,
+                    dst=delegator_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
         if predicate_lower == "boundtodevice":
             principal_ref = _principal_ref(subject)
             device_value = object_data.get("device") or object_data.get("device_id") or object_data.get("bound_device")
@@ -745,6 +778,50 @@ class AuthzGraphProjector:
                     kind=EdgeKind.OPERATES,
                     src=src_ref,
                     dst=target_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
+        if predicate_lower in {"approvedforfacility", "approvedfor"}:
+            src_ref = _normalize_permission_subject(subject)
+            facility_value = (
+                object_data.get("facility")
+                or object_data.get("facility_id")
+                or object_data.get("approved_for")
+            )
+            if not src_ref or not facility_value:
+                return
+            facility_ref = _facility_ref(facility_value)
+            buffer.add_node(AuthzNode(kind=_infer_subject_kind(src_ref), ref=src_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=NodeKind.FACILITY, ref=facility_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.APPROVED_FOR,
+                    src=src_ref,
+                    dst=facility_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
+        if predicate_lower == "controlszone":
+            src_ref = _normalize_permission_subject(subject)
+            zone_value = object_data.get("zone") or object_data.get("target_zone") or object_data.get("controls")
+            if not src_ref or not zone_value:
+                return
+            zone_ref = _zone_ref(zone_value)
+            buffer.add_node(AuthzNode(kind=_infer_subject_kind(src_ref), ref=src_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=NodeKind.ZONE, ref=zone_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.CONTROLS,
+                    src=src_ref,
+                    dst=zone_ref,
                     provenance=provenance,
                     valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
                     valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
@@ -1333,6 +1410,12 @@ def _normalize_permission_subject(subject: str) -> str:
         return _registration_decision_ref(subject)
     if subject.startswith("registration:"):
         return _registration_ref(subject)
+    if subject.startswith("zone:"):
+        return _zone_ref(subject)
+    if subject.startswith("network:"):
+        return _network_ref(subject)
+    if subject.startswith("custody_point:"):
+        return _custody_point_ref(subject)
     return _principal_ref(subject)
 
 
@@ -1355,6 +1438,12 @@ def _infer_subject_kind(subject_ref: str) -> NodeKind:
         return NodeKind.REGISTRATION_DECISION
     if subject_ref.startswith("registration:"):
         return NodeKind.REGISTRATION
+    if subject_ref.startswith("zone:"):
+        return NodeKind.ZONE
+    if subject_ref.startswith("network:"):
+        return NodeKind.NETWORK_SEGMENT
+    if subject_ref.startswith("custody_point:"):
+        return NodeKind.CUSTODY_POINT
     return NodeKind.PRINCIPAL
 
 

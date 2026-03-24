@@ -782,6 +782,67 @@ def test_evaluate_intent_phase1_release_requires_approved_registration_and_stage
     assert "registration_decision:decision-1" in decision.governed_receipt["evidence_refs"]
 
 
+def test_evaluate_intent_surfaces_phase2_multihop_authority_path() -> None:
+    payload = _base_payload()
+    canonical_resource_uri = "seedcore://zones/vault-a/assets/asset-1"
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@phase2",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-delegated-by",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "delegatedBy",
+                "object_data": {"org": "acme-logistics"},
+            },
+            {
+                "id": "fact-facility",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "org:acme-logistics",
+                "predicate": "approvedForFacility",
+                "object_data": {"facility_id": "vault-hub"},
+            },
+            {
+                "id": "fact-zone-control",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "facility:vault-hub",
+                "predicate": "controlsZone",
+                "object_data": {"zone": "vault-a"},
+            },
+            {
+                "id": "fact-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "zone:vault-a",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "MUTATE",
+                    "resource": canonical_resource_uri,
+                    "zones": ["vault-a"],
+                },
+            },
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert any(
+        tuple(path) == (
+            "principal:agent-1",
+            "org:acme-logistics",
+            "facility:vault-hub",
+            "zone:vault-a",
+        )
+        for path in decision.authz_graph["authority_paths"]
+    )
+
+
 def test_evaluate_intent_denies_when_transition_custody_mismatch(monkeypatch):
     payload = _base_payload()
     canonical_resource_uri = "seedcore://zones/vault-a/assets/asset-1"

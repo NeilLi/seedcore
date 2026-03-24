@@ -282,6 +282,130 @@ def test_compiler_resolves_authority_paths_for_org_and_device_subjects() -> None
     assert ("principal:agent-alpha", "device:edge-7") in attest_match.authority_paths
 
 
+def test_compiler_resolves_multihop_authority_paths_for_phase2_subjects() -> None:
+    now = datetime.now(timezone.utc)
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="org delegation",
+            snapshot_id=9,
+            namespace="authz",
+            subject="agent-alpha",
+            predicate="delegatedBy",
+            object_data={"org": "acme-logistics"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="facility approval",
+            snapshot_id=9,
+            namespace="authz",
+            subject="org:acme-logistics",
+            predicate="approvedForFacility",
+            object_data={"facility_id": "hub-1"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="zone control",
+            snapshot_id=9,
+            namespace="authz",
+            subject="facility:hub-1",
+            predicate="controlsZone",
+            object_data={"zone": "cold-room"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="device binding",
+            snapshot_id=9,
+            namespace="authz",
+            subject="agent-alpha",
+            predicate="boundToDevice",
+            object_data={"device_id": "edge-7"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="device certification",
+            snapshot_id=9,
+            namespace="authz",
+            subject="device:edge-7",
+            predicate="certifiedFor",
+            object_data={"certification_id": "cold-chain-seal"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="zone permission",
+            snapshot_id=9,
+            namespace="authz",
+            subject="zone:cold-room",
+            predicate="allowedOperation",
+            object_data={"operation": "MOVE", "resource": "asset-42"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="certification permission",
+            snapshot_id=9,
+            namespace="authz",
+            subject="certification:cold-chain-seal",
+            predicate="allowedOperation",
+            object_data={"operation": "SEAL", "resource": "asset-42"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@phase2-authority-paths",
+            snapshot_id=9,
+            snapshot_version="rules@9.0.0",
+            facts=facts,
+        )
+    )
+
+    move_match = compiled.can_access(
+        principal_ref="principal:agent-alpha",
+        operation="MOVE",
+        resource_ref="resource:asset-42",
+    )
+    seal_match = compiled.can_access(
+        principal_ref="principal:agent-alpha",
+        operation="SEAL",
+        resource_ref="resource:asset-42",
+    )
+
+    assert move_match.allowed is True
+    assert (
+        "principal:agent-alpha",
+        "org:acme-logistics",
+        "facility:hub-1",
+        "zone:cold-room",
+    ) in move_match.authority_paths
+    assert seal_match.allowed is True
+    assert (
+        "principal:agent-alpha",
+        "device:edge-7",
+        "certification:cold-chain-seal",
+    ) in seal_match.authority_paths
+
+
 def test_projector_projects_source_registration_backing_edges() -> None:
     registration = SourceRegistration(
         id=uuid4(),

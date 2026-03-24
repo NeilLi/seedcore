@@ -1258,7 +1258,10 @@ class AuthzGraphCompiler:
             return
         if edge.kind in {
             EdgeKind.MEMBER_OF,
+            EdgeKind.DELEGATED_BY,
+            EdgeKind.APPROVED_FOR,
             EdgeKind.OPERATES,
+            EdgeKind.CONTROLS,
             EdgeKind.BOUND_TO_DEVICE,
             EdgeKind.CERTIFIED_FOR,
         }:
