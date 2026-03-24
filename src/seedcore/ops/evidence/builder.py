@@ -14,7 +14,7 @@ from seedcore.models.evidence_bundle import (
     PolicyReceipt,
     TransitionReceipt,
 )
-from seedcore.ops.evidence.verification import build_signed_artifact
+from seedcore.ops.evidence.verification import build_signed_artifact, verify_policy_receipt
 
 
 def build_policy_receipt_artifact(
@@ -24,13 +24,6 @@ def build_policy_receipt_artifact(
 ) -> Optional[PolicyReceipt]:
     params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
     governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
-    existing_receipt = governance.get("policy_receipt")
-    if isinstance(existing_receipt, dict):
-        try:
-            return PolicyReceipt(**existing_receipt)
-        except Exception:
-            pass
-
     policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
     action_intent = governance.get("action_intent") if isinstance(governance.get("action_intent"), dict) else {}
     execution_token = governance.get("execution_token") if isinstance(governance.get("execution_token"), dict) else {}
@@ -112,13 +105,21 @@ def build_evidence_bundle(
     governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
     action_intent = governance.get("action_intent", {}) if isinstance(governance.get("action_intent"), dict) else {}
     execution_token = governance.get("execution_token", {}) if isinstance(governance.get("execution_token"), dict) else {}
+    existing_policy_receipt = governance.get("policy_receipt") if isinstance(governance.get("policy_receipt"), dict) else {}
 
     executed_at = _derive_executed_at(envelope)
     actuator_entries = _extract_actuator_entries(envelope)
     actuator_endpoint = _extract_actuator_endpoint(task_dict, actuator_entries)
     node_id = _derive_node_id(task_dict, actuator_entries, organ_id)
     transition_receipts = _extract_transition_receipts(actuator_entries)
-    policy_receipt = build_policy_receipt_artifact(task_dict=task_dict, timestamp=executed_at)
+    policy_receipt = None
+    if existing_policy_receipt and verify_policy_receipt(existing_policy_receipt) is None:
+        try:
+            policy_receipt = PolicyReceipt(**existing_policy_receipt)
+        except Exception:
+            policy_receipt = None
+    if policy_receipt is None:
+        policy_receipt = build_policy_receipt_artifact(task_dict=task_dict, timestamp=executed_at)
     asset_fingerprint = _build_asset_fingerprint(task_dict, timestamp=executed_at, node_id=node_id)
     telemetry_snapshot = _build_telemetry_snapshot(
         task_dict,
