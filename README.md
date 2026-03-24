@@ -278,31 +278,15 @@ In these environments, the default action is quarantine, not graceful degradatio
 
 ## Recommended Next Steps
 
-The current codebase is already solving the right problems. The next milestone is not inventing a new architecture, but hardening the existing one into an enterprise-grade trust framework.
+The detailed next-step plan now lives in [docs/development/current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md).
 
-### Phase 1: Hardening the Boundary (Next 1-2 Months)
+That document is the better source of truth because the implementation and verification state is moving faster than the architecture overview in this root README.
 
-Goal: move from software-defined trust to hardware-backed trust.
+In short, the highest-priority remaining work is:
 
-- move HAL receipt signing out of `.env` and Kubernetes secret delivery into TPM, HSM, or cloud KMS-backed signing
-- keep the current short-lived execution token model and expand operator tooling around revocation, E-stop, and observability
-- treat Redis-backed revocation as the fast operational control plane, while planning for stronger signer identity guarantees
-
-### Phase 2: Immutable Custody and Auditing (Months 3-4)
-
-Goal: make custody disputes externally auditable.
-
-- anchor `ExecutionReceipt`, `transition_receipt`, and custody-event records into an immutable transparency log or enterprise ledger
-- promote `previous_receipt_hash` from a model field into a default end-to-end chained audit trail
-- add dual-authorization paths for high-risk actions, such as operator co-sign or independent policy approval
-
-### Phase 3: Dynamic and Distributed Policy (Months 5-6)
-
-Goal: support fleet-wide compliance updates and governed multi-agent operation.
-
-- replace restart-based PKG rollout with hot policy distribution and runtime activation across active services and edge endpoints
-- convert high-risk break-glass handling from score thresholds alone into explicit deterministic policy branches
-- extend custody receipts beyond Coordinator -> HAL so Agent -> Agent and cognitive handoffs can be traced with the same rigor
+- hardware-backed signer and device-trust hardening
+- external audit anchoring and default receipt-chain promotion
+- dual-authorization and rollout/activation hardening across runtime surfaces
 
 ## Architecture Overview
 
