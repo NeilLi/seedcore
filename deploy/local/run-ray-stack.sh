@@ -16,6 +16,24 @@ START_DELAY_S="${START_DELAY_S:-2}"
 
 mkdir -p "${LOG_DIR}" "${PID_DIR}"
 
+route_prefix_for_app() {
+  case "$1" in
+    organism) echo "/organism" ;;
+    cognitive) echo "/cognitive" ;;
+    coordinator) echo "/pipeline" ;;
+    ops) echo "/ops" ;;
+    mcp) echo "/mcp" ;;
+    ml) echo "/ml" ;;
+    *) echo "" ;;
+  esac
+}
+
+serve_route_present() {
+  local route_prefix="$1"
+  [[ -n "${route_prefix}" ]] || return 1
+  curl -fsS "${SERVE_GATEWAY}/-/routes" 2>/dev/null | rg -q "\"${route_prefix}\""
+}
+
 start_app() {
   local app="$1"
   local pidfile="${PID_DIR}/${app}.pid"
@@ -70,6 +88,8 @@ case "${cmd}" in
       local_pid_file="${PID_DIR}/${app}.pid"
       if [[ -f "${local_pid_file}" ]] && kill -0 "$(cat "${local_pid_file}")" >/dev/null 2>&1; then
         echo "${app}: running (pid $(cat "${local_pid_file}"))"
+      elif serve_route_present "$(route_prefix_for_app "${app}")"; then
+        echo "${app}: running (serve route present)"
       else
         echo "${app}: stopped"
       fi

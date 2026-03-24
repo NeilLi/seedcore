@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bring up the local host-mode task execution stack:
-# Ray head + coordinator/organism Serve apps + organism/bootstrap dispatchers.
+# Ray head + coordinator/organism/cognitive Serve apps + organism/bootstrap dispatchers.
 
 set -euo pipefail
 
@@ -60,10 +60,11 @@ case "${cmd}" in
   start)
     (
       cd "${PROJECT_ROOT}"
-      APPS="organism coordinator" bash "${SCRIPT_DIR}/run-ray-stack.sh" start
+      APPS="organism cognitive coordinator" bash "${SCRIPT_DIR}/run-ray-stack.sh" start
     )
 
     wait_for_url "${SERVE_GATEWAY}/organism/health" "organism health"
+    wait_for_url "${SERVE_GATEWAY}/cognitive/health" "cognitive health"
     wait_for_url "${SERVE_GATEWAY}/-/routes" "serve routes"
 
     (
@@ -81,13 +82,13 @@ case "${cmd}" in
   stop)
     (
       cd "${PROJECT_ROOT}"
-      APPS="organism coordinator" bash "${SCRIPT_DIR}/run-ray-stack.sh" stop
+      APPS="organism cognitive coordinator" bash "${SCRIPT_DIR}/run-ray-stack.sh" stop
     )
     ;;
   status)
     (
       cd "${PROJECT_ROOT}"
-      APPS="organism coordinator" bash "${SCRIPT_DIR}/run-ray-stack.sh" status
+      APPS="organism cognitive coordinator" bash "${SCRIPT_DIR}/run-ray-stack.sh" status
     )
     echo
     echo "Routes:"
