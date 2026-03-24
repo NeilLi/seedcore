@@ -684,7 +684,9 @@ def test_evaluate_intent_quarantines_when_transition_has_trust_gap(monkeypatch):
     assert decision.execution_token.constraints["restricted_state"] is True
     assert decision.governed_receipt["disposition"] == "quarantine"
     assert decision.authz_graph["mode"] == "transition_evaluation"
+    assert ("principal:agent-1", "role:ROBOT_OPERATOR") in [tuple(path) for path in decision.authz_graph["authority_paths"]]
     assert any(item["code"] == "stale_telemetry" for item in decision.authz_graph["trust_gaps"])
+    assert any(item["code"] == "telemetry_freshness" and item["outcome"] == "failed" for item in decision.authz_graph["checked_constraints"])
 
 
 def test_evaluate_intent_denies_when_transition_custody_mismatch(monkeypatch):

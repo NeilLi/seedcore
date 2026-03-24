@@ -1986,6 +1986,7 @@ def _authz_graph_decision_metadata(
             "mode": "permission_match",
             "match_reason": compiled_match.reason,
             "matched_subjects": list(compiled_match.matched_subjects),
+            "authority_paths": [list(path) for path in compiled_match.authority_paths],
             "break_glass_required": compiled_match.break_glass_required,
             "break_glass_used": compiled_match.break_glass_used,
         }
@@ -2002,6 +2003,7 @@ def _authz_graph_decision_metadata(
         "restricted_token_recommended": transition_evaluation.restricted_token_recommended,
         "permission_match_reason": transition_evaluation.permission_match.reason,
         "matched_subjects": list(transition_evaluation.permission_match.matched_subjects),
+        "authority_paths": [list(path) for path in transition_evaluation.permission_match.authority_paths],
         "trust_gaps": [
             {
                 "code": gap.code,
@@ -2009,6 +2011,15 @@ def _authz_graph_decision_metadata(
                 "details": dict(gap.details),
             }
             for gap in transition_evaluation.trust_gaps
+        ],
+        "checked_constraints": [
+            {
+                "code": check.code,
+                "outcome": check.outcome,
+                "message": check.message,
+                "details": dict(check.details),
+            }
+            for check in transition_evaluation.checked_constraints
         ],
     }
     if evaluator:

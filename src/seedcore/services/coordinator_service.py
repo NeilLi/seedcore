@@ -2671,13 +2671,30 @@ class Coordinator:
                 "mode": authz_graph.get("mode"),
                 "disposition": authz_graph.get("disposition"),
                 "reason": authz_graph.get("reason"),
+                "match_reason": authz_graph.get("match_reason"),
+                "permission_match_reason": authz_graph.get("permission_match_reason"),
                 "asset_ref": authz_graph.get("asset_ref"),
                 "resource_ref": authz_graph.get("resource_ref"),
                 "current_custodian": authz_graph.get("current_custodian"),
+                "matched_subjects": (
+                    list(authz_graph.get("matched_subjects"))
+                    if isinstance(authz_graph.get("matched_subjects"), list)
+                    else []
+                ),
+                "authority_paths": (
+                    list(authz_graph.get("authority_paths"))
+                    if isinstance(authz_graph.get("authority_paths"), list)
+                    else []
+                ),
                 "restricted_token_recommended": bool(authz_graph.get("restricted_token_recommended")),
                 "trust_gaps": (
                     list(authz_graph.get("trust_gaps"))
                     if isinstance(authz_graph.get("trust_gaps"), list)
+                    else []
+                ),
+                "checked_constraints": (
+                    list(authz_graph.get("checked_constraints"))
+                    if isinstance(authz_graph.get("checked_constraints"), list)
                     else []
                 ),
             }

@@ -11,6 +11,7 @@ from .ontology import (
 from .projector import AuthzGraphProjector
 from .compiler import (
     AuthzDecisionDisposition,
+    CompiledConstraintCheck,
     AuthzTransitionRequest,
     CompiledAuthzIndex,
     CompiledAssetState,
@@ -41,6 +42,7 @@ __all__ = [
     "PermissionEffect",
     "AuthzGraphProjector",
     "AuthzDecisionDisposition",
+    "CompiledConstraintCheck",
     "AuthzTransitionRequest",
     "CompiledAuthzIndex",
     "CompiledAssetState",

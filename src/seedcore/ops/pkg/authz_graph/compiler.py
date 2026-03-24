@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections import deque
 import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
 
 from .ontology import AuthzEdge, AuthzGraphSnapshot, AuthzNode, EdgeKind, NodeKind, PermissionEffect
 
@@ -110,6 +111,14 @@ class CompiledTrustGap:
 
 
 @dataclass(frozen=True)
+class CompiledConstraintCheck:
+    code: str
+    outcome: str
+    message: str
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class GovernedDecisionReceipt:
     decision_hash: str
     disposition: AuthzDecisionDisposition
@@ -175,6 +184,7 @@ class CompiledTransitionEvaluation:
     resource_ref: Optional[str] = None
     current_custodian: Optional[str] = None
     trust_gaps: Tuple[CompiledTrustGap, ...] = ()
+    checked_constraints: Tuple[CompiledConstraintCheck, ...] = ()
     restricted_token_recommended: bool = False
 
     @property
@@ -235,6 +245,7 @@ class CompiledPermission:
 class CompiledPermissionMatch:
     allowed: bool
     matched_subjects: Tuple[str, ...] = ()
+    authority_paths: Tuple[Tuple[str, ...], ...] = ()
     matched_permissions: Tuple[CompiledPermission, ...] = ()
     deny_permissions: Tuple[CompiledPermission, ...] = ()
     break_glass_permissions: Tuple[CompiledPermission, ...] = ()
@@ -250,25 +261,30 @@ class CompiledAuthzIndex:
     snapshot_version: Optional[str]
     role_memberships: Dict[str, Set[str]] = field(default_factory=dict)
     delegations: Dict[str, Set[str]] = field(default_factory=dict)
+    authority_links: Dict[str, Set[str]] = field(default_factory=dict)
     resource_zones: Dict[str, Set[str]] = field(default_factory=dict)
     permissions_by_subject: Dict[str, List[CompiledPermission]] = field(default_factory=dict)
     resource_to_asset: Dict[str, str] = field(default_factory=dict)
     asset_states: Dict[str, CompiledAssetState] = field(default_factory=dict)
     nodes_by_ref: Dict[str, AuthzNode] = field(default_factory=dict)
 
+    def resolve_subject_paths(self, principal_ref: str) -> Dict[str, Tuple[str, ...]]:
+        paths: Dict[str, Tuple[str, ...]] = {principal_ref: (principal_ref,)}
+        queue: Deque[str] = deque([principal_ref])
+
+        while queue:
+            current = queue.popleft()
+            current_path = paths[current]
+            next_subjects = sorted(self.authority_links.get(current, set()))
+            for next_subject in next_subjects:
+                if next_subject in paths:
+                    continue
+                paths[next_subject] = current_path + (next_subject,)
+                queue.append(next_subject)
+        return paths
+
     def resolve_subjects(self, principal_ref: str) -> Tuple[str, ...]:
-        resolved: List[str] = []
-        seen: Set[str] = set()
-        stack = [principal_ref]
-        while stack:
-            current = stack.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            resolved.append(current)
-            stack.extend(sorted(self.role_memberships.get(current, set()) - seen))
-            stack.extend(sorted(self.delegations.get(current, set()) - seen))
-        return tuple(resolved)
+        return tuple(self.resolve_subject_paths(principal_ref).keys())
 
     def can_access(
         self,
@@ -283,10 +299,13 @@ class CompiledAuthzIndex:
         break_glass: bool = False,
     ) -> CompiledPermissionMatch:
         effective_at = at.astimezone(timezone.utc) if at and at.tzinfo else at or _utcnow()
-        subject_refs = self.resolve_subjects(principal_ref)
+        subject_paths = self.resolve_subject_paths(principal_ref)
+        subject_refs = tuple(subject_paths.keys())
         allow_matches: List[CompiledPermission] = []
         deny_matches: List[CompiledPermission] = []
         break_glass_matches: List[CompiledPermission] = []
+        authority_paths: List[Tuple[str, ...]] = []
+        seen_paths: Set[Tuple[str, ...]] = set()
         expected_op = str(operation).strip().upper()
         effective_zone = _normalize_optional_ref(zone_ref)
         effective_network = _normalize_optional_ref(network_ref)
@@ -319,12 +338,17 @@ class CompiledAuthzIndex:
                     break_glass_matches.append(permission)
                 else:
                     allow_matches.append(permission)
+                authority_path = subject_paths.get(subject_ref)
+                if authority_path is not None and authority_path not in seen_paths:
+                    seen_paths.add(authority_path)
+                    authority_paths.append(authority_path)
 
         if deny_matches:
             if break_glass and break_glass_matches and any(item.bypass_deny for item in break_glass_matches):
                 return CompiledPermissionMatch(
                     allowed=True,
                     matched_subjects=subject_refs,
+                    authority_paths=tuple(authority_paths),
                     matched_permissions=tuple(allow_matches),
                     deny_permissions=tuple(deny_matches),
                     break_glass_permissions=tuple(break_glass_matches),
@@ -335,6 +359,7 @@ class CompiledAuthzIndex:
             return CompiledPermissionMatch(
                 allowed=False,
                 matched_subjects=subject_refs,
+                authority_paths=tuple(authority_paths),
                 matched_permissions=tuple(allow_matches),
                 deny_permissions=tuple(deny_matches),
                 break_glass_permissions=tuple(break_glass_matches),
@@ -345,6 +370,7 @@ class CompiledAuthzIndex:
             return CompiledPermissionMatch(
                 allowed=True,
                 matched_subjects=subject_refs,
+                authority_paths=tuple(authority_paths),
                 matched_permissions=tuple(allow_matches),
                 deny_permissions=(),
                 break_glass_permissions=tuple(break_glass_matches),
@@ -357,6 +383,7 @@ class CompiledAuthzIndex:
                 return CompiledPermissionMatch(
                     allowed=True,
                     matched_subjects=subject_refs,
+                    authority_paths=tuple(authority_paths),
                     matched_permissions=tuple(allow_matches),
                     deny_permissions=(),
                     break_glass_permissions=tuple(break_glass_matches),
@@ -367,6 +394,7 @@ class CompiledAuthzIndex:
             return CompiledPermissionMatch(
                 allowed=False,
                 matched_subjects=subject_refs,
+                authority_paths=tuple(authority_paths),
                 matched_permissions=tuple(allow_matches),
                 deny_permissions=(),
                 break_glass_permissions=tuple(break_glass_matches),
@@ -377,6 +405,7 @@ class CompiledAuthzIndex:
         return CompiledPermissionMatch(
             allowed=False,
             matched_subjects=subject_refs,
+            authority_paths=(),
             matched_permissions=(),
             deny_permissions=(),
             break_glass_permissions=(),
@@ -411,9 +440,18 @@ class CompiledAuthzIndex:
         requirements = self._collect_transition_requirements(request, permission_match)
         deny_reasons: List[str] = []
         trust_gaps: List[CompiledTrustGap] = []
+        checked_constraints: List[CompiledConstraintCheck] = []
 
         if requirements.require_current_custodian:
             if asset_state is None or asset_state.current_custodian is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="current_custodian",
+                        outcome="missing",
+                        message="The asset has no compiled current custodian.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="missing_current_custodian",
@@ -423,11 +461,56 @@ class CompiledAuthzIndex:
                 )
             else:
                 if request.expected_custodian_ref and asset_state.current_custodian != request.expected_custodian_ref:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="expected_custodian",
+                            outcome="failed",
+                            message="The compiled current custodian does not match the expected custodian.",
+                            details={
+                                "asset_ref": asset_ref,
+                                "expected_custodian_ref": request.expected_custodian_ref,
+                                "current_custodian": asset_state.current_custodian,
+                            },
+                        )
+                    )
                     deny_reasons.append("expected_custodian_mismatch")
                 if asset_state.current_custodian != request.principal_ref:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="current_custodian",
+                            outcome="failed",
+                            message="The principal is not the compiled current custodian.",
+                            details={
+                                "asset_ref": asset_ref,
+                                "principal_ref": request.principal_ref,
+                                "current_custodian": asset_state.current_custodian,
+                            },
+                        )
+                    )
                     deny_reasons.append("principal_not_current_custodian")
+                if not deny_reasons:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="current_custodian",
+                            outcome="passed",
+                            message="The principal matches the compiled current custodian.",
+                            details={
+                                "asset_ref": asset_ref,
+                                "principal_ref": request.principal_ref,
+                                "current_custodian": asset_state.current_custodian,
+                            },
+                        )
+                    )
         elif request.expected_custodian_ref:
             if asset_state is None or asset_state.current_custodian is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="expected_custodian",
+                        outcome="missing",
+                        message="The asset has no compiled current custodian for expected-custodian validation.",
+                        details={"asset_ref": asset_ref, "expected_custodian_ref": request.expected_custodian_ref},
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="missing_current_custodian",
@@ -436,15 +519,82 @@ class CompiledAuthzIndex:
                     )
                 )
             elif asset_state.current_custodian != request.expected_custodian_ref:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="expected_custodian",
+                        outcome="failed",
+                        message="The compiled current custodian does not match the expected custodian.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "expected_custodian_ref": request.expected_custodian_ref,
+                            "current_custodian": asset_state.current_custodian,
+                        },
+                    )
+                )
                 deny_reasons.append("expected_custodian_mismatch")
+            else:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="expected_custodian",
+                        outcome="passed",
+                        message="The compiled current custodian matches the expected custodian.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "expected_custodian_ref": request.expected_custodian_ref,
+                            "current_custodian": asset_state.current_custodian,
+                        },
+                    )
+                )
 
         if requirements.custody_points:
             if request.custody_point_ref is not None and request.custody_point_ref not in requirements.custody_points:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="custody_point",
+                        outcome="failed",
+                        message="The request custody point is not allowed by the compiled transition requirements.",
+                        details={
+                            "provided_custody_point_ref": request.custody_point_ref,
+                            "required_custody_points": sorted(requirements.custody_points),
+                        },
+                    )
+                )
                 deny_reasons.append("custody_point_mismatch")
             elif asset_state is not None and asset_state.custody_points:
                 if requirements.custody_points.isdisjoint(asset_state.custody_points):
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="custody_point",
+                            outcome="failed",
+                            message="The asset is not currently in one of the required custody points.",
+                            details={
+                                "asset_custody_points": sorted(asset_state.custody_points),
+                                "required_custody_points": sorted(requirements.custody_points),
+                            },
+                        )
+                    )
                     deny_reasons.append("asset_not_in_required_custody_point")
+                else:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="custody_point",
+                            outcome="passed",
+                            message="The asset matches the required custody point constraints.",
+                            details={
+                                "asset_custody_points": sorted(asset_state.custody_points),
+                                "required_custody_points": sorted(requirements.custody_points),
+                            },
+                        )
+                    )
             elif request.custody_point_ref is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="custody_point",
+                        outcome="missing",
+                        message="The transition requires a custody point but none was provided.",
+                        details={"required_custody_points": sorted(requirements.custody_points)},
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="missing_custody_point",
@@ -455,6 +605,14 @@ class CompiledAuthzIndex:
 
         if requirements.require_transferable_state:
             if asset_state is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="transferable_state",
+                        outcome="missing",
+                        message="The asset has no compiled state for transfer validation.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="missing_asset_state",
@@ -464,10 +622,34 @@ class CompiledAuthzIndex:
                 )
             else:
                 if asset_state.restricted is True:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="transferable_state",
+                            outcome="failed",
+                            message="The asset is already restricted.",
+                            details={"asset_ref": asset_ref},
+                        )
+                    )
                     deny_reasons.append("asset_restricted")
                 elif asset_state.transferable is False:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="transferable_state",
+                            outcome="failed",
+                            message="The asset is not in a transferable state.",
+                            details={"asset_ref": asset_ref, "state": asset_state.state},
+                        )
+                    )
                     deny_reasons.append("asset_not_transferable")
                 elif asset_state.transferable is None and asset_state.state is None:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="transferable_state",
+                            outcome="missing",
+                            message="The asset does not expose a transferability state.",
+                            details={"asset_ref": asset_ref},
+                        )
+                    )
                     trust_gaps.append(
                         CompiledTrustGap(
                             code="unknown_transfer_state",
@@ -475,10 +657,27 @@ class CompiledAuthzIndex:
                             details={"asset_ref": asset_ref},
                         )
                     )
+                else:
+                    checked_constraints.append(
+                        CompiledConstraintCheck(
+                            code="transferable_state",
+                            outcome="passed",
+                            message="The asset is transferable under the compiled state.",
+                            details={"asset_ref": asset_ref, "state": asset_state.state},
+                        )
+                    )
 
         effective_at = request.at.astimezone(timezone.utc) if request.at and request.at.tzinfo else request.at or _utcnow()
         if requirements.max_telemetry_age_seconds is not None:
             if asset_state is None or asset_state.last_telemetry_at is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="telemetry_freshness",
+                        outcome="missing",
+                        message="The asset is missing compiled telemetry coverage.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="missing_telemetry",
@@ -487,6 +686,18 @@ class CompiledAuthzIndex:
                     )
                 )
             elif effective_at - asset_state.last_telemetry_at > timedelta(seconds=requirements.max_telemetry_age_seconds):
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="telemetry_freshness",
+                        outcome="failed",
+                        message="The asset telemetry is older than the permitted trust window.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "last_telemetry_at": asset_state.last_telemetry_at.isoformat(),
+                            "max_age_seconds": requirements.max_telemetry_age_seconds,
+                        },
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="stale_telemetry",
@@ -498,9 +709,30 @@ class CompiledAuthzIndex:
                         },
                     )
                 )
+            else:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="telemetry_freshness",
+                        outcome="passed",
+                        message="The asset telemetry is within the permitted trust window.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "last_telemetry_at": asset_state.last_telemetry_at.isoformat(),
+                            "max_age_seconds": requirements.max_telemetry_age_seconds,
+                        },
+                    )
+                )
 
         if requirements.max_inspection_age_seconds is not None:
             if asset_state is None or asset_state.last_inspection_at is None:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="inspection_freshness",
+                        outcome="missing",
+                        message="The asset is missing a compiled inspection or attestation timestamp.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="missing_inspection",
@@ -509,6 +741,18 @@ class CompiledAuthzIndex:
                     )
                 )
             elif effective_at - asset_state.last_inspection_at > timedelta(seconds=requirements.max_inspection_age_seconds):
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="inspection_freshness",
+                        outcome="failed",
+                        message="The asset inspection is older than the permitted trust window.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "last_inspection_at": asset_state.last_inspection_at.isoformat(),
+                            "max_age_seconds": requirements.max_inspection_age_seconds,
+                        },
+                    )
+                )
                 trust_gaps.append(
                     CompiledTrustGap(
                         code="stale_inspection",
@@ -520,24 +764,73 @@ class CompiledAuthzIndex:
                         },
                     )
                 )
-
-        if requirements.require_attestation and (asset_state is None or not asset_state.attestation_refs):
-            trust_gaps.append(
-                CompiledTrustGap(
-                    code="missing_attestation",
-                    message="The asset has no compiled attestation references.",
-                    details={"asset_ref": asset_ref},
+            else:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="inspection_freshness",
+                        outcome="passed",
+                        message="The asset inspection is within the permitted trust window.",
+                        details={
+                            "asset_ref": asset_ref,
+                            "last_inspection_at": asset_state.last_inspection_at.isoformat(),
+                            "max_age_seconds": requirements.max_inspection_age_seconds,
+                        },
+                    )
                 )
-            )
 
-        if requirements.require_seal and (asset_state is None or not asset_state.seal_refs):
-            trust_gaps.append(
-                CompiledTrustGap(
-                    code="missing_seal",
-                    message="The asset has no compiled seal binding.",
-                    details={"asset_ref": asset_ref},
+        if requirements.require_attestation:
+            if asset_state is None or not asset_state.attestation_refs:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="attestation",
+                        outcome="missing",
+                        message="The asset has no compiled attestation references.",
+                        details={"asset_ref": asset_ref},
+                    )
                 )
-            )
+                trust_gaps.append(
+                    CompiledTrustGap(
+                        code="missing_attestation",
+                        message="The asset has no compiled attestation references.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
+            else:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="attestation",
+                        outcome="passed",
+                        message="The asset has compiled attestation references.",
+                        details={"asset_ref": asset_ref, "attestation_refs": sorted(asset_state.attestation_refs)},
+                    )
+                )
+
+        if requirements.require_seal:
+            if asset_state is None or not asset_state.seal_refs:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="seal",
+                        outcome="missing",
+                        message="The asset has no compiled seal binding.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
+                trust_gaps.append(
+                    CompiledTrustGap(
+                        code="missing_seal",
+                        message="The asset has no compiled seal binding.",
+                        details={"asset_ref": asset_ref},
+                    )
+                )
+            else:
+                checked_constraints.append(
+                    CompiledConstraintCheck(
+                        code="seal",
+                        outcome="passed",
+                        message="The asset has compiled seal evidence.",
+                        details={"asset_ref": asset_ref, "seal_refs": sorted(asset_state.seal_refs)},
+                    )
+                )
 
         if deny_reasons:
             disposition = AuthzDecisionDisposition.DENY
@@ -566,6 +859,7 @@ class CompiledAuthzIndex:
             resource_ref=target_ref,
             current_custodian=asset_state.current_custodian if asset_state else None,
             trust_gaps=tuple(trust_gaps),
+            checked_constraints=tuple(checked_constraints),
             restricted_token_recommended=disposition == AuthzDecisionDisposition.QUARANTINE,
         )
 
@@ -794,9 +1088,19 @@ class AuthzGraphCompiler:
     def _consume_edge(self, index: CompiledAuthzIndex, edge: AuthzEdge) -> None:
         if edge.kind == EdgeKind.HAS_ROLE:
             index.role_memberships.setdefault(edge.src, set()).add(edge.dst)
+            _link_authority(index, edge.src, edge.dst)
             return
         if edge.kind == EdgeKind.DELEGATED_TO:
             index.delegations.setdefault(edge.src, set()).add(edge.dst)
+            _link_authority(index, edge.src, edge.dst)
+            return
+        if edge.kind in {
+            EdgeKind.MEMBER_OF,
+            EdgeKind.OPERATES,
+            EdgeKind.BOUND_TO_DEVICE,
+            EdgeKind.CERTIFIED_FOR,
+        }:
+            _link_authority(index, edge.src, edge.dst)
             return
         if edge.kind == EdgeKind.LOCATED_IN:
             index.resource_zones.setdefault(edge.src, set()).add(edge.dst)
@@ -924,3 +1228,7 @@ def _ensure_asset_state(index: CompiledAuthzIndex, asset_ref: str) -> CompiledAs
         state = CompiledAssetState(asset_ref=asset_ref)
         index.asset_states[asset_ref] = state
     return state
+
+
+def _link_authority(index: CompiledAuthzIndex, src: str, dst: str) -> None:
+    index.authority_links.setdefault(src, set()).add(dst)

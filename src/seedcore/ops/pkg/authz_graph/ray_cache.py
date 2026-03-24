@@ -10,6 +10,7 @@ from .compiler import (
     AuthzDecisionDisposition,
     AuthzTransitionRequest,
     CompiledAuthzIndex,
+    CompiledConstraintCheck,
     CompiledPermission,
     CompiledPermissionMatch,
     CompiledTrustGap,
@@ -38,6 +39,7 @@ def _serialize_permission_match(match: CompiledPermissionMatch) -> Dict[str, Any
     return {
         "allowed": match.allowed,
         "matched_subjects": list(match.matched_subjects),
+        "authority_paths": [list(path) for path in match.authority_paths],
         "matched_permissions_count": len(match.matched_permissions),
         "deny_permissions_count": len(match.deny_permissions),
         "break_glass_permissions_count": len(match.break_glass_permissions),
@@ -58,6 +60,15 @@ def _serialize_transition_evaluation(evaluation: CompiledTransitionEvaluation) -
         "current_custodian": evaluation.current_custodian,
         "restricted_token_recommended": evaluation.restricted_token_recommended,
         "trust_gap_codes": [gap.code for gap in evaluation.trust_gaps],
+        "checked_constraints": [
+            {
+                "code": check.code,
+                "outcome": check.outcome,
+                "message": check.message,
+                "details": dict(check.details),
+            }
+            for check in evaluation.checked_constraints
+        ],
         "permission_match": _serialize_permission_match(evaluation.permission_match),
         "receipt": {
             "decision_hash": evaluation.receipt.decision_hash,
@@ -162,12 +173,18 @@ def _placeholder_permissions(
 
 def _deserialize_permission_match(payload: Mapping[str, Any], *, operation: str, resource_ref: str | None) -> CompiledPermissionMatch:
     matched_subjects = tuple(str(item) for item in payload.get("matched_subjects", []) or [])
+    authority_paths = tuple(
+        tuple(str(part) for part in path if str(part).strip())
+        for path in payload.get("authority_paths", []) or []
+        if isinstance(path, (list, tuple))
+    )
     matched_permissions_count = int(payload.get("matched_permissions_count") or 0)
     deny_permissions_count = int(payload.get("deny_permissions_count") or 0)
     break_glass_permissions_count = int(payload.get("break_glass_permissions_count") or 0)
     return CompiledPermissionMatch(
         allowed=bool(payload.get("allowed", False)),
         matched_subjects=matched_subjects,
+        authority_paths=authority_paths,
         matched_permissions=_placeholder_permissions(
             count=matched_permissions_count,
             effect=PermissionEffect.ALLOW,
@@ -215,6 +232,16 @@ def _deserialize_transition_evaluation(payload: Mapping[str, Any], *, operation:
         operation=operation,
         resource_ref=payload.get("resource_ref"),
     )
+    checked_constraints = tuple(
+        CompiledConstraintCheck(
+            code=str(item.get("code") or "unknown_constraint"),
+            outcome=str(item.get("outcome") or "unknown"),
+            message=str(item.get("message") or item.get("code") or "constraint"),
+            details=dict(item.get("details") or {}),
+        )
+        for item in payload.get("checked_constraints", []) or []
+        if isinstance(item, Mapping)
+    )
     receipt = GovernedDecisionReceipt(
         decision_hash=str(receipt_payload.get("decision_hash") or ""),
         disposition=AuthzDecisionDisposition(str(receipt_payload.get("disposition") or payload.get("disposition") or "deny")),
@@ -243,6 +270,7 @@ def _deserialize_transition_evaluation(payload: Mapping[str, Any], *, operation:
         resource_ref=payload.get("resource_ref"),
         current_custodian=payload.get("current_custodian"),
         trust_gaps=trust_gaps,
+        checked_constraints=checked_constraints,
         restricted_token_recommended=bool(payload.get("restricted_token_recommended", False)),
     )
 

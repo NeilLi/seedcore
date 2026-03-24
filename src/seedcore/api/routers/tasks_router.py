@@ -112,6 +112,8 @@ def _authz_transition_summary(entry: Dict[str, Any]) -> Dict[str, Any] | None:
         "asset_ref": authz_graph.get("asset_ref") or governed_receipt.get("asset_ref"),
         "resource_ref": authz_graph.get("resource_ref") or governed_receipt.get("resource_ref"),
         "current_custodian": authz_graph.get("current_custodian"),
+        "authority_path_count": len(authz_graph.get("authority_paths") or []),
+        "checked_constraint_count": len(authz_graph.get("checked_constraints") or []),
         "restricted_token_recommended": bool(authz_graph.get("restricted_token_recommended")),
         "governed_receipt_hash": governed_receipt.get("decision_hash"),
         "trust_gap_codes": trust_gap_codes,

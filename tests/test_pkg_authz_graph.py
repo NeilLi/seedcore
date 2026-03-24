@@ -153,6 +153,85 @@ def test_compiler_materializes_role_based_permission_index() -> None:
     assert wrong_operation.allowed is False
 
 
+def test_compiler_resolves_authority_paths_for_org_and_device_subjects() -> None:
+    now = datetime.now(timezone.utc)
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="org membership",
+            snapshot_id=8,
+            namespace="authz",
+            subject="agent-alpha",
+            predicate="memberOf",
+            object_data={"org": "acme-logistics"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="device binding",
+            snapshot_id=8,
+            namespace="authz",
+            subject="agent-alpha",
+            predicate="boundToDevice",
+            object_data={"device_id": "edge-7"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="org permission",
+            snapshot_id=8,
+            namespace="authz",
+            subject="org:acme-logistics",
+            predicate="allowedOperation",
+            object_data={"operation": "MOVE", "resource": "asset-42"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="device permission",
+            snapshot_id=8,
+            namespace="authz",
+            subject="device:edge-7",
+            predicate="allowedOperation",
+            object_data={"operation": "ATTEST", "resource": "asset-42"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@authority-paths",
+            snapshot_id=8,
+            snapshot_version="rules@8.0.0",
+            facts=facts,
+        )
+    )
+
+    move_match = compiled.can_access(
+        principal_ref="principal:agent-alpha",
+        operation="MOVE",
+        resource_ref="resource:asset-42",
+    )
+    attest_match = compiled.can_access(
+        principal_ref="principal:agent-alpha",
+        operation="ATTEST",
+        resource_ref="resource:asset-42",
+    )
+
+    assert move_match.allowed is True
+    assert ("principal:agent-alpha", "org:acme-logistics") in move_match.authority_paths
+    assert attest_match.allowed is True
+    assert ("principal:agent-alpha", "device:edge-7") in attest_match.authority_paths
+
+
 def test_projector_projects_source_registration_backing_edges() -> None:
     registration = SourceRegistration(
         id=uuid4(),
@@ -717,6 +796,9 @@ def test_transition_evaluation_allows_when_lineage_and_evidence_are_intact() -> 
     assert evaluation.disposition == AuthzDecisionDisposition.ALLOW
     assert evaluation.allowed is True
     assert evaluation.current_custodian == "principal:driver-9"
+    assert ("principal:driver-9", "role:carrier") in evaluation.permission_match.authority_paths
+    assert any(check.code == "current_custodian" and check.outcome == "passed" for check in evaluation.checked_constraints)
+    assert any(check.code == "telemetry_freshness" and check.outcome == "passed" for check in evaluation.checked_constraints)
     assert evaluation.receipt.disposition == AuthzDecisionDisposition.ALLOW
     assert "attestation:lab-cert-99" in evaluation.receipt.evidence_refs
     assert any(item.startswith("current_custodian:principal:driver-9") for item in evaluation.receipt.custody_proof)

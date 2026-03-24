@@ -37,9 +37,29 @@ def _principal_ref(value: str) -> str:
     return value if value.startswith("principal:") else f"principal:{value}"
 
 
+def _org_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("org:") else f"org:{value}"
+
+
 def _role_ref(value: str) -> str:
     value = str(value).strip()
     return value if value.startswith("role:") else f"role:{value}"
+
+
+def _device_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("device:") else f"device:{value}"
+
+
+def _facility_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("facility:") else f"facility:{value}"
+
+
+def _certification_ref(value: str) -> str:
+    value = str(value).strip()
+    return value if value.startswith("certification:") else f"certification:{value}"
 
 
 def _resource_ref(value: str) -> str:
@@ -480,7 +500,12 @@ class AuthzGraphProjector:
         )
 
         predicate_lower = str(predicate).strip().lower()
-        if predicate_lower in {"hasrole", "delegatedto", "allowedoperation", "locatedinzone"}:
+        if predicate_lower in {
+            "hasrole",
+            "delegatedto",
+            "allowedoperation",
+            "locatedinzone",
+        }:
             self._warn_legacy_inferred_predicate(predicate_lower, buffer)
         if predicate_lower == "hasrole":
             principal_ref = _principal_ref(subject)
@@ -502,6 +527,26 @@ class AuthzGraphProjector:
             )
             return
 
+        if predicate_lower == "memberof":
+            principal_ref = _principal_ref(subject)
+            org_value = object_data.get("org") or object_data.get("organization") or object_data.get("member_of")
+            if not org_value:
+                return
+            org_ref = _org_ref(org_value)
+            buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=principal_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=NodeKind.ORG, ref=org_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.MEMBER_OF,
+                    src=principal_ref,
+                    dst=org_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
         if predicate_lower == "delegatedto":
             principal_ref = _principal_ref(subject)
             delegate_ref = _principal_ref(object_data.get("principal") or object_data.get("delegate"))
@@ -515,6 +560,96 @@ class AuthzGraphProjector:
                     provenance=provenance,
                     valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
                     valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
+        if predicate_lower == "boundtodevice":
+            principal_ref = _principal_ref(subject)
+            device_value = object_data.get("device") or object_data.get("device_id") or object_data.get("bound_device")
+            if not device_value:
+                return
+            device_ref = _device_ref(device_value)
+            buffer.add_node(AuthzNode(kind=NodeKind.PRINCIPAL, ref=principal_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=NodeKind.DEVICE, ref=device_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.BOUND_TO_DEVICE,
+                    src=principal_ref,
+                    dst=device_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
+        if predicate_lower == "operates":
+            src_ref = _normalize_permission_subject(subject)
+            target_value = (
+                object_data.get("facility")
+                or object_data.get("facility_id")
+                or object_data.get("device")
+                or object_data.get("device_id")
+                or object_data.get("target")
+                or object_data.get("resource")
+            )
+            if not src_ref or not target_value:
+                return
+            target_text = str(target_value).strip()
+            if target_text.startswith("device:"):
+                target_ref = _device_ref(target_text)
+                target_kind = NodeKind.DEVICE
+            elif target_text.startswith("facility:") or object_data.get("facility") or object_data.get("facility_id"):
+                target_ref = _facility_ref(target_text)
+                target_kind = NodeKind.FACILITY
+            elif target_text.startswith("resource:") or "://" in target_text:
+                target_ref = _resource_ref(target_text)
+                target_kind = NodeKind.RESOURCE
+            else:
+                target_ref = _facility_ref(target_text)
+                target_kind = NodeKind.FACILITY
+            buffer.add_node(AuthzNode(kind=_infer_subject_kind(src_ref), ref=src_ref, provenance=provenance))
+            buffer.add_node(AuthzNode(kind=target_kind, ref=target_ref, provenance=provenance))
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.OPERATES,
+                    src=src_ref,
+                    dst=target_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(_value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(_value_from(fact, "valid_to")),
+                )
+            )
+            return
+
+        if predicate_lower == "certifiedfor":
+            src_ref = _normalize_permission_subject(subject)
+            certification_value = (
+                object_data.get("certification")
+                or object_data.get("certification_id")
+                or object_data.get("certified_for")
+            )
+            if not src_ref or not certification_value:
+                return
+            certification_ref = _certification_ref(certification_value)
+            buffer.add_node(AuthzNode(kind=_infer_subject_kind(src_ref), ref=src_ref, provenance=provenance))
+            buffer.add_node(
+                AuthzNode(
+                    kind=NodeKind.CERTIFICATION,
+                    ref=certification_ref,
+                    attributes={"status": object_data.get("status")},
+                    provenance=provenance,
+                )
+            )
+            buffer.add_edge(
+                AuthzEdge(
+                    kind=EdgeKind.CERTIFIED_FOR,
+                    src=src_ref,
+                    dst=certification_ref,
+                    provenance=provenance,
+                    valid_from=_serialize_datetime(object_data.get("valid_from") or _value_from(fact, "valid_from")),
+                    valid_to=_serialize_datetime(object_data.get("valid_to") or _value_from(fact, "valid_to")),
                 )
             )
             return
@@ -990,14 +1125,30 @@ def _normalize_permission_subject(subject: str) -> str:
     subject = str(subject).strip()
     if not subject:
         return ""
+    if subject.startswith("org:"):
+        return _org_ref(subject)
     if subject.startswith("role:"):
         return _role_ref(subject)
+    if subject.startswith("device:"):
+        return _device_ref(subject)
+    if subject.startswith("facility:"):
+        return _facility_ref(subject)
+    if subject.startswith("certification:"):
+        return _certification_ref(subject)
     return _principal_ref(subject)
 
 
 def _infer_subject_kind(subject_ref: str) -> NodeKind:
+    if subject_ref.startswith("org:"):
+        return NodeKind.ORG
     if subject_ref.startswith("role:"):
         return NodeKind.ROLE_PROFILE
+    if subject_ref.startswith("device:"):
+        return NodeKind.DEVICE
+    if subject_ref.startswith("facility:"):
+        return NodeKind.FACILITY
+    if subject_ref.startswith("certification:"):
+        return NodeKind.CERTIFICATION
     return NodeKind.PRINCIPAL
 
 
@@ -1007,8 +1158,16 @@ def _normalize_selector_ref(selector: str) -> str:
         return ""
     if selector.startswith("principal:"):
         return _principal_ref(selector)
+    if selector.startswith("org:"):
+        return _org_ref(selector)
     if selector.startswith("role:"):
         return _role_ref(selector)
+    if selector.startswith("device:"):
+        return _device_ref(selector)
+    if selector.startswith("facility:"):
+        return _facility_ref(selector)
+    if selector.startswith("certification:"):
+        return _certification_ref(selector)
     if selector.startswith("asset:"):
         return _asset_ref(selector)
     if selector.startswith("asset_batch:"):
@@ -1033,8 +1192,16 @@ def _normalize_selector_ref(selector: str) -> str:
 def _infer_selector_kind(selector_ref: str) -> NodeKind:
     if selector_ref.startswith("principal:"):
         return NodeKind.PRINCIPAL
+    if selector_ref.startswith("org:"):
+        return NodeKind.ORG
     if selector_ref.startswith("role:"):
         return NodeKind.ROLE_PROFILE
+    if selector_ref.startswith("device:"):
+        return NodeKind.DEVICE
+    if selector_ref.startswith("facility:"):
+        return NodeKind.FACILITY
+    if selector_ref.startswith("certification:"):
+        return NodeKind.CERTIFICATION
     if selector_ref.startswith("asset:"):
         return NodeKind.ASSET
     if selector_ref.startswith("asset_batch:"):

@@ -40,8 +40,12 @@ def _freeze_value(value: Any) -> Any:
 
 
 class NodeKind(str, Enum):
+    ORG = "org"
     PRINCIPAL = "principal"
     ROLE_PROFILE = "role_profile"
+    DEVICE = "device"
+    FACILITY = "facility"
+    CERTIFICATION = "certification"
     ASSET = "asset"
     ASSET_BATCH = "asset_batch"
     RESOURCE = "resource"
@@ -62,8 +66,12 @@ class NodeKind(str, Enum):
 
 
 class EdgeKind(str, Enum):
+    MEMBER_OF = "member_of"
     HAS_ROLE = "has_role"
     DELEGATED_TO = "delegated_to"
+    OPERATES = "operates"
+    BOUND_TO_DEVICE = "bound_to_device"
+    CERTIFIED_FOR = "certified_for"
     CAN = "can"
     HELD_BY = "held_by"
     TRANSFERRED_FROM = "transferred_from"
