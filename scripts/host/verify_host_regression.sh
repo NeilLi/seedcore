@@ -25,6 +25,7 @@ PYTEST_TARGETS=(
   tests/test_pkg_router.py
   tests/test_replay_router.py
   tests/test_replay_service.py
+  tests/test_zero_trust_boundaries.py
 )
 
 echo "==> Running targeted pytest bundle"
@@ -45,3 +46,7 @@ bash scripts/host/verify_authz_engine_parity.sh
 echo
 echo "==> Running zero-trust PDP contract verification"
 bash scripts/host/verify_zero_trust_pdp_contract.sh
+
+echo
+echo "==> Running zero-trust boundary verification"
+bash scripts/host/verify_zero_trust_boundaries.sh
