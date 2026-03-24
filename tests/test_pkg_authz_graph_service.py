@@ -150,6 +150,10 @@ async def test_projection_service_builds_snapshot_from_snapshot_scoped_sources()
     assert result.snapshot.snapshot_id == snapshot_id
     assert any(node.ref == "principal:agent-alpha" for node in result.snapshot.nodes)
     assert any(edge.src == "role:warehouse_operator" and edge.dst == "resource:asset-42" for edge in result.snapshot.edges)
+    assert all(node.kind != "tracking_event" for node in result.snapshot.nodes)
+    assert any(node.kind.value == "tracking_event" for node in result.enrichment_snapshot.nodes)
+    assert result.stats["decision_graph_nodes_count"] == len(result.snapshot.nodes)
+    assert result.stats["enrichment_graph_nodes_count"] == len(result.enrichment_snapshot.nodes)
 
 
 @pytest.mark.asyncio
@@ -305,6 +309,59 @@ async def test_projection_service_rebuilds_snapshot_deterministically() -> None:
     assert first_result.stats["graph_nodes_count"] == second_result.stats["graph_nodes_count"]
     assert first_result.stats["graph_edges_count"] == second_result.stats["graph_edges_count"]
     assert first_compiled.permissions_by_subject == second_compiled.permissions_by_subject
+
+
+@pytest.mark.asyncio
+async def test_projection_service_splits_decision_and_enrichment_graphs() -> None:
+    snapshot_id = 11
+    facts = [
+        {
+            "id": "fact-role",
+            "snapshot_id": snapshot_id,
+            "namespace": "authz",
+            "subject": "agent-alpha",
+            "predicate": "hasRole",
+            "object_data": {"role": "warehouse_operator"},
+        },
+        {
+            "id": "fact-allow",
+            "snapshot_id": snapshot_id,
+            "namespace": "authz",
+            "subject": "role:warehouse_operator",
+            "predicate": "allowedOperation",
+            "object_data": {"operation": "PICK", "resource": "asset-42"},
+        },
+    ]
+    tracking_events = [
+        {
+            "id": "track-1",
+            "snapshot_id": snapshot_id,
+            "registration_id": "reg-1",
+            "producer_id": "producer-1",
+            "subject_id": "asset-42",
+            "subject_type": "asset",
+        }
+    ]
+
+    async def _load_tracking_events(*, snapshot_id: int):
+        return list(tracking_events) if snapshot_id == 11 else []
+
+    service = AuthzGraphProjectionService(
+        pkg_client=_FakePKGClient(facts=facts, snapshot_id=snapshot_id, version="rules@11.0.0"),
+        registrations_loader=lambda **kwargs: _empty_async_list(),
+        tracking_events_loader=_load_tracking_events,
+    )
+
+    compiled, result = await service.build_compiled_index(
+        snapshot_ref="pkg-authz@phase4",
+        snapshot_version="rules@11.0.0",
+    )
+
+    assert compiled.snapshot_version == "rules@11.0.0"
+    assert all(node.kind.value != "tracking_event" for node in result.snapshot.nodes)
+    assert any(node.kind.value == "tracking_event" for node in result.enrichment_snapshot.nodes)
+    assert result.stats["combined_graph_nodes_count"] >= result.stats["decision_graph_nodes_count"]
+    assert result.stats["combined_graph_nodes_count"] >= result.stats["enrichment_graph_nodes_count"]
 
 
 @pytest.mark.asyncio

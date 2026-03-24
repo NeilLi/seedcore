@@ -126,6 +126,7 @@ async def test_authz_graph_manager_activates_compiled_snapshot() -> None:
     assert status["healthy"] is True
     assert status["active_snapshot_version"] == "snapshot:1"
     assert status["graph_edges_count"] > 0
+    assert "enrichment_graph_nodes_count" in status
 
 
 @pytest.mark.asyncio

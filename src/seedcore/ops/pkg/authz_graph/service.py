@@ -14,7 +14,7 @@ from seedcore.ops.pkg.client import PKGClient
 
 from .compiler import AuthzGraphCompiler, CompiledAuthzIndex
 from .manifest import PolicyEdgeManifest
-from .ontology import AuthzGraphSnapshot
+from .ontology import AuthzEdge, AuthzGraphSnapshot, AuthzNode, EdgeKind, NodeKind
 from .projector import AuthzGraphProjector
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,8 @@ class AuthzProjectionSources:
 @dataclass(frozen=True)
 class AuthzProjectionResult:
     snapshot: AuthzGraphSnapshot
+    enrichment_snapshot: AuthzGraphSnapshot
+    combined_snapshot: AuthzGraphSnapshot
     sources: AuthzProjectionSources
     stats: Dict[str, Any]
 
@@ -147,7 +149,7 @@ class AuthzGraphProjectionService:
             effective_snapshot_id = snapshot.id
             effective_snapshot_version = snapshot.version
 
-        snapshot = self.projector.project_snapshot(
+        combined_snapshot = self.projector.project_snapshot(
             snapshot_ref=snapshot_ref,
             snapshot_id=effective_snapshot_id,
             snapshot_version=effective_snapshot_version,
@@ -158,6 +160,7 @@ class AuthzGraphProjectionService:
             registration_decisions=sources.registration_decisions,
             tracking_events=sources.tracking_events,
         )
+        snapshot, enrichment_snapshot = _split_graph_snapshots(combined_snapshot)
         stats = {
             "snapshot_ref": snapshot_ref,
             "snapshot_id": effective_snapshot_id,
@@ -170,10 +173,22 @@ class AuthzGraphProjectionService:
             "graph_manifests_count": len(sources.graph_manifests),
             "graph_nodes_count": len(snapshot.nodes),
             "graph_edges_count": len(snapshot.edges),
+            "decision_graph_nodes_count": len(snapshot.nodes),
+            "decision_graph_edges_count": len(snapshot.edges),
+            "enrichment_graph_nodes_count": len(enrichment_snapshot.nodes),
+            "enrichment_graph_edges_count": len(enrichment_snapshot.edges),
+            "combined_graph_nodes_count": len(combined_snapshot.nodes),
+            "combined_graph_edges_count": len(combined_snapshot.edges),
             "governed_only": governed_only,
             "fact_namespace": fact_namespace,
         }
-        return AuthzProjectionResult(snapshot=snapshot, sources=sources, stats=stats)
+        return AuthzProjectionResult(
+            snapshot=snapshot,
+            enrichment_snapshot=enrichment_snapshot,
+            combined_snapshot=combined_snapshot,
+            sources=sources,
+            stats=stats,
+        )
 
     async def build_compiled_index(self, **kwargs: Any) -> tuple[CompiledAuthzIndex, AuthzProjectionResult]:
         result = await self.build_snapshot(**kwargs)
@@ -286,3 +301,53 @@ def _result_items(result: Any) -> List[Any]:
         return [] if value is None else [value]
 
     return []
+
+
+_ENRICHMENT_NODE_KINDS = {
+    NodeKind.FACT,
+    NodeKind.TRACKING_EVENT,
+    NodeKind.DIGITAL_PASSPORT_FRAGMENT,
+    NodeKind.RECEIPT,
+    NodeKind.HANDSHAKE_INTENT,
+}
+
+_ENRICHMENT_EDGE_KINDS = {
+    EdgeKind.REQUESTED,
+}
+
+
+def _split_graph_snapshots(snapshot: AuthzGraphSnapshot) -> tuple[AuthzGraphSnapshot, AuthzGraphSnapshot]:
+    decision_nodes = [node for node in snapshot.nodes if node.kind not in _ENRICHMENT_NODE_KINDS]
+    enrichment_nodes = [node for node in snapshot.nodes if node.kind in _ENRICHMENT_NODE_KINDS]
+
+    decision_node_refs = {node.ref for node in decision_nodes}
+    enrichment_node_refs = {node.ref for node in enrichment_nodes}
+
+    decision_edges: List[AuthzEdge] = []
+    enrichment_edges: List[AuthzEdge] = []
+    for edge in snapshot.edges:
+        if edge.kind in _ENRICHMENT_EDGE_KINDS:
+            enrichment_edges.append(edge)
+            continue
+        if edge.src in decision_node_refs and edge.dst in decision_node_refs:
+            decision_edges.append(edge)
+        elif edge.src in enrichment_node_refs or edge.dst in enrichment_node_refs:
+            enrichment_edges.append(edge)
+
+    decision_snapshot = AuthzGraphSnapshot(
+        snapshot_ref=snapshot.snapshot_ref,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_version=snapshot.snapshot_version,
+        generated_at=snapshot.generated_at,
+        nodes=decision_nodes,
+        edges=decision_edges,
+    ).deduplicated()
+    enrichment_snapshot = AuthzGraphSnapshot(
+        snapshot_ref=f"{snapshot.snapshot_ref}#enrichment",
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_version=snapshot.snapshot_version,
+        generated_at=snapshot.generated_at,
+        nodes=enrichment_nodes,
+        edges=enrichment_edges,
+    ).deduplicated()
+    return decision_snapshot, enrichment_snapshot

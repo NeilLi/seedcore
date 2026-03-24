@@ -27,6 +27,10 @@ class AuthzGraphManager:
             "active_snapshot_version": None,
             "graph_nodes_count": 0,
             "graph_edges_count": 0,
+            "decision_graph_nodes_count": 0,
+            "decision_graph_edges_count": 0,
+            "enrichment_graph_nodes_count": 0,
+            "enrichment_graph_edges_count": 0,
             "error": None,
         }
 
@@ -53,14 +57,20 @@ class AuthzGraphManager:
                 "active_snapshot_version": snapshot_version,
                 "graph_nodes_count": result.stats.get("graph_nodes_count", 0),
                 "graph_edges_count": result.stats.get("graph_edges_count", 0),
+                "decision_graph_nodes_count": result.stats.get("decision_graph_nodes_count", 0),
+                "decision_graph_edges_count": result.stats.get("decision_graph_edges_count", 0),
+                "enrichment_graph_nodes_count": result.stats.get("enrichment_graph_nodes_count", 0),
+                "enrichment_graph_edges_count": result.stats.get("enrichment_graph_edges_count", 0),
                 "error": None,
             }
         logger.info(
-            "Activated authz graph snapshot %s (id=%s) with %s nodes / %s edges",
+            "Activated authz graph snapshot %s (id=%s) with %s decision nodes / %s decision edges and %s enrichment nodes / %s enrichment edges",
             snapshot_version,
             snapshot_id,
-            result.stats.get("graph_nodes_count", 0),
-            result.stats.get("graph_edges_count", 0),
+            result.stats.get("decision_graph_nodes_count", 0),
+            result.stats.get("decision_graph_edges_count", 0),
+            result.stats.get("enrichment_graph_nodes_count", 0),
+            result.stats.get("enrichment_graph_edges_count", 0),
         )
         return compiled
 
