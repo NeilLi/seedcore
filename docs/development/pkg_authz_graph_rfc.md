@@ -1,4 +1,4 @@
-# RFC: Authorization Graph for the Policy Knowledge Graph
+# RFC: SeedCore Authorization PKG as a Live Decision Graph
 
 ## Status
 
@@ -6,92 +6,142 @@ Proposed
 
 ## Summary
 
-SeedCore already has a strong policy control plane:
+The key shift in this RFC is simple:
+
+> A useful PKG is not a knowledge graph about the domain in general.
+> It is a decision graph for authorization under live context.
+
+For SeedCore, especially in provenance-heavy supply-chain workflows, the graph should answer questions like:
+
+- Is this actor allowed to perform this action on this asset now?
+- Does the actor have a valid authority path to the asset or twin?
+- Are the current custody, zone, workflow, device, telemetry, and evidence conditions sufficient?
+- If denied or quarantined, what prerequisite is missing?
+- If allowed, what governed receipt or obligation must be minted?
+
+This RFC formalizes two things:
+
+1. The baseline that already exists in SeedCore today.
+2. The enhanced direction that should guide the next iterations of the authorization graph.
+
+The baseline is a snapshot-scoped authorization graph projection compiled into an in-memory PDP index. The enhanced direction is a path-centric, explanation-first, asset-centric decision graph with a clean separation between hot authorization logic and broader knowledge enrichment.
+
+## Problem Statement
+
+SeedCore already has strong ingredients for deterministic policy control:
 
 - versioned policy snapshots in PostgreSQL
 - deterministic evaluation through OPA WASM or native rules
 - hot-swap activation through Redis
 - a synchronous `ActionIntent` Policy Decision Point (PDP)
+- an authorization graph package under `src/seedcore/ops/pkg/authz_graph/`
 
-What it does not yet have is a dedicated authorization graph that can answer path-based questions such as:
+What has been missing is a sharper design target for the graph itself.
 
-> Does this principal have a valid, snapshot-scoped path to perform this operation on this resource in this zone and network context?
+The authorization graph should not become a giant enterprise ontology. It should become the smallest, hottest, most explainable graph that can answer high-value authorization questions in bounded time.
 
-This RFC introduces an **Authorization Graph** as a projection layer inside PKG. The graph does not replace the existing snapshot system. Instead, it complements it:
+## Decision Target
 
-- PostgreSQL snapshots remain the source of truth for governed policy state.
-- The authorization graph becomes a rebuildable operational projection.
-- The synchronous PDP consumes a compiled in-memory authorization index derived from that graph.
+The graph should be designed from authorization questions, not ontology completeness.
 
-For SeedCore's initial provenance and high-trust supply-chain wedge, this graph should be explicitly asset-centric. The system should treat high-value assets and their twins not as passive records, but as active participants in each authorization handshake. In practice, that means the PDP should evaluate identity, custody, lineage, telemetry, and state-transition validity together before issuing an execution token.
+SeedCore should begin from the highest-value PDP decisions it must answer in under tens of milliseconds, for example:
 
-## Motivation
+- Can this inspection agent seal this lot now?
+- Can this warehouse operator transfer custody of this batch?
+- Can this robot arm manipulate this item in this zone?
+- Can this partner read or append provenance for this shipment?
+- Can this edge device sign evidence for this frame?
 
-The current PKG in SeedCore is primarily a policy snapshot and rule-execution system, not yet a low-latency graph-native authorization engine. The repository already contains:
+These questions imply a graph centered on:
 
-- PKG snapshot lifecycle and evaluation in `src/seedcore/ops/pkg/`
-- a synchronous `ActionIntent` authorization boundary in `src/seedcore/coordinator/core/governance.py`
-- graph foundations in Neo4j and DGL loaders
-- governed facts, tracking events, source registrations, and twin-oriented state
+- principals
+- resources and assets
+- actions
+- live context
+- policy constraints
+- evidence
 
-That makes SeedCore a good fit for a graph-backed authorization projection, but not for replacing the current PKG control plane.
+That is the backbone of a useful PKG for SeedCore.
 
-## Strategic Alignment: Asset-Centric Zero Trust
+## Baseline: What SeedCore Already Has
 
-The near-term market wedge is provenance and high-trust supply chains where trust must be enforced at runtime rather than reconstructed after the fact. SeedCore should therefore evolve toward an asset-centric zero-trust model.
+SeedCore already implements the core shape of an authorization graph runtime:
 
-This changes the primary authorization question from:
+- snapshot-scoped projection orchestration in `src/seedcore/ops/pkg/authz_graph/service.py`
+- deterministic graph projection in `src/seedcore/ops/pkg/authz_graph/projector.py`
+- an explicit graph ontology in `src/seedcore/ops/pkg/authz_graph/ontology.py`
+- a compiled in-memory authorization index in `src/seedcore/ops/pkg/authz_graph/compiler.py`
+- active snapshot lifecycle management in `src/seedcore/ops/pkg/authz_graph/manager.py`
+- runtime API endpoints documented in `docs/references/api/seedcore-api-reference.md`
 
-> Is this actor allowed to perform this class of action?
+### Baseline Properties
+
+The current baseline is already directionally correct:
+
+- PostgreSQL snapshots remain the governance source of truth.
+- The authorization graph is rebuildable and projection-based.
+- The synchronous PDP can consume a compiled read-only index.
+- Decisions can produce `allow`, `deny`, or `quarantine`.
+- Governed decision receipts and trust-gap semantics already exist.
+- The runtime can refresh the active compiled authorization graph independently of a full PKG reload.
+
+### Baseline Limits
+
+The current baseline is still more permission-edge-centric than decision-path-centric.
+
+It models:
+
+- principals, roles, assets, resources, zones, custody points, inspections, attestations, tracking events, twins, and receipts
+- edges such as `has_role`, `delegated_to`, `can`, `held_by`, `located_in`, and `governed_by`
+- permission constraints largely attached to `can` edges
+
+That is a strong starting point, but the next iterations should make authority paths, runtime context, explanation, and first-class constraints more explicit.
+
+## Design Principles
+
+### 1. Start from decisions, not encyclopedic modeling
+
+Do not model all of supply chain first. Model the highest-value authorization questions first.
+
+### 2. Model authority as paths
+
+SeedCore authorization should move from:
+
+- "principal has role"
 
 to:
 
-> Is this actor allowed to perform this specific state transition on this specific asset, with an intact custody and evidence chain, under the currently governed context?
+- principal is delegated by organization
+- organization is approved for facility
+- facility controls zone
+- asset is in zone
+- action requires certification, workflow state, or trust state
+- device is bound to principal and currently attested
+- policy allows the transition only if live conditions hold
 
-This is not plain RBAC. It is closer to attribute-based and lineage-based access control, where the decision depends on:
+The PDP should evaluate whether a valid path exists from principal to authority to resource to action under the current governed context.
 
-- actor identity and role
-- asset identity and twin state
-- current and prior custodians
-- route, zone, and facility context
-- telemetry and inspection freshness
-- authoritative attestations and registrations
+### 3. Separate stable structure from hot runtime state
 
-For the supply-chain wedge, each high-value batch should behave like a sovereign root in the graph with a hardened, traversable history. The PDP should be able to prove that the requested action preserves the asset's governed trust chain before issuing any new execution token.
+Identity and domain structure change slowly. Telemetry, attestation, custody, workflow stage, and network state change quickly. These should not be modeled as if they have the same lifecycle.
 
-## Design Goals
+### 4. Keep the hot path deterministic
 
-1. Preserve the synchronous, stateless PDP contract.
-2. Keep control decisions deterministic and snapshot-scoped.
-3. Make authorization relationships explicit and traversable.
-4. Keep AI and GraphRAG outside the CONTROL hot path.
-5. Allow event-driven projection updates without making the PDP depend on live database traversals.
-6. Treat asset state transitions, custody continuity, and lineage integrity as first-class authorization concerns.
-7. Produce governed decision artifacts that can be reused as regulator-facing or consumer-facing proof.
+No live LLM calls, GraphRAG lookups, or probabilistic scoring should decide the final `allow` or `deny` outcome in the CONTROL path.
 
-## Non-Goals
+### 5. Optimize for explanation, not only decision
 
-- No live LLM, GraphRAG, or anomaly-model calls in the CONTROL PDP path.
-- No direct authorization from unreviewed cognitive outputs.
-- No replacement of the current Postgres snapshot catalog or OPA/native evaluator.
-- No requirement that every PDP request hit Neo4j or Kafka.
+The graph is most valuable when it can explain:
 
-## Current State
+- which rule matched
+- which authority path was used
+- which constraints were evaluated
+- which prerequisite was missing
+- which obligations or receipts were created
 
-Today, SeedCore already provides:
+## Target Architecture
 
-- active policy snapshots and hot-swap management
-- temporal PKG facts and governed fact persistence
-- source registration and tracking-event projections
-- a synchronous `ActionIntent -> PolicyDecision` function
-- Ray as the distributed runtime substrate
-- Neo4j-backed graph storage helpers
-
-This means the missing piece is not orchestration. The missing piece is a coherent authorization graph contract that sits between governed domain state and the synchronous PDP.
-
-## Proposed Architecture
-
-The PKG should evolve into three related but distinct planes.
+The PKG should evolve into four related planes.
 
 ### 1. Policy Plane
 
@@ -100,339 +150,492 @@ Authoritative policy remains in the current snapshot system:
 - `pkg_snapshots`
 - `pkg_policy_rules`
 - `pkg_facts`
-- OPA/native rule artifacts
+- OPA or native rule artifacts
 
-This plane defines what policy means and which snapshot is active.
+This is the governance root.
 
-### 2. Authorization Graph Plane
+### 2. Decision Graph Plane
 
-Introduce a rebuildable graph projection that stores authorization-relevant relationships:
+This is the hot, authorization-focused graph used to answer live questions. It should contain only entities and relationships needed for deterministic decisions.
 
-- principals
-- role profiles
-- assets, twins, resources, and zones
-- networks
-- custody points and transfer paths
-- source registrations and tracking evidence
-- attestations, telemetry, and inspections
-- twins and delegated authorities
-- snapshot-scoped permission edges
+Examples:
 
-This graph is deterministic and event-driven. It is not the source of truth. It is a projection of authoritative state.
+- principals and organizations
+- devices and certifications
+- assets, lots, batches, shipments, twins
+- facilities, zones, and workflow stages
+- custody, attestation, telemetry, and inspection state
+- policy rules, constraints, obligations, and evidence references
 
 ### 3. Compiled PDP Plane
 
-For the synchronous hot path, the active authorization graph snapshot is compiled into an immutable in-memory index:
+The synchronous PDP should read an immutable compiled index derived from the active decision graph snapshot.
 
-- adjacency sets
-- role membership closure
-- permission rules by principal or role
-- lineage and custody continuity summaries
-- zone and network constraints
-- asset state and transferability flags
-- attestation and inspection validity windows
-- validity windows
+Examples:
 
-The PDP reads this compiled index directly in-process.
+- subject closure for role and delegation traversal
+- permission and deny indexes
+- resource-to-asset and asset-to-zone indexes
+- current custodian and transferability summaries
+- freshness windows for telemetry and inspections
+- compiled transition requirements
 
-## Why This Split
+### 4. Enrichment And Advisory Plane
 
-This split preserves the current SeedCore contract:
+This is the broader graph for analytics and learning, not the synchronous authorization hot path.
 
-- the graph database is good at relationship storage and projection
-- the compiled index is good at single-digit-millisecond reads
-- PostgreSQL snapshots remain the governance root
-- governed receipts can be minted from deterministic PDP state without requiring a second evaluation path
+Examples:
 
-Without this split, the system risks creating two competing sources of policy truth or pushing graph latency into the synchronous PDP.
+- historical provenance expansion
+- partner relationship analytics
+- anomaly markers
+- exception clustering
+- document-to-policy mapping
+- natural-language explanation helpers
 
-## Phase Plan
+## Decision Graph Versus Enrichment Graph
 
-### Phase 1: Ontology, Projection, Compilation
+Architecturally, SeedCore should treat the PKG as two graphs, not one.
 
-Add a new package:
+### Decision Graph
 
-- `src/seedcore/ops/pkg/authz_graph/`
+Small, hot, latency-sensitive, directly used by the PDP.
 
-Phase 1 contains:
+It should contain only what is required to answer:
 
-- a strict ontology for nodes, edges, and graph snapshots
-- deterministic projectors for current SeedCore models
-- a compiler that produces a read-only permission index
-- initial decision receipt schemas for allowed and quarantined actions
-- unit tests
+> Given this principal, asset, device, place, workflow step, and current state, is this action allowed now?
 
-This phase does not yet wire the compiler into the PDP.
+### Enrichment Graph
 
-### Phase 2: Snapshot-Scoped Projection Service
+Richer, broader, and slower-moving.
 
-Add a projection service that builds graph snapshots from:
+It should support:
 
-- governed facts
-- source registrations
-- tracking events
-- twin snapshots
-- authorization-relevant policy metadata
+- analytics
+- onboarding new policies
+- anomaly detection
+- natural-language policy assistance
+- partner and provenance exploration
+- explanation views that are not part of the synchronous decision boundary
 
-The output should be keyed by active snapshot version and be rebuildable.
+This separation matters because the PDP should not traverse a huge and noisy graph if deterministic latency is a product requirement.
 
-### Phase 3: PDP Integration
+## Layered Ontology
 
-Call the compiled authorization index from `evaluate_intent(...)` after cryptographic and freshness validation, but before `ExecutionToken` issuance.
+The ontology should be designed in four layers.
 
-### Phase 4: Event-Driven Updates
+### A. Core Identity And Authority Layer
 
-Projection updates should follow the existing event-stream-first direction in SeedCore:
+Changes slowly.
 
-- tasks and multimodal ingestion
-- tracking events
-- governed fact persistence
-- snapshot hot-swap events
+Examples:
 
-Kafka or outbox-style event transport may drive the projection workers, but the active PDP must only read a local compiled snapshot.
+- `Org`
+- `HumanPrincipal`
+- `AgentPrincipal`
+- `ServicePrincipal`
+- `DevicePrincipal`
+- `Facility`
+- `Zone`
+- `ActionType`
+- `Certification`
+- `PolicyTemplate`
 
-### Phase 5: Distributed Warm Caches
+### B. Supply-Chain Domain Layer
 
-Use Ray actors to:
+Defines what the business governs.
 
-- build compiled snapshots
-- shard hot subgraphs
-- prewarm policy projections near execution regions
+Examples:
 
-Ray should improve build and distribution, not become a hard dependency on every PDP request.
+- `Product`
+- `Batch`
+- `Lot`
+- `Shipment`
+- `Container`
+- `Twin`
+- `InspectionEvent`
+- `CustodyState`
+- `ProvenanceRecord`
+- `ComplianceProgram`
+- `HandlingConstraint`
 
-## Ontology
+### C. Runtime Context Layer
 
-The initial ontology should support the following entity classes.
+Changes frequently and must remain compact and easy to update.
 
-### Node Kinds
+Examples:
 
-- `principal`
-- `role_profile`
-- `asset`
-- `asset_batch`
-- `resource`
-- `zone`
-- `network_segment`
-- `custody_point`
-- `registration`
-- `attestation`
-- `inspection`
-- `sensor_observation`
-- `handshake_intent`
-- `digital_passport_fragment`
-- `tracking_event`
-- `fact`
-- `policy_snapshot`
-- `twin`
-- `receipt`
+- current location
+- current custodian
+- active device attestation
+- temperature or humidity window
+- network trust state
+- current workflow stage
+- shift window
+- edge node health
 
-### Edge Kinds
+### D. Evidence Layer
 
-- `has_role`
-- `delegated_to`
-- `can`
-- `held_by`
-- `transferred_from`
-- `attested_by`
-- `observed_in`
-- `sealed_with`
-- `located_in`
-- `requested`
-- `backed_by`
-- `recorded_by`
-- `governed_by`
+Binds decisions to proof.
 
-### Permission Semantics
+Examples:
 
-Phase 1 treats `can` edges as deterministic permission edges with:
+- `ExecutionToken`
+- `PolicyDecision`
+- `DecisionReceipt`
+- `EvidenceBundle`
+- `SignatureProof`
+- `TelemetrySnapshot`
+- `CustodyEvent`
+- `ReplayReceipt`
 
-- `operation`
-- `effect`
-- `constraints`
-- `valid_from`
-- `valid_to`
-- provenance metadata
+## Baseline V1 Contract Versus Enhanced V2 Direction
 
-For the supply-chain wedge, the compiler should also support asset-centric decision predicates that are derived deterministically from projected state, including:
+The current implementation should be treated as Baseline V1. The next modeling direction should be treated as Enhanced V2.
 
-- current custodian continuity
-- asset transferability and restricted-state flags
-- route or zone compliance
-- inspection freshness
-- telemetry coverage windows
-- attestation validity
+| Concern | Baseline V1 | Enhanced V2 Direction |
+| :--- | :--- | :--- |
+| Authority modeling | role, delegation, and `can` edges | explicit principal-to-authority-to-resource-to-action paths |
+| Resource model | generic `asset` and `resource` nodes | richer supply-chain resource types such as lot, batch, shipment, container, twin |
+| Runtime context | constraints mostly attached to permission edges | runtime state elevated into graph-visible context nodes and edges |
+| Evidence | receipts and trust gaps exist | explicit evidence bundles, obligations, proof links, and decision artifacts |
+| Explanation | reason codes and receipts | full path-of-authority, constraints checked, missing prerequisite, and minted obligations |
+| Graph scope | one operational authz graph | split decision graph and enrichment graph |
 
-These predicates should remain deterministic compiled facts. Advisory systems may contribute evidence-quality signals, but they must not become a probabilistic allow primitive in the CONTROL path.
+Enhanced V2 should build on V1 rather than replace it. The current compiler and projector remain the foundation.
 
-## Projection Inputs
+## Practical Schema Direction For SeedCore
 
-The first deterministic projection inputs should be:
+The enhanced schema should organize around five families.
 
-- `ActionIntent`
-- `Fact`
-- `SourceRegistration`
-- `TrackingEvent`
-- `Twin` or equivalent digital asset state
-- inspection and attestation records when available
+### Principal Side
 
-Supported fact predicates in Phase 1:
+Nodes:
 
-- `hasRole`
-- `delegatedTo`
-- `allowedOperation`
-- `locatedInZone`
-- `heldBy`
-- `transferredFrom`
-- `attestedBy`
-- `observedIn`
-- `sealedWith`
+- `(:Org)`
+- `(:HumanPrincipal)`
+- `(:AgentPrincipal)`
+- `(:ServicePrincipal)`
+- `(:DevicePrincipal)`
 
-These predicates are sufficient to stand up a coherent first compiler and test path.
+Edges:
 
-## Decision Semantics
+- `[:MEMBER_OF]`
+- `[:OPERATES]`
+- `[:BOUND_TO_DEVICE]`
+- `[:DELEGATED_BY]`
+- `[:CERTIFIED_FOR]`
 
-The PDP should move toward asset-centric state-transition decisions rather than coarse subject-action checks. A principal should not be allowed to move an asset merely because they have a role label. They should be allowed only when the compiled graph proves that:
+### Resource Side
 
-- they are an authorized current or delegated custodian
-- the asset is in a transferable state
-- the intended transfer preserves custody and policy invariants
-- required telemetry, inspection, and attestation conditions are satisfied for the current snapshot
+Nodes:
 
-### Trust Gaps and Quarantine
+- `(:Product)`
+- `(:Lot)`
+- `(:Batch)`
+- `(:Shipment)`
+- `(:Twin)`
+- `(:EvidenceBundle)`
+- `(:Facility)`
+- `(:Zone)`
 
-Supply-chain operations often contain incomplete or stale evidence. The compiler should therefore model trust gaps explicitly instead of collapsing all missing context into a generic deny.
+Edges:
 
-The PDP should support three deterministic outcomes:
+- `[:PART_OF]`
+- `[:LOCATED_IN]`
+- `[:REPRESENTED_BY]`
+- `[:HAS_EVIDENCE]`
+- `[:UNDER_CUSTODY_OF]`
 
-- `allow`: the transition is permitted and an execution token may be issued
-- `deny`: the transition violates governed policy and no execution token is issued
-- `quarantine`: the transition is operationally tolerated but the asset is moved into a restricted governed state pending remediation
+### Policy Side
 
-A quarantine outcome is appropriate when the trust chain is incomplete but not yet contradictory, for example:
+Nodes:
 
-- telemetry coverage is stale
-- an inspection window has expired
-- an expected custody checkpoint is missing
-- an evidence source is temporarily degraded
+- `(:ActionType)`
+- `(:PolicyRule)`
+- `(:Constraint)`
+- `(:Obligation)`
+- `(:ComplianceProgram)`
 
-Quarantine must remain a governed outcome, not an informal side effect. If supported by the surrounding workflow, it should mint a restricted-scope token and mark the twin or asset state as restricted until a remediation event resolves the gap.
+Edges:
 
-## Governed Receipt and Mutable Digital Passport
+- `[:CAN_ATTEMPT]`
+- `[:GOVERNED_BY]`
+- `[:REQUIRES]`
+- `[:SATISFIED_BY]`
+- `[:DENIES_IF]`
+- `[:OBLIGATES]`
 
-For this wedge, the decision artifact is a product surface, not just an internal audit log. Every `allow` decision should mint a signed governed receipt payload. Internally, this can evolve toward a Mutable Digital Passport (MDP) assembled from successive governed receipt fragments over the asset lifecycle.
+### Runtime Side
 
-The governed receipt should bind:
+Nodes:
 
-- a stable decision hash
-- the policy snapshot version
-- the principal and asset or twin identifiers
-- the approved operation or state transition
-- the compiled decision basis
-- provenance or custody proof references
-- supporting evidence references
+- `(:ExecutionContext)`
+- `(:TelemetryState)`
+- `(:NetworkState)`
+- `(:AttestationState)`
+- `(:WorkflowStage)`
+
+Edges:
+
+- `[:IN_CONTEXT]`
+- `[:HAS_STATE]`
+- `[:AT_STAGE]`
+- `[:AT_TIME]`
+
+### Evidence Side
+
+Nodes:
+
+- `(:DecisionReceipt)`
+- `(:ExecutionToken)`
+- `(:SignatureProof)`
+- `(:CustodyEvent)`
+
+Edges:
+
+- `[:ISSUED_FOR]`
+- `[:SIGNED_BY]`
+- `[:RECORDED_AS]`
+- `[:PROVES]`
+
+These schema families are logical targets. They can be materialized as new labels and edge kinds, or as specializations layered over the current `NodeKind` and `EdgeKind` contract.
+
+## Constraint Modeling Strategy
+
+Constraint handling should be staged.
+
+### Baseline V1
+
+Keep decision-critical constraints on compiled permission structures so the current compiler stays simple and deterministic.
+
+Examples:
+
+- zone restrictions
+- network restrictions
+- custody point requirements
+- telemetry freshness windows
+- inspection freshness windows
+- attestation and seal requirements
+- transferability requirements
+
+### Enhanced V2
+
+Promote the highest-value constraints into first-class graph structure where explanation and graph querying benefit from it.
+
+Examples:
+
+- allowed temperature band
+- allowed geography
+- inspection-before-transfer
+- two-party approval
+- certified-device-only sealing
+- same-facility-only transfer unless export release exists
+- deny while custody dispute is open
+
+Decision-relevant constraints should be graph-visible. Richer raw payloads can still live in documents.
+
+## Evaluation Semantics
+
+The PDP should increasingly answer state-transition questions rather than coarse subject-action checks.
+
+The authorization question becomes:
+
+> Can this principal, possibly bound to a device and acting under delegated authority, perform this specific action on this specific asset or twin under the current governed context?
+
+The evaluation flow should be:
+
+1. Receive `ActionIntent` with principal, action, asset or resource, and live context.
+2. Resolve the active compiled authorization graph snapshot.
+3. Resolve principal closure across role, delegation, and authority path relationships.
+4. Resolve the target asset, twin, batch, shipment, or resource neighborhood.
+5. Evaluate deterministic permission or deny matches.
+6. Evaluate live constraints such as zone, workflow stage, custody continuity, telemetry freshness, inspection freshness, attestation, device binding, and network state.
+7. Return `allow`, `deny`, or `quarantine`.
+8. Mint a governed receipt and any required obligations.
+9. Return an explanation payload suitable for operator, auditor, or downstream replay use.
+
+## Decision Outcomes
+
+The decision engine should support three deterministic outcomes:
+
+- `allow`
+- `deny`
+- `quarantine`
+
+`quarantine` should remain a governed outcome, not an informal side effect. It is appropriate when the trust chain is incomplete but not contradictory, for example:
+
+- stale telemetry
+- expired inspection window
+- missing expected custody checkpoint
+- temporary evidence-source degradation
+
+If the surrounding workflow supports it, a quarantine result may mint a restricted-scope token and mark the asset or twin as restricted until remediation completes.
+
+## Explanation Contract
+
+A useful authorization graph should explain every result.
+
+At minimum, the PDP response should be able to return:
+
+- disposition
+- matched policy rule or deny condition
+- authority path used
+- evaluated constraints
+- missing prerequisite when denied
+- trust gaps when quarantined
+- evidence obligations or governed receipt references created
+
+Example explanation:
+
+> Denied because `AgentPrincipal quality-twin-03` is bound to `Device edge-node-7`, but `Device edge-node-7` lacks valid calibration certification for `LotClass pharma-cold-chain`, required by `PolicyRule inspect_cold_chain_v4`.
+
+## Governed Receipts And Digital Passport Fragments
+
+SeedCore should continue treating decision artifacts as product surfaces, not just internal logs.
+
+Every `allow` decision should mint a signed governed receipt that binds:
+
+- decision hash
+- policy snapshot version
+- principal and asset identifiers
+- approved operation or transition
+- compiled decision basis
+- custody and evidence references
 - timestamps, validity, and signer metadata
 
-The receipt may also include advisory fields such as an evidence quality score, provided those fields are clearly marked as advisory and are not the sole determinant of an allow decision.
+Successive receipt fragments can support a Mutable Digital Passport style view for downstream consumer, auditor, or regulator-facing trust surfaces without changing CONTROL-path semantics.
 
-The MDP concept fits naturally with the projection model:
+## Deterministic Plane Versus Advisory Plane
 
-- each allowed transition appends a new governed passport fragment
-- fragments remain traceable to authoritative facts, events, and attestations
-- consumer or regulator views can be derived from the same governed receipt chain without changing CONTROL-path semantics
+SeedCore should preserve a hard boundary:
 
-## PDP Guardrails
+### Deterministic Plane
 
-The synchronous PDP must remain bounded:
+- curated ontology
+- signed or governed policy updates
+- versioned graph mutations
+- validated edge types
+- explicit revocation logic
+- compiled snapshot-scoped decision indexes
 
-- no network calls
-- no live database traversals
-- no LLM calls
-- no GraphRAG calls
-- no probabilistic scoring as the final allow signal
+### Advisory Plane
 
-GraphRAG and neuro-symbolic systems may write advisory facts or risk markers into governed storage, but those must still pass through deterministic policy compilation before they influence authorization.
+- candidate policy extraction from documents
+- anomaly markers
+- natural-language regulation mapping
+- topology analysis
+- explanation summarization
 
-## Storage Recommendation
+AI may advise. Governance decides.
 
-Near-term recommendation:
+Advisory systems must not directly write trusted allow or deny semantics into the decision graph without a governed promotion workflow.
+
+## Runtime And Storage Recommendations
+
+### Near Term
 
 - keep PostgreSQL as the policy source of truth
-- use Neo4j as the first operational authorization graph because the repository already contains Neo4j integration
-- compile the active graph snapshot into in-process indexes for the PDP
+- use the existing authorization graph projection contract as the operational decision graph
+- continue using Neo4j as the first graph-backed iteration path because the repository already has Neo4j foundations
+- compile active graph snapshots into immutable in-process PDP indexes
 
-Longer-term option:
+### Scale Layer
 
-- if hot-path graph mirror latency becomes a bottleneck, add a dedicated low-latency mirror such as Memgraph behind the same projection contract
+Use Ray above the graph, not instead of the graph.
 
-## Risks
+Ray actors are a good fit for:
 
-- accidentally creating a second policy source of truth
-- allowing graph projection drift across snapshot versions
-- leaking advisory AI outputs into CONTROL authorization
-- letting direct graph queries creep into the PDP hot path
-- overfitting ontology and compiler behavior to one vertical before the core projection contract stabilizes
-- conflating customer-facing passport rendering with the deterministic receipt contract that backs it
+- compiled snapshot builds
+- regional or tenant-local cache warming
+- hot subgraph shard caches
+- facility or trade-lane scoped decision neighborhoods
 
-## Canonical Wedge Scenarios
+The stateless PDP should ask a local or near-local compiled cache first and only fall back to graph refresh or rebuild workflows outside the synchronous request path.
 
-The following scenarios help anchor the architecture in high-trust supply-chain workflows without changing the core control-plane principles.
+### Longer Term
 
-### A. Harvest-to-Vault Handshake
+Benchmark alternative graph stores only after the decision path is stable and measurable. If streaming updates or traversal speed become dominant bottlenecks, evaluate whether Memgraph or a multimodel store adds real value behind the same projection contract.
 
-Flow:
+## What To Avoid
 
-- a harvester scans and mints a new batch in the field
-- the system binds the scan, the actor identity, the location, and the anti-counterfeit or seal identifier into a single handshake intent
+### Trap 1: Giant Universal Ontology
 
-PDP expectations:
+Do not try to model all of supply chain before proving the decision wedge.
 
-- validate zone membership, permit status, and registration freshness
-- validate that the batch or twin is not already active under a conflicting seal
-- issue an authorization result that mints the governed asset state
+### Trap 2: RBAC In Graph Clothing
 
-### B. Anomalous Diversion Block
+If the graph is only users, roles, and permissions with prettier edges, SeedCore is not using graph structure to solve the right problem.
 
-Flow:
+### Trap 3: Historical Analytics In The Hot Path
 
-- a logistics actor attempts to receive or transfer a shipment at an unexpected facility
+The decision graph must stay compact, deterministic, and bounded.
 
-PDP expectations:
+### Trap 4: AI Owning Final Authorization Semantics
 
-- validate the compiled custody chain and route or zone constraints
-- allow advisory systems to contribute governed risk markers through prior projection, but not through live calls
-- return a hard deny when the transition breaks lineage or route policy
+LLMs and GraphRAG can propose, summarize, and detect. They should not own final allow or deny semantics in CONTROL.
 
-### C. Consumer Truth Reveal
+## Phased Recommendation
 
-Flow:
+### Phase 0: Baseline Hardening
 
-- a downstream consumer or inspector scans a product and requests a bounded authenticity view
+Stabilize the current implementation:
 
-PDP expectations:
+- snapshot alignment
+- projection rebuild determinism
+- compiled index correctness
+- staging rollout and refresh workflows
+- governed receipt coverage
 
-- validate the single-use handshake intent and any presentation constraints
-- verify custody continuity and the governed receipt chain
-- return an allow result with a derived, presentation-safe receipt or passport view
+### Phase 1: Decision-Centric Ontology
+
+Anchor the graph to concrete SeedCore authorization questions and identify the minimum domain entities required for the first wedge.
+
+### Phase 2: Authority Path Expansion
+
+Add explicit organization, facility, zone, device, certification, and delegated-authority path modeling.
+
+### Phase 3: First-Class Constraints And Explanation
+
+Promote the highest-value constraints into graph-visible structure and return explanation payloads that expose matched path, checked constraints, and missing prerequisites.
+
+### Phase 4: Decision Graph Versus Enrichment Graph Split
+
+Keep the hot decision graph compact while introducing a broader enrichment graph for analytics, policy discovery, and explanation support.
+
+### Phase 5: Distributed Cache And Shard Layer
+
+Use Ray actors to distribute hot compiled decision neighborhoods by region, tenant, facility, trade lane, or product family.
 
 ## Acceptance Criteria
 
-Phase 1 is successful when:
+This RFC is successful when the authorization graph can reliably answer five questions:
 
-1. authorization-relevant objects can be projected into a strict graph ontology
-2. a compiled permission index can answer deterministic allow/deny checks
-3. asset-centric lineage and custody constraints can be represented without live graph traversal in the PDP
-4. governed receipt payloads can be minted from compiled decision state
-5. quarantine or trust-gap outcomes are modeled explicitly if the workflow enables them
-6. the implementation is snapshot-scoped and test-covered
-7. no changes are required to the current synchronous PDP contract
+1. Authority: who is allowed to do what
+2. Scope: on which exact asset, twin, or shipment
+3. Condition: under what live context
+4. Obligation: what evidence or follow-up is required
+5. Explanation: why the answer was allow, deny, or quarantine
+
+Phase success should also require:
+
+1. snapshot-scoped deterministic behavior
+2. no live database traversals in the synchronous PDP path
+3. no live AI calls in the CONTROL path
+4. a governed receipt or equivalent proof artifact for successful decisions
+5. bounded latency suitable for the synchronous PDP
 
 ## Open Questions
 
-- Which snapshot metadata should mint `can` edges versus fact-derived permissions?
-- How should deny edges be represented and prioritized relative to allow edges?
-- Which twin relationships should be elevated into the authorization graph first?
-- When should region-local Ray caches be introduced versus keeping a single in-process compiled snapshot?
-- Which asset and custody concepts should be first-class in Phase 1 versus represented as resource specializations?
-- Should governed receipt fragments be stored directly in PKG tables, graph projections, or both?
-- What is the minimal deterministic representation of lineage proof for a governed receipt: graph path, Merkle proof, or a hybrid?
+- Which supply-chain entities should become first-class in the first product wedge: lot, batch, shipment, container, device, facility, or workflow stage?
+- Which constraints should graduate from edge attributes into explicit graph nodes first?
+- How should obligations be represented in the compiled index?
+- What is the minimal explanation payload that is still operator- and regulator-useful?
+- When should Ray-based shard caches be introduced versus keeping a single active compiled snapshot per environment?
+- Which parts of the broader enrichment graph should remain completely outside the governed projection pipeline?
+
+## Related Documents
+
+- `docs/development/pdp_authz_graph_staging_rollout.md`
+- `docs/development/policy_gate_matrix.md`
+- `docs/references/api/seedcore-api-reference.md`
