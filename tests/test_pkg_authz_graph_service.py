@@ -214,6 +214,100 @@ async def test_projection_service_resolves_snapshot_version_and_compiles_index()
 
 
 @pytest.mark.asyncio
+async def test_projection_service_rebuilds_snapshot_deterministically() -> None:
+    snapshot_id = 9
+    facts = [
+        {
+            "id": "fact-role",
+            "snapshot_id": snapshot_id,
+            "namespace": "authz",
+            "subject": "agent-alpha",
+            "predicate": "hasRole",
+            "object_data": {"role": "warehouse_operator"},
+            "valid_from": _iso(datetime.now(timezone.utc) - timedelta(minutes=5)),
+            "valid_to": _iso(datetime.now(timezone.utc) + timedelta(minutes=5)),
+        },
+        {
+            "id": "fact-allow",
+            "snapshot_id": snapshot_id,
+            "namespace": "authz",
+            "subject": "role:warehouse_operator",
+            "predicate": "allowedOperation",
+            "object_data": {
+                "operation": "PICK",
+                "resource": "asset-42",
+                "zones": ["cold-room"],
+                "networks": ["plant-a"],
+            },
+            "valid_from": _iso(datetime.now(timezone.utc) - timedelta(minutes=5)),
+            "valid_to": _iso(datetime.now(timezone.utc) + timedelta(minutes=5)),
+        },
+        {
+            "id": "fact-zone",
+            "snapshot_id": snapshot_id,
+            "namespace": "authz",
+            "subject": "asset-42",
+            "predicate": "locatedInZone",
+            "object_data": {"zone": "cold-room"},
+        },
+    ]
+
+    service = AuthzGraphProjectionService(
+        pkg_client=_FakePKGClient(facts=facts, snapshot_id=snapshot_id, version="rules@9.0.0"),
+        registrations_loader=lambda **kwargs: _empty_async_list(),
+        tracking_events_loader=lambda **kwargs: _empty_async_list(),
+    )
+
+    first = await service.build_compiled_index(
+        snapshot_ref="pkg-authz@phase0",
+        snapshot_version="rules@9.0.0",
+    )
+    second = await service.build_compiled_index(
+        snapshot_ref="pkg-authz@phase0",
+        snapshot_version="rules@9.0.0",
+    )
+    first_compiled, first_result = first
+    second_compiled, second_result = second
+
+    first_nodes = sorted(
+        (node.kind.value, node.ref, node.display_name, tuple(sorted(node.attributes.items())))
+        for node in first_result.snapshot.nodes
+    )
+    second_nodes = sorted(
+        (node.kind.value, node.ref, node.display_name, tuple(sorted(node.attributes.items())))
+        for node in second_result.snapshot.nodes
+    )
+    first_edges = sorted(
+        (
+            edge.kind.value,
+            edge.src,
+            edge.dst,
+            edge.operation,
+            edge.effect.value,
+            tuple(sorted(edge.constraints.items())),
+        )
+        for edge in first_result.snapshot.edges
+    )
+    second_edges = sorted(
+        (
+            edge.kind.value,
+            edge.src,
+            edge.dst,
+            edge.operation,
+            edge.effect.value,
+            tuple(sorted(edge.constraints.items())),
+        )
+        for edge in second_result.snapshot.edges
+    )
+
+    assert first_nodes == second_nodes
+    assert first_edges == second_edges
+    assert first_result.stats["graph_nodes_count"] == second_result.stats["graph_nodes_count"]
+    assert first_result.stats["graph_edges_count"] == second_result.stats["graph_edges_count"]
+    assert first_compiled.permissions_by_subject == second_compiled.permissions_by_subject
+
+
+@pytest.mark.asyncio
 async def test_projection_service_projects_snapshot_graph_manifests() -> None:
     snapshot_id = 9
     graph_manifests = [
