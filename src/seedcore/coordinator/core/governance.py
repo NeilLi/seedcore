@@ -1536,6 +1536,9 @@ def _evaluate_compiled_authz_graph_with_ray(
             "operation": _compiled_authz_operation(action_intent),
             "resource_ref": _compiled_authz_resource_ref(action_intent),
             "asset_ref": _compiled_authz_asset_ref(action_intent),
+            "product_ref": _compiled_authz_product_ref(action_intent),
+            "lot_ref": _compiled_authz_lot_ref(action_intent),
+            "facility_ref": _compiled_authz_facility_ref(action_intent),
             "source_registration_ref": _compiled_authz_source_registration_ref(action_intent),
             "registration_decision_ref": _compiled_authz_registration_decision_ref(action_intent),
             "workflow_stage_ref": _compiled_authz_workflow_stage_ref(action_intent),
@@ -1544,6 +1547,7 @@ def _evaluate_compiled_authz_graph_with_ray(
             "custody_point_ref": _compiled_authz_custody_point_ref(action_intent),
             "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
             "require_approved_source_registration": _requires_approved_source_registration(action_intent),
+            "shard_key": _compiled_authz_shard_key(action_intent),
             "at": action_intent.timestamp,
             "break_glass": break_glass,
         }
@@ -1552,10 +1556,14 @@ def _evaluate_compiled_authz_graph_with_ray(
             "principal_ref": _compiled_authz_principal_ref(action_intent),
             "operation": _compiled_authz_operation(action_intent),
             "resource_ref": _compiled_authz_resource_ref(action_intent),
+            "product_ref": _compiled_authz_product_ref(action_intent),
+            "lot_ref": _compiled_authz_lot_ref(action_intent),
+            "facility_ref": _compiled_authz_facility_ref(action_intent),
             "zone_ref": _compiled_authz_zone_ref(action_intent),
             "network_ref": _compiled_authz_network_ref(action_intent),
             "workflow_stage_ref": _compiled_authz_workflow_stage_ref(action_intent),
             "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
+            "shard_key": _compiled_authz_shard_key(action_intent),
             "at": action_intent.timestamp,
             "break_glass": break_glass,
         }
@@ -1724,6 +1732,42 @@ def _compiled_authz_zone_ref(action_intent: ActionIntent) -> str | None:
 def _compiled_authz_network_ref(action_intent: ActionIntent) -> str | None:
     network = (action_intent.environment.origin_network or "").strip()
     return f"network:{network}" if network else None
+
+
+def _compiled_authz_product_ref(action_intent: ActionIntent) -> str | None:
+    product_id = (action_intent.resource.product_id or "").strip()
+    return f"product:{product_id}" if product_id else None
+
+
+def _compiled_authz_lot_ref(action_intent: ActionIntent) -> str | None:
+    lot_id = (action_intent.resource.lot_id or "").strip()
+    return f"asset_batch:{lot_id}" if lot_id else None
+
+
+def _compiled_authz_facility_ref(action_intent: ActionIntent) -> str | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
+    for key in ("facility_id", "warehouse_id"):
+        value = parameters.get(key)
+        if value is not None and str(value).strip():
+            return f"facility:{str(value).strip()}"
+    custody_point_ref = _compiled_authz_custody_point_ref(action_intent)
+    if custody_point_ref and custody_point_ref.startswith("custody_point:"):
+        return f"facility:{custody_point_ref.removeprefix('custody_point:')}"
+    return None
+
+
+def _compiled_authz_shard_key(action_intent: ActionIntent) -> str:
+    for value in (
+        _compiled_authz_facility_ref(action_intent),
+        _compiled_authz_custody_point_ref(action_intent),
+        _compiled_authz_zone_ref(action_intent),
+        _compiled_authz_product_ref(action_intent),
+        _compiled_authz_lot_ref(action_intent),
+        _compiled_authz_network_ref(action_intent),
+    ):
+        if value is not None and str(value).strip():
+            return str(value)
+    return "global"
 
 
 def _compiled_authz_source_registration_ref(action_intent: ActionIntent) -> str | None:

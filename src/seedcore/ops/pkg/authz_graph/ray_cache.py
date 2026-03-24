@@ -112,8 +112,32 @@ def _ray_address() -> str:
     return (os.getenv("RAY_ADDRESS") or "auto").strip() or "auto"
 
 
-def _authz_graph_cache_actor_name() -> str:
-    return (os.getenv("SEEDCORE_AUTHZ_RAY_CACHE_ACTOR_NAME") or DEFAULT_AUTHZ_GRAPH_CACHE_ACTOR_NAME).strip() or DEFAULT_AUTHZ_GRAPH_CACHE_ACTOR_NAME
+def _sanitize_shard_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "global"
+    sanitized = []
+    for char in text:
+        if char.isalnum():
+            sanitized.append(char)
+        else:
+            sanitized.append("_")
+    collapsed = "".join(sanitized).strip("_")
+    return collapsed or "global"
+
+
+def _authz_graph_cache_actor_name(shard_key: str | None = None) -> str:
+    base = (os.getenv("SEEDCORE_AUTHZ_RAY_CACHE_ACTOR_NAME") or DEFAULT_AUTHZ_GRAPH_CACHE_ACTOR_NAME).strip() or DEFAULT_AUTHZ_GRAPH_CACHE_ACTOR_NAME
+    suffix = _sanitize_shard_key(shard_key)
+    return base if suffix == "global" else f"{base}__{suffix}"
+
+
+def _payload_shard_key(payload: Mapping[str, Any]) -> str:
+    for key in ("shard_key", "facility_ref", "custody_point_ref", "zone_ref", "product_ref", "lot_ref", "network_ref"):
+        value = payload.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return "global"
 
 
 def _ensure_ray_initialized() -> bool:
@@ -131,10 +155,10 @@ def _ensure_ray_initialized() -> bool:
         return False
 
 
-def _get_or_create_authz_graph_cache_actor():
+def _get_or_create_authz_graph_cache_actor(*, shard_key: str | None = None):
     if not _ensure_ray_initialized():
         return None
-    actor_name = _authz_graph_cache_actor_name()
+    actor_name = _authz_graph_cache_actor_name(shard_key)
     namespace = _ray_namespace()
     try:
         return ray.get_actor(actor_name, namespace=namespace)
@@ -284,7 +308,8 @@ def evaluate_authz_with_ray_cache(
     transitions: bool,
     timeout_seconds: float = 1.0,
 ) -> Dict[str, Any] | None:
-    actor = _get_or_create_authz_graph_cache_actor()
+    shard_key = _payload_shard_key(payload)
+    actor = _get_or_create_authz_graph_cache_actor(shard_key=shard_key)
     if actor is None:
         return None
     try:
@@ -297,6 +322,7 @@ def evaluate_authz_with_ray_cache(
                     snapshot_id=snapshot_id,
                     snapshot_version=snapshot_version,
                     snapshot_ref=snapshot_ref,
+                    shard_key=shard_key,
                 ),
                 timeout=timeout_seconds,
             )
@@ -306,6 +332,7 @@ def evaluate_authz_with_ray_cache(
             evaluation = _deserialize_transition_evaluation(raw, operation=operation)
             return {
                 "source": "ray_actor",
+                "shard_key": shard_key,
                 "status": dict(status or {}),
                 "match": evaluation.permission_match,
                 "transition_evaluation": evaluation,
@@ -318,6 +345,7 @@ def evaluate_authz_with_ray_cache(
         )
         return {
             "source": "ray_actor",
+            "shard_key": shard_key,
             "status": dict(status or {}),
             "match": match,
             "transition_evaluation": None,
@@ -342,6 +370,7 @@ class AuthzGraphCacheActor:
         snapshot_id: int | None = None,
         snapshot_version: str | None = None,
         snapshot_ref: str | None = None,
+        shard_key: str | None = None,
     ) -> Dict[str, Any]:
         effective_ref = snapshot_ref or f"authz_graph@{snapshot_version or snapshot_id}"
         compiled, result = await self._projection_service.build_compiled_index(
@@ -354,8 +383,13 @@ class AuthzGraphCacheActor:
         self._status = _index_status(compiled, source="snapshot")
         self._status.update(
             {
+                "shard_key": _sanitize_shard_key(shard_key),
                 "graph_nodes_count": result.stats.get("graph_nodes_count", 0),
                 "graph_edges_count": result.stats.get("graph_edges_count", 0),
+                "decision_graph_nodes_count": result.stats.get("decision_graph_nodes_count", 0),
+                "decision_graph_edges_count": result.stats.get("decision_graph_edges_count", 0),
+                "enrichment_graph_nodes_count": result.stats.get("enrichment_graph_nodes_count", 0),
+                "enrichment_graph_edges_count": result.stats.get("enrichment_graph_edges_count", 0),
             }
         )
         return dict(self._status)

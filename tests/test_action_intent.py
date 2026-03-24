@@ -438,6 +438,7 @@ def test_evaluate_intent_can_use_ray_backed_authz_cache(monkeypatch):
         "_evaluate_compiled_authz_graph_with_ray",
         lambda **kwargs: {
             "source": "ray_actor",
+            "shard_key": "zone:vault-a",
             "match": CompiledPermissionMatch(
                 allowed=True,
                 matched_subjects=("principal:agent-1", "role:ROBOT_OPERATOR"),
@@ -452,6 +453,16 @@ def test_evaluate_intent_can_use_ray_backed_authz_cache(monkeypatch):
     assert decision.allowed is True
     assert decision.execution_token is not None
     assert decision.authz_graph["evaluator"] == "ray_actor"
+
+
+def test_compiled_authz_shard_key_prefers_facility_then_zone() -> None:
+    action_intent = build_action_intent(_base_payload())
+    action_intent.action.parameters = {"facility_id": "vault-hub"}
+
+    assert governance_mod._compiled_authz_shard_key(action_intent) == "facility:vault-hub"
+
+    action_intent.action.parameters = {}
+    assert governance_mod._compiled_authz_shard_key(action_intent) == "zone:vault-a"
 
 
 def test_evaluate_intent_denies_when_compiled_authz_snapshot_mismatches():

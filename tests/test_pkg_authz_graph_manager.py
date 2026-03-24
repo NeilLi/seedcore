@@ -17,6 +17,7 @@ import mock_eventizer_dependencies  # noqa: F401
 
 from seedcore.coordinator.core.governance import evaluate_intent
 from seedcore.ops.pkg.authz_graph import AuthzGraphManager, AuthzGraphProjectionService
+from seedcore.ops.pkg.authz_graph.ray_cache import _authz_graph_cache_actor_name, _payload_shard_key
 import seedcore.ops.pkg.manager as pkg_manager_mod
 from seedcore.ops.pkg.manager import PKGManager
 from seedcore.ops.pkg.dao import PKGSnapshotData
@@ -183,3 +184,10 @@ def test_evaluate_intent_uses_global_active_authz_graph_when_enabled(monkeypatch
 
     assert decision.allowed is True
     assert decision.execution_token is not None
+
+
+def test_ray_cache_uses_shard_scoped_actor_names() -> None:
+    assert _authz_graph_cache_actor_name("facility:vault-hub").endswith("__facility_vault_hub")
+    assert _authz_graph_cache_actor_name("global").endswith("seedcore_authz_graph_cache")
+    assert _payload_shard_key({"facility_ref": "facility:vault-hub"}) == "facility:vault-hub"
+    assert _payload_shard_key({"zone_ref": "zone:vault-a"}) == "zone:vault-a"
