@@ -1,102 +1,259 @@
 # Current Next Steps
 
-This document tracks the practical next-step priorities for SeedCore based on the current repository state, not an earlier architecture-only roadmap.
+This document tracks the next-stage priorities for SeedCore based on the repository as it exists today.
+
+It is intentionally written to balance two things:
+
+- the strong baseline SeedCore already has
+- the practical, wedge-first roadmap needed to make that baseline enterprise-credible
+
+The goal is not to describe a perfect future state all at once. The goal is to define the next 12-18 months in a way that is ambitious, believable, and product-relevant.
 
 ## Why This Lives Outside The Root README
 
-The root README should explain what SeedCore is and how to run it. The exact next steps shift more quickly as verification coverage, PKG/runtime behavior, and trust-surface features improve, so the detailed plan lives here instead.
+The root README should explain what SeedCore is, how it runs, and why the architecture matters.
 
-## What Is Already In Place
+The exact next-stage plan changes faster than the high-level architecture summary. As verification improves and the runtime hardens, this document can be updated without turning the root README into a moving target.
 
-The following capabilities are already present in the repository and should not be described as future work anymore:
+## Baseline That Already Exists
+
+SeedCore is no longer a conceptual architecture. The repository already contains a functioning governed execution baseline.
+
+The following should be treated as present, not future work:
 
 - short-lived execution tokens with TTL enforcement
 - Redis-backed token revocation and HAL emergency cutoff controls
 - HAL transition receipts with verification paths
-- evidence bundles that bind policy and transition artifacts into replayable closure
+- evidence bundles that bind policy, execution, and transition artifacts into replayable closure
 - public replay, trust-page, and verification workflow surfaces
 - DID, delegation, and signed-intent support on the external surface
 - staged PKG authz-graph rollout through Phase 5, including:
   - decision-centric ontology
   - multihop authority paths
-  - explanation payloads
-  - decision/enrichment split
+  - explanation payloads such as `matched_policy_refs` and `missing_prerequisites`
+  - decision-graph vs enrichment-graph split
   - shard-aware Ray authz cache routing
 
-## Current Priorities
+This means the next stage is not about adding more concepts for their own sake. It is about converting the existing governed execution baseline into a product-grade trust runtime for high-trust, multi-party environments.
 
-### 1. Hardware-Backed Signing And Device Trust
+## Strategic Objective
 
-The main trust gap is no longer “add signatures.” It is moving signer identity from local or environment-backed delivery into stronger production-grade controls.
+The right objective for the next stage is:
 
-Current focus:
+**Make SeedCore the most credible runtime for irrefutable, multi-party governed execution in high-trust supply-chain and asset-sensitive environments.**
 
-- move attested HAL and evidence-signing keys behind TPM, HSM, or cloud KMS-backed signers
+That is a better objective than “solve all trusted autonomy problems” because it forces the roadmap to stay wedge-first, operational, and commercially legible.
+
+The guiding discipline for this stage is:
+
+- one wedge: high-trust, multi-party supply chain and asset transfer
+- one proof surface: governed receipts and replayable verification
+- one scaling logic: a compiled hot-path decision graph with cryptographic trust anchors
+
+## Next Stage: Productizing Irrefutable Governed Execution
+
+The next stage should focus on four priorities.
+
+### 1. Irrefutable Trust Anchors
+
+SeedCore already issues bounded execution authority. The next step is to make the trust boundary cryptographically defensible in environments where spoofing, repudiation, or internal tampering are real concerns.
+
+What to build:
+
+- move critical HAL and evidence-signing flows behind TPM, HSM, or cloud KMS-backed signers where practical
 - make signer profile selection explicit across PDP, evidence, and transition-receipt paths
-- keep local dev fallbacks, but separate them clearly from production attested signer modes
-- bind physical endpoint identity and signer identity more tightly in runtime verification and inventory
+- support optional external anchoring for selected high-value receipts into a transparency log or enterprise audit ledger
+- separate internal operational audit from externally shareable verification receipts
 
-### 2. External Audit Anchoring And Default Receipt Chains
+Why this is feasible:
 
-Receipt chaining and custody lineage exist, but external anchoring is still the next real step for dispute resistance.
+- this can start with cloud KMS-backed server-side signing
+- it can use TPM-backed or device-bound signing for selected edge nodes instead of requiring universal hardware redesign
+- external anchoring can begin only for high-stakes transitions rather than every low-risk action
 
-Current focus:
+Strategic result:
 
-- anchor policy receipts, execution receipts, transition receipts, and custody events into an external transparency log or enterprise audit ledger
-- promote chained receipt relationships from optional or service-specific behavior into the default audit path
-- make receipt-chain verification a first-class operator and trust-surface workflow
+SeedCore will move trust from application claims to cryptographically anchored execution evidence.
 
-### 3. Dual Authorization For High-Risk Actions
+### 2. Multi-Party Execution Governance
 
-The runtime already supports deny-by-default, quarantine, and governed receipts. The next control upgrade is stronger multi-party authorization for selected actions.
+The current runtime already supports deny-by-default, quarantine, and governed receipts. The next step is to govern actions that cross organizational and approval boundaries.
 
-Current focus:
+What to build:
 
-- add explicit co-sign or dual-approval paths for releases, protected transfers, and other high-risk transitions
-- bind those approvals into the same evidence and replay closure
-- ensure dual-authorization state participates in authz-graph explanation and policy replay
+- dual authorization for selected high-risk transitions
+- delegated authority chains across organizations, facilities, zones, and devices
+- explicit break-glass paths with elevated evidence obligations
+- co-signed approvals for exceptional or blocked workflow overrides
+- signed approval and delegation capture as part of the same governed receipt chain
 
-### 4. Policy Rollout And Activation Hardening
+Why this is feasible:
 
-Policy reload, refresh, compare, and local activation flows exist now. The next step is operational hardening, not inventing policy distribution from scratch.
+SeedCore does not need to model every legal or commercial workflow immediately. It should start with a small number of high-value patterns:
 
-Current focus:
+- release from quarantine
+- transfer of custody for a restricted lot
+- emergency override of a blocked workflow
 
-- make snapshot promotion, compare, reload, and runtime activation confirmation part of one consistent rollout contract
-- reduce ambiguous or partial activation states across API, Ray Serve, and host-mode workflows
-- improve fleet-facing rollout ergonomics so active runtime state is always obvious and auditable
-- keep hot-path authz graph activation deterministic across refresh and restart flows
+Strategic result:
 
-### 5. Multi-Party Delegation And External Authority In Runtime Paths
+SeedCore becomes more than an internal policy gate. It becomes a runtime for replayable, governed multi-party action.
 
-The API surface already supports DID, delegation, and signed intents. The next step is deeper operational use of those surfaces.
+### 3. The Asset-Centric Hot Path
 
-Current focus:
+The strongest technical discipline for the next stage is keeping the real-time decision path small, deterministic, and operationally useful.
 
-- carry delegation and external authority signals further into governed execution paths
-- expand signed-intent usage from API support into more end-to-end runtime demos and product flows
-- make partner and cross-organization trust boundaries easier to inspect through replay and trust views
+What to build:
 
-### 6. Productization Of Trust Surfaces
+- a compiled Decision Graph for synchronous PDP evaluation
+- strict inclusion of only latency-critical entities:
+  - principals
+  - devices
+  - facilities
+  - zones
+  - lots, batches, and twins
+  - active custody state
+  - live policy context
+- versioned graph snapshots for reproducible decisions
+- cached or precompiled path evaluation for the most common action types
+- first-class quarantine and trust-gap outcomes
 
-SeedCore now has credible trust primitives; the next step is packaging them as a clearer product surface.
+Why this matters:
 
-Current focus:
+SeedCore should not behave like an academic graph platform that turns every issue into a generic deny. In real operations, the correct governed outcome is often:
 
-- refine trust-page and public-verification UX around the strongest governed evidence flows
-- make replay, receipt-chain status, and signer provenance easier to present to operators, auditors, and buyers
-- keep the proof story anchored in what the runtime actually verifies today
+- isolate the asset
+- preserve state
+- require manual review
+- escalate an evidence or telemetry gap
 
-## What Is No Longer A Good Root-README Claim
+Strategic result:
 
-The following older formulations are now too inaccurate or too incomplete to keep as the main “next steps” message:
+SeedCore keeps the hot path explainable, fast, and deterministic even as the broader ontology grows.
 
-- “add revocation and emergency stop” as future work
-- “add transition receipts” as future work
-- “replace restart-based policy operation” as if no runtime activation path exists today
-- “make break-glass deterministic” without acknowledging the current compiled-authz and explanation path
-- “add signed intents or delegation” as though those APIs do not already exist
+### 4. Productize The Verification Surface
+
+The runtime’s trust value has to be visible, not just internally correct.
+
+What to build:
+
+- signed governed receipts for every high-value allow, deny, or quarantine outcome
+- verification pages or APIs that replay receipt chains
+- asset-centric forensic views tying together:
+  - decision hash
+  - policy snapshot
+  - principal identity
+  - custody transition
+  - telemetry references
+  - signature provenance
+- public or partner-visible verification surfaces for approved stakeholders
+
+Why this is feasible:
+
+SeedCore does not need a universal trust portal on day one. It needs a narrow but impressive proof surface for one wedge:
+
+- one asset class
+- one transfer chain
+- one evidence model
+- one replay view
+
+Strategic result:
+
+SeedCore stops looking like a backend-only control layer and becomes a visible trust product.
+
+## 12-18 Month Execution Program
+
+The next stage is best presented as a staged execution program rather than a giant future-state promise.
+
+### Phase A: Trust Hardening
+
+Focus:
+
+- KMS, TPM, or HSM-backed signing for selected receipt paths
+- clearer signer provenance and signer policy profiles
+- optional external anchoring for high-value events
+- verifier tooling for signature and signer-chain inspection
+
+Success condition:
+
+SeedCore can produce receipt chains that are difficult to spoof, difficult to erase, and easy to verify.
+
+### Phase B: Multi-Party Governance
+
+Focus:
+
+- delegated authority chains
+- dual authorization
+- break-glass workflows with elevated evidence
+- cross-organization approval paths
+
+Success condition:
+
+SeedCore can govern one or two high-risk transitions that require more than one approving authority.
+
+### Phase C: Operational Decision Engine
+
+Focus:
+
+- compiled decision graph discipline
+- quarantine and trust-gap state as first-class outcomes
+- fast-path evaluation and shard-aware cache routing
+- deterministic explanation output for hot-path decisions
+
+Success condition:
+
+SeedCore can answer real authorization questions quickly and explainably without pulling broad enrichment context into the synchronous path.
+
+### Phase D: Verification Product Surface
+
+Focus:
+
+- governed receipts as the visible product artifact
+- replay and trust-page UX for operators, auditors, and partners
+- asset-centric trust history
+- API and UI proof layer for third-party verification
+
+Success condition:
+
+SeedCore can show an externally legible chain of decision, execution, and evidence for a specific high-value asset workflow.
+
+## Killer Demonstration
+
+The roadmap should stay anchored to one demonstration that proves the category.
+
+The best next-stage demonstration is:
+
+**a high-value asset transfer that requires deterministic policy evaluation, dual authorization, hardware-backed evidence, and replayable third-party verification**
+
+If SeedCore can demonstrate that end to end, it will tell a much more credible story than a broad list of trust claims.
+
+## Messaging Guardrails
+
+The next-stage narrative should stay ambitious without overclaiming.
+
+Better positioning:
+
+- “SeedCore is productizing irrefutable governed execution.”
+- “SeedCore is positioning to become one of the first runtimes purpose-built for deterministic, multi-party governed execution.”
+- “SeedCore moves trust from application claims to cryptographically anchored execution evidence.”
+
+Claims to avoid:
+
+- “only viable execution runtime for 2026”
+- “legally binding digital contracts” as a near-term product claim
+- “infrastructure for the entire EU Digital Product Passport” as though the wedge has already been won
+
+More grounded alternatives:
+
+- “well aligned with emerging provenance, auditability, and product-passport requirements in regulated supply chains”
+- “governed, co-signed execution receipts for high-trust multi-party workflows”
+- “a runtime for cryptographically defensible, replayable governed execution”
 
 ## Practical Guidance
 
-When the root README needs to mention roadmap direction, keep it brief and point here. The detailed plan should continue to be updated alongside real runtime and verification progress.
+When the root README mentions roadmap direction, it should stay short and point here.
+
+This document should be updated when one of two things changes:
+
+- the baseline has materially improved and a “future” item is now present
+- the wedge strategy changes and the next-stage narrative needs to be tightened
