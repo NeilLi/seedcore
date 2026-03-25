@@ -2,6 +2,7 @@ use seedcore_kernel_testkit::FixtureStaticResolver;
 use seedcore_kernel_testkit::{run_transfer_fixture_dir, TransferVerificationReport};
 use seedcore_kernel_types::Timestamp;
 use seedcore_policy_core::PolicyEvaluation;
+use seedcore_proof_core::{verify_replay_chain, ReplayBundle, ReplayVerificationReport};
 use seedcore_token_core::{verify_token, ExecutionToken};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -46,6 +47,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let report = verify_transfer_dir(&dir)?;
             print_json(&report)
         }
+        "verify-chain" => {
+            let bundle_path = flag_value(&args, "--bundle")?;
+            let report = verify_chain_bundle(Path::new(&bundle_path))?;
+            print_json(&report)
+        }
         "explain" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let evaluation: PolicyEvaluation = read_json_file(&artifact_path)?;
@@ -61,6 +67,7 @@ fn usage() -> String {
         "  seedcore-verify verify-token --artifact <path>",
         "  seedcore-verify verify-policy-eval --artifact <path>",
         "  seedcore-verify verify-transfer-dir --dir <path>",
+        "  seedcore-verify verify-chain --bundle <path>",
         "  seedcore-verify explain --artifact <path>",
     ]
     .join("\n")
@@ -91,6 +98,11 @@ fn verify_transfer_dir(dir: &Path) -> Result<TransferVerificationReport, String>
     run_transfer_fixture_dir(dir).map_err(|error| error.to_string())
 }
 
+fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> {
+    let bundle: ReplayBundle = read_json_file(path)?;
+    Ok(verify_replay_chain(&bundle, &FixtureStaticResolver))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PolicyEvaluationReport {
     verified: bool,
@@ -116,6 +128,12 @@ mod tests {
     fn fixture_dir(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/transfers")
+            .join(name)
+    }
+
+    fn replay_bundle_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/replay_bundles")
             .join(name)
     }
 
@@ -161,5 +179,14 @@ mod tests {
             report.actual_policy_evaluation.disposition,
             seedcore_kernel_types::Disposition::Escalate
         );
+    }
+
+    #[test]
+    fn verify_replay_bundle_fixture() {
+        let report = verify_chain_bundle(&replay_bundle_fixture("allow_chain.json"))
+            .expect("allow replay bundle should verify");
+        assert!(report.verified);
+        assert_eq!(report.error_code, None);
+        assert_eq!(report.artifact_reports.len(), 2);
     }
 }

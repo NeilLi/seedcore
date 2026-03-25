@@ -1,0 +1,49 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "policy-receipt:intent-transfer-001",
+      "artifact_type": "policy_receipt",
+      "artifact": {
+        "policy_receipt_id": "policy-receipt:intent-transfer-001",
+        "disposition": "allow"
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+      },
+      "signature": {
+        "signer_type": "service",
+        "signer_id": "seedcore-verify",
+        "signing_scheme": "debug_hash_v1",
+        "key_ref": "test-key",
+        "attestation_level": "baseline",
+        "signature": "sha256:6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+      },
+      "previous_artifact_hash": null
+    },
+    {
+      "artifact_id": "transition-receipt:intent-transfer-001",
+      "artifact_type": "transition_receipt",
+      "artifact": {
+        "transition_receipt_id": "transition-receipt:intent-transfer-001",
+        "decision_ref": "policy-receipt:intent-transfer-001"
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "e7cb5b4906c4782f6c1c312e512c38495548ab3fc4b80cb1674e4cf672774f74"
+      },
+      "signature": {
+        "signer_type": "service",
+        "signer_id": "seedcore-verify",
+        "signing_scheme": "debug_hash_v1",
+        "key_ref": "test-key",
+        "attestation_level": "baseline",
+        "signature": "sha256:e7cb5b4906c4782f6c1c312e512c38495548ab3fc4b80cb1674e4cf672774f74"
+      },
+      "previous_artifact_hash": {
+        "algorithm": "sha256",
+        "value": "6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+      }
+    }
+  ]
+}
