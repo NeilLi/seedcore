@@ -18,6 +18,8 @@ repository = "https://github.com/NeilLi/seedcore"
 
 [workspace.dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "1"

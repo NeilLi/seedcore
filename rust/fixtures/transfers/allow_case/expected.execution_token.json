@@ -1,0 +1,28 @@
+{
+  "token_id": "token:intent-transfer-001",
+  "intent_id": "intent-transfer-001",
+  "issued_at": "2026-04-02T08:00:15Z",
+  "valid_until": "2026-04-02T08:01:15Z",
+  "contract_version": "transfer-v1",
+  "constraints": {
+    "action_type": "TRANSFER_CUSTODY",
+    "target_zone": "handoff_bay_3",
+    "asset_id": "asset:lot-8841",
+    "principal_agent_id": "agent:custody_runtime_01",
+    "source_registration_id": "registration:approved-001",
+    "registration_decision_id": "decision:registration-001",
+    "endpoint_id": "hal://robot_sim/1"
+  },
+  "artifact_hash": {
+    "algorithm": "sha256",
+    "value": "3e86bc2e254ceb2c181f689aff21ef27d40a1638390ce62d5ac8e0023a213e4f"
+  },
+  "signature": {
+    "signer_type": "service",
+    "signer_id": "seedcore-verify",
+    "signing_scheme": "debug_hash_v1",
+    "key_ref": "test-key",
+    "attestation_level": "baseline",
+    "signature": "sha256:3e86bc2e254ceb2c181f689aff21ef27d40a1638390ce62d5ac8e0023a213e4f"
+  }
+}

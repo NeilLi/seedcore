@@ -1,0 +1,38 @@
+{
+  "disposition": "allow",
+  "explanation": {
+    "disposition": "allow",
+    "matched_policy_refs": [
+      "policy:transfer-v1"
+    ],
+    "authority_path_summary": [
+      "facility_manager -> transfer_lot"
+    ],
+    "missing_prerequisites": [],
+    "trust_gaps": [],
+    "minted_artifacts": [
+      "governed_decision:intent-transfer-001",
+      "policy_receipt:intent-transfer-001",
+      "execution_token:intent-transfer-001"
+    ],
+    "obligations": []
+  },
+  "governed_decision_artifact": {
+    "decision_id": "decision:intent-transfer-001",
+    "action_intent_ref": "intent-transfer-001",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "disposition": "allow",
+    "asset_ref": "asset:lot-8841"
+  },
+  "policy_receipt_payload": {
+    "policy_receipt_id": "policy-receipt:intent-transfer-001",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "action_intent_ref": "intent-transfer-001",
+    "disposition": "allow"
+  },
+  "execution_token_spec": {
+    "intent_ref": "intent-transfer-001",
+    "asset_ref": "asset:lot-8841",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02"
+  }
+}

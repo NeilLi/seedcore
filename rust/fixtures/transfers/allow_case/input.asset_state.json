@@ -1,0 +1,14 @@
+{
+  "asset_ref": "asset:lot-8841",
+  "current_custodian_ref": "principal:facility_mgr_001",
+  "current_zone_ref": "vault_a",
+  "custody_point_ref": "custody_point:vault_a",
+  "transferable": true,
+  "restricted": true,
+  "evidence_refs": [
+    "evidence:telemetry-001"
+  ],
+  "approved_registration_refs": [
+    "registration:approved-001"
+  ]
+}

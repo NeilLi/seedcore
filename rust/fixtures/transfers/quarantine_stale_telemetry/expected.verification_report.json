@@ -1,0 +1,47 @@
+{
+  "verified": true,
+  "checks": [
+    "policy_evaluation_match",
+    "execution_token_null_match"
+  ],
+  "error_code": null,
+  "actual_policy_evaluation": {
+    "disposition": "quarantine",
+    "explanation": {
+      "disposition": "quarantine",
+      "matched_policy_refs": [
+        "policy:transfer-v1"
+      ],
+      "authority_path_summary": [
+        "facility_manager -> transfer_lot"
+      ],
+      "missing_prerequisites": [],
+      "trust_gaps": [
+        "stale_telemetry",
+        "missing_attestation",
+        "seal_missing_or_broken"
+      ],
+      "minted_artifacts": [
+        "governed_decision:intent-transfer-003",
+        "policy_receipt:intent-transfer-003"
+      ],
+      "obligations": []
+    },
+    "governed_decision_artifact": {
+      "decision_id": "decision:intent-transfer-003",
+      "action_intent_ref": "intent-transfer-003",
+      "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+      "disposition": "quarantine",
+      "asset_ref": "asset:lot-8843"
+    },
+    "policy_receipt_payload": {
+      "policy_receipt_id": "policy-receipt:intent-transfer-003",
+      "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+      "action_intent_ref": "intent-transfer-003",
+      "disposition": "quarantine"
+    },
+    "execution_token_spec": null
+  },
+  "actual_execution_token": null,
+  "token_verification": null
+}

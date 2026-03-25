@@ -1,0 +1,39 @@
+{
+  "disposition": "escalate",
+  "explanation": {
+    "disposition": "escalate",
+    "matched_policy_refs": [
+      "policy:transfer-v1"
+    ],
+    "authority_path_summary": [
+      "facility_manager -> transfer_lot"
+    ],
+    "missing_prerequisites": [],
+    "trust_gaps": [],
+    "minted_artifacts": [
+      "governed_decision:intent-transfer-004",
+      "policy_receipt:intent-transfer-004"
+    ],
+    "obligations": [
+      {
+        "obligation_type": "human_review",
+        "reference": "urgent_release",
+        "details": {}
+      }
+    ]
+  },
+  "governed_decision_artifact": {
+    "decision_id": "decision:intent-transfer-004",
+    "action_intent_ref": "intent-transfer-004",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "disposition": "escalate",
+    "asset_ref": "asset:lot-8844"
+  },
+  "policy_receipt_payload": {
+    "policy_receipt_id": "policy-receipt:intent-transfer-004",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "action_intent_ref": "intent-transfer-004",
+    "disposition": "escalate"
+  },
+  "execution_token_spec": null
+}

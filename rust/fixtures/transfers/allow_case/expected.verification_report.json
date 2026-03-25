@@ -1,0 +1,83 @@
+{
+  "verified": true,
+  "checks": [
+    "policy_evaluation_match",
+    "execution_token_verified",
+    "execution_token_constraints_satisfied",
+    "execution_token_match"
+  ],
+  "error_code": null,
+  "actual_policy_evaluation": {
+    "disposition": "allow",
+    "explanation": {
+      "disposition": "allow",
+      "matched_policy_refs": [
+        "policy:transfer-v1"
+      ],
+      "authority_path_summary": [
+        "facility_manager -> transfer_lot"
+      ],
+      "missing_prerequisites": [],
+      "trust_gaps": [],
+      "minted_artifacts": [
+        "governed_decision:intent-transfer-001",
+        "policy_receipt:intent-transfer-001",
+        "execution_token:intent-transfer-001"
+      ],
+      "obligations": []
+    },
+    "governed_decision_artifact": {
+      "decision_id": "decision:intent-transfer-001",
+      "action_intent_ref": "intent-transfer-001",
+      "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+      "disposition": "allow",
+      "asset_ref": "asset:lot-8841"
+    },
+    "policy_receipt_payload": {
+      "policy_receipt_id": "policy-receipt:intent-transfer-001",
+      "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+      "action_intent_ref": "intent-transfer-001",
+      "disposition": "allow"
+    },
+    "execution_token_spec": {
+      "intent_ref": "intent-transfer-001",
+      "asset_ref": "asset:lot-8841",
+      "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02"
+    }
+  },
+  "actual_execution_token": {
+    "token_id": "token:intent-transfer-001",
+    "intent_id": "intent-transfer-001",
+    "issued_at": "2026-04-02T08:00:15Z",
+    "valid_until": "2026-04-02T08:01:15Z",
+    "contract_version": "transfer-v1",
+    "constraints": {
+      "action_type": "TRANSFER_CUSTODY",
+      "target_zone": "handoff_bay_3",
+      "asset_id": "asset:lot-8841",
+      "principal_agent_id": "agent:custody_runtime_01",
+      "source_registration_id": "registration:approved-001",
+      "registration_decision_id": "decision:registration-001",
+      "endpoint_id": "hal://robot_sim/1"
+    },
+    "artifact_hash": {
+      "algorithm": "sha256",
+      "value": "3e86bc2e254ceb2c181f689aff21ef27d40a1638390ce62d5ac8e0023a213e4f"
+    },
+    "signature": {
+      "signer_type": "service",
+      "signer_id": "seedcore-verify",
+      "signing_scheme": "debug_hash_v1",
+      "key_ref": "test-key",
+      "attestation_level": "baseline",
+      "signature": "sha256:3e86bc2e254ceb2c181f689aff21ef27d40a1638390ce62d5ac8e0023a213e4f"
+    }
+  },
+  "token_verification": {
+    "verified": true,
+    "error_code": null,
+    "details": [
+      "token_verified"
+    ]
+  }
+}

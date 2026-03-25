@@ -8,10 +8,13 @@ repository.workspace = true
 
 [dependencies]
 seedcore-kernel-types = { path = "../seedcore-kernel-types" }
+seedcore-kernel-testkit = { path = "../seedcore-kernel-testkit" }
 seedcore-proof-core = { path = "../seedcore-proof-core" }
 seedcore-approval-core = { path = "../seedcore-approval-core" }
 seedcore-policy-core = { path = "../seedcore-policy-core" }
 seedcore-token-core = { path = "../seedcore-token-core" }
+serde.workspace = true
+serde_json.workspace = true
 
 [[bin]]
 name = "seedcore-verify"

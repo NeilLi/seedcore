@@ -1,0 +1,39 @@
+{
+  "approval_envelope_id": "approval-transfer-003",
+  "workflow_type": "custody_transfer",
+  "status": "APPROVED",
+  "asset_ref": "asset:lot-8843",
+  "lot_id": "lot-8843",
+  "from_custodian_ref": "principal:facility_mgr_001",
+  "to_custodian_ref": "principal:outbound_mgr_002",
+  "transfer_context": {
+    "from_zone": "vault_a",
+    "to_zone": "handoff_bay_3",
+    "facility_ref": "facility:north_warehouse",
+    "custody_point_ref": "custody_point:handoff_bay_3"
+  },
+  "required_approvals": [
+    {
+      "role": "FACILITY_MANAGER",
+      "principal_ref": "principal:facility_mgr_001",
+      "status": "APPROVED",
+      "approved_at": "2026-04-02T08:20:05Z",
+      "approval_ref": "approval:facility_mgr_001"
+    },
+    {
+      "role": "QUALITY_INSPECTOR",
+      "principal_ref": "principal:quality_insp_017",
+      "status": "APPROVED",
+      "approved_at": "2026-04-02T08:20:12Z",
+      "approval_ref": "approval:quality_insp_017"
+    }
+  ],
+  "approval_binding_hash": {
+    "algorithm": "sha256",
+    "value": "placeholder"
+  },
+  "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+  "expires_at": "2026-04-02T08:25:00Z",
+  "created_at": "2026-04-02T08:20:00Z",
+  "version": 1
+}

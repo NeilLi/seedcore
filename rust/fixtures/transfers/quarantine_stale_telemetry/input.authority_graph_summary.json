@@ -1,0 +1,10 @@
+{
+  "matched_policy_refs": [
+    "policy:transfer-v1"
+  ],
+  "authority_paths": [
+    "facility_manager -> transfer_lot"
+  ],
+  "missing_prerequisites": [],
+  "trust_gaps": []
+}
