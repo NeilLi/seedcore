@@ -130,41 +130,6 @@ def verify_payload_signature(
     return result
 
 
-def verify_execution_token_signature(token: Mapping[str, Any]) -> dict[str, Any]:
-    payload = {
-        "token_id": token.get("token_id"),
-        "intent_id": token.get("intent_id"),
-        "issued_at": token.get("issued_at"),
-        "valid_until": token.get("valid_until"),
-        "contract_version": token.get("contract_version"),
-        "constraints": token.get("constraints"),
-    }
-    signature = token.get("signature")
-    result = {
-        "artifact_type": "execution_token",
-        "verified": False,
-        "error": None,
-        "payload_hash": sha256_hex(canonical_json(payload)),
-        "signing_scheme": "hmac_sha256",
-        "attestation_level": "baseline",
-        "policy": _policy_to_dict(get_signer_policy(artifact_type="execution_token")),
-    }
-    if not isinstance(signature, str) or not signature:
-        result["error"] = "missing_signature"
-        return result
-    secret = os.getenv("SEEDCORE_PDP_SIGNING_SECRET", "seedcore-dev-signing-secret")
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        canonical_json(payload).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        result["error"] = "signature_mismatch"
-        return result
-    result["verified"] = True
-    return result
-
-
 def load_ed25519_public_key(value: str) -> Optional[Ed25519PublicKey]:
     try:
         if "BEGIN PUBLIC KEY" in value:

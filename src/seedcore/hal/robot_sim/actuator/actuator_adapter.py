@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from ..evidence.evidence_builder import EvidenceBuilder
 
@@ -17,8 +17,16 @@ class ActuatorAdapter:
         self.endpoint_id = endpoint_id
         self._evidence_builder = EvidenceBuilder()
 
-    def execute(self, token: Any, behavior_name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if not token or not getattr(token, "is_valid", lambda: False)():
+    def execute(
+        self,
+        token: Mapping[str, Any] | None,
+        behavior_name: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(token, Mapping):
+            raise PermissionError("Execution blocked: invalid ExecutionToken")
+        token_id = token.get("token_id") or token.get("id")
+        if not isinstance(token_id, str) or not token_id.strip():
             raise PermissionError("Execution blocked: invalid ExecutionToken")
 
         behavior = self.registry.get(behavior_name)
@@ -27,7 +35,7 @@ class ActuatorAdapter:
 
         result = behavior.execute(self.robot, self.runtime, **(params or {}))
         return self._evidence_builder.build(
-            token_id=getattr(token, "id", "unknown_token"),
+            token_id=token_id.strip(),
             actuator=self.endpoint_id,
             behavior=behavior_name,
             result=result,

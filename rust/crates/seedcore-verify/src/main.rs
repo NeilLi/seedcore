@@ -1,12 +1,17 @@
 use seedcore_kernel_testkit::FixtureStaticResolver;
-use seedcore_kernel_testkit::{run_transfer_fixture_dir, TransferVerificationReport};
+use seedcore_kernel_testkit::{
+    run_transfer_fixture_dir, FixtureDebugSigner, TransferVerificationReport,
+};
 use seedcore_kernel_types::Timestamp;
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
     verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
     ReplayVerificationReport, VerificationReport,
 };
-use seedcore_token_core::{verify_token, ExecutionToken};
+use seedcore_token_core::{
+    enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
+    ExecutionTokenClaims, TokenEnforcementReport,
+};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -32,12 +37,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "verify-token" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let token: ExecutionToken = read_json_file(&artifact_path)?;
-            let report = verify_token(
-                &token,
-                &FixtureStaticResolver,
-                Timestamp::from_str("2026-04-02T08:00:30Z").map_err(|e| e.to_string())?,
-            );
+            let now = timestamp_from_flag(&args, "--now", "2026-04-02T08:00:30Z")?;
+            let report = verify_token(&token, &FixtureStaticResolver, now);
             print_json(&report)
+        }
+        "enforce-token" => {
+            let token_path = flag_value(&args, "--token")?;
+            let request_path = flag_value(&args, "--request")?;
+            let now = timestamp_from_flag(&args, "--now", "2026-04-02T08:00:30Z")?;
+            let report = enforce_token_path(Path::new(&token_path), Path::new(&request_path), now)?;
+            print_json(&report)
+        }
+        "mint-token" => {
+            let claims_path = flag_value(&args, "--claims")?;
+            let token = mint_token_path(Path::new(&claims_path))?;
+            print_json(&token)
         }
         "verify-policy-eval" => {
             let artifact_path = flag_value(&args, "--artifact")?;
@@ -75,7 +89,9 @@ fn usage() -> String {
         "  seedcore-verify verify-receipt --artifact <path>",
         "  seedcore-verify verify-chain --bundle <path>",
         "  seedcore-verify verify-transfer --dir <path>",
+        "  seedcore-verify mint-token --claims <path>",
         "  seedcore-verify verify-token --artifact <path>",
+        "  seedcore-verify enforce-token --token <path> --request <path>",
         "  seedcore-verify verify-policy-eval --artifact <path>",
         "  seedcore-verify verify-transfer-dir --dir <path>",
         "  seedcore-verify explain --artifact <path>",
@@ -88,6 +104,17 @@ fn flag_value(args: &[String], flag: &str) -> Result<String, String> {
         .find(|window| window[0] == flag)
         .map(|window| window[1].clone())
         .ok_or_else(|| format!("missing_flag:{flag}"))
+}
+
+fn optional_flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2)
+        .find(|window| window[0] == flag)
+        .map(|window| window[1].clone())
+}
+
+fn timestamp_from_flag(args: &[String], flag: &str, default: &str) -> Result<Timestamp, String> {
+    let raw = optional_flag_value(args, flag).unwrap_or_else(|| default.to_string());
+    Timestamp::from_str(&raw).map_err(|error| format!("invalid_timestamp:{flag}:{error}"))
 }
 
 fn read_json_file<T: for<'de> Deserialize<'de>>(path: impl AsRef<Path>) -> Result<T, String> {
@@ -116,6 +143,21 @@ fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> 
 fn verify_receipt_path(path: &Path) -> Result<VerificationReport, String> {
     let artifact: ReplayArtifact = read_json_file(path)?;
     Ok(verify_receipt_artifact(&artifact, &FixtureStaticResolver))
+}
+
+fn enforce_token_path(
+    token_path: &Path,
+    request_path: &Path,
+    now: Timestamp,
+) -> Result<TokenEnforcementReport, String> {
+    let token: ExecutionToken = read_json_file(token_path)?;
+    let request: ExecutionRequestContext = read_json_file(request_path)?;
+    Ok(enforce_constraints(&token, &request, now))
+}
+
+fn mint_token_path(claims_path: &Path) -> Result<ExecutionToken, String> {
+    let claims: ExecutionTokenClaims = read_json_file(claims_path)?;
+    mint_token(claims, &FixtureDebugSigner).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +197,12 @@ mod tests {
     fn receipt_fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/receipts")
+            .join(name)
+    }
+
+    fn token_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/tokens")
             .join(name)
     }
 
@@ -218,5 +266,25 @@ mod tests {
         assert!(report.verified);
         assert_eq!(report.error_code, None);
         assert_eq!(report.artifact_type, "policy_receipt");
+    }
+
+    #[test]
+    fn enforce_token_fixture_allows_matching_request() {
+        let report = enforce_token_path(
+            &fixture_dir("allow_case").join("expected.execution_token.json"),
+            &token_fixture("allow_request.json"),
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        )
+        .expect("enforce-token should execute");
+        assert!(report.allowed);
+        assert_eq!(report.error_code, None);
+    }
+
+    #[test]
+    fn mint_token_fixture_claims() {
+        let token = mint_token_path(&token_fixture("mint_claims.json"))
+            .expect("mint-token should return token");
+        assert_eq!(token.token_id, "token-transfer-001");
+        assert_eq!(token.signature.signing_scheme, "debug_hash_v1");
     }
 }

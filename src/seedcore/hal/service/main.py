@@ -15,7 +15,7 @@ import json
 import os
 import uuid
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional, List
 
@@ -24,7 +24,11 @@ from ..custody.forensic_sealer import ForensicSealer
 from ..custody.transition_receipts import build_transition_receipt
 from pydantic import BaseModel, Field
 from ...database import get_redis_client
-from ...ops.evidence.policy import verify_execution_token_signature as verify_execution_token_signature_result
+from ...integrations.rust_kernel import (
+    enforce_execution_token_with_rust,
+    map_token_error_for_hal,
+    verify_execution_token_with_rust,
+)
 
 # Internal SeedCore HAL imports
 from ..drivers.reachy_mini import ReachyMiniDriver
@@ -54,7 +58,6 @@ HAL_REQUIRE_EXECUTION_TOKEN = os.getenv("HAL_REQUIRE_EXECUTION_TOKEN", "false").
     "true",
     "yes",
 }
-DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 5
 EXECUTION_TOKEN_REVOCATION_PREFIX = os.getenv(
     "SEEDCORE_EXECUTION_TOKEN_CRL_PREFIX",
     "seedcore:execution_token:revoked:",
@@ -481,6 +484,7 @@ def _validate_execution_token(
     issued_at = token.get("issued_at")
     contract_version = token.get("contract_version")
     signature = token.get("signature")
+    artifact_hash = token.get("artifact_hash")
     constraints = token.get("constraints")
 
     if not token_id or not isinstance(valid_until_raw, str):
@@ -491,7 +495,9 @@ def _validate_execution_token(
         return "invalid ExecutionToken"
     if not isinstance(contract_version, str) or not contract_version.strip():
         return "invalid ExecutionToken"
-    if not isinstance(signature, str) or not signature.strip():
+    if not isinstance(signature, dict):
+        return "invalid ExecutionToken"
+    if not isinstance(artifact_hash, dict):
         return "invalid ExecutionToken"
     if not isinstance(constraints, dict):
         return "invalid ExecutionToken"
@@ -506,9 +512,6 @@ def _validate_execution_token(
     issued_at_ts = issued_at_ts.astimezone(timezone.utc)
     if ts <= issued_at_ts:
         return "invalid ExecutionToken"
-    max_valid_until = issued_at_ts + timedelta(seconds=_execution_token_ttl_seconds())
-    if ts > max_valid_until:
-        return "expired ExecutionToken"
     revocation_error = _validate_execution_token_revocation(
         token_id=str(token_id),
         issued_at=issued_at_ts,
@@ -517,10 +520,15 @@ def _validate_execution_token(
         return revocation_error
     if ts <= datetime.now(timezone.utc):
         return "expired ExecutionToken"
-    if not _verify_execution_token_signature(token):
-        return "forged ExecutionToken"
+    rust_verify = verify_execution_token_with_rust(
+        token,
+        now=datetime.now(timezone.utc),
+    )
+    if not bool(rust_verify.get("verified")):
+        return map_token_error_for_hal(rust_verify.get("error_code"))
 
     constraint_error = _validate_execution_token_constraints(
+        token=token,
         constraints=constraints,
         active_driver=active_driver,
     )
@@ -533,17 +541,6 @@ def _coerce_execution_token(token: Dict[str, Any]) -> Any:
     # Kept for compatibility if used elsewhere, though not required internally now
     return token
 
-
-
-def _execution_token_ttl_seconds() -> int:
-    raw = os.getenv(
-        "SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS",
-        str(DEFAULT_EXECUTION_TOKEN_TTL_SECONDS),
-    )
-    try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return DEFAULT_EXECUTION_TOKEN_TTL_SECONDS
 
 
 def _execution_token_crl_ttl_seconds() -> int:
@@ -720,6 +717,7 @@ def _validate_hashed_media_references(media_refs: List[Dict[str, Any]]) -> None:
 
 def _validate_execution_token_constraints(
     *,
+    token: Dict[str, Any],
     constraints: Dict[str, Any],
     active_driver: Optional[BaseRobotDriver],
 ) -> Optional[str]:
@@ -728,6 +726,30 @@ def _validate_execution_token_constraints(
 
     endpoint_constraint = constraints.get("endpoint_id") or constraints.get("actuator_endpoint")
     expected_endpoint = _derive_actuator_endpoint(active_driver)
+    target_zone = constraints.get("target_zone")
+    configured_zones = _configured_target_zones()
+
+    rust_request = {
+        "action_type": constraints.get("action_type"),
+        "target_zone": (
+            next(iter(configured_zones))
+            if len(configured_zones) == 1
+            else target_zone
+        ),
+        "asset_id": constraints.get("asset_id"),
+        "principal_agent_id": constraints.get("principal_agent_id"),
+        "source_registration_id": constraints.get("source_registration_id"),
+        "registration_decision_id": constraints.get("registration_decision_id"),
+        "endpoint_id": expected_endpoint,
+    }
+    rust_enforcement = enforce_execution_token_with_rust(
+        token,
+        rust_request,
+        now=datetime.now(timezone.utc),
+    )
+    if not bool(rust_enforcement.get("allowed")):
+        return map_token_error_for_hal(rust_enforcement.get("error_code"))
+
     if (
         isinstance(endpoint_constraint, str)
         and endpoint_constraint.strip()
@@ -735,10 +757,8 @@ def _validate_execution_token_constraints(
     ):
         return "ExecutionToken endpoint mismatch"
 
-    target_zone = constraints.get("target_zone")
     if isinstance(target_zone, str) and target_zone.strip():
-        allowed_zones = _configured_target_zones()
-        if allowed_zones and target_zone not in allowed_zones:
+        if configured_zones and target_zone not in configured_zones:
             return "ExecutionToken target zone mismatch"
 
     return None
@@ -757,31 +777,6 @@ def _configured_target_zones() -> set[str]:
             if part.strip()
         )
     return values
-
-
-def _verify_execution_token_signature(token: Dict[str, Any]) -> bool:
-    return bool(verify_execution_token_signature_result(token).get("verified"))
-
-
-def _expected_execution_token_signature(token: Dict[str, Any]) -> str:
-    secret = os.getenv("SEEDCORE_PDP_SIGNING_SECRET", "seedcore-dev-signing-secret")
-    payload = {
-        "token_id": token.get("token_id"),
-        "intent_id": token.get("intent_id"),
-        "issued_at": token.get("issued_at"),
-        "valid_until": token.get("valid_until"),
-        "contract_version": token.get("contract_version"),
-        "constraints": token.get("constraints"),
-    }
-    return hmac.new(
-        secret.encode("utf-8"),
-        _canonical_json(payload).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
 @app.get("/vision/frame")

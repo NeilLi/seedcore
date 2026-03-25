@@ -297,7 +297,8 @@ class ExecutionToken(BaseModel):
     issued_at: str
     valid_until: str
     contract_version: str
-    signature: str
+    artifact_hash: Dict[str, Any] = Field(default_factory=dict)
+    signature: Dict[str, Any] = Field(default_factory=dict)
     constraints: Dict[str, Any] = Field(default_factory=dict)
 
 

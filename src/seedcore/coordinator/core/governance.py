@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping
 from urllib.parse import quote
 
+from seedcore.integrations.rust_kernel import mint_execution_token_with_rust
 from seedcore.models.action_intent import (
     ActionIntent,
     AuthorityLevel,
@@ -2473,8 +2474,10 @@ def _mint_execution_token(
         "contract_version": action_intent.action.security_contract.version,
         "constraints": constraints,
     }
-    signature = _sign_payload(token_payload)
-    return ExecutionToken(signature=signature, **token_payload)
+    minted = mint_execution_token_with_rust(token_payload)
+    if minted.get("error") is not None:
+        raise ValueError(f"rust_token_mint_failed:{minted.get('error')}")
+    return ExecutionToken(**minted)
 
 
 def _allow_reason(action_intent: ActionIntent) -> str:
@@ -3083,15 +3086,6 @@ def _pdp_break_glass_token_max_skew_seconds() -> float:
         return max(0.0, float(raw))
     except (TypeError, ValueError):
         return 1.0
-
-
-def _sign_payload(payload: Dict[str, Any]) -> str:
-    secret = os.getenv("SEEDCORE_PDP_SIGNING_SECRET", "seedcore-dev-signing-secret")
-    return hmac.new(
-        secret.encode("utf-8"),
-        _canonical_json(payload).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
 
 
 def _sha256_hex(value: str) -> str:

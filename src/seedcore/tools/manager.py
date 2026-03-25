@@ -11,6 +11,10 @@ import json
 from datetime import datetime, timezone
 import uuid
 
+from seedcore.integrations.rust_kernel import (
+    enforce_execution_token_with_rust,
+    verify_execution_token_with_rust,
+)
 from seedcore.hal.custody.transition_receipts import (
     is_attestable_transition_endpoint,
     verify_transition_receipt,
@@ -631,6 +635,18 @@ class ToolManager:
         signature = token.get("signature")
         if not token_id or not intent_id or not valid_until or not signature:
             raise ToolError(tool_name, "invalid_execution_token")
+        if not isinstance(signature, dict):
+            raise ToolError(tool_name, "invalid_execution_token")
+
+        rust_verify = verify_execution_token_with_rust(
+            token,
+            now=datetime.now(timezone.utc),
+        )
+        if not bool(rust_verify.get("verified")):
+            error_code = str(rust_verify.get("error_code") or "verification_failed")
+            if error_code == "token_expired":
+                raise ToolError(tool_name, "execution_token_expired")
+            raise ToolError(tool_name, f"invalid_execution_token:{error_code}")
 
         valid_until_ts = self._iso_to_ts(str(valid_until))
         if valid_until_ts is None:
@@ -649,7 +665,7 @@ class ToolManager:
         principal = action_intent.get("principal", {})
         resource = action_intent.get("resource", {})
         action = action_intent.get("action", {})
-        expected_pairs = {
+        expected_pairs: Dict[str, Any] = {
             "action_type": action.get("type"),
             "target_zone": resource.get("target_zone"),
             "asset_id": resource.get("asset_id"),
@@ -657,10 +673,32 @@ class ToolManager:
             "source_registration_id": resource.get("source_registration_id"),
             "registration_decision_id": resource.get("registration_decision_id"),
         }
-        for key, expected in expected_pairs.items():
-            actual = constraints.get(key)
-            if expected is not None and actual is not None and str(expected) != str(actual):
-                raise ToolError(tool_name, f"execution_token_constraint_mismatch:{key}")
+        action_params = action.get("parameters", {})
+        expected_pairs["endpoint_id"] = (
+            action_params.get("endpoint_id")
+            if isinstance(action_params, dict)
+            else None
+        )
+        request_context = {
+            key: expected_pairs.get(key) if expected_pairs.get(key) is not None else constraints.get(key)
+            for key in (
+                "action_type",
+                "target_zone",
+                "asset_id",
+                "principal_agent_id",
+                "source_registration_id",
+                "registration_decision_id",
+                "endpoint_id",
+            )
+        }
+        rust_enforcement = enforce_execution_token_with_rust(
+            token,
+            request_context,
+            now=datetime.now(timezone.utc),
+        )
+        if not bool(rust_enforcement.get("allowed")):
+            error_code = str(rust_enforcement.get("error_code") or "constraint_mismatch")
+            raise ToolError(tool_name, f"execution_token_constraint_mismatch:{error_code}")
 
     async def _execute_custody(
         self,

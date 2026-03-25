@@ -15,7 +15,6 @@ import numpy as np
 from ..interfaces import BaseRobotDriver, ProprioceptionState, RobotCapabilities, RobotState
 from ..robot_sim.actuator.actuator_adapter import ActuatorAdapter
 from ..robot_sim.actuator.execution_registry import ExecutionRegistry
-from ..robot_sim.governance.execution_token import ExecutionToken as SimExecutionToken
 from ..robot_sim.simulator.robot_model import RobotModel
 
 logger = logging.getLogger(__name__)
@@ -200,9 +199,8 @@ class RobotSimExecutionDriver(BaseRobotDriver):
         if not isinstance(execution_token, dict):
             raise PermissionError("Execution blocked: invalid ExecutionToken")
 
-        token = self._to_sim_token(execution_token)
         self._state = RobotState.MOVING
-        envelope = self._adapter.execute(token, behavior_name, behavior_params or {})
+        envelope = self._adapter.execute(execution_token, behavior_name, behavior_params or {})
         self._state = RobotState.CONNECTED
         self._last_execution = envelope
 
@@ -228,11 +226,3 @@ class RobotSimExecutionDriver(BaseRobotDriver):
             self._current_state["antennas"] = [float(target["antennas"][0]), float(target["antennas"][1])]
         if target.get("body_yaw") is not None:
             self._current_state["body_yaw"] = float(target["body_yaw"])
-
-    def _to_sim_token(self, token: Dict[str, Any]) -> SimExecutionToken:
-        token_id = str(token.get("token_id") or token.get("id") or "missing-token")
-        valid_until_raw = token.get("valid_until")
-        valid_until = None
-        if isinstance(valid_until_raw, str) and valid_until_raw.strip():
-            valid_until = datetime.fromisoformat(valid_until_raw.replace("Z", "+00:00"))
-        return SimExecutionToken(id=token_id, status="active", valid_until=valid_until)
