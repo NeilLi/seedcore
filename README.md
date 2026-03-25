@@ -34,6 +34,9 @@ The current baseline now includes:
 - short-lived execution tokens with explicit TTL enforcement at both PDP issuance time and HAL validation time
 - Redis-backed token revocation and an operator-triggered emergency cutoff path at the HAL boundary
 - PKG-first routing where action execution remains behind a policy-produced proto-plan rather than LLM-only actuation
+- a Rust authority kernel workspace under `rust/` with deterministic proof, approval, policy, token, and verifier crates
+- a `seedcore-verify` CLI that supports transfer verification, replay-chain checks, and business-readable transfer summaries
+- a TypeScript trust surface workspace under `ts/` including strict verifier-output contracts, a verification API facade, and workflow-specific proof pages
 
 This means the repository is no longer just describing zero-trust ideas. It already contains the runtime seams needed to make authority, policy, and custody inspectable in code.
 
@@ -285,6 +288,9 @@ That document is the better source of truth because the implementation and verif
 The recommended language-boundary evolution for that next stage lives in
 [docs/development/language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
 
+The concrete Rust workspace proposal for that same track lives in
+[docs/development/rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
+
 In short, the highest-priority remaining work is:
 
 - hardware-backed signer and device-trust hardening
@@ -405,6 +411,44 @@ Current focused suite result:
 
 - `51 passed`
 
+### Rust + TypeScript Proof Surface Quick Check
+
+Run the Rust kernel test baseline:
+
+```bash
+cargo test --workspace --manifest-path rust/Cargo.toml
+```
+
+Build and run the Rust verifier summary path:
+
+```bash
+cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
+rust/target/debug/seedcore-verify summarize-transfer --dir rust/fixtures/transfers/allow_case
+```
+
+Typecheck and build the TypeScript trust surface workspace:
+
+```bash
+npm --prefix ts install
+npm --prefix ts run typecheck
+npm --prefix ts run build
+```
+
+Run the TS verification API and proof surface locally:
+
+```bash
+npm --prefix ts run serve:verification-api
+```
+
+```bash
+npm --prefix ts run serve:proof-surface
+```
+
+Proof pages:
+
+- `http://127.0.0.1:7072/transfer?dir=rust/fixtures/transfers/allow_case`
+- `http://127.0.0.1:7072/asset?dir=rust/fixtures/transfers/allow_case`
+
 ### Kind + Kubernetes
 
 ### Prerequisites
@@ -514,6 +558,7 @@ SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64=
 SEEDCORE_HAL_RECEIPT_KEY_ID=
 SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON=
 SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY=false
+SEEDCORE_VERIFY_BIN=/usr/local/bin/seedcore-verify
 ```
 
 HAL receipt signing prefers Ed25519:
@@ -609,6 +654,18 @@ The HAL bridge is deployed separately from the main API and exposes the controll
 
 - Ray Serve base URL: `http://localhost:8000`
 - Ray Dashboard: `http://localhost:8265`
+
+### TypeScript Verification Surface (Optional Local Services)
+
+- Verification API: `http://127.0.0.1:7071`
+  - `GET /health`
+  - `GET /api/v1/transfers/summary?dir=...`
+  - `GET /api/v1/transfers/proof?dir=...`
+  - `GET /api/v1/assets/proof?dir=...`
+- Proof surface: `http://127.0.0.1:7072`
+  - `GET /`
+  - `GET /transfer?dir=...`
+  - `GET /asset?dir=...`
 
 ---
 
