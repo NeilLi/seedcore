@@ -41,6 +41,7 @@ class GovernedOperation(str, Enum):
     ACTION = "ACTION"
     READ = "READ"
     MUTATE = "MUTATE"
+    TRANSFER_CUSTODY = "TRANSFER_CUSTODY"
     SPAWN_PROCESS = "SPAWN_PROCESS"
     TERMINATE = "TERMINATE"
     MOVE = "MOVE"
@@ -325,6 +326,7 @@ class PolicyDecision(BaseModel):
     required_approvals: List[str] = Field(default_factory=list)
     evidence_gaps: List[str] = Field(default_factory=list)
     cognitive_trace_ref: Optional[str] = None
+    obligations: List[Dict[str, Any]] = Field(default_factory=list)
     break_glass: BreakGlassDecisionContext = Field(default_factory=BreakGlassDecisionContext)
     authz_graph: Dict[str, Any] = Field(default_factory=dict)
     governed_receipt: Dict[str, Any] = Field(default_factory=dict)

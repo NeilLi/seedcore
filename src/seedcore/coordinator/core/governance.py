@@ -96,6 +96,8 @@ EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "endpoint_id",
 )
 DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 5
+RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE = "custody_transfer"
+RESTRICTED_CUSTODY_TRANSFER_ACTION_TYPES = {"TRANSFER_CUSTODY"}
 
 
 def requires_action_intent(task: TaskPayload | Mapping[str, Any] | Dict[str, Any]) -> bool:
@@ -815,66 +817,87 @@ def evaluate_intent(
         issued_at = _parse_iso8601(action_intent.timestamp)
         valid_until = _parse_iso8601(action_intent.valid_until)
     except ValueError:
-        return _deny_decision(
-            "ActionIntent contains invalid timestamps.",
-            "invalid_timestamp",
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                "ActionIntent contains invalid timestamps.",
+                "invalid_timestamp",
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
 
     if valid_until <= issued_at:
-        return _deny_decision(
-            "ActionIntent TTL is non-positive.",
-            "expired_intent",
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                "ActionIntent TTL is non-positive.",
+                "expired_intent",
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
     if valid_until <= now:
-        return _deny_decision(
-            "ActionIntent TTL is expired.",
-            "expired_intent",
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                "ActionIntent TTL is expired.",
+                "expired_intent",
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
     intent_age_ms = (now - issued_at).total_seconds() * 1000.0
     max_intent_age_ms = _pdp_max_intent_age_ms()
     if max_intent_age_ms > 0 and intent_age_ms > max_intent_age_ms:
-        return _deny_decision(
-            f"ActionIntent is older than the permitted freshness window ({max_intent_age_ms}ms).",
-            STALE_INTENT_DENY_CODE,
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                f"ActionIntent is older than the permitted freshness window ({max_intent_age_ms}ms).",
+                STALE_INTENT_DENY_CODE,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
 
     if not action_intent.principal.agent_id.strip():
-        return _deny_decision(
-            "ActionIntent is missing principal.agent_id.",
-            "missing_principal",
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                "ActionIntent is missing principal.agent_id.",
+                "missing_principal",
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
 
     if not action_intent.principal.role_profile.strip():
-        return _deny_decision(
-            "ActionIntent is missing principal.role_profile.",
-            "missing_role_profile",
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                "ActionIntent is missing principal.role_profile.",
+                "missing_role_profile",
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
 
     if not action_intent.action.security_contract.version.strip():
-        return _deny_decision(
-            "ActionIntent is missing action.security_contract.version.",
-            "missing_contract_version",
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                "ActionIntent is missing action.security_contract.version.",
+                "missing_contract_version",
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
 
     actor_token_violation = _evaluate_actor_token_policy(
@@ -884,28 +907,49 @@ def evaluate_intent(
         policy_case=policy_case,
     )
     if actor_token_violation is not None:
-        return actor_token_violation
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=actor_token_violation,
+        )
 
     registration_deny_code = _source_registration_deny_code(
         action_intent,
         policy_case.approved_source_registrations,
     )
     if registration_deny_code is not None:
-        return _deny_decision(
-            _source_registration_deny_reason(registration_deny_code),
-            registration_deny_code,
-            policy_snapshot,
-            risk_score=_policy_case_risk_score(policy_case),
-            cognitive_assessment=policy_case.cognitive_assessment,
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=_deny_decision(
+                _source_registration_deny_reason(registration_deny_code),
+                registration_deny_code,
+                policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case),
+                cognitive_assessment=policy_case.cognitive_assessment,
+            ),
         )
 
     twin_violation = _evaluate_twin_policy(policy_case)
     if twin_violation is not None:
-        return twin_violation
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=twin_violation,
+        )
 
     cognitive_violation = _evaluate_cognitive_policy(policy_case)
     if cognitive_violation is not None:
-        return cognitive_violation
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=cognitive_violation,
+        )
+
+    transfer_prerequisite_violation = _evaluate_restricted_custody_transfer_prerequisites(
+        policy_case=policy_case,
+    )
+    if transfer_prerequisite_violation is not None:
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=transfer_prerequisite_violation,
+        )
 
     authz_graph_violation, break_glass_context, transition_evaluation, compiled_match, authz_evaluator = _evaluate_compiled_authz_graph_policy(
         action_intent=action_intent,
@@ -913,57 +957,66 @@ def evaluate_intent(
         compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
     )
     if authz_graph_violation is not None:
-        return authz_graph_violation
+        return _finalize_policy_decision_contract(
+            policy_case=policy_case,
+            policy_decision=authz_graph_violation,
+        )
 
     token_valid_until = min(
         valid_until,
         now + timedelta(seconds=_execution_token_ttl_seconds()),
     )
+    execution_constraints = dict(
+        _transition_execution_constraints(transition_evaluation)
+        if transition_evaluation is not None
+        else {}
+    )
+    if _is_restricted_custody_transfer(action_intent):
+        execution_constraints.update(_restricted_custody_transfer_execution_constraints(action_intent))
     token = _mint_execution_token(
         action_intent=action_intent,
         issued_at=now,
         valid_until=token_valid_until,
-        extra_constraints=(
-            _transition_execution_constraints(transition_evaluation)
-            if transition_evaluation is not None
-            else None
-        ),
+        extra_constraints=execution_constraints or None,
     )
     allow_reason = _allow_reason(action_intent)
     disposition = "allow"
     if transition_evaluation is not None and transition_evaluation.disposition == AuthzDecisionDisposition.QUARANTINE:
         allow_reason = "quarantine"
         disposition = "quarantine"
-    return PolicyDecision(
-        allowed=True,
-        execution_token=token,
-        reason=allow_reason,
-        policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
-        disposition=disposition,
-        risk_score=_policy_case_risk_score(policy_case),
-        explanations=_policy_case_explanations(policy_case, allow_reason),
-        required_approvals=(
-            policy_case.cognitive_assessment.required_approvals
-            if policy_case.cognitive_assessment is not None
-            else []
+    return _finalize_policy_decision_contract(
+        policy_case=policy_case,
+        policy_decision=PolicyDecision(
+            allowed=True,
+            execution_token=token,
+            reason=allow_reason,
+            policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
+            disposition=disposition,
+            risk_score=_policy_case_risk_score(policy_case),
+            explanations=_policy_case_explanations(policy_case, allow_reason),
+            required_approvals=(
+                policy_case.cognitive_assessment.required_approvals
+                if policy_case.cognitive_assessment is not None
+                else []
+            ),
+            evidence_gaps=(
+                policy_case.cognitive_assessment.missing_evidence
+                if policy_case.cognitive_assessment is not None
+                else []
+            ),
+            cognitive_trace_ref=(
+                policy_case.cognitive_assessment.trace_ref
+                if policy_case.cognitive_assessment is not None
+                else None
+            ),
+            break_glass=break_glass_context,
+            authz_graph=_authz_graph_decision_metadata(
+                transition_evaluation=transition_evaluation,
+                compiled_match=compiled_match,
+                evaluator=authz_evaluator,
+            ),
+            governed_receipt=_serialize_governed_receipt(transition_evaluation),
         ),
-        evidence_gaps=(
-            policy_case.cognitive_assessment.missing_evidence
-            if policy_case.cognitive_assessment is not None
-            else []
-        ),
-        cognitive_trace_ref=(
-            policy_case.cognitive_assessment.trace_ref
-            if policy_case.cognitive_assessment is not None
-            else None
-        ),
-        break_glass=break_glass_context,
-        authz_graph=_authz_graph_decision_metadata(
-            transition_evaluation=transition_evaluation,
-            compiled_match=compiled_match,
-            evaluator=authz_evaluator,
-        ),
-        governed_receipt=_serialize_governed_receipt(transition_evaluation),
     )
 
 
@@ -1706,6 +1759,382 @@ def _decision_explanations(
     return explanations
 
 
+def _transfer_context(action_intent: ActionIntent) -> Dict[str, Any]:
+    category_envelope = (
+        action_intent.resource.category_envelope
+        if isinstance(action_intent.resource.category_envelope, dict)
+        else {}
+    )
+    transfer_context = category_envelope.get("transfer_context")
+    return dict(transfer_context) if isinstance(transfer_context, Mapping) else {}
+
+
+def _approval_context(action_intent: ActionIntent) -> Dict[str, Any]:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
+    approval_context = parameters.get("approval_context")
+    return dict(approval_context) if isinstance(approval_context, Mapping) else {}
+
+
+def _is_restricted_custody_transfer(action_intent: ActionIntent) -> bool:
+    action_type = str(action_intent.action.type or "").strip().upper()
+    return (
+        action_type in RESTRICTED_CUSTODY_TRANSFER_ACTION_TYPES
+        or bool(_transfer_context(action_intent))
+        or bool(_approval_context(action_intent))
+    )
+
+
+def _workflow_type_for_intent(action_intent: ActionIntent) -> str | None:
+    if _is_restricted_custody_transfer(action_intent):
+        return RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE
+    return None
+
+
+def _transfer_context_value(action_intent: ActionIntent, *keys: str) -> str | None:
+    context = _transfer_context(action_intent)
+    for key in keys:
+        value = context.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _transfer_required_approvals(action_intent: ActionIntent) -> list[str]:
+    approval_context = _approval_context(action_intent)
+    required_roles = approval_context.get("required_roles")
+    if not isinstance(required_roles, list):
+        return []
+    values: list[str] = []
+    for item in required_roles:
+        if item is None:
+            continue
+        value = str(item).strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _evaluate_restricted_custody_transfer_prerequisites(
+    *,
+    policy_case: PolicyCase,
+) -> PolicyDecision | None:
+    action_intent = policy_case.action_intent
+    if not _is_restricted_custody_transfer(action_intent):
+        return None
+
+    approval_context = _approval_context(action_intent)
+    required_approvals = _transfer_required_approvals(action_intent)
+    approved_by_raw = approval_context.get("approved_by")
+    approved_by: list[str] = []
+    if isinstance(approved_by_raw, list):
+        for item in approved_by_raw:
+            if item is None:
+                continue
+            value = str(item).strip()
+            if value and value not in approved_by:
+                approved_by.append(value)
+
+    missing_prerequisites: list[dict[str, Any]] = []
+    approval_envelope_id = approval_context.get("approval_envelope_id")
+    if approval_envelope_id is None or not str(approval_envelope_id).strip():
+        missing_prerequisites.append(
+            {
+                "code": "approval_envelope",
+                "outcome": "missing",
+                "message": "Restricted custody transfer requires an approval envelope reference.",
+                "details": {},
+            }
+        )
+
+    approval_binding_hash = approval_context.get("approval_binding_hash")
+    if approval_binding_hash is None or not str(approval_binding_hash).strip():
+        missing_prerequisites.append(
+            {
+                "code": "approval_binding",
+                "outcome": "missing",
+                "message": "Restricted custody transfer requires an approval binding hash.",
+                "details": {},
+            }
+        )
+
+    if not required_approvals:
+        missing_prerequisites.append(
+            {
+                "code": "required_approvals",
+                "outcome": "missing",
+                "message": "Restricted custody transfer requires explicit approval roles.",
+                "details": {},
+            }
+        )
+
+    if required_approvals and len(approved_by) < len(required_approvals):
+        missing_prerequisites.append(
+            {
+                "code": "approved_by",
+                "outcome": "missing",
+                "message": "Restricted custody transfer is still waiting for the full approval set.",
+                "details": {
+                    "required_approvals": required_approvals,
+                    "approved_by": approved_by,
+                },
+            }
+        )
+
+    if missing_prerequisites:
+        return _escalate_decision(
+            "Restricted custody transfer requires completed dual approval.",
+            policy_case.policy_snapshot,
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=_policy_case_explanations(
+                policy_case,
+                "restricted_custody_transfer_approval_incomplete",
+            ),
+            authz_graph={
+                "mode": "transfer_prerequisite_check",
+                "disposition": "escalate",
+                "reason": "approval_incomplete",
+                "matched_policy_refs": [],
+                "authority_paths": [],
+                "authority_path_summary": [],
+                "missing_prerequisites": missing_prerequisites,
+                "trust_gaps": [],
+            },
+        ).model_copy(update={"required_approvals": required_approvals})
+    return None
+
+
+def _authority_path_summary(authority_paths: Any) -> list[str]:
+    if not isinstance(authority_paths, list):
+        return []
+    summaries: list[str] = []
+    for raw_path in authority_paths:
+        if not isinstance(raw_path, list):
+            continue
+        path = [str(item).strip() for item in raw_path if str(item).strip()]
+        if path:
+            summaries.append(" -> ".join(path))
+    return summaries
+
+
+def _decision_minted_artifacts(policy_decision: PolicyDecision) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    if policy_decision.execution_token is not None:
+        artifacts.append(
+            {
+                "kind": "execution_token",
+                "ref": policy_decision.execution_token.token_id,
+            }
+        )
+    governed_receipt = policy_decision.governed_receipt if isinstance(policy_decision.governed_receipt, dict) else {}
+    decision_hash = governed_receipt.get("decision_hash")
+    if decision_hash is not None and str(decision_hash).strip():
+        artifacts.append(
+            {
+                "kind": "governed_receipt",
+                "ref": str(decision_hash).strip(),
+            }
+        )
+    return artifacts
+
+
+def _transfer_has_telemetry_requirement(authz_graph: Mapping[str, Any]) -> bool:
+    checked_constraints = authz_graph.get("checked_constraints")
+    if isinstance(checked_constraints, list):
+        for item in checked_constraints:
+            if isinstance(item, Mapping) and str(item.get("code") or "").strip() == "telemetry_freshness":
+                return True
+    trust_gaps = authz_graph.get("trust_gaps")
+    if isinstance(trust_gaps, list):
+        for item in trust_gaps:
+            if not isinstance(item, Mapping):
+                continue
+            if str(item.get("code") or "").strip() in {"stale_telemetry", "missing_telemetry"}:
+                return True
+    return False
+
+
+def _workflow_obligations(
+    *,
+    action_intent: ActionIntent,
+    policy_decision: PolicyDecision,
+    authz_graph: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    if not _is_restricted_custody_transfer(action_intent):
+        return []
+
+    obligation_codes: list[str]
+    if policy_decision.disposition == "allow":
+        obligation_codes = [
+            "generate_transition_receipt",
+            "publish_replay_artifact",
+            "close_prior_custodian_state",
+            "update_verification_surface",
+        ]
+    elif policy_decision.disposition == "quarantine":
+        obligation_codes = [
+            "preserve_restricted_state",
+            "manual_review",
+            "update_verification_surface",
+        ]
+    else:
+        obligation_codes = ["update_verification_surface"]
+
+    if (
+        policy_decision.disposition in {"allow", "quarantine"}
+        and _transfer_has_telemetry_requirement(authz_graph)
+        and "attach_telemetry_proof" not in obligation_codes
+    ):
+        obligation_codes.append("attach_telemetry_proof")
+
+    return [{"code": code} for code in obligation_codes]
+
+
+def _restricted_custody_transfer_execution_constraints(
+    action_intent: ActionIntent,
+) -> Dict[str, Any]:
+    approval_context = _approval_context(action_intent)
+    approved_by = approval_context.get("approved_by") if isinstance(approval_context.get("approved_by"), list) else []
+    required_approvals = _transfer_required_approvals(action_intent)
+    constraints = {
+        "from_zone": _transfer_context_value(action_intent, "from_zone"),
+        "target_zone": _transfer_context_value(action_intent, "to_zone") or action_intent.resource.target_zone,
+        "expected_current_custodian": _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref"),
+        "next_custodian": _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref"),
+        "approval_envelope_id": approval_context.get("approval_envelope_id"),
+        "approval_binding_hash": approval_context.get("approval_binding_hash"),
+        "approved_by": list(approved_by),
+        "co_signed": bool(required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(required_approvals)),
+    }
+    return {key: value for key, value in constraints.items() if value is not None}
+
+
+def _workflow_status_for_decision(policy_decision: PolicyDecision) -> str:
+    if policy_decision.disposition == "allow":
+        return "verified"
+    if policy_decision.disposition == "quarantine":
+        return "quarantined"
+    if policy_decision.disposition == "deny":
+        return "rejected"
+    if policy_decision.required_approvals:
+        return "pending_approval"
+    return "review_required"
+
+
+def _finalize_policy_decision_contract(
+    *,
+    policy_case: PolicyCase,
+    policy_decision: PolicyDecision,
+) -> PolicyDecision:
+    action_intent = policy_case.action_intent
+    authz_graph = (
+        dict(policy_decision.authz_graph)
+        if isinstance(policy_decision.authz_graph, Mapping)
+        else {}
+    )
+    authz_graph["disposition"] = str(authz_graph.get("disposition") or policy_decision.disposition)
+    authz_graph["matched_policy_refs"] = (
+        list(authz_graph.get("matched_policy_refs"))
+        if isinstance(authz_graph.get("matched_policy_refs"), list)
+        else []
+    )
+    authz_graph["authority_paths"] = (
+        list(authz_graph.get("authority_paths"))
+        if isinstance(authz_graph.get("authority_paths"), list)
+        else []
+    )
+    authz_graph["authority_path_summary"] = _authority_path_summary(authz_graph.get("authority_paths"))
+    authz_graph["missing_prerequisites"] = (
+        list(authz_graph.get("missing_prerequisites"))
+        if isinstance(authz_graph.get("missing_prerequisites"), list)
+        else []
+    )
+    authz_graph["trust_gaps"] = (
+        list(authz_graph.get("trust_gaps"))
+        if isinstance(authz_graph.get("trust_gaps"), list)
+        else []
+    )
+
+    if _is_restricted_custody_transfer(action_intent):
+        authz_graph["workflow_type"] = RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE
+        authz_graph["workflow_status"] = _workflow_status_for_decision(policy_decision)
+        approval_context = _approval_context(action_intent)
+        authz_graph["required_approvals"] = list(
+            policy_decision.required_approvals or _transfer_required_approvals(action_intent)
+        )
+        authz_graph["approval_envelope_id"] = (
+            str(approval_context.get("approval_envelope_id")).strip()
+            if approval_context.get("approval_envelope_id") is not None and str(approval_context.get("approval_envelope_id")).strip()
+            else None
+        )
+        authz_graph["approved_by"] = (
+            list(approval_context.get("approved_by"))
+            if isinstance(approval_context.get("approved_by"), list)
+            else []
+        )
+
+    policy_decision.required_approvals = list(policy_decision.required_approvals or _transfer_required_approvals(action_intent))
+    policy_decision.obligations = _workflow_obligations(
+        action_intent=action_intent,
+        policy_decision=policy_decision,
+        authz_graph=authz_graph,
+    )
+    authz_graph["obligations"] = list(policy_decision.obligations)
+    authz_graph["minted_artifacts"] = _decision_minted_artifacts(policy_decision)
+
+    governed_receipt = (
+        dict(policy_decision.governed_receipt)
+        if isinstance(policy_decision.governed_receipt, Mapping)
+        else {}
+    )
+    if _is_restricted_custody_transfer(action_intent) and governed_receipt:
+        approval_context = _approval_context(action_intent)
+        approved_by = approval_context.get("approved_by") if isinstance(approval_context.get("approved_by"), list) else []
+        advisory = dict(governed_receipt.get("advisory") or {})
+        advisory.update(
+            {
+                "workflow_type": RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE,
+                "approval_envelope_id": approval_context.get("approval_envelope_id"),
+                "approval_binding_hash": approval_context.get("approval_binding_hash"),
+                "approved_by": list(approved_by),
+                "co_signed": bool(policy_decision.required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(policy_decision.required_approvals)),
+                "from_zone": _transfer_context_value(action_intent, "from_zone"),
+                "to_zone": _transfer_context_value(action_intent, "to_zone") or action_intent.resource.target_zone,
+                "expected_current_custodian": _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref"),
+                "next_custodian": _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref"),
+            }
+        )
+        governed_receipt.update(
+            {
+                "workflow_type": RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE,
+                "approval_envelope_id": approval_context.get("approval_envelope_id"),
+                "approval_binding_hash": approval_context.get("approval_binding_hash"),
+                "approved_by": list(approved_by),
+                "co_signed": advisory["co_signed"],
+                "from_zone": advisory["from_zone"],
+                "target_zone": advisory["to_zone"],
+                "expected_current_custodian": advisory["expected_current_custodian"],
+                "next_custodian": advisory["next_custodian"],
+                "advisory": advisory,
+            }
+        )
+        if approval_context.get("approval_envelope_id") is not None and str(approval_context.get("approval_envelope_id")).strip():
+            evidence_refs = list(governed_receipt.get("evidence_refs") or [])
+            approval_ref = f"approval-envelope:{str(approval_context.get('approval_envelope_id')).strip()}"
+            if approval_ref not in evidence_refs:
+                evidence_refs.append(approval_ref)
+            governed_receipt["evidence_refs"] = evidence_refs
+        if approval_context.get("approval_binding_hash") is not None and str(approval_context.get("approval_binding_hash")).strip():
+            provenance_sources = list(governed_receipt.get("provenance_sources") or [])
+            binding_ref = f"approval_binding:{str(approval_context.get('approval_binding_hash')).strip()}"
+            if binding_ref not in provenance_sources:
+                provenance_sources.append(binding_ref)
+            governed_receipt["provenance_sources"] = provenance_sources
+
+    policy_decision.authz_graph = authz_graph
+    policy_decision.governed_receipt = governed_receipt
+    return policy_decision
+
+
 def _compiled_authz_principal_ref(action_intent: ActionIntent) -> str:
     return f"principal:{action_intent.principal.agent_id.strip()}"
 
@@ -1725,7 +2154,11 @@ def _compiled_authz_resource_ref(action_intent: ActionIntent) -> str:
 
 
 def _compiled_authz_zone_ref(action_intent: ActionIntent) -> str | None:
-    zone = (action_intent.resource.target_zone or "").strip()
+    zone = (
+        _transfer_context_value(action_intent, "to_zone")
+        or action_intent.resource.target_zone
+        or ""
+    ).strip()
     return f"zone:{zone}" if zone else None
 
 
@@ -1745,6 +2178,10 @@ def _compiled_authz_lot_ref(action_intent: ActionIntent) -> str | None:
 
 
 def _compiled_authz_facility_ref(action_intent: ActionIntent) -> str | None:
+    transfer_facility = _transfer_context_value(action_intent, "facility_ref", "facility_id")
+    if transfer_facility is not None and transfer_facility.strip():
+        facility = transfer_facility.strip()
+        return facility if facility.startswith("facility:") else f"facility:{facility}"
     parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
     for key in ("facility_id", "warehouse_id"):
         value = parameters.get(key)
@@ -1795,6 +2232,10 @@ def _compiled_authz_asset_ref(action_intent: ActionIntent) -> str | None:
 
 
 def _compiled_authz_custody_point_ref(action_intent: ActionIntent) -> str | None:
+    transfer_custody_point = _transfer_context_value(action_intent, "custody_point_ref")
+    if transfer_custody_point is not None and transfer_custody_point.strip():
+        custody_point = transfer_custody_point.strip()
+        return custody_point if custody_point.startswith("custody_point:") else f"custody_point:{custody_point}"
     parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, dict) else {}
     for key in ("custody_point", "custody_point_id", "facility_id", "warehouse_id"):
         value = parameters.get(key)
@@ -1825,6 +2266,11 @@ def _compiled_authz_transition_request(
         network_ref=_compiled_authz_network_ref(action_intent),
         custody_point_ref=_compiled_authz_custody_point_ref(action_intent),
         resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+        expected_custodian_ref=_transfer_context_value(
+            action_intent,
+            "expected_current_custodian",
+            "from_custodian_ref",
+        ),
         require_approved_source_registration=_requires_approved_source_registration(action_intent),
         at=_parse_iso8601(action_intent.timestamp),
         break_glass=break_glass,
@@ -2076,6 +2522,7 @@ def _authz_graph_decision_metadata(
             "match_reason": compiled_match.reason,
             "matched_subjects": list(compiled_match.matched_subjects),
             "authority_paths": [list(path) for path in compiled_match.authority_paths],
+            "authority_path_summary": _authority_path_summary([list(path) for path in compiled_match.authority_paths]),
             "matched_policy_refs": _policy_refs(compiled_match.matched_permissions),
             "deny_policy_refs": _policy_refs(compiled_match.deny_permissions),
             "break_glass_policy_refs": _policy_refs(compiled_match.break_glass_permissions),
@@ -2097,6 +2544,9 @@ def _authz_graph_decision_metadata(
         "permission_match_reason": transition_evaluation.permission_match.reason,
         "matched_subjects": list(transition_evaluation.permission_match.matched_subjects),
         "authority_paths": [list(path) for path in transition_evaluation.permission_match.authority_paths],
+        "authority_path_summary": _authority_path_summary(
+            [list(path) for path in transition_evaluation.permission_match.authority_paths]
+        ),
         "matched_policy_refs": _policy_refs(transition_evaluation.permission_match.matched_permissions),
         "deny_policy_refs": _policy_refs(transition_evaluation.permission_match.deny_permissions),
         "break_glass_policy_refs": _policy_refs(transition_evaluation.permission_match.break_glass_permissions),

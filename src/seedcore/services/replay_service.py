@@ -995,9 +995,13 @@ class ReplayService:
         replay: ReplayRecord,
         audience: ReplayProjectionKind,
     ) -> TrustPageProjection:
+        workflow_type = self._workflow_type(replay)
+        workflow_status = self._workflow_status(replay)
         custody_summary = self._build_custody_summary(replay)
         fingerprint_summary = self._build_fingerprint_summary(replay)
         policy_summary = self._build_policy_summary(replay)
+        approvals = self._build_approval_summary(replay)
+        authorization = self._build_authorization_summary(replay)
         dispute_summary = self._build_dispute_summary(replay)
         timeline_summary = [
             {
@@ -1010,16 +1014,26 @@ class ReplayService:
         claims = self._build_verifiable_claims(replay)
         media_refs = self._public_media_refs(replay.evidence_bundle)
         subject_label = "Asset" if replay.subject_type == "asset" else "Transaction"
-        if replay.governed_receipt.get("disposition") == "quarantine":
+        if workflow_status == "quarantined":
             subject_summary = f"{subject_label} {replay.subject_id} is restricted pending trust-gap resolution, with governed evidence preserved."
+        elif workflow_status == "pending_approval":
+            subject_summary = f"{subject_label} {replay.subject_id} is awaiting required approvals before governed transfer can proceed."
+        elif workflow_status == "review_required":
+            subject_summary = f"{subject_label} {replay.subject_id} requires governed review before transfer can proceed."
+        elif workflow_status == "rejected":
+            subject_summary = f"{subject_label} {replay.subject_id} was rejected by the governed transfer policy path."
         elif audience == ReplayProjectionKind.BUYER:
             subject_summary = f"{subject_label} {replay.subject_id} has a governed replay record with trust-safe evidence."
         else:
             subject_summary = f"{subject_label} {replay.subject_id} can be verified from governed policy and evidence records."
         return TrustPageProjection(
+            workflow_type=workflow_type,
+            status=workflow_status,
             subject_title=f"{subject_label} {replay.subject_id}",
             subject_summary=subject_summary,
             verification_status=replay.verification_status.model_dump(mode="json"),
+            approvals=approvals,
+            authorization=authorization,
             custody_summary=custody_summary,
             fingerprint_summary=fingerprint_summary,
             policy_summary=policy_summary,
@@ -1077,6 +1091,10 @@ class ReplayService:
             "trust_gap_codes": trust_gap_codes,
             "restricted_token_recommended": bool(replay.authz_graph.get("restricted_token_recommended")),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
+            "workflow_status": self._workflow_status(replay),
+            "authority_path_summary": list(replay.authz_graph.get("authority_path_summary") or []),
+            "minted_artifacts": list(replay.authz_graph.get("minted_artifacts") or []),
+            "obligations": list(replay.authz_graph.get("obligations") or []),
         }
 
     def _build_dispute_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -1086,6 +1104,91 @@ class ReplayService:
             "open_count": sum(1 for item in disputes if item.get("status") in {"OPEN", "UNDER_REVIEW"}),
             "statuses": sorted({str(item.get("status")) for item in disputes if item.get("status")}),
             "linked_dispute_ids": [item.get("dispute_id") for item in disputes if item.get("dispute_id")],
+        }
+
+    def _policy_decision_payload(self, replay: ReplayRecord) -> Dict[str, Any]:
+        record = replay.audit_record if isinstance(replay.audit_record, dict) else {}
+        payload = record.get("policy_decision")
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def _action_intent_payload(self, replay: ReplayRecord) -> Dict[str, Any]:
+        record = replay.audit_record if isinstance(replay.audit_record, dict) else {}
+        payload = record.get("action_intent")
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def _approval_context(self, replay: ReplayRecord) -> Dict[str, Any]:
+        action_intent = self._action_intent_payload(replay)
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+        approval_context = parameters.get("approval_context")
+        return dict(approval_context) if isinstance(approval_context, dict) else {}
+
+    def _workflow_type(self, replay: ReplayRecord) -> Optional[str]:
+        workflow_type = replay.authz_graph.get("workflow_type")
+        if isinstance(workflow_type, str) and workflow_type.strip():
+            return workflow_type.strip()
+        approval_context = self._approval_context(replay)
+        if approval_context:
+            return "custody_transfer"
+        action_intent = self._action_intent_payload(replay)
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        action_type = str(action.get("type") or "").strip().upper()
+        if action_type == "TRANSFER_CUSTODY":
+            return "custody_transfer"
+        return None
+
+    def _workflow_status(self, replay: ReplayRecord) -> Optional[str]:
+        policy_decision = self._policy_decision_payload(replay)
+        required_approvals = policy_decision.get("required_approvals") if isinstance(policy_decision.get("required_approvals"), list) else []
+        disposition = str(
+            replay.authz_graph.get("disposition")
+            or replay.governed_receipt.get("disposition")
+            or policy_decision.get("disposition")
+            or ""
+        ).strip().lower()
+        if not disposition:
+            return None
+        if disposition == "allow":
+            return "verified"
+        if disposition == "quarantine":
+            return "quarantined"
+        if disposition == "deny":
+            return "rejected"
+        if disposition == "escalate":
+            return "pending_approval" if required_approvals else "review_required"
+        return None
+
+    def _build_approval_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        policy_decision = self._policy_decision_payload(replay)
+        approval_context = self._approval_context(replay)
+        required = policy_decision.get("required_approvals") if isinstance(policy_decision.get("required_approvals"), list) else []
+        completed_by = (
+            replay.authz_graph.get("approved_by")
+            if isinstance(replay.authz_graph.get("approved_by"), list)
+            else approval_context.get("approved_by")
+            if isinstance(approval_context.get("approved_by"), list)
+            else []
+        )
+        return {
+            "required": list(required),
+            "completed_by": list(completed_by),
+            "approval_envelope_id": (
+                replay.authz_graph.get("approval_envelope_id")
+                or replay.governed_receipt.get("approval_envelope_id")
+                or approval_context.get("approval_envelope_id")
+            ),
+        }
+
+    def _build_authorization_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        return {
+            "disposition": replay.authz_graph.get("disposition") or replay.governed_receipt.get("disposition"),
+            "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
+            "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
+            "execution_token_id": (
+                replay.audit_record.get("token_id")
+                if isinstance(replay.audit_record, dict)
+                else None
+            ) or replay.evidence_bundle.get("execution_token_id"),
         }
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:

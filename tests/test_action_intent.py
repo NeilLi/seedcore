@@ -6,7 +6,7 @@ import hmac
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -62,6 +62,152 @@ def _base_payload() -> dict:
             },
         },
     }
+
+
+def _transfer_payload() -> dict:
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"] = {
+        "intent_id": "intent-transfer-1",
+        "timestamp": "2099-03-20T12:00:00+00:00",
+        "valid_until": "2099-03-20T12:10:00+00:00",
+        "principal": {
+            "agent_id": "agent-1",
+            "role_profile": "TRANSFER_COORDINATOR",
+            "session_token": "sess-transfer-1",
+        },
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "approval_context": {
+                    "approval_envelope_id": "approval-transfer-001",
+                    "approval_binding_hash": "sha256:approval-binding-transfer-001",
+                    "required_roles": ["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+                    "approved_by": [
+                        "principal:facility_mgr_001",
+                        "principal:quality_insp_017",
+                    ],
+                }
+            },
+            "security_contract": {"hash": "h-transfer-1", "version": "snapshot:1"},
+        },
+        "resource": {
+            "asset_id": "asset-1",
+            "resource_uri": "seedcore://zones/handoff-bay-3/assets/asset-1",
+            "target_zone": "handoff-bay-3",
+            "provenance_hash": "prov-transfer-1",
+            "lot_id": "lot-8841",
+            "category_envelope": {
+                "transfer_context": {
+                    "from_zone": "vault-a",
+                    "to_zone": "handoff-bay-3",
+                    "facility_ref": "facility:north-warehouse",
+                    "custody_point_ref": "custody_point:handoff-bay-3",
+                    "expected_current_custodian": "principal:facility_mgr_001",
+                    "next_custodian": "principal:outbound_mgr_002",
+                }
+            },
+        },
+        "environment": {"origin_network": "network:warehouse-core"},
+    }
+    return payload
+
+
+def _compiled_transfer_graph(*, now: datetime, telemetry_at: datetime, inspection_at: datetime, current_custodian: str):
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@transfer",
+        snapshot_version="snapshot:1",
+        facts=[
+            {
+                "id": "fact-delegated-by",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "agent-1",
+                "predicate": "delegatedBy",
+                "object_data": {"org": "acme-logistics"},
+            },
+            {
+                "id": "fact-facility",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "org:acme-logistics",
+                "predicate": "approvedForFacility",
+                "object_data": {"facility_id": "north-warehouse"},
+            },
+            {
+                "id": "fact-zone-control",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "facility:north-warehouse",
+                "predicate": "controlsZone",
+                "object_data": {"zone": "handoff-bay-3"},
+            },
+            {
+                "id": "fact-lot-location",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "seedcore://zones/handoff-bay-3/assets/asset-1",
+                "predicate": "locatedInZone",
+                "object_data": {"zone": "handoff-bay-3"},
+            },
+            {
+                "id": "fact-transfer-allow",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "zone:handoff-bay-3",
+                "predicate": "allowedOperation",
+                "object_data": {
+                    "operation": "TRANSFER_CUSTODY",
+                    "resource": "seedcore://zones/handoff-bay-3/assets/asset-1",
+                    "zones": ["handoff-bay-3"],
+                    "required_transferable_state": True,
+                    "max_telemetry_age_seconds": 300,
+                    "max_inspection_age_seconds": 3600,
+                    "allow_quarantine": True,
+                },
+            },
+            {
+                "id": "fact-held",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "heldBy",
+                "object_data": {
+                    "custodian": current_custodian,
+                    "transferable": True,
+                    "custody_point": "handoff-bay-3",
+                    "zone": "handoff-bay-3",
+                    "lot_id": "lot-8841",
+                },
+            },
+            {
+                "id": "fact-telemetry",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "observedIn",
+                "object_data": {
+                    "observation_id": "obs-transfer-1",
+                    "measurement_type": "temperature",
+                    "observed_at": telemetry_at.isoformat(),
+                    "custody_point": "handoff-bay-3",
+                },
+            },
+            {
+                "id": "fact-attestation",
+                "snapshot_id": 1,
+                "namespace": "authz",
+                "subject": "asset-1",
+                "predicate": "attestedBy",
+                "object_data": {
+                    "attestation_id": "inspection-transfer-1",
+                    "attestor": "lab-1",
+                    "valid_from": inspection_at.isoformat(),
+                    "valid_to": inspection_at.isoformat(),
+                },
+            },
+        ],
+    )
+    return AuthzGraphCompiler().compile(graph)
 
 
 def _build_actor_token(
@@ -912,3 +1058,104 @@ def test_evaluate_intent_denies_when_transition_custody_mismatch(monkeypatch):
     assert decision.authz_graph["reason"] == "principal_not_current_custodian"
     assert "fact-allow" in decision.authz_graph["matched_policy_refs"]
     assert any(item["code"] == "current_custodian" for item in decision.authz_graph["missing_prerequisites"])
+
+
+def test_evaluate_intent_restricted_custody_transfer_escalates_when_approval_incomplete() -> None:
+    payload = _transfer_payload()
+    approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
+    approval_context["approved_by"] = ["principal:facility_mgr_001"]
+    approval_context.pop("approval_binding_hash")
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is False
+    assert decision.disposition == "escalate"
+    assert decision.execution_token is None
+    assert decision.required_approvals == ["FACILITY_MANAGER", "QUALITY_INSPECTOR"]
+    assert decision.authz_graph["workflow_type"] == "custody_transfer"
+    assert decision.authz_graph["workflow_status"] == "pending_approval"
+    assert any(item["code"] == "approval_binding" for item in decision.authz_graph["missing_prerequisites"])
+    assert any(item["code"] == "approved_by" for item in decision.authz_graph["missing_prerequisites"])
+    assert decision.authz_graph["minted_artifacts"] == []
+    assert decision.obligations == [{"code": "update_verification_surface"}]
+
+
+def test_evaluate_intent_restricted_custody_transfer_allows_with_canonical_explanation(monkeypatch) -> None:
+    payload = _transfer_payload()
+    now = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    compiled = _compiled_transfer_graph(
+        now=now,
+        telemetry_at=now - timedelta(minutes=1),
+        inspection_at=now - timedelta(minutes=2),
+        current_custodian="facility_mgr_001",
+    )
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.disposition == "allow"
+    assert decision.authz_graph["workflow_type"] == "custody_transfer"
+    assert decision.authz_graph["workflow_status"] == "verified"
+    assert any(
+        summary == "principal:agent-1 -> org:acme-logistics -> facility:north-warehouse -> zone:handoff-bay-3"
+        for summary in decision.authz_graph["authority_path_summary"]
+    )
+    assert decision.authz_graph["matched_policy_refs"] == ["fact-transfer-allow"]
+    assert {item["kind"] for item in decision.authz_graph["minted_artifacts"]} == {"execution_token", "governed_receipt"}
+    assert {"code": "generate_transition_receipt"} in decision.obligations
+    assert {"code": "publish_replay_artifact"} in decision.obligations
+    assert {"code": "close_prior_custodian_state"} in decision.obligations
+    assert {"code": "attach_telemetry_proof"} in decision.obligations
+    assert decision.execution_token is not None
+    assert decision.execution_token.constraints["approval_envelope_id"] == "approval-transfer-001"
+    assert decision.execution_token.constraints["expected_current_custodian"] == "principal:facility_mgr_001"
+    assert decision.governed_receipt["workflow_type"] == "custody_transfer"
+    assert decision.governed_receipt["approval_envelope_id"] == "approval-transfer-001"
+    assert decision.governed_receipt["co_signed"] is True
+
+
+def test_evaluate_intent_restricted_custody_transfer_quarantines_when_telemetry_is_stale(monkeypatch) -> None:
+    payload = _transfer_payload()
+    now = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    compiled = _compiled_transfer_graph(
+        now=now,
+        telemetry_at=now - timedelta(minutes=20),
+        inspection_at=now - timedelta(minutes=2),
+        current_custodian="facility_mgr_001",
+    )
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.disposition == "quarantine"
+    assert decision.authz_graph["workflow_status"] == "quarantined"
+    assert any(item["code"] == "stale_telemetry" for item in decision.authz_graph["trust_gaps"])
+    assert {"code": "preserve_restricted_state"} in decision.obligations
+    assert {"code": "manual_review"} in decision.obligations
+    assert {"code": "attach_telemetry_proof"} in decision.obligations
+
+
+def test_evaluate_intent_restricted_custody_transfer_denies_when_expected_custodian_mismatches(monkeypatch) -> None:
+    payload = _transfer_payload()
+    now = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    compiled = _compiled_transfer_graph(
+        now=now,
+        telemetry_at=now - timedelta(minutes=1),
+        inspection_at=now - timedelta(minutes=2),
+        current_custodian="outbound_mgr_002",
+    )
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.disposition == "deny"
+    assert decision.authz_graph["workflow_status"] == "rejected"
+    assert decision.authz_graph["reason"] == "expected_custodian_mismatch"
+    assert any(item["code"] == "expected_custodian" for item in decision.authz_graph["missing_prerequisites"])
+    assert decision.obligations == [{"code": "update_verification_surface"}]

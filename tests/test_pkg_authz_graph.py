@@ -1023,6 +1023,184 @@ def test_transition_evaluation_allows_when_lineage_and_evidence_are_intact() -> 
     assert any(item.startswith("current_custodian:principal:driver-9") for item in evaluation.receipt.custody_proof)
 
 
+def test_transition_evaluation_denies_when_expected_custodian_mismatches() -> None:
+    now = datetime.now(timezone.utc)
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="role",
+            snapshot_id=15,
+            namespace="authz",
+            subject="driver-12",
+            predicate="hasRole",
+            object_data={"role": "carrier"},
+            valid_from=now - timedelta(hours=1),
+            valid_to=now + timedelta(hours=1),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="move asset",
+            snapshot_id=15,
+            namespace="authz",
+            subject="role:carrier",
+            predicate="allowedOperation",
+            object_data={
+                "operation": "MOVE",
+                "resource": "asset-12",
+                "required_transferable_state": True,
+            },
+            valid_from=now - timedelta(hours=1),
+            valid_to=now + timedelta(hours=1),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="custody",
+            snapshot_id=15,
+            namespace="authz",
+            subject="asset-12",
+            predicate="heldBy",
+            object_data={
+                "custodian": "driver-12",
+                "transferable": True,
+            },
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=20),
+            created_by="test",
+        ),
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@phase1",
+            snapshot_id=15,
+            snapshot_version="rules@15.0.0",
+            facts=facts,
+        )
+    )
+    evaluation = compiled.evaluate_transition(
+        AuthzTransitionRequest(
+            principal_ref="principal:driver-12",
+            operation="MOVE",
+            resource_ref="resource:asset-12",
+            asset_ref="asset:asset-12",
+            expected_custodian_ref="principal:driver-99",
+            at=now,
+        )
+    )
+
+    assert evaluation.disposition == AuthzDecisionDisposition.DENY
+    assert evaluation.reason == "expected_custodian_mismatch"
+    assert any(check.code == "expected_custodian" and check.outcome == "failed" for check in evaluation.checked_constraints)
+
+
+def test_transition_evaluation_quarantines_when_inspection_is_stale() -> None:
+    now = datetime.now(timezone.utc)
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="role",
+            snapshot_id=16,
+            namespace="authz",
+            subject="driver-16",
+            predicate="hasRole",
+            object_data={"role": "carrier"},
+            valid_from=now - timedelta(hours=1),
+            valid_to=now + timedelta(hours=1),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="move asset",
+            snapshot_id=16,
+            namespace="authz",
+            subject="role:carrier",
+            predicate="allowedOperation",
+            object_data={
+                "operation": "MOVE",
+                "resource": "asset-16",
+                "required_current_custodian": True,
+                "required_transferable_state": True,
+                "max_telemetry_age_seconds": 300,
+                "max_inspection_age_seconds": 300,
+                "allow_quarantine": True,
+            },
+            valid_from=now - timedelta(hours=1),
+            valid_to=now + timedelta(hours=1),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="custody",
+            snapshot_id=16,
+            namespace="authz",
+            subject="asset-16",
+            predicate="heldBy",
+            object_data={
+                "custodian": "driver-16",
+                "transferable": True,
+                "custody_point": "warehouse-16",
+            },
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=20),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="telemetry",
+            snapshot_id=16,
+            namespace="authz",
+            subject="asset-16",
+            predicate="observedIn",
+            object_data={
+                "observation_id": "obs-16",
+                "measurement_type": "temperature",
+                "observed_at": _iso(now - timedelta(minutes=1)),
+            },
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="inspection",
+            snapshot_id=16,
+            namespace="authz",
+            subject="asset-16",
+            predicate="attestedBy",
+            object_data={
+                "attestation_id": "inspection-16",
+                "attestor": "lab-16",
+                "valid_from": _iso(now - timedelta(minutes=20)),
+                "valid_to": _iso(now - timedelta(minutes=20)),
+            },
+            created_by="test",
+        ),
+    ]
+
+    compiled = AuthzGraphCompiler().compile(
+        AuthzGraphProjector().project_snapshot(
+            snapshot_ref="pkg-authz@phase1",
+            snapshot_id=16,
+            snapshot_version="rules@16.0.0",
+            facts=facts,
+        )
+    )
+    evaluation = compiled.evaluate_transition(
+        AuthzTransitionRequest(
+            principal_ref="principal:driver-16",
+            operation="MOVE",
+            resource_ref="resource:asset-16",
+            asset_ref="asset:asset-16",
+            custody_point_ref="custody_point:warehouse-16",
+            at=now,
+        )
+    )
+
+    assert evaluation.disposition == AuthzDecisionDisposition.QUARANTINE
+    assert any(gap.code == "stale_inspection" for gap in evaluation.trust_gaps)
+    assert any(check.code == "inspection_freshness" and check.outcome == "failed" for check in evaluation.checked_constraints)
+
+
 def test_transition_evaluation_requires_approved_source_registration_and_workflow_stage() -> None:
     now = datetime.now(timezone.utc)
     facts = [

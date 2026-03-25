@@ -21,7 +21,12 @@ from seedcore.services.replay_service import ReplayService
 sys.modules.pop("seedcore.api.routers.tasks_router", None)
 tasks_router_module = importlib.import_module("seedcore.api.routers.tasks_router")
 
-from test_replay_service import _DummySession, _apply_transition_metadata, _build_audit_record
+from test_replay_service import (
+    _DummySession,
+    _apply_transfer_workflow_metadata,
+    _apply_transition_metadata,
+    _build_audit_record,
+)
 
 
 class _FakeRedis:
@@ -194,6 +199,27 @@ def test_replay_artifacts_include_authz_transition_metadata() -> None:
     assert body["authz_graph"]["reason"] == "trust_gap_quarantine"
     assert body["governed_receipt"]["decision_hash"] == "receipt-intent-router-5"
     assert body["governed_receipt"]["trust_gap_codes"] == ["stale_telemetry"]
+
+
+def test_trust_surface_exposes_pending_approval_status_for_transfer_flow() -> None:
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(task_id="task-router-transfer-1", intent_id="intent-router-transfer-1", asset_id="asset-transfer-1"),
+        disposition="escalate",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001"],
+    )
+    client = _make_client(record)
+
+    publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
+    assert publish.status_code == 200
+    public_id = publish.json()["public_id"]
+
+    trust = client.get(f"/trust/{public_id}")
+    assert trust.status_code == 200
+    body = trust.json()
+    assert body["workflow_type"] == "custody_transfer"
+    assert body["status"] == "pending_approval"
+    assert body["approvals"]["required"] == ["FACILITY_MANAGER", "QUALITY_INSPECTOR"]
 
 
 def test_task_governance_endpoint_exposes_authz_transition_summary() -> None:

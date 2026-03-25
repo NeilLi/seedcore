@@ -225,6 +225,69 @@ def _apply_transition_metadata(
     return record
 
 
+def _apply_transfer_workflow_metadata(
+    record: Dict[str, Any],
+    *,
+    disposition: str,
+    required_approvals: List[str] | None = None,
+    approved_by: List[str] | None = None,
+) -> Dict[str, Any]:
+    record = _apply_transition_metadata(
+        record,
+        disposition=disposition,
+        reason="restricted_custody_transfer" if disposition == "allow" else "approval_incomplete",
+        trust_gap_codes=["stale_telemetry"] if disposition == "quarantine" else [],
+    )
+    record["action_intent"] = {
+        "intent_id": record["intent_id"],
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "approval_context": {
+                    "approval_envelope_id": "approval-transfer-001",
+                    "approved_by": list(approved_by or []),
+                }
+            },
+        },
+    }
+    record["policy_decision"] = {
+        **dict(record.get("policy_decision") or {}),
+        "disposition": disposition,
+        "required_approvals": list(required_approvals or []),
+        "authz_graph": {
+            **dict((record.get("policy_decision") or {}).get("authz_graph") or {}),
+            "workflow_type": "custody_transfer",
+            "workflow_status": (
+                "pending_approval"
+                if disposition == "escalate" and required_approvals
+                else "quarantined"
+                if disposition == "quarantine"
+                else "verified"
+                if disposition == "allow"
+                else "rejected"
+            ),
+            "approved_by": list(approved_by or []),
+            "approval_envelope_id": "approval-transfer-001",
+            "authority_path_summary": [
+                "principal:agent:test -> org:acme-logistics -> facility:north-warehouse -> zone:vault-a"
+            ],
+            "minted_artifacts": (
+                [{"kind": "governed_receipt", "ref": f"receipt-{record['intent_id']}"}]
+                if disposition != "escalate"
+                else []
+            ),
+            "obligations": (
+                [{"code": "update_verification_surface"}]
+                if disposition == "escalate"
+                else [{"code": "publish_replay_artifact"}]
+            ),
+        },
+    }
+    if disposition == "escalate":
+        record["policy_decision"]["governed_receipt"] = {}
+    return record
+
+
 @pytest.mark.asyncio
 async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified_chain():
     record = _build_audit_record(task_id="task-asset-1", intent_id="intent-asset-1", asset_id="asset-1")
@@ -434,3 +497,52 @@ async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_veri
     assert await service.reference_is_revoked(reference=reference, redis_client=redis_client) is True
     assert verification.verified is False
     assert verification.reason == "revoked_reference"
+
+
+@pytest.mark.asyncio
+async def test_replay_projection_maps_restricted_custody_transfer_to_quarantined_status():
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(task_id="task-transfer-q", intent_id="intent-transfer-q", asset_id="asset-transfer-q"),
+        disposition="quarantine",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001", "principal:quality_insp_017"],
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-q"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.public_projection["workflow_type"] == "custody_transfer"
+    assert replay.public_projection["status"] == "quarantined"
+    assert replay.public_projection["approvals"]["completed_by"] == [
+        "principal:facility_mgr_001",
+        "principal:quality_insp_017",
+    ]
+    assert replay.public_projection["policy_summary"]["obligations"] == [{"code": "publish_replay_artifact"}]
+
+
+@pytest.mark.asyncio
+async def test_replay_projection_maps_escalation_with_required_approvals_to_pending_approval():
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(task_id="task-transfer-p", intent_id="intent-transfer-p", asset_id="asset-transfer-p"),
+        disposition="escalate",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001"],
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-p"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.public_projection["status"] == "pending_approval"
+    assert replay.public_projection["approvals"]["required"] == [
+        "FACILITY_MANAGER",
+        "QUALITY_INSPECTOR",
+    ]
+    assert replay.public_projection["authorization"]["disposition"] == "escalate"

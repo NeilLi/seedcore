@@ -63,9 +63,13 @@ class ReplayRecord(BaseModel):
 
 class TrustPageProjection(BaseModel):
     trust_page_id: Optional[str] = None
+    workflow_type: Optional[str] = None
+    status: Optional[str] = None
     subject_title: str
     subject_summary: str
     verification_status: Dict[str, Any] = Field(default_factory=dict)
+    approvals: Dict[str, Any] = Field(default_factory=dict)
+    authorization: Dict[str, Any] = Field(default_factory=dict)
     custody_summary: Dict[str, Any] = Field(default_factory=dict)
     fingerprint_summary: Dict[str, Any] = Field(default_factory=dict)
     policy_summary: Dict[str, Any] = Field(default_factory=dict)
