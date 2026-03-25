@@ -20,6 +20,8 @@ spec:
           env:
             - name: RAY_ADDRESS
               value: "auto"
+            - name: SEEDCORE_VERIFY_BIN
+              value: "/usr/local/bin/seedcore-verify"
           ports:
           - name: client
             containerPort: 10001
@@ -43,6 +45,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: seedcore-env
+          env:
+            - name: SEEDCORE_VERIFY_BIN
+              value: "/usr/local/bin/seedcore-verify"
           resources:
             requests: { cpu: "500m", memory: "1Gi" }
             limits:   { cpu: "1",    memory: "2Gi" }

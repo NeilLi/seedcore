@@ -43,6 +43,8 @@ spec:
               value: "1"
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: SEEDCORE_VERIFY_BIN
+              value: "/usr/local/bin/seedcore-verify"
 
             # Mode switch
             - name: HAL_DRIVER_MODE

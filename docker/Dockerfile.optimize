@@ -2,6 +2,13 @@
 # Python 3.12 + Ray (multi-arch capable: arm64 / amd64)
 # Uses python:3.12-slim base + pip-installed Ray for native arm64 support
 # BuildKit automatically uses the target platform from build context
+FROM rust:1.87-slim AS rust-builder
+
+WORKDIR /workspace/rust
+COPY rust/Cargo.toml rust/Cargo.lock ./
+COPY rust/crates ./crates
+RUN cargo build --release -p seedcore-verify
+
 FROM python:3.12-slim
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
@@ -45,6 +52,10 @@ RUN arch="$(uname -m)" && \
     curl -L -o /usr/local/bin/opa "https://openpolicyagent.org/downloads/latest/opa_linux_${opa_arch}" && \
     chmod +x /usr/local/bin/opa && \
     opa version
+
+# Install SeedCore Rust verifier binary for authority-critical verification flows.
+COPY --from=rust-builder /workspace/rust/target/release/seedcore-verify /usr/local/bin/seedcore-verify
+RUN chmod +x /usr/local/bin/seedcore-verify
 
 # ---- Install Ray (via pip for native arm64/amd64 support) ----
 # Install Ray with default extras - pip will pick the appropriate wheel for the platform
@@ -118,6 +129,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app:/app/src \
     PATH="/home/ray/.local/bin:${PATH}" \
+    SEEDCORE_VERIFY_BIN=/usr/local/bin/seedcore-verify \
     RAY_USAGE_STATS_ENABLED=0 \
     SEEDCORE_OPTIONAL_ML=${ENABLE_ML} \
     DGL_GRAPHBOLT_SKIP=1 \

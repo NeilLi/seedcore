@@ -8,6 +8,7 @@ env:
   SEEDCORE_NS: seedcore-dev
   COG_APP_NAME: seedcore-dev-dev-cognitive_core
   COG_MIN_READY: "1"
+  SEEDCORE_VERIFY_BIN: /usr/local/bin/seedcore-verify
   PG_DSN: postgresql://postgres:password@postgresql-pgbouncer:6432/postgres
   MYSQL_DATABASE_URL: mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore
   REDIS_HOST: redis
@@ -18,6 +19,5 @@ env:
 resources:
   requests: { cpu: 200m, memory: 512Mi }
   limits:   { cpu: 400m, memory: 1Gi }
-
 
 

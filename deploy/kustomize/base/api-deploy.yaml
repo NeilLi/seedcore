@@ -21,6 +21,7 @@ spec:
           - name: OPENAI_API_KEY
             valueFrom: { secretKeyRef: { name: openai, key: api_key } }
           - { name: COG_MIN_READY, value: "1" }
+          - { name: SEEDCORE_VERIFY_BIN, value: "/usr/local/bin/seedcore-verify" }
           - { name: PG_DSN, value: "postgresql://postgres:password@postgresql-pgbouncer:6432/postgres" }
           - { name: MYSQL_DATABASE_URL, value: "mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore" }
           - { name: REDIS_HOST, value: "redis" }
@@ -39,6 +40,5 @@ spec:
         resources:
           requests: { cpu: "200m", memory: "256Mi" }
           limits:   { cpu: "500m", memory: "512Mi" }
-
 
 

@@ -11,6 +11,13 @@ cd "${PROJECT_ROOT}"
 source .venv/bin/activate
 
 export PYTHONPATH="${PROJECT_ROOT}/src"
+if [[ -z "${SEEDCORE_VERIFY_BIN:-}" ]]; then
+  if [[ -x "${PROJECT_ROOT}/rust/target/release/seedcore-verify" ]]; then
+    export SEEDCORE_VERIFY_BIN="${PROJECT_ROOT}/rust/target/release/seedcore-verify"
+  elif [[ -x "${PROJECT_ROOT}/rust/target/debug/seedcore-verify" ]]; then
+    export SEEDCORE_VERIFY_BIN="${PROJECT_ROOT}/rust/target/debug/seedcore-verify"
+  fi
+fi
 
 export HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
 export HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"

@@ -45,6 +45,8 @@ spec:
               value: "127.0.0.1:8002"
             - name: SEEDCORE_SKIP_EAGER_RAY
               value: "1"
+            - name: SEEDCORE_VERIFY_BIN
+              value: "/usr/local/bin/seedcore-verify"
             - name: OPA_KEEP_TEMP
               value: "1"
           envFrom:
@@ -131,6 +133,5 @@ spec:
       port: 8002
       targetPort: 8002
       nodePort: 30002      # 👈 Explicit NodePort
-
 
 

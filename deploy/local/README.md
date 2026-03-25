@@ -13,6 +13,19 @@ Use these when you want to run SeedCore directly on your machine without Kuberne
 - `run-ray-stack.sh`
 - `run-task-stack.sh`
 
+## Rust verifier binary (recommended)
+
+The API/HAL host scripts will auto-detect a local Rust verifier binary at:
+
+- `rust/target/release/seedcore-verify`
+- `rust/target/debug/seedcore-verify`
+
+Build it once before running local flows:
+
+```bash
+cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
+```
+
 These scripts are intentionally separate from the main `deploy/` entrypoints because they are:
 
 - localhost-oriented

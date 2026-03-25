@@ -134,6 +134,8 @@ spec:
               value: "false"
             - name: DGL_GRAPHBOLT_SKIP
               value: "1"
+            - name: SEEDCORE_VERIFY_BIN
+              value: "/usr/local/bin/seedcore-verify"
             - name: RAY_OVERRIDE_RESOURCES
               value: '{"head_node": 1}'
             - name: XGB_STORAGE_PATH

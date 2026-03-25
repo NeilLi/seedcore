@@ -28,6 +28,8 @@ spec:
           valueFrom: { secretKeyRef: { name: openai, key: api_key } }
         - name: COG_MIN_READY
           value: "1"
+        - name: SEEDCORE_VERIFY_BIN
+          value: "/usr/local/bin/seedcore-verify"
         - name: PG_DSN
           value: "postgresql://postgres:password@postgresql-pgbouncer:6432/postgres"
         - name: MYSQL_DATABASE_URL
@@ -51,6 +53,5 @@ spec:
           httpGet: { path: /health, port: 8000 }
           initialDelaySeconds: 10
           periodSeconds: 10
-
 
 

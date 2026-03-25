@@ -164,6 +164,8 @@ spec:
                   value: "false" # Default lean image keeps ML optional; set true for ML-enabled builds
                 - name: DGL_GRAPHBOLT_SKIP
                   value: "1"
+                - name: SEEDCORE_VERIFY_BIN
+                  value: "/usr/local/bin/seedcore-verify"
                 - name: RAY_OVERRIDE_RESOURCES
                   value: '{"head_node": 1}'
                 - name: XGB_STORAGE_PATH
@@ -260,6 +262,8 @@ spec:
                     value: "stable"
                   - name: DGL_GRAPHBOLT_SKIP
                     value: "1"
+                  - name: SEEDCORE_VERIFY_BIN
+                    value: "/usr/local/bin/seedcore-verify"
                   - name: XGB_STORAGE_PATH
                     value: "/app/data/models"
                 resources:

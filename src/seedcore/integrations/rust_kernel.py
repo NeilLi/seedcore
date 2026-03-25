@@ -134,7 +134,17 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
 def _resolve_verify_binary(repo_root: Path) -> Path | None:
     override = os.getenv("SEEDCORE_VERIFY_BIN", "").strip()
     if override:
-        candidate = Path(override)
+        candidate = Path(override).expanduser()
+        if not candidate.is_absolute():
+            candidate = (repo_root / candidate).resolve()
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    default_candidates = [
+        Path("/usr/local/bin/seedcore-verify"),
+        repo_root / "rust" / "target" / "release" / "seedcore-verify",
+        repo_root / "rust" / "target" / "debug" / "seedcore-verify",
+    ]
+    for candidate in default_candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None

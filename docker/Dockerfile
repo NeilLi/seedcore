@@ -1,5 +1,12 @@
 # docker/Dockerfile
 # 1. UPGRADE to Python 3.12 as requested
+FROM rust:1.87-slim AS rust-builder
+
+WORKDIR /workspace/rust
+COPY rust/Cargo.toml rust/Cargo.lock ./
+COPY rust/crates ./crates
+RUN cargo build --release -p seedcore-verify
+
 FROM rayproject/ray:2.53.0-py312
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
@@ -31,6 +38,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64 \
     && chmod +x /usr/local/bin/opa \
     && opa version
+
+# Install SeedCore Rust verifier binary for authority-critical verification flows.
+COPY --from=rust-builder /workspace/rust/target/release/seedcore-verify /usr/local/bin/seedcore-verify
+RUN chmod +x /usr/local/bin/seedcore-verify
 
 # ---- Python Environment Setup ----
 USER ray
@@ -101,6 +112,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app:/app/src \
     PATH="/home/ray/.local/bin:${PATH}" \
+    SEEDCORE_VERIFY_BIN=/usr/local/bin/seedcore-verify \
     RAY_USAGE_STATS_ENABLED=0 \
     SEEDCORE_OPTIONAL_ML=${ENABLE_ML} \
     DGL_GRAPHBOLT_SKIP=1 \

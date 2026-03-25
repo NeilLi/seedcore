@@ -12,6 +12,13 @@ source .venv/bin/activate
 
 export PATH="/opt/homebrew/opt/postgresql@17/bin:${PATH}"
 export PYTHONPATH="${PROJECT_ROOT}/src"
+if [[ -z "${SEEDCORE_VERIFY_BIN:-}" ]]; then
+  if [[ -x "${PROJECT_ROOT}/rust/target/release/seedcore-verify" ]]; then
+    export SEEDCORE_VERIFY_BIN="${PROJECT_ROOT}/rust/target/release/seedcore-verify"
+  elif [[ -x "${PROJECT_ROOT}/rust/target/debug/seedcore-verify" ]]; then
+    export SEEDCORE_VERIFY_BIN="${PROJECT_ROOT}/rust/target/debug/seedcore-verify"
+  fi
+fi
 
 export PG_DSN="${PG_DSN:-postgresql://ningli@127.0.0.1:5432/seedcore}"
 export PG_DSN_ASYNC="${PG_DSN_ASYNC:-postgresql+asyncpg://ningli@127.0.0.1:5432/seedcore}"
