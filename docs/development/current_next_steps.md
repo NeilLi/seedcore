@@ -54,6 +54,33 @@ The guiding discipline for this stage is:
 
 The next stage should focus on four priorities.
 
+Operationally, those priorities should be executed as one productionization program rather than as separate security, observability, and UX initiatives.
+
+The dependency order should stay clear:
+
+- first harden the trust boundary
+- then make the trust runtime operable and visible
+- then expose that trust boundary through a narrow product surface
+- then expand multi-party governance on top of a runtime that is already defensible and operable
+
+## Program Lock: One Must-Win Workflow
+
+In the next phase, all workstreams must prove value against one canonical
+workflow:
+
+**Restricted Custody Transfer**
+
+This means:
+
+- every Phase A, B, C, and D deliverable must improve the same dual-approved,
+  replay-verifiable transfer flow
+- anything that does not improve that flow is second-tier for this phase
+- registration intake remains important, but as an upstream prerequisite chain
+  to the transfer proof surface rather than as the product center of gravity
+
+The execution spine for that rule now lives in
+[killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md).
+
 ### 1. Irrefutable Trust Anchors
 
 SeedCore already issues bounded execution authority. The next step is to make the trust boundary cryptographically defensible in environments where spoofing, repudiation, or internal tampering are real concerns.
@@ -64,16 +91,19 @@ What to build:
 - make signer profile selection explicit across PDP, evidence, and transition-receipt paths
 - support optional external anchoring for selected high-value receipts into a transparency log or enterprise audit ledger
 - separate internal operational audit from externally shareable verification receipts
+- define security validation gates for trust-critical surfaces such as signer paths, receipt verification, replay verification, and revocation flows
+- treat targeted external review and adversarial testing of the trust boundary as part of release readiness for high-stakes workflows
 
 Why this is feasible:
 
 - this can start with cloud KMS-backed server-side signing
 - it can use TPM-backed or device-bound signing for selected edge nodes instead of requiring universal hardware redesign
 - external anchoring can begin only for high-stakes transitions rather than every low-risk action
+- security validation can begin with scoped threat modeling and targeted penetration testing of the cryptographic and replay boundary instead of a broad platform-wide certification effort
 
 Strategic result:
 
-SeedCore will move trust from application claims to cryptographically anchored execution evidence.
+SeedCore will move trust from application claims to cryptographically anchored execution evidence and measurably reduce spoofing, replay, and revocation risk at the execution boundary.
 
 ### 2. Multi-Party Execution Governance
 
@@ -94,6 +124,10 @@ SeedCore does not need to model every legal or commercial workflow immediately. 
 - release from quarantine
 - transfer of custody for a restricted lot
 - emergency override of a blocked workflow
+
+Multi-party governance is the canonical demo workflow, but initial
+productionization should still prioritize trust hardening for the artifacts
+that support that workflow.
 
 Strategic result:
 
@@ -117,6 +151,8 @@ What to build:
 - versioned graph snapshots for reproducible decisions
 - cached or precompiled path evaluation for the most common action types
 - first-class quarantine and trust-gap outcomes
+- critical-path tracing and decision-path visibility for the governed execution path, especially registration submission, PDP evaluation, signer selection, replay publication, and verification
+- focused dashboards, trust-anomaly detection, and alerting for authz-graph health, deny and quarantine spikes, snapshot mismatches, signer failures, replay verification failures, and stuck registration workflows
 
 Why this matters:
 
@@ -126,6 +162,8 @@ SeedCore should not behave like an academic graph platform that turns every issu
 - preserve state
 - require manual review
 - escalate an evidence or telemetry gap
+
+The point is not tracing every microsecond. The point is giving operators visibility into why actions were allowed, denied, quarantined, or slowed and whether the runtime is still preserving its deterministic contract.
 
 Strategic result:
 
@@ -139,6 +177,9 @@ What to build:
 
 - signed governed receipts for every high-value allow, deny, or quarantine outcome
 - verification pages or APIs that replay receipt chains
+- operator-facing workflow status APIs that expose prerequisite state, approval state, transfer readiness, and governed tracking timeline for Restricted Custody Transfer
+- a workflow-specific proof surface for Restricted Custody Transfer, with registration intake treated as an upstream prerequisite rather than the product center
+- business-readable trust states such as verified, quarantined, rejected, and review required rather than raw graph or signer failure details
 - asset-centric forensic views tying together:
   - decision hash
   - policy snapshot
@@ -157,6 +198,14 @@ SeedCore does not need a universal trust portal on day one. It needs a narrow bu
 - one evidence model
 - one replay view
 
+It can also start with one governed intake workflow that already matches the trust story:
+
+- one registration-to-transfer chain
+- one operator status view
+- one monitored path from prerequisite approval to transfer to replay verification
+
+It should not begin as a generic admin dashboard. It should begin as a governed operational surface for one high-trust workflow.
+
 Strategic result:
 
 SeedCore stops looking like a backend-only control layer and becomes a visible trust product.
@@ -164,6 +213,8 @@ SeedCore stops looking like a backend-only control layer and becomes a visible t
 ## 12-18 Month Execution Program
 
 The next stage is best presented as a staged execution program rather than a giant future-state promise.
+
+It should be described and managed as one program that makes governed execution defendable, operable, and usable in production.
 
 ### Phase A: Trust Hardening
 
@@ -173,6 +224,7 @@ Focus:
 - clearer signer provenance and signer policy profiles
 - optional external anchoring for high-value events
 - verifier tooling for signature and signer-chain inspection
+- security validation gates for signer, replay, and revocation surfaces before claiming enterprise-grade trust properties
 
 Success condition:
 
@@ -199,6 +251,7 @@ Focus:
 - quarantine and trust-gap state as first-class outcomes
 - fast-path evaluation and shard-aware cache routing
 - deterministic explanation output for hot-path decisions
+- critical-path tracing, dashboards, and alerting for trust-runtime failures and degraded decision readiness
 
 Success condition:
 
@@ -212,10 +265,18 @@ Focus:
 - replay and trust-page UX for operators, auditors, and partners
 - asset-centric trust history
 - API and UI proof layer for third-party verification
+- operator-facing status tracking and proof monitoring for Restricted Custody Transfer, with registration intake treated as its prerequisite chain
 
 Success condition:
 
 SeedCore can show an externally legible chain of decision, execution, and evidence for a specific high-value asset workflow.
+
+## Phase Done Means
+
+- Phase A is done when the canonical transfer flow emits signed artifacts with verifier output, tamper checks, and signer provenance that can be demonstrated end to end.
+- Phase B is done when Restricted Custody Transfer can require dual approval and deterministically deny, quarantine, or allow based on approval and custody state.
+- Phase C is done when the PDP returns a bounded-latency explanation payload and trust-runtime metrics derived from the runtime truth table for the canonical workflow.
+- Phase D is done when the canonical transfer flow has an externally legible proof surface showing business-readable state, artifact lineage, and replay verification.
 
 ## Killer Demonstration
 
@@ -223,9 +284,16 @@ The roadmap should stay anchored to one demonstration that proves the category.
 
 The best next-stage demonstration is:
 
-**a high-value asset transfer that requires deterministic policy evaluation, dual authorization, hardware-backed evidence, and replayable third-party verification**
+**Restricted Custody Transfer: a high-value asset transfer that requires deterministic policy evaluation, dual authorization, hardware-backed evidence, and replayable third-party verification**
 
 If SeedCore can demonstrate that end to end, it will tell a much more credible story than a broad list of trust claims.
+
+The immediate next technical step for that demonstration is to freeze the
+approval, authorization-output, and verification-surface contracts for the
+next dual-authorization workflow before broad UI or signer integration work
+begins. See
+[killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md) and
+[next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md).
 
 ## Messaging Guardrails
 

@@ -1,0 +1,148 @@
+# Killer Demo Execution Spine
+
+## Status
+
+Working execution spine for the next 90-day contract-and-proof phase.
+
+## Purpose
+
+This document is the execution center of gravity above the roadmap, contract
+freeze, and PKG RFC for the next SeedCore build phase.
+
+It exists to answer four questions unambiguously:
+
+- what exact workflow becomes product first
+- which artifacts are authoritative
+- which explanation payload is mandatory
+- what remains out of scope until that workflow is proven
+
+## Program Lock
+
+For the next phase, all workstreams must prove value against one canonical
+workflow:
+
+**Restricted Custody Transfer**
+
+Definition:
+
+- a high-value asset changes custody
+- the transfer requires dual approval
+- the transfer is deterministically authorized by the PDP
+- the decision mints governed artifacts
+- the result is replay-verifiable and business-readable to a third party
+
+Secondary workflows such as registration intake, release from quarantine, and
+other approval flows remain useful, but they are not the primary execution
+spine.
+
+## Primary Rule
+
+Every near-term Phase A, B, C, and D deliverable must improve Restricted
+Custody Transfer directly.
+
+If a task does not improve this workflow’s:
+
+- trust boundary
+- approval chain
+- decision path
+- proof surface
+- replayability
+
+it is second-tier for this phase.
+
+## Authoritative Artifact Order
+
+The authoritative contract order for the next killer demo is:
+
+```text
+TaskPayload
+  -> ActionIntent
+  -> TransferApprovalEnvelope
+  -> PolicyDecision / ExecutionToken / governed_receipt
+  -> PolicyReceipt
+  -> TransitionReceipt / EvidenceBundle
+  -> VerificationSurfaceProjection
+```
+
+Artifact rules:
+
+- `TaskPayload` is proposal only.
+- `ActionIntent` is the accountable authorization request.
+- `TransferApprovalEnvelope` is governed approval state.
+- `ExecutionToken` is the only authorization artifact that may unlock execution.
+- `governed_receipt`, `PolicyReceipt`, and `TransitionReceipt` are proof-bearing artifacts with different roles.
+- `EvidenceBundle` records what happened after execution.
+- `VerificationSurfaceProjection` is downstream product projection only.
+
+## Runtime Truth Table
+
+| Runtime disposition | Meaning | Token? | Receipt? | Surface state |
+| :--- | :--- | :--- | :--- | :--- |
+| `allow` | prerequisites satisfied | yes | yes | `verified` |
+| `deny` | contradictory or forbidden | no | yes | `rejected` |
+| `quarantine` | trust chain incomplete but not contradictory | maybe restricted | yes | `quarantined` |
+| `escalate` | human or governance review required | no or pending | yes | `review_required` |
+
+This table should be treated as the shared translation layer across runtime,
+proof, and UI documents.
+
+## Minimum Explanation Payload
+
+The next killer demo must emit a minimum explanation payload that every
+verification view can derive from.
+
+Mandatory fields:
+
+- `disposition`
+- `matched_policy_refs`
+- `authority_path_summary`
+- `missing_prerequisites`
+- `trust_gaps`
+- `minted_artifacts`
+- `obligations`
+
+The goal is not maximal detail. The goal is minimum cross-document consistency.
+
+## Product-First Rule
+
+SeedCore’s first product surface in this phase is:
+
+- architecture term: **Proof Surface**
+- user-facing term: **Verification Surface**
+
+It is not:
+
+- a generic admin console
+- a general observability dashboard
+- a broad workflow manager
+
+It is a workflow-specific proof surface for Restricted Custody Transfer.
+
+## Must-Win Success Criteria
+
+The phase is successful when Restricted Custody Transfer is:
+
+- dual-approved
+- deterministically authorized
+- receipt-bound
+- proof-explainable
+- replay-verifiable
+- business-readable
+
+## Out Of Scope Until This Is Proven
+
+Do not let the phase drift into:
+
+- generic partner UX across many workflows
+- broad dashboard programs
+- open-ended enrichment modeling
+- natural-language policy authoring
+- non-essential multi-workflow orchestration
+- analytics-first PKG work
+
+## Related Documents
+
+- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+- [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
+- [pkg_authz_graph_rfc.md](/Users/ningli/project/seedcore/docs/development/pkg_authz_graph_rfc.md)
+- [contract_freeze_zero_trust_terms.md](/Users/ningli/project/seedcore/docs/development/contract_freeze_zero_trust_terms.md)

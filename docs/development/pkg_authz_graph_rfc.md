@@ -304,6 +304,44 @@ The current implementation should be treated as Baseline V1. The next modeling d
 
 Enhanced V2 should build on V1 rather than replace it. The current compiler and projector remain the foundation.
 
+## V2 Minimum For The Next Killer Demo
+
+The next killer demo does not need the full conceptual V2 target at once.
+
+For the next implementation phase, the enforced V2 minimum should support one
+canonical workflow only:
+
+**Restricted Custody Transfer**
+
+### Frozen V2 Minimum Entities
+
+- `Org`
+- `AgentPrincipal`
+- `DevicePrincipal`
+- `Facility`
+- `Zone`
+- `Lot`
+- `CustodyState`
+- `WorkflowStage`
+- `PolicyRule`
+- `Constraint`
+- `ExecutionToken`
+- `DecisionReceipt`
+
+### Frozen V2 Minimum Path Types
+
+- principal delegated by org
+- org approved for facility
+- facility controls zone
+- lot located in zone
+- transfer action governed by rule
+- transition requires dual approval
+- current custodian matches expected custodian
+- telemetry freshness and inspection freshness where policy requires them
+
+Everything else in V2 should be treated as secondary until this workflow is
+proven end to end.
+
 ## Practical Schema Direction For SeedCore
 
 The enhanced schema should organize around five families.
@@ -486,6 +524,19 @@ At minimum, the PDP response should be able to return:
 - trust gaps when quarantined
 - evidence obligations or governed receipt references created
 
+For the next killer demo, the minimum frozen explanation payload should include:
+
+- `disposition`
+- `matched_policy_refs`
+- `authority_path_summary`
+- `missing_prerequisites`
+- `trust_gaps`
+- `minted_artifacts`
+- `obligations`
+
+Verification surfaces may summarize these fields, but they should not invent
+authoritative policy meaning that is not derivable from this explanation layer.
+
 Example explanation:
 
 > Denied because `AgentPrincipal quality-twin-03` is bound to `Device edge-node-7`, but `Device edge-node-7` lacks valid calibration certification for `LotClass pharma-cold-chain`, required by `PolicyRule inspect_cold_chain_v4`.
@@ -503,6 +554,15 @@ Every `allow` decision should mint a signed governed receipt that binds:
 - compiled decision basis
 - custody and evidence references
 - timestamps, validity, and signer metadata
+
+For the next killer demo, obligations should also become explicit enough to
+prove what must now exist because of the decision, for example:
+
+- publish replay artifact
+- generate transfer transition receipt
+- attach telemetry proof
+- close prior custodian state
+- update the proof surface within the governed workflow
 
 Successive receipt fragments can support a Mutable Digital Passport style view for downstream consumer, auditor, or regulator-facing trust surfaces without changing CONTROL-path semantics.
 
@@ -556,6 +616,20 @@ The stateless PDP should ask a local or near-local compiled cache first and only
 ### Longer Term
 
 Benchmark alternative graph stores only after the decision path is stable and measurable. If streaming updates or traversal speed become dominant bottlenecks, evaluate whether Memgraph or a multimodel store adds real value behind the same projection contract.
+
+## Out Of Scope For Decision Graph V2 Minimum
+
+The first V2 decision graph should explicitly exclude:
+
+- partner analytics
+- historical provenance exploration beyond the immediate required chain
+- natural-language policy ingestion
+- anomaly inference
+- general-purpose knowledge nodes
+- non-decision UI metadata
+
+These may live in enrichment, analytics, or advisory surfaces, but they should
+not shape the synchronous decision graph for the next killer demo.
 
 ## What To Avoid
 
