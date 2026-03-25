@@ -5,7 +5,7 @@
 //! artifacts for Restricted Custody Transfer and follow-on workflows.
 
 use seedcore_kernel_types::{
-    Disposition, ExplanationPayload, GovernedDecisionArtifact, Obligation, Timestamp,
+    ActionIntent, Disposition, ExplanationPayload, GovernedDecisionArtifact, Obligation, Timestamp,
     TransferApprovalEnvelope,
 };
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ pub struct BreakGlassContext {
 /// Frozen decision input passed into the deterministic policy kernel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrozenDecisionInput {
-    pub action_intent_ref: String,
+    pub action_intent: ActionIntent,
     pub approval_envelope: Option<TransferApprovalEnvelope>,
     pub policy_snapshot_ref: String,
     pub asset_state: FrozenAssetState,
@@ -106,7 +106,7 @@ pub enum PolicyError {
 /// Evaluates a frozen input into one deterministic disposition and its
 /// downstream artifacts.
 pub fn evaluate(input: &FrozenDecisionInput) -> Result<PolicyEvaluation, PolicyError> {
-    require_non_empty(&input.action_intent_ref, "action_intent_ref")?;
+    require_non_empty(&input.action_intent.intent_id, "action_intent.intent_id")?;
     require_non_empty(&input.policy_snapshot_ref, "policy_snapshot_ref")?;
     require_non_empty(&input.asset_state.asset_ref, "asset_state.asset_ref")?;
 
@@ -143,20 +143,20 @@ pub fn evaluate(input: &FrozenDecisionInput) -> Result<PolicyEvaluation, PolicyE
 
     let explanation = build_explanation(input, disposition);
     let governed_decision_artifact = GovernedDecisionArtifact {
-        decision_id: format!("decision:{}", input.action_intent_ref),
-        action_intent_ref: input.action_intent_ref.clone(),
+        decision_id: format!("decision:{}", input.action_intent.intent_id),
+        action_intent_ref: input.action_intent.intent_id.clone(),
         policy_snapshot_ref: input.policy_snapshot_ref.clone(),
         disposition,
         asset_ref: input.asset_state.asset_ref.clone(),
     };
     let policy_receipt_payload = PolicyReceiptPayload {
-        policy_receipt_id: format!("policy-receipt:{}", input.action_intent_ref),
+        policy_receipt_id: format!("policy-receipt:{}", input.action_intent.intent_id),
         policy_snapshot_ref: input.policy_snapshot_ref.clone(),
-        action_intent_ref: input.action_intent_ref.clone(),
+        action_intent_ref: input.action_intent.intent_id.clone(),
         disposition,
     };
     let execution_token_spec = (disposition == Disposition::Allow).then(|| ExecutionTokenSpec {
-        intent_ref: input.action_intent_ref.clone(),
+        intent_ref: input.action_intent.intent_id.clone(),
         asset_ref: input.asset_state.asset_ref.clone(),
         policy_snapshot_ref: input.policy_snapshot_ref.clone(),
     });
@@ -177,15 +177,15 @@ fn build_explanation(input: &FrozenDecisionInput, disposition: Disposition) -> E
     explanation.missing_prerequisites = input.authority_graph_summary.missing_prerequisites.clone();
     explanation.trust_gaps = input.authority_graph_summary.trust_gaps.clone();
     explanation.minted_artifacts = vec![
-        format!("governed_decision:{}", input.action_intent_ref),
-        format!("policy_receipt:{}", input.action_intent_ref),
+        format!("governed_decision:{}", input.action_intent.intent_id),
+        format!("policy_receipt:{}", input.action_intent.intent_id),
     ];
 
     match disposition {
         Disposition::Allow => {
             explanation
                 .minted_artifacts
-                .push(format!("execution_token:{}", input.action_intent_ref));
+                .push(format!("execution_token:{}", input.action_intent.intent_id));
         }
         Disposition::Deny => {
             if explanation.missing_prerequisites.is_empty() && !input.asset_state.transferable {
@@ -270,7 +270,30 @@ mod tests {
 
     fn base_input() -> FrozenDecisionInput {
         FrozenDecisionInput {
-            action_intent_ref: "intent-transfer-001".to_string(),
+            action_intent: ActionIntent {
+                intent_id: "intent-transfer-001".to_string(),
+                timestamp: Timestamp::from_str("2026-04-02T08:00:00Z").unwrap(),
+                valid_until: Timestamp::from_str("2026-04-02T08:01:00Z").unwrap(),
+                principal: seedcore_kernel_types::IntentPrincipal {
+                    principal_ref: "principal:facility_mgr_001".to_string(),
+                    organization_ref: Some("org:north_warehouse".to_string()),
+                    role_refs: vec!["FACILITY_MANAGER".to_string()],
+                },
+                action: seedcore_kernel_types::IntentAction {
+                    action_type: "TRANSFER_CUSTODY".to_string(),
+                    target_zone: Some("handoff_bay_3".to_string()),
+                    endpoint_id: Some("hal://robot_sim/1".to_string()),
+                },
+                resource: seedcore_kernel_types::IntentResource {
+                    asset_ref: "asset:lot-8841".to_string(),
+                    lot_id: Some("lot-8841".to_string()),
+                },
+                environment: seedcore_kernel_types::IntentEnvironment {
+                    source_registration_id: Some("registration:approved-001".to_string()),
+                    registration_decision_id: Some("decision:registration-001".to_string()),
+                    attributes: std::collections::BTreeMap::new(),
+                },
+            },
             approval_envelope: Some(approved_envelope()),
             policy_snapshot_ref: "snapshot:pkg-prod-2026-04-02".to_string(),
             asset_state: FrozenAssetState {

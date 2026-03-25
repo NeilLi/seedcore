@@ -4,7 +4,10 @@
 //! verification across policy and token kernels.
 
 use seedcore_approval_core::{approval_binding_hash, validate_envelope};
-use seedcore_kernel_types::{ArtifactHash, SignatureEnvelope, Timestamp, TransferApprovalEnvelope};
+use seedcore_kernel_types::{
+    ActionIntent, ArtifactHash, IntentAction, IntentEnvironment, IntentPrincipal, IntentResource,
+    SignatureEnvelope, Timestamp, TransferApprovalEnvelope,
+};
 use seedcore_policy_core::{evaluate, FrozenDecisionInput, PolicyEvaluation};
 use seedcore_proof_core::{
     KeyMaterial, KeyResolver, ReplayArtifact, ReplayBundle, Signer, VerificationError,
@@ -187,7 +190,34 @@ pub fn run_transfer_fixture(
         .map_err(|error| ScenarioError::Approval(error.to_string()))?;
 
     let input = FrozenDecisionInput {
-        action_intent_ref: fixture.action_intent.action_intent_ref.clone(),
+        action_intent: ActionIntent {
+            intent_id: fixture.action_intent.action_intent_ref.clone(),
+            timestamp: fixed_ts("2026-04-02T08:00:00Z")?,
+            valid_until: fixed_ts("2026-04-02T08:01:00Z")?,
+            principal: IntentPrincipal {
+                principal_ref: fixture
+                    .action_intent
+                    .principal_agent_id
+                    .clone()
+                    .unwrap_or_else(|| "principal:unknown".to_string()),
+                organization_ref: None,
+                role_refs: Vec::new(),
+            },
+            action: IntentAction {
+                action_type: fixture.action_intent.action_type.clone(),
+                target_zone: fixture.approval_envelope.transfer_context.to_zone.clone(),
+                endpoint_id: fixture.action_intent.endpoint_id.clone(),
+            },
+            resource: IntentResource {
+                asset_ref: fixture.asset_state.asset_ref.clone(),
+                lot_id: fixture.approval_envelope.lot_id.clone(),
+            },
+            environment: IntentEnvironment {
+                source_registration_id: fixture.action_intent.source_registration_id.clone(),
+                registration_decision_id: fixture.action_intent.registration_decision_id.clone(),
+                attributes: BTreeMap::new(),
+            },
+        },
         approval_envelope: Some(fixture.approval_envelope.clone()),
         policy_snapshot_ref: fixture.approval_envelope.policy_snapshot_ref.clone(),
         asset_state: fixture.asset_state.clone(),
