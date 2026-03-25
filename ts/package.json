@@ -1,0 +1,19 @@
+{
+  "name": "@seedcore/ts-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces --if-present build",
+    "typecheck": "npm run --workspaces --if-present typecheck",
+    "verify:transfer": "npm --workspace @seedcore/verification-console run verify:transfer --"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}

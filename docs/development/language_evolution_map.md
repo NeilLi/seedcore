@@ -131,6 +131,12 @@ The detailed service/CLI-first Rust workspace proposal now lives in
 TypeScript should be introduced where trust must become visible and product
 legible.
 
+Current bootstrap implemented in-repo:
+
+- `ts/packages/contracts`
+- `ts/apps/verification-console`
+- `seedcore-verify summarize-transfer --dir rust/fixtures/transfers/allow_case`
+
 #### 1. Verification or proof surface
 
 Recommended first app:
