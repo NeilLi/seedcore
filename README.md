@@ -282,6 +282,9 @@ The detailed next-step plan now lives in [docs/development/current_next_steps.md
 
 That document is the better source of truth because the implementation and verification state is moving faster than the architecture overview in this root README.
 
+The recommended language-boundary evolution for that next stage lives in
+[docs/development/language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
+
 In short, the highest-priority remaining work is:
 
 - hardware-backed signer and device-trust hardening

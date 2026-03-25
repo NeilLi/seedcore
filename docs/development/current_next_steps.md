@@ -295,6 +295,9 @@ begins. See
 [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md) and
 [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md).
 
+The recommended multi-language boundary plan for that work now lives in
+[language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
+
 ## Messaging Guardrails
 
 The next-stage narrative should stay ambitious without overclaiming.
