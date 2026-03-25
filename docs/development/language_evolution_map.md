@@ -135,6 +135,8 @@ Current bootstrap implemented in-repo:
 
 - `ts/packages/contracts`
 - `ts/apps/verification-console`
+- `ts/services/verification-api`
+- `ts/apps/proof-surface`
 - `seedcore-verify summarize-transfer --dir rust/fixtures/transfers/allow_case`
 
 #### 1. Verification or proof surface
@@ -245,6 +247,17 @@ Expected deliverables:
 - deterministic hash compatibility tests
 - a basic verifier CLI
 
+Status as of March 25, 2026:
+
+- completed for baseline scope:
+  - `seedcore-proof-core` canonicalization, hashing, signing, signature
+    verification, and replay-chain verification
+  - deterministic fixture and golden-path coverage in the Rust workspace
+  - `seedcore-verify` CLI, including `verify-transfer` and
+    `summarize-transfer`
+- remaining hardening can continue in follow-on phases (for example, broader
+  external verifier packaging and page/API projection maturity)
+
 ### Phase 2: TypeScript Proof Surface
 
 Build the first workflow-specific proof surface once proof artifacts are stable.
@@ -254,6 +267,20 @@ Expected deliverables:
 - one asset proof page
 - one transfer proof page
 - business-readable status mapping from the runtime truth table
+
+Status as of March 25, 2026:
+
+- completed for baseline scope:
+  - `ts/packages/contracts` provides strict TS contract parsing for verifier
+    outputs
+  - `ts/services/verification-api` provides a typed proof facade over
+    `seedcore-verify`
+  - `ts/apps/proof-surface` provides:
+    - one transfer proof page
+    - one asset proof page
+    - business-readable status mapping from runtime disposition
+- remaining maturity work can continue in later phases (for example richer
+  operator workflow depth and broader product UX hardening)
 
 ### Phase 3: Rust Approval Engine
 

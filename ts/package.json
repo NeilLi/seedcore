@@ -4,12 +4,15 @@
   "version": "0.1.0",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "services/*"
   ],
   "scripts": {
     "build": "npm run --workspaces --if-present build",
     "typecheck": "npm run --workspaces --if-present typecheck",
-    "verify:transfer": "npm --workspace @seedcore/verification-console run verify:transfer --"
+    "verify:transfer": "npm --workspace @seedcore/verification-console run verify:transfer --",
+    "serve:verification-api": "npm --workspace @seedcore/verification-api run start",
+    "serve:proof-surface": "npm --workspace @seedcore/proof-surface run start"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",
