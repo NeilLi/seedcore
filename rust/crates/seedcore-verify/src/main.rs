@@ -1,8 +1,9 @@
 use seedcore_kernel_testkit::FixtureStaticResolver;
 use seedcore_kernel_testkit::{
-    run_transfer_fixture_dir, FixtureDebugSigner, TransferVerificationReport,
+    load_transfer_fixture, run_transfer_fixture_dir, FixtureDebugSigner,
+    TransferVerificationReport,
 };
-use seedcore_kernel_types::Timestamp;
+use seedcore_kernel_types::{ApprovalStatus, Disposition, Timestamp};
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
     verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
@@ -64,6 +65,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let report = verify_transfer_dir(&dir)?;
             print_json(&report)
         }
+        "summarize-transfer" => {
+            let dir = PathBuf::from(flag_value(&args, "--dir")?);
+            let summary = summarize_transfer_dir(&dir)?;
+            print_json(&summary)
+        }
         "verify-receipt" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let report = verify_receipt_path(Path::new(&artifact_path))?;
@@ -89,6 +95,7 @@ fn usage() -> String {
         "  seedcore-verify verify-receipt --artifact <path>",
         "  seedcore-verify verify-chain --bundle <path>",
         "  seedcore-verify verify-transfer --dir <path>",
+        "  seedcore-verify summarize-transfer --dir <path>",
         "  seedcore-verify mint-token --claims <path>",
         "  seedcore-verify verify-token --artifact <path>",
         "  seedcore-verify enforce-token --token <path> --request <path>",
@@ -135,6 +142,46 @@ fn verify_transfer_dir(dir: &Path) -> Result<TransferVerificationReport, String>
     run_transfer_fixture_dir(dir).map_err(|error| error.to_string())
 }
 
+fn summarize_transfer_dir(dir: &Path) -> Result<TransferTrustSummary, String> {
+    let report = verify_transfer_dir(dir)?;
+    let fixture = load_transfer_fixture(dir).map_err(|error| error.to_string())?;
+    let disposition = report.actual_policy_evaluation.disposition;
+
+    Ok(TransferTrustSummary {
+        verified: report.verified,
+        business_state: business_state_label(report.verified, disposition).to_string(),
+        disposition: disposition.as_str().to_string(),
+        approval_status: approval_status_label(fixture.approval_envelope.status).to_string(),
+        execution_token_expected: report.actual_policy_evaluation.execution_token_spec.is_some(),
+        execution_token_present: report.actual_execution_token.is_some(),
+        verification_error_code: report.error_code,
+        checks: report.checks,
+    })
+}
+
+fn business_state_label(verified: bool, disposition: Disposition) -> &'static str {
+    if !verified {
+        return "verification_failed";
+    }
+    match disposition {
+        Disposition::Allow => "verified",
+        Disposition::Deny => "rejected",
+        Disposition::Quarantine => "quarantined",
+        Disposition::Escalate => "review_required",
+    }
+}
+
+fn approval_status_label(status: ApprovalStatus) -> &'static str {
+    match status {
+        ApprovalStatus::Pending => "PENDING",
+        ApprovalStatus::PartiallyApproved => "PARTIALLY_APPROVED",
+        ApprovalStatus::Approved => "APPROVED",
+        ApprovalStatus::Expired => "EXPIRED",
+        ApprovalStatus::Revoked => "REVOKED",
+        ApprovalStatus::Superseded => "SUPERSEDED",
+    }
+}
+
 fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> {
     let bundle: ReplayBundle = read_json_file(path)?;
     Ok(verify_replay_chain(&bundle, &FixtureStaticResolver))
@@ -176,6 +223,18 @@ impl From<&PolicyEvaluation> for PolicyEvaluationReport {
             execution_token_expected: value.execution_token_spec.is_some(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TransferTrustSummary {
+    verified: bool,
+    business_state: String,
+    disposition: String,
+    approval_status: String,
+    execution_token_expected: bool,
+    execution_token_present: bool,
+    verification_error_code: Option<String>,
+    checks: Vec<String>,
 }
 
 #[cfg(test)]
@@ -286,5 +345,17 @@ mod tests {
             .expect("mint-token should return token");
         assert_eq!(token.token_id, "token-transfer-001");
         assert_eq!(token.signature.signing_scheme, "debug_hash_v1");
+    }
+
+    #[test]
+    fn summarize_transfer_fixture_maps_business_state() {
+        let summary = summarize_transfer_dir(&fixture_dir("allow_case"))
+            .expect("allow_case summary should be produced");
+        assert!(summary.verified);
+        assert_eq!(summary.business_state, "verified");
+        assert_eq!(summary.disposition, "allow");
+        assert_eq!(summary.approval_status, "APPROVED");
+        assert!(summary.execution_token_expected);
+        assert!(summary.execution_token_present);
     }
 }
