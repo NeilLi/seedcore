@@ -30,7 +30,7 @@
   ],
   "approval_binding_hash": {
     "algorithm": "sha256",
-    "value": "placeholder"
+    "value": "bed2634dd882f41d2b4a43d39429bc891fae1c8484af2300c28f0d0276d2f18e"
   },
   "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
   "expires_at": "2026-04-02T08:35:00Z",

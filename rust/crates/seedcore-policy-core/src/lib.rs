@@ -5,7 +5,8 @@
 //! artifacts for Restricted Custody Transfer and follow-on workflows.
 
 use seedcore_kernel_types::{
-    Disposition, ExplanationPayload, Obligation, Timestamp, TransferApprovalEnvelope,
+    Disposition, ExplanationPayload, GovernedDecisionArtifact, Obligation, Timestamp,
+    TransferApprovalEnvelope,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -66,16 +67,6 @@ pub struct FrozenDecisionInput {
     pub authority_graph_summary: AuthorityGraphSummary,
     pub telemetry_summary: TelemetrySummary,
     pub break_glass: Option<BreakGlassContext>,
-}
-
-/// Minimal governed decision artifact emitted by the policy kernel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GovernedDecisionArtifact {
-    pub decision_id: String,
-    pub action_intent_ref: String,
-    pub policy_snapshot_ref: String,
-    pub disposition: Disposition,
-    pub asset_ref: String,
 }
 
 /// Policy receipt payload prepared by the policy kernel.

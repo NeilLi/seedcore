@@ -3,24 +3,13 @@
 //! This crate will own token claims, minting, verification, TTL checks, and
 //! scope enforcement.
 
-use seedcore_kernel_types::{ArtifactHash, SignatureEnvelope, Timestamp};
+use seedcore_kernel_types::Timestamp;
+pub use seedcore_kernel_types::{ExecutionToken, TokenConstraints};
 use seedcore_proof_core::{
     sign_artifact, verify_signed_artifact, KeyResolver, SignedArtifact, Signer,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-/// Token scope and runtime-binding constraints.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct TokenConstraints {
-    pub action_type: String,
-    pub target_zone: Option<String>,
-    pub asset_id: Option<String>,
-    pub principal_agent_id: Option<String>,
-    pub source_registration_id: Option<String>,
-    pub registration_decision_id: Option<String>,
-    pub endpoint_id: Option<String>,
-}
 
 /// Claims required to mint an execution token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,19 +20,6 @@ pub struct ExecutionTokenClaims {
     pub valid_until: Timestamp,
     pub contract_version: String,
     pub constraints: TokenConstraints,
-}
-
-/// Signed execution token artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecutionToken {
-    pub token_id: String,
-    pub intent_id: String,
-    pub issued_at: Timestamp,
-    pub valid_until: Timestamp,
-    pub contract_version: String,
-    pub constraints: TokenConstraints,
-    pub artifact_hash: ArtifactHash,
-    pub signature: SignatureEnvelope,
 }
 
 /// Runtime request context evaluated against token constraints.
@@ -93,7 +69,7 @@ pub fn mint_token(
     validate_claims(&claims)?;
     let signed =
         sign_artifact(claims, signer).map_err(|error| TokenError::ProofError(error.to_string()))?;
-    Ok(ExecutionToken::from_signed(signed))
+    Ok(execution_token_from_signed(signed))
 }
 
 /// Verifies the signed token artifact and its validity window.
@@ -102,7 +78,7 @@ pub fn verify_token(
     resolver: &dyn KeyResolver,
     now: Timestamp,
 ) -> TokenVerificationReport {
-    let signed = token.clone().into_signed();
+    let signed = execution_token_into_signed(token.clone());
     let report = verify_signed_artifact(&signed, resolver);
     if !report.verified {
         return TokenVerificationReport {
@@ -229,39 +205,38 @@ fn deny(code: &str) -> TokenEnforcementReport {
     }
 }
 
-impl ExecutionToken {
-    fn from_signed(signed: SignedArtifact<ExecutionTokenClaims>) -> Self {
-        Self {
-            token_id: signed.artifact.token_id,
-            intent_id: signed.artifact.intent_id,
-            issued_at: signed.artifact.issued_at,
-            valid_until: signed.artifact.valid_until,
-            contract_version: signed.artifact.contract_version,
-            constraints: signed.artifact.constraints,
-            artifact_hash: signed.artifact_hash,
-            signature: signed.signature,
-        }
+fn execution_token_from_signed(signed: SignedArtifact<ExecutionTokenClaims>) -> ExecutionToken {
+    ExecutionToken {
+        token_id: signed.artifact.token_id,
+        intent_id: signed.artifact.intent_id,
+        issued_at: signed.artifact.issued_at,
+        valid_until: signed.artifact.valid_until,
+        contract_version: signed.artifact.contract_version,
+        constraints: signed.artifact.constraints,
+        artifact_hash: signed.artifact_hash,
+        signature: signed.signature,
     }
+}
 
-    fn into_signed(self) -> SignedArtifact<ExecutionTokenClaims> {
-        SignedArtifact {
-            artifact: ExecutionTokenClaims {
-                token_id: self.token_id,
-                intent_id: self.intent_id,
-                issued_at: self.issued_at,
-                valid_until: self.valid_until,
-                contract_version: self.contract_version,
-                constraints: self.constraints,
-            },
-            artifact_hash: self.artifact_hash,
-            signature: self.signature,
-        }
+fn execution_token_into_signed(token: ExecutionToken) -> SignedArtifact<ExecutionTokenClaims> {
+    SignedArtifact {
+        artifact: ExecutionTokenClaims {
+            token_id: token.token_id,
+            intent_id: token.intent_id,
+            issued_at: token.issued_at,
+            valid_until: token.valid_until,
+            contract_version: token.contract_version,
+            constraints: token.constraints,
+        },
+        artifact_hash: token.artifact_hash,
+        signature: token.signature,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seedcore_kernel_types::{ArtifactHash, SignatureEnvelope};
     use seedcore_proof_core::{KeyMaterial, VerificationError};
     use std::collections::BTreeMap;
     use std::str::FromStr;

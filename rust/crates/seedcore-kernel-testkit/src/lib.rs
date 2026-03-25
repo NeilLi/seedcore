@@ -3,9 +3,12 @@
 //! This crate loads deterministic fixtures and runs canonical transfer-scenario
 //! verification across policy and token kernels.
 
+use seedcore_approval_core::{approval_binding_hash, validate_envelope};
 use seedcore_kernel_types::{ArtifactHash, SignatureEnvelope, Timestamp, TransferApprovalEnvelope};
 use seedcore_policy_core::{evaluate, FrozenDecisionInput, PolicyEvaluation};
-use seedcore_proof_core::{KeyMaterial, KeyResolver, Signer, VerificationError};
+use seedcore_proof_core::{
+    KeyMaterial, KeyResolver, ReplayArtifact, ReplayBundle, Signer, VerificationError,
+};
 use seedcore_token_core::{
     enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
     ExecutionTokenClaims, TokenConstraints, TokenVerificationReport,
@@ -82,6 +85,8 @@ pub enum FixtureError {
 pub enum ScenarioError {
     #[error(transparent)]
     Fixture(#[from] FixtureError),
+    #[error("approval_error:{0}")]
+    Approval(String),
     #[error("policy_evaluation_failed:{0}")]
     Policy(String),
     #[error("token_mint_failed:{0}")]
@@ -151,6 +156,16 @@ pub fn load_transfer_fixture(
     })
 }
 
+/// Loads one replay bundle fixture file.
+pub fn load_replay_bundle(path: impl AsRef<Path>) -> Result<ReplayBundle, FixtureError> {
+    read_json_file(path)
+}
+
+/// Loads one receipt artifact fixture file.
+pub fn load_receipt_artifact(path: impl AsRef<Path>) -> Result<ReplayArtifact, FixtureError> {
+    read_json_file(path)
+}
+
 /// Runs the canonical transfer scenario evaluation for a fixture directory,
 /// using deterministic signer/resolver defaults.
 pub fn run_transfer_fixture_dir(
@@ -166,6 +181,11 @@ pub fn run_transfer_fixture(
     signer: &dyn Signer,
     resolver: &dyn KeyResolver,
 ) -> Result<TransferVerificationReport, ScenarioError> {
+    validate_envelope(&fixture.approval_envelope)
+        .map_err(|error| ScenarioError::Approval(error.to_string()))?;
+    let computed_approval_hash = approval_binding_hash(&fixture.approval_envelope)
+        .map_err(|error| ScenarioError::Approval(error.to_string()))?;
+
     let input = FrozenDecisionInput {
         action_intent_ref: fixture.action_intent.action_intent_ref.clone(),
         approval_envelope: Some(fixture.approval_envelope.clone()),
@@ -182,6 +202,17 @@ pub fn run_transfer_fixture(
     let mut checks = Vec::new();
     let mut verified = true;
     let mut error_code = None;
+
+    if let Some(expected_hash) = fixture.approval_envelope.approval_binding_hash.as_ref() {
+        if expected_hash != &computed_approval_hash {
+            verified = false;
+            error_code = Some("approval_binding_hash_mismatch".to_string());
+        } else {
+            checks.push("approval_binding_hash_match".to_string());
+        }
+    } else {
+        checks.push("approval_binding_hash_computed".to_string());
+    }
 
     if let Some(expected) = fixture.expected_policy_evaluation.as_ref() {
         if expected != &actual_policy_evaluation {

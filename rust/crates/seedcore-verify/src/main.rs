@@ -2,7 +2,10 @@ use seedcore_kernel_testkit::FixtureStaticResolver;
 use seedcore_kernel_testkit::{run_transfer_fixture_dir, TransferVerificationReport};
 use seedcore_kernel_types::Timestamp;
 use seedcore_policy_core::PolicyEvaluation;
-use seedcore_proof_core::{verify_replay_chain, ReplayBundle, ReplayVerificationReport};
+use seedcore_proof_core::{
+    verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
+    ReplayVerificationReport, VerificationReport,
+};
 use seedcore_token_core::{verify_token, ExecutionToken};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -42,9 +45,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let report = PolicyEvaluationReport::from(&evaluation);
             print_json(&report)
         }
-        "verify-transfer-dir" => {
+        "verify-transfer" | "verify-transfer-dir" => {
             let dir = PathBuf::from(flag_value(&args, "--dir")?);
             let report = verify_transfer_dir(&dir)?;
+            print_json(&report)
+        }
+        "verify-receipt" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let report = verify_receipt_path(Path::new(&artifact_path))?;
             print_json(&report)
         }
         "verify-chain" => {
@@ -64,10 +72,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
 fn usage() -> String {
     [
         "usage:",
+        "  seedcore-verify verify-receipt --artifact <path>",
+        "  seedcore-verify verify-chain --bundle <path>",
+        "  seedcore-verify verify-transfer --dir <path>",
         "  seedcore-verify verify-token --artifact <path>",
         "  seedcore-verify verify-policy-eval --artifact <path>",
         "  seedcore-verify verify-transfer-dir --dir <path>",
-        "  seedcore-verify verify-chain --bundle <path>",
         "  seedcore-verify explain --artifact <path>",
     ]
     .join("\n")
@@ -103,6 +113,11 @@ fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> 
     Ok(verify_replay_chain(&bundle, &FixtureStaticResolver))
 }
 
+fn verify_receipt_path(path: &Path) -> Result<VerificationReport, String> {
+    let artifact: ReplayArtifact = read_json_file(path)?;
+    Ok(verify_receipt_artifact(&artifact, &FixtureStaticResolver))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PolicyEvaluationReport {
     verified: bool,
@@ -134,6 +149,12 @@ mod tests {
     fn replay_bundle_fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/replay_bundles")
+            .join(name)
+    }
+
+    fn receipt_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/receipts")
             .join(name)
     }
 
@@ -188,5 +209,14 @@ mod tests {
         assert!(report.verified);
         assert_eq!(report.error_code, None);
         assert_eq!(report.artifact_reports.len(), 2);
+    }
+
+    #[test]
+    fn verify_receipt_fixture() {
+        let report = verify_receipt_path(&receipt_fixture("policy_receipt_artifact.json"))
+            .expect("policy receipt artifact should verify");
+        assert!(report.verified);
+        assert_eq!(report.error_code, None);
+        assert_eq!(report.artifact_type, "policy_receipt");
     }
 }

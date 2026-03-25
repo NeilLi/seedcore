@@ -239,6 +239,163 @@ pub struct TransferApprovalEnvelope {
     pub version: u32,
 }
 
+/// Principal context bound to an action intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentPrincipal {
+    pub principal_ref: String,
+    pub organization_ref: Option<String>,
+    #[serde(default)]
+    pub role_refs: Vec<String>,
+}
+
+/// Action context bound to an action intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentAction {
+    pub action_type: String,
+    pub target_zone: Option<String>,
+    pub endpoint_id: Option<String>,
+}
+
+/// Resource context bound to an action intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentResource {
+    pub asset_ref: String,
+    pub lot_id: Option<String>,
+}
+
+/// Environment context bound to an action intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct IntentEnvironment {
+    pub source_registration_id: Option<String>,
+    pub registration_decision_id: Option<String>,
+    #[serde(default)]
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Canonical action-intent artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionIntent {
+    pub intent_id: String,
+    pub timestamp: Timestamp,
+    pub valid_until: Timestamp,
+    pub principal: IntentPrincipal,
+    pub action: IntentAction,
+    pub resource: IntentResource,
+    pub environment: IntentEnvironment,
+}
+
+/// Shared governed decision artifact fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernedDecisionArtifact {
+    pub decision_id: String,
+    pub action_intent_ref: String,
+    pub policy_snapshot_ref: String,
+    pub disposition: Disposition,
+    pub asset_ref: String,
+}
+
+/// Execution-token scope and runtime-binding constraints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TokenConstraints {
+    pub action_type: String,
+    pub target_zone: Option<String>,
+    pub asset_id: Option<String>,
+    pub principal_agent_id: Option<String>,
+    pub source_registration_id: Option<String>,
+    pub registration_decision_id: Option<String>,
+    pub endpoint_id: Option<String>,
+}
+
+/// Canonical execution-token artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionToken {
+    pub token_id: String,
+    pub intent_id: String,
+    pub issued_at: Timestamp,
+    pub valid_until: Timestamp,
+    pub contract_version: String,
+    pub constraints: TokenConstraints,
+    pub artifact_hash: ArtifactHash,
+    pub signature: SignatureEnvelope,
+}
+
+/// Canonical policy-decision artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyDecision {
+    pub policy_decision_id: String,
+    pub allowed: bool,
+    pub disposition: Disposition,
+    pub reason: Option<String>,
+    pub policy_snapshot_ref: String,
+    pub explanation: ExplanationPayload,
+    pub governed_decision_artifact: GovernedDecisionArtifact,
+    pub execution_token: Option<ExecutionToken>,
+}
+
+/// Canonical policy receipt artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyReceipt {
+    pub policy_receipt_id: String,
+    pub policy_decision_id: String,
+    pub intent_id: String,
+    pub policy_snapshot_ref: String,
+    pub disposition: Disposition,
+    pub explanation: ExplanationPayload,
+    pub governed_receipt_hash: ArtifactHash,
+    pub signer: SignatureEnvelope,
+    pub timestamp: Timestamp,
+}
+
+/// Canonical transition receipt artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransitionReceipt {
+    pub transition_receipt_id: String,
+    pub intent_id: String,
+    pub execution_token_id: String,
+    pub endpoint_id: String,
+    pub hardware_uuid: String,
+    pub actuator_result_hash: ArtifactHash,
+    pub from_zone: Option<String>,
+    pub to_zone: Option<String>,
+    pub executed_at: Timestamp,
+    pub receipt_nonce: String,
+    pub payload_hash: ArtifactHash,
+    pub signer: SignatureEnvelope,
+}
+
+/// Telemetry reference bound into an evidence bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetryRef {
+    pub telemetry_id: String,
+    pub captured_at: Timestamp,
+    pub hash: ArtifactHash,
+}
+
+/// Media reference bound into an evidence bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaRef {
+    pub media_id: String,
+    pub media_type: String,
+    pub hash: ArtifactHash,
+}
+
+/// Canonical evidence bundle artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceBundle {
+    pub evidence_bundle_id: String,
+    pub intent_id: String,
+    pub execution_token_id: Option<String>,
+    pub policy_receipt_id: Option<String>,
+    #[serde(default)]
+    pub transition_receipt_ids: Vec<String>,
+    #[serde(default)]
+    pub telemetry_refs: Vec<TelemetryRef>,
+    #[serde(default)]
+    pub media_refs: Vec<MediaRef>,
+    pub signer: SignatureEnvelope,
+    pub created_at: Timestamp,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +468,56 @@ mod tests {
             value.get("status").and_then(|item| item.as_str()),
             Some("APPROVED")
         );
+    }
+
+    #[test]
+    fn action_intent_round_trips() {
+        let intent = ActionIntent {
+            intent_id: "intent-transfer-001".to_string(),
+            timestamp: Timestamp::from_str("2026-04-02T08:00:00Z").unwrap(),
+            valid_until: Timestamp::from_str("2026-04-02T08:01:00Z").unwrap(),
+            principal: IntentPrincipal {
+                principal_ref: "principal:facility_mgr_001".to_string(),
+                organization_ref: Some("org:north_warehouse".to_string()),
+                role_refs: vec!["FACILITY_MANAGER".to_string()],
+            },
+            action: IntentAction {
+                action_type: "TRANSFER_CUSTODY".to_string(),
+                target_zone: Some("handoff_bay_3".to_string()),
+                endpoint_id: Some("hal://robot_sim/1".to_string()),
+            },
+            resource: IntentResource {
+                asset_ref: "asset:lot-8841".to_string(),
+                lot_id: Some("lot-8841".to_string()),
+            },
+            environment: IntentEnvironment::default(),
+        };
+
+        let value = serde_json::to_value(&intent).expect("action intent should serialize");
+        let parsed: ActionIntent =
+            serde_json::from_value(value).expect("action intent should deserialize");
+        assert_eq!(parsed, intent);
+    }
+
+    #[test]
+    fn policy_decision_allowed_matches_disposition() {
+        let decision = PolicyDecision {
+            policy_decision_id: "decision:intent-transfer-001".to_string(),
+            allowed: true,
+            disposition: Disposition::Allow,
+            reason: None,
+            policy_snapshot_ref: "snapshot:pkg-prod-2026-04-02".to_string(),
+            explanation: ExplanationPayload::empty(Disposition::Allow),
+            governed_decision_artifact: GovernedDecisionArtifact {
+                decision_id: "decision:intent-transfer-001".to_string(),
+                action_intent_ref: "intent-transfer-001".to_string(),
+                policy_snapshot_ref: "snapshot:pkg-prod-2026-04-02".to_string(),
+                disposition: Disposition::Allow,
+                asset_ref: "asset:lot-8841".to_string(),
+            },
+            execution_token: None,
+        };
+        assert!(decision.allowed);
+        assert_eq!(decision.disposition, Disposition::Allow);
     }
 }

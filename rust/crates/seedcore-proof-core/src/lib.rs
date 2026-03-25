@@ -75,7 +75,7 @@ pub trait KeyResolver {
 }
 
 /// Signed artifact wrapper that binds the artifact, its hash, and signature.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedArtifact<T> {
     pub artifact: T,
     pub artifact_hash: ArtifactHash,
@@ -249,6 +249,14 @@ pub fn verify_replay_chain(
         artifact_reports,
         chain_checks,
     }
+}
+
+/// Verifies one replay/receipt artifact in isolation.
+pub fn verify_receipt_artifact(
+    artifact: &ReplayArtifact,
+    resolver: &dyn KeyResolver,
+) -> VerificationReport {
+    verify_replay_artifact_item(artifact, resolver)
 }
 
 fn canonical_json_bytes<T: Serialize + ?Sized>(

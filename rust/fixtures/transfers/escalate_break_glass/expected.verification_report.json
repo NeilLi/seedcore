@@ -1,6 +1,7 @@
 {
   "verified": true,
   "checks": [
+    "approval_binding_hash_match",
     "policy_evaluation_match",
     "execution_token_null_match"
   ],
