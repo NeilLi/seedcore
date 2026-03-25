@@ -95,129 +95,36 @@ Why:
 
 The first Rust moves should follow authority order, not repo convenience.
 
-#### 1. Receipt and proof kernel
+Recommended workspace:
 
-Recommended first crate:
+- `rust/crates/seedcore-kernel-types`
+- `rust/crates/seedcore-proof-core`
+- `rust/crates/seedcore-approval-core`
+- `rust/crates/seedcore-policy-core`
+- `rust/crates/seedcore-token-core`
+- `rust/crates/seedcore-verify`
+- `rust/crates/seedcore-kernel-testkit`
+- `rust/fixtures/`
 
-- `rust/seedcore-proof-core`
+Recommended migration order:
 
-Initial responsibility:
+1. `seedcore-proof-core`
+2. `seedcore-approval-core`
+3. `seedcore-policy-core`
+4. `seedcore-token-core`
+5. `seedcore-verify`
 
-- canonical serialization
-- binding-hash generation
-- receipt construction helpers
-- signature generation and verification
-- artifact integrity checking
-- deterministic replay verification helpers
+Rationale:
 
-Python sources that should eventually call into it:
+- proof and receipt integrity are the most bounded authority surface
+- approval lifecycle is the next strict state machine
+- policy evaluation should move only after the truth table and explanation
+  payload are frozen
+- token enforcement should converge with the same strict kernel semantics
+- verifier tooling should be externally shareable and offline-friendly
 
-- `src/seedcore/ops/evidence/builder.py`
-- `src/seedcore/ops/evidence/signers.py`
-- `src/seedcore/ops/evidence/verification.py`
-- `src/seedcore/hal/custody/transition_receipts.py`
-- `src/seedcore/hal/custody/forensic_sealer.py`
-
-Why first:
-
-- bounded scope
-- correctness-critical
-- directly aligned with the proof surface and verifier story
-
-#### 2. Approval lifecycle engine
-
-Recommended second crate:
-
-- `rust/seedcore-approval-core`
-
-Initial responsibility:
-
-- `TransferApprovalEnvelope` validation
-- approval lifecycle state machine
-- supersession rules
-- revocation and expiry logic
-- role matching rules
-- approval binding-hash semantics
-
-Python seams most likely to hand off to it:
-
-- the next approval-persistence and transfer-governance path defined in
-  `docs/development/next_killer_demo_contract_freeze.md`
-- coordinator governance logic near
-  `src/seedcore/coordinator/core/governance.py`
-
-Why second:
-
-- approval state is a governed state machine
-- contract drift here would be costly
-
-#### 3. PDP decision kernel
-
-Recommended third crate:
-
-- `rust/seedcore-policy-core`
-
-Initial responsibility:
-
-- evaluate frozen decision inputs
-- apply deterministic outcome logic
-- compute `allow`, `deny`, `quarantine`, and `escalate`
-- generate the minimum explanation payload
-- mint internal decision artifacts
-
-Current Python boundary that should stabilize before migration:
-
-- `src/seedcore/ops/pkg/evaluator.py`
-- `src/seedcore/ops/pkg/authz_graph/service.py`
-- `src/seedcore/coordinator/core/execute.py`
-- `src/seedcore/coordinator/core/governance.py`
-
-Why third:
-
-- central to the trust boundary
-- worth moving only after decision semantics and truth-table behavior are
-  frozen
-
-#### 4. Token validation and enforcement core
-
-Recommended crate:
-
-- `rust/seedcore-token-core`
-
-Initial responsibility:
-
-- token schema validation
-- TTL and revocation checks
-- claim verification
-- scope checking
-- constraint enforcement
-
-Current Python seams:
-
-- `src/seedcore/hal/robot_sim/governance/execution_token.py`
-- `src/seedcore/hal/drivers/robot_sim_driver.py`
-
-Why:
-
-- tokens are authority-bearing artifacts and should become strict
-
-#### 5. Verifier SDK and CLI core
-
-Recommended crate or binary package:
-
-- `rust/seedcore-verify`
-
-Initial responsibility:
-
-- offline receipt verification
-- signature-chain validation
-- replay artifact validation
-- audit export checks
-
-Why:
-
-- this is an external trust surface
-- it is high-value for demos, audits, and partner validation
+The detailed service/CLI-first Rust workspace proposal now lives in
+[rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
 
 ### Move Toward TypeScript
 

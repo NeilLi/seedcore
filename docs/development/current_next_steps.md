@@ -298,6 +298,10 @@ begins. See
 The recommended multi-language boundary plan for that work now lives in
 [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
 
+The concrete service/CLI-first Rust kernel proposal for that same track now
+lives in
+[rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
+
 ## Messaging Guardrails
 
 The next-stage narrative should stay ambitious without overclaiming.

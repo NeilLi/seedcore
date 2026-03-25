@@ -1,0 +1,23 @@
+[workspace]
+members = [
+  "crates/seedcore-kernel-types",
+  "crates/seedcore-proof-core",
+  "crates/seedcore-approval-core",
+  "crates/seedcore-policy-core",
+  "crates/seedcore-token-core",
+  "crates/seedcore-verify",
+  "crates/seedcore-kernel-testkit",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+authors = ["SeedCore Contributors <contributors@seedcore.ai>"]
+repository = "https://github.com/NeilLi/seedcore"
+
+[workspace.dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

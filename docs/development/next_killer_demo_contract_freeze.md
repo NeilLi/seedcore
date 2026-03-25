@@ -514,6 +514,7 @@ boundaries:
 - [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
 - [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
 - [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md)
+- [rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md)
 - [contract_freeze_zero_trust_terms.md](/Users/ningli/project/seedcore/docs/development/contract_freeze_zero_trust_terms.md)
 - [end_to_end_governance_demo_contract.md](/Users/ningli/project/seedcore/docs/development/end_to_end_governance_demo_contract.md)
 - [pkg_authz_graph_rfc.md](/Users/ningli/project/seedcore/docs/development/pkg_authz_graph_rfc.md)
