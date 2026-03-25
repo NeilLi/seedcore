@@ -307,6 +307,9 @@ mod tests {
         };
 
         let value = serde_json::to_value(envelope).expect("envelope should serialize");
-        assert_eq!(value.get("status").and_then(|item| item.as_str()), Some("APPROVED"));
+        assert_eq!(
+            value.get("status").and_then(|item| item.as_str()),
+            Some("APPROVED")
+        );
     }
 }

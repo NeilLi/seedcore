@@ -91,8 +91,8 @@ pub fn mint_token(
     signer: &dyn Signer,
 ) -> Result<ExecutionToken, TokenError> {
     validate_claims(&claims)?;
-    let signed = sign_artifact(claims, signer)
-        .map_err(|error| TokenError::ProofError(error.to_string()))?;
+    let signed =
+        sign_artifact(claims, signer).map_err(|error| TokenError::ProofError(error.to_string()))?;
     Ok(ExecutionToken::from_signed(signed))
 }
 
@@ -143,10 +143,16 @@ pub fn enforce_constraints(
     if token.constraints.action_type != request.action_type {
         return deny("action_type_mismatch");
     }
-    if mismatch(token.constraints.target_zone.as_deref(), request.target_zone.as_deref()) {
+    if mismatch(
+        token.constraints.target_zone.as_deref(),
+        request.target_zone.as_deref(),
+    ) {
         return deny("target_zone_mismatch");
     }
-    if mismatch(token.constraints.asset_id.as_deref(), request.asset_id.as_deref()) {
+    if mismatch(
+        token.constraints.asset_id.as_deref(),
+        request.asset_id.as_deref(),
+    ) {
         return deny("asset_id_mismatch");
     }
     if mismatch(
@@ -167,7 +173,10 @@ pub fn enforce_constraints(
     ) {
         return deny("registration_decision_id_mismatch");
     }
-    if mismatch(token.constraints.endpoint_id.as_deref(), request.endpoint_id.as_deref()) {
+    if mismatch(
+        token.constraints.endpoint_id.as_deref(),
+        request.endpoint_id.as_deref(),
+    ) {
         return deny("endpoint_id_mismatch");
     }
 

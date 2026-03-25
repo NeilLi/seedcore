@@ -34,10 +34,24 @@ pub enum ApprovalError {
     InvalidApprovalStatus(String),
     #[error("expires_at_not_after_created_at")]
     InvalidWindow,
-    #[error("terminal_envelope_requires_terminal_status")]
-    InvalidTerminalState,
     #[error("binding_hash_failed:{0}")]
     BindingHashFailed(String),
+    #[error("unknown_role:{0}")]
+    UnknownRole(String),
+    #[error("approval_principal_mismatch:{role}")]
+    PrincipalMismatch { role: String },
+    #[error("role_already_approved:{0}")]
+    RoleAlreadyApproved(String),
+    #[error("transition_from_terminal_status")]
+    TransitionFromTerminal,
+    #[error("envelope_expired")]
+    EnvelopeExpired,
+    #[error("invalid_expire_transition")]
+    InvalidExpireTransition,
+    #[error("invalid_successor_envelope_id")]
+    InvalidSuccessorEnvelopeId,
+    #[error("version_overflow")]
+    VersionOverflow,
 }
 
 /// Validates the approval envelope's core invariants.
@@ -84,10 +98,6 @@ pub fn validate_envelope(envelope: &TransferApprovalEnvelope) -> Result<(), Appr
         return Err(ApprovalError::InvalidWindow);
     }
 
-    if envelope.status.is_terminal() && envelope.approval_binding_hash.is_none() {
-        return Err(ApprovalError::InvalidTerminalState);
-    }
-
     Ok(())
 }
 
@@ -100,6 +110,144 @@ pub fn approval_binding_hash(
     let binding_view = BindingHashEnvelopeView::from(envelope);
     hash_artifact(&binding_view)
         .map_err(|error| ApprovalError::BindingHashFailed(error.to_string()))
+}
+
+/// Applies one deterministic approval lifecycle transition and returns the next
+/// immutable envelope state.
+pub fn apply_transition(
+    envelope: &TransferApprovalEnvelope,
+    transition: ApprovalTransition,
+    now: Timestamp,
+) -> Result<TransferApprovalEnvelope, ApprovalError> {
+    validate_envelope(envelope)?;
+
+    let mut next = envelope.clone();
+    match transition {
+        ApprovalTransition::AddApproval(approval) => {
+            apply_add_approval(&mut next, approval, now)?;
+        }
+        ApprovalTransition::Revoke(revocation) => {
+            apply_revoke(&mut next, revocation)?;
+        }
+        ApprovalTransition::Expire(expired_at) => {
+            apply_expire(&mut next, expired_at, now)?;
+        }
+        ApprovalTransition::Supersede {
+            successor_envelope_id,
+        } => {
+            apply_supersede(&mut next, successor_envelope_id)?;
+        }
+    }
+
+    next.version = envelope
+        .version
+        .checked_add(1)
+        .ok_or(ApprovalError::VersionOverflow)?;
+    next.approval_binding_hash = Some(approval_binding_hash(&next)?);
+    validate_envelope(&next)?;
+    Ok(next)
+}
+
+fn apply_add_approval(
+    envelope: &mut TransferApprovalEnvelope,
+    approval: RoleApproval,
+    now: Timestamp,
+) -> Result<(), ApprovalError> {
+    guard_non_terminal(envelope.status)?;
+    if now >= envelope.expires_at {
+        return Err(ApprovalError::EnvelopeExpired);
+    }
+
+    let role = approval.role.clone();
+    let candidate = envelope
+        .required_approvals
+        .iter_mut()
+        .find(|entry| entry.role == role)
+        .ok_or_else(|| ApprovalError::UnknownRole(approval.role.clone()))?;
+
+    if approval.status != ApprovalStatus::Approved {
+        return Err(ApprovalError::InvalidApprovalStatus(approval.role));
+    }
+    if candidate.principal_ref != approval.principal_ref {
+        return Err(ApprovalError::PrincipalMismatch {
+            role: candidate.role.clone(),
+        });
+    }
+    if candidate.status == ApprovalStatus::Approved {
+        return Err(ApprovalError::RoleAlreadyApproved(candidate.role.clone()));
+    }
+
+    candidate.status = ApprovalStatus::Approved;
+    candidate.approved_at = approval.approved_at.or(Some(now));
+    if !approval.approval_ref.trim().is_empty() {
+        candidate.approval_ref = approval.approval_ref;
+    }
+
+    envelope.status = recompute_envelope_status(&envelope.required_approvals);
+    Ok(())
+}
+
+fn apply_revoke(
+    envelope: &mut TransferApprovalEnvelope,
+    revocation: RevocationRecord,
+) -> Result<(), ApprovalError> {
+    guard_non_terminal(envelope.status)?;
+    require_non_empty(&revocation.revoked_by, "revoked_by")?;
+    require_non_empty(&revocation.reason, "reason")?;
+    envelope.status = ApprovalStatus::Revoked;
+    Ok(())
+}
+
+fn apply_expire(
+    envelope: &mut TransferApprovalEnvelope,
+    expired_at: Timestamp,
+    now: Timestamp,
+) -> Result<(), ApprovalError> {
+    guard_non_terminal(envelope.status)?;
+    if expired_at < envelope.created_at {
+        return Err(ApprovalError::InvalidExpireTransition);
+    }
+    if now < envelope.expires_at && expired_at < envelope.expires_at {
+        return Err(ApprovalError::InvalidExpireTransition);
+    }
+    envelope.status = ApprovalStatus::Expired;
+    Ok(())
+}
+
+fn apply_supersede(
+    envelope: &mut TransferApprovalEnvelope,
+    successor_envelope_id: String,
+) -> Result<(), ApprovalError> {
+    guard_non_terminal(envelope.status)?;
+    if successor_envelope_id.trim().is_empty()
+        || successor_envelope_id == envelope.approval_envelope_id
+    {
+        return Err(ApprovalError::InvalidSuccessorEnvelopeId);
+    }
+    envelope.status = ApprovalStatus::Superseded;
+    Ok(())
+}
+
+fn guard_non_terminal(status: ApprovalStatus) -> Result<(), ApprovalError> {
+    if status.is_terminal() {
+        Err(ApprovalError::TransitionFromTerminal)
+    } else {
+        Ok(())
+    }
+}
+
+fn recompute_envelope_status(approvals: &[RoleApproval]) -> ApprovalStatus {
+    let approved_count = approvals
+        .iter()
+        .filter(|approval| approval.status == ApprovalStatus::Approved)
+        .count();
+    if approved_count == 0 {
+        ApprovalStatus::Pending
+    } else if approved_count == approvals.len() {
+        ApprovalStatus::Approved
+    } else {
+        ApprovalStatus::PartiallyApproved
+    }
 }
 
 fn require_non_empty(value: &str, field_name: &'static str) -> Result<(), ApprovalError> {
@@ -212,7 +360,10 @@ mod tests {
         let mut envelope = sample_envelope();
         envelope.required_approvals[1].role = "FACILITY_MANAGER".to_string();
         let error = validate_envelope(&envelope).expect_err("duplicate roles should fail");
-        assert_eq!(error, ApprovalError::DuplicateRole("FACILITY_MANAGER".to_string()));
+        assert_eq!(
+            error,
+            ApprovalError::DuplicateRole("FACILITY_MANAGER".to_string())
+        );
     }
 
     #[test]
@@ -235,5 +386,116 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.algorithm, "sha256");
         assert_eq!(first.value.len(), 64);
+    }
+
+    fn sample_pending_envelope() -> TransferApprovalEnvelope {
+        let mut envelope = sample_envelope();
+        envelope.status = ApprovalStatus::Pending;
+        envelope.required_approvals[0].status = ApprovalStatus::Pending;
+        envelope.required_approvals[0].approved_at = None;
+        envelope.required_approvals[1].status = ApprovalStatus::Pending;
+        envelope.required_approvals[1].approved_at = None;
+        envelope.approval_binding_hash = None;
+        envelope
+    }
+
+    #[test]
+    fn apply_transition_add_approval_advances_status_and_sets_binding_hash() {
+        let envelope = sample_pending_envelope();
+        let now = Timestamp::from_str("2026-04-02T08:00:10Z").unwrap();
+        let partially = apply_transition(
+            &envelope,
+            ApprovalTransition::AddApproval(RoleApproval {
+                role: "FACILITY_MANAGER".to_string(),
+                principal_ref: "principal:facility_mgr_001".to_string(),
+                status: ApprovalStatus::Approved,
+                approved_at: None,
+                approval_ref: "approval:facility_mgr_001".to_string(),
+            }),
+            now.clone(),
+        )
+        .expect("first transition should succeed");
+        assert_eq!(partially.status, ApprovalStatus::PartiallyApproved);
+        assert!(partially.approval_binding_hash.is_some());
+
+        let approved = apply_transition(
+            &partially,
+            ApprovalTransition::AddApproval(RoleApproval {
+                role: "QUALITY_INSPECTOR".to_string(),
+                principal_ref: "principal:quality_insp_017".to_string(),
+                status: ApprovalStatus::Approved,
+                approved_at: None,
+                approval_ref: "approval:quality_insp_017".to_string(),
+            }),
+            Timestamp::from_str("2026-04-02T08:00:12Z").unwrap(),
+        )
+        .expect("second transition should succeed");
+        assert_eq!(approved.status, ApprovalStatus::Approved);
+        assert!(approved.approval_binding_hash.is_some());
+    }
+
+    #[test]
+    fn apply_transition_rejects_unknown_approval_role() {
+        let envelope = sample_pending_envelope();
+        let error = apply_transition(
+            &envelope,
+            ApprovalTransition::AddApproval(RoleApproval {
+                role: "UNKNOWN_ROLE".to_string(),
+                principal_ref: "principal:any".to_string(),
+                status: ApprovalStatus::Approved,
+                approved_at: None,
+                approval_ref: "approval:any".to_string(),
+            }),
+            Timestamp::from_str("2026-04-02T08:00:10Z").unwrap(),
+        )
+        .expect_err("unknown role should fail");
+        assert_eq!(
+            error,
+            ApprovalError::UnknownRole("UNKNOWN_ROLE".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_transition_revoke_moves_envelope_to_terminal_status() {
+        let envelope = sample_pending_envelope();
+        let revoked = apply_transition(
+            &envelope,
+            ApprovalTransition::Revoke(RevocationRecord {
+                revoked_by: "principal:security_officer_009".to_string(),
+                revoked_at: Timestamp::from_str("2026-04-02T08:00:20Z").unwrap(),
+                reason: "tamper_flag".to_string(),
+            }),
+            Timestamp::from_str("2026-04-02T08:00:20Z").unwrap(),
+        )
+        .expect("revoke should succeed");
+        assert_eq!(revoked.status, ApprovalStatus::Revoked);
+        assert!(revoked.approval_binding_hash.is_some());
+    }
+
+    #[test]
+    fn apply_transition_expire_rejects_before_expiry_window() {
+        let envelope = sample_pending_envelope();
+        let error = apply_transition(
+            &envelope,
+            ApprovalTransition::Expire(Timestamp::from_str("2026-04-02T08:01:00Z").unwrap()),
+            Timestamp::from_str("2026-04-02T08:01:00Z").unwrap(),
+        )
+        .expect_err("premature expire should fail");
+        assert_eq!(error, ApprovalError::InvalidExpireTransition);
+    }
+
+    #[test]
+    fn apply_transition_supersede_sets_terminal_status() {
+        let envelope = sample_pending_envelope();
+        let superseded = apply_transition(
+            &envelope,
+            ApprovalTransition::Supersede {
+                successor_envelope_id: "approval-transfer-002".to_string(),
+            },
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        )
+        .expect("supersede should succeed");
+        assert_eq!(superseded.status, ApprovalStatus::Superseded);
+        assert!(superseded.approval_binding_hash.is_some());
     }
 }

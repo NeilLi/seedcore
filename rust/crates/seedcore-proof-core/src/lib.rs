@@ -92,9 +92,7 @@ pub struct VerificationReport {
 }
 
 /// Deterministic canonicalization helper.
-pub fn canonicalize<T: CanonicalArtifact>(
-    artifact: &T,
-) -> Result<Vec<u8>, CanonicalizationError> {
+pub fn canonicalize<T: CanonicalArtifact>(artifact: &T) -> Result<Vec<u8>, CanonicalizationError> {
     artifact.canonical_bytes()
 }
 
@@ -219,9 +217,7 @@ fn sort_value(value: Value) -> Value {
             }
             Value::Object(ordered)
         }
-        Value::Array(values) => {
-            Value::Array(values.into_iter().map(sort_value).collect())
-        }
+        Value::Array(values) => Value::Array(values.into_iter().map(sort_value).collect()),
         other => other,
     }
 }

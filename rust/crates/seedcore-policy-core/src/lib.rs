@@ -126,7 +126,11 @@ pub fn evaluate(input: &FrozenDecisionInput) -> Result<PolicyEvaluation, PolicyE
         .unwrap_or(false)
     {
         Disposition::Escalate
-    } else if !input.authority_graph_summary.missing_prerequisites.is_empty() {
+    } else if !input
+        .authority_graph_summary
+        .missing_prerequisites
+        .is_empty()
+    {
         Disposition::Deny
     } else if input
         .approval_envelope
@@ -204,10 +208,14 @@ fn build_explanation(input: &FrozenDecisionInput, disposition: Disposition) -> E
                 explanation.trust_gaps.push("stale_telemetry".to_string());
             }
             if !input.telemetry_summary.attested {
-                explanation.trust_gaps.push("missing_attestation".to_string());
+                explanation
+                    .trust_gaps
+                    .push("missing_attestation".to_string());
             }
             if matches!(input.telemetry_summary.seal_present, Some(false)) {
-                explanation.trust_gaps.push("seal_missing_or_broken".to_string());
+                explanation
+                    .trust_gaps
+                    .push("seal_missing_or_broken".to_string());
             }
         }
         Disposition::Escalate => {
@@ -236,9 +244,7 @@ fn require_non_empty(value: &str, field_name: &'static str) -> Result<(), Policy
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seedcore_kernel_types::{
-        ApprovalStatus, ArtifactHash, RoleApproval, TransferContext,
-    };
+    use seedcore_kernel_types::{ApprovalStatus, ArtifactHash, RoleApproval, TransferContext};
     use std::str::FromStr;
 
     fn approved_envelope() -> TransferApprovalEnvelope {
@@ -312,7 +318,8 @@ mod tests {
     #[test]
     fn evaluate_returns_deny_when_prerequisites_are_missing() {
         let mut input = base_input();
-        input.authority_graph_summary.missing_prerequisites = vec!["missing_dual_approval".to_string()];
+        input.authority_graph_summary.missing_prerequisites =
+            vec!["missing_dual_approval".to_string()];
         let result = evaluate(&input).expect("evaluation should succeed");
         assert_eq!(result.disposition, Disposition::Deny);
         assert!(result.execution_token_spec.is_none());
