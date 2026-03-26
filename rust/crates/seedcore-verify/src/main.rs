@@ -817,6 +817,21 @@ mod tests {
     }
 
     #[test]
+    fn verify_replay_bundle_fixture_with_approval_transition_chain() {
+        let report = verify_chain_bundle(&replay_bundle_fixture(
+            "allow_chain_with_approval_transition.json",
+        ))
+        .expect("approval transition replay bundle should verify");
+        assert!(report.verified);
+        assert_eq!(report.error_code, None);
+        assert_eq!(report.artifact_reports.len(), 3);
+        assert_eq!(
+            report.artifact_reports[1].artifact_type,
+            "approval_transition_history"
+        );
+    }
+
+    #[test]
     fn verify_receipt_fixture() {
         let report = verify_receipt_path(&receipt_fixture("policy_receipt_artifact.json"))
             .expect("policy receipt artifact should verify");

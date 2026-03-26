@@ -312,6 +312,9 @@ Status as of March 26, 2026:
     transition count) into workflow-facing output state
   - replay publication surfaces now expose approval transition chain metadata:
     replay timeline events, replay artifact payloads, and JSON-LD proof output
+  - Rust replay-bundle fixtures now include approval transition history
+    artifacts (`allow_chain_with_approval_transition.json`) verified by
+    `seedcore-verify verify-chain`
 - remaining to close phase scope:
   - promote approval transition history from Python replay publication payloads
     into first-class Rust replay artifact/bundle contracts across crates

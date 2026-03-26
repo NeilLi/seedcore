@@ -1,0 +1,74 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "policy-receipt:intent-transfer-001",
+      "artifact_type": "policy_receipt",
+      "artifact": {
+        "policy_receipt_id": "policy-receipt:intent-transfer-001",
+        "disposition": "allow"
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+      },
+      "signature": {
+        "signer_type": "service",
+        "signer_id": "seedcore-verify",
+        "signing_scheme": "debug_hash_v1",
+        "key_ref": "test-key",
+        "attestation_level": "baseline",
+        "signature": "sha256:6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+      },
+      "previous_artifact_hash": null
+    },
+    {
+      "artifact_id": "approval-transition-history:intent-transfer-001",
+      "artifact_type": "approval_transition_history",
+      "artifact": {
+        "approval_envelope_id": "approval-transfer-001",
+        "approval_transition_count": 1,
+        "approval_transition_head": "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "63a19a3c9b14aa96745e13f4d4fcc73c4275700b65a98a1946992314f0d5b750"
+      },
+      "signature": {
+        "signer_type": "service",
+        "signer_id": "seedcore-verify",
+        "signing_scheme": "debug_hash_v1",
+        "key_ref": "test-key",
+        "attestation_level": "baseline",
+        "signature": "sha256:63a19a3c9b14aa96745e13f4d4fcc73c4275700b65a98a1946992314f0d5b750"
+      },
+      "previous_artifact_hash": {
+        "algorithm": "sha256",
+        "value": "6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+      }
+    },
+    {
+      "artifact_id": "transition-receipt:intent-transfer-001",
+      "artifact_type": "transition_receipt",
+      "artifact": {
+        "transition_receipt_id": "transition-receipt:intent-transfer-001",
+        "decision_ref": "approval-transition-history:intent-transfer-001"
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "a2c3954b7ea5faf083c7923e007cf02ab717f573fe23f0536ba6f0cb1ff09331"
+      },
+      "signature": {
+        "signer_type": "service",
+        "signer_id": "seedcore-verify",
+        "signing_scheme": "debug_hash_v1",
+        "key_ref": "test-key",
+        "attestation_level": "baseline",
+        "signature": "sha256:a2c3954b7ea5faf083c7923e007cf02ab717f573fe23f0536ba6f0cb1ff09331"
+      },
+      "previous_artifact_hash": {
+        "algorithm": "sha256",
+        "value": "63a19a3c9b14aa96745e13f4d4fcc73c4275700b65a98a1946992314f0d5b750"
+      }
+    }
+  ]
+}
