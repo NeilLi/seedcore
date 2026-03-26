@@ -231,7 +231,15 @@ def _apply_transfer_workflow_metadata(
     disposition: str,
     required_approvals: List[str] | None = None,
     approved_by: List[str] | None = None,
+    approval_transition_history: List[Dict[str, Any]] | None = None,
+    approval_transition_head: str | None = None,
 ) -> Dict[str, Any]:
+    transition_history = [dict(item) for item in (approval_transition_history or [])]
+    transition_head = approval_transition_head or (
+        str(transition_history[-1].get("event_hash"))
+        if transition_history and transition_history[-1].get("event_hash") is not None
+        else None
+    )
     record = _apply_transition_metadata(
         record,
         disposition=disposition,
@@ -246,6 +254,8 @@ def _apply_transfer_workflow_metadata(
                 "approval_context": {
                     "approval_envelope_id": "approval-transfer-001",
                     "approved_by": list(approved_by or []),
+                    "approval_transition_head": transition_head,
+                    "approval_transition_history": transition_history,
                 }
             },
         },
@@ -268,6 +278,8 @@ def _apply_transfer_workflow_metadata(
             ),
             "approved_by": list(approved_by or []),
             "approval_envelope_id": "approval-transfer-001",
+            "approval_transition_head": transition_head,
+            "approval_transition_count": len(transition_history),
             "authority_path_summary": [
                 "principal:agent:test -> org:acme-logistics -> facility:north-warehouse -> zone:vault-a"
             ],
@@ -286,6 +298,24 @@ def _apply_transfer_workflow_metadata(
     if disposition == "escalate":
         record["policy_decision"]["governed_receipt"] = {}
     return record
+
+
+def _sample_approval_transition_history() -> List[Dict[str, Any]]:
+    return [
+        {
+            "event_id": "approval-transition-event:sha256:transition-event-001",
+            "event_hash": "sha256:transition-event-001",
+            "previous_event_hash": None,
+            "occurred_at": "2026-03-20T09:59:30+00:00",
+            "transition_type": "add_approval",
+            "envelope_id": "approval-transfer-001",
+            "previous_status": "PARTIALLY_APPROVED",
+            "next_status": "APPROVED",
+            "previous_binding_hash": None,
+            "next_binding_hash": "sha256:approval-binding-transfer-001",
+            "envelope_version": 2,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -546,3 +576,66 @@ async def test_replay_projection_maps_escalation_with_required_approvals_to_pend
         "QUALITY_INSPECTOR",
     ]
     assert replay.public_projection["authorization"]["disposition"] == "escalate"
+
+
+@pytest.mark.asyncio
+async def test_replay_projection_and_jsonld_include_approval_transition_chain() -> None:
+    transition_history = _sample_approval_transition_history()
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(
+            task_id="task-transfer-chain-1",
+            intent_id="intent-transfer-chain-1",
+            asset_id="asset-transfer-chain-1",
+        ),
+        disposition="allow",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001", "principal:quality_insp_017"],
+        approval_transition_history=transition_history,
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-chain-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.public_projection["approvals"]["approval_transition_count"] == 1
+    assert replay.public_projection["approvals"]["approval_transition_head"] == "sha256:transition-event-001"
+    assert any(item.event_type == "approval_transition_applied" for item in replay.replay_timeline)
+    assert any(
+        item.get("claim") == "approval_transition_chain_available" and item.get("value") is True
+        for item in replay.public_projection["verifiable_claims"]
+    )
+    assert replay.jsonld_export["proof"]["approval_transition_chain"]["count"] == 1
+    assert replay.jsonld_export["proof"]["approval_transition_chain"]["head"] == "sha256:transition-event-001"
+
+
+@pytest.mark.asyncio
+async def test_public_jsonld_approval_transition_chain_exposes_hash_only_fields() -> None:
+    transition_history = _sample_approval_transition_history()
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(
+            task_id="task-transfer-chain-2",
+            intent_id="intent-transfer-chain-2",
+            asset_id="asset-transfer-chain-2",
+        ),
+        disposition="allow",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001", "principal:quality_insp_017"],
+        approval_transition_history=transition_history,
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-chain-2"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+    public_jsonld = service.build_jsonld_export(replay, projection=ReplayProjectionKind.PUBLIC)
+
+    chain = public_jsonld["proof"]["approval_transition_chain"]
+    assert chain["count"] == 1
+    assert chain["head"] == "sha256:transition-event-001"
+    assert chain["events"][0]["event_hash"] == "sha256:transition-event-001"
+    assert "previous_status" not in chain["events"][0]

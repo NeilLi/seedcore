@@ -293,7 +293,7 @@ class ReplayService:
         payload = materialize_seedcore_custody_event_payload(audit_record=replay.audit_record)
         payload["seedcore:subject_type"] = replay.subject_type
         payload["seedcore:subject_id"] = replay.subject_id
-        payload["proof"] = {
+        proof_payload = {
             "type": "SeedCoreReplayProof",
             "verification_status": replay.verification_status.model_dump(mode="json"),
             "trust_reference": public_id,
@@ -302,6 +302,38 @@ class ReplayService:
                 for item in replay.signer_chain
             ],
         }
+        approval_context = self._approval_context(replay)
+        transition_history = (
+            list(approval_context.get("approval_transition_history"))
+            if isinstance(approval_context.get("approval_transition_history"), list)
+            else []
+        )
+        transition_head = (
+            str(approval_context.get("approval_transition_head")).strip()
+            if approval_context.get("approval_transition_head") is not None and str(approval_context.get("approval_transition_head")).strip()
+            else None
+        )
+        if transition_history:
+            if kind in {ReplayProjectionKind.INTERNAL, ReplayProjectionKind.AUDITOR}:
+                chain_events = [dict(item) for item in transition_history if isinstance(item, dict)]
+            else:
+                chain_events = [
+                    {
+                        "event_hash": item.get("event_hash"),
+                        "previous_event_hash": item.get("previous_event_hash"),
+                        "occurred_at": item.get("occurred_at"),
+                        "transition_type": item.get("transition_type"),
+                        "envelope_version": item.get("envelope_version"),
+                    }
+                    for item in transition_history
+                    if isinstance(item, dict)
+                ]
+            proof_payload["approval_transition_chain"] = {
+                "head": transition_head,
+                "count": len(chain_events),
+                "events": chain_events,
+            }
+        payload["proof"] = proof_payload
         if kind in {ReplayProjectionKind.PUBLIC, ReplayProjectionKind.BUYER}:
             signer_metadata = payload.get("signer_metadata")
             if isinstance(signer_metadata, dict):
@@ -987,6 +1019,38 @@ class ReplayService:
                     details={"status": dispute.get("status"), "title": dispute.get("title")},
                 )
             )
+        action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+        approval_context = parameters.get("approval_context") if isinstance(parameters.get("approval_context"), dict) else {}
+        approval_history = approval_context.get("approval_transition_history")
+        if isinstance(approval_history, list):
+            for item in approval_history:
+                if not isinstance(item, dict):
+                    continue
+                occurred_at = item.get("occurred_at")
+                if not isinstance(occurred_at, str) or not occurred_at.strip():
+                    continue
+                previous_status = str(item.get("previous_status") or "").strip()
+                next_status = str(item.get("next_status") or "").strip()
+                summary = "Approval transition applied for governed transfer."
+                if previous_status and next_status:
+                    summary = f"Approval transition applied: {previous_status} -> {next_status}."
+                events.append(
+                    ReplayTimelineEvent(
+                        event_id=str(item.get("event_id") or item.get("event_hash") or f"approval-transition:{uuid.uuid4()}"),
+                        event_type="approval_transition_applied",
+                        timestamp=occurred_at,
+                        summary=summary,
+                        artifact_ref=str(item.get("event_hash") or ""),
+                        details={
+                            "transition_type": item.get("transition_type"),
+                            "envelope_id": item.get("envelope_id"),
+                            "event_hash": item.get("event_hash"),
+                            "previous_event_hash": item.get("previous_event_hash"),
+                        },
+                    )
+                )
         return sorted(events, key=lambda item: self._parse_datetime(item.timestamp))
 
     def _build_trust_page_projection(
@@ -1224,6 +1288,21 @@ class ReplayService:
                 "source": replay.audit_record_id,
             },
         ]
+        approval_context = self._approval_context(replay)
+        transition_head = (
+            str(approval_context.get("approval_transition_head")).strip()
+            if approval_context.get("approval_transition_head") is not None and str(approval_context.get("approval_transition_head")).strip()
+            else None
+        )
+        transition_history = approval_context.get("approval_transition_history")
+        if isinstance(transition_history, list):
+            claims.append(
+                {
+                    "claim": "approval_transition_chain_available",
+                    "value": bool(transition_history),
+                    "source": transition_head or replay.audit_record_id,
+                }
+            )
         if governed_receipt_hash:
             claims.append(
                 {

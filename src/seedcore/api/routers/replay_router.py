@@ -163,6 +163,7 @@ async def get_replay_artifacts(
 
     if projection in {ReplayProjectionKind.PUBLIC, ReplayProjectionKind.BUYER}:
         view = replay_service.project_record(replay, projection)
+        public_jsonld = replay_service.build_jsonld_export(replay, projection=projection)
         return {
             "lookup_key": lookup_key,
             "lookup_value": lookup_value,
@@ -173,9 +174,15 @@ async def get_replay_artifacts(
                 "policy_summary": view.get("policy_summary"),
                 "public_media_refs": view.get("public_media_refs"),
                 "verifiable_claims": view.get("verifiable_claims"),
+                "approval_transition_chain": (
+                    public_jsonld.get("proof", {}).get("approval_transition_chain")
+                    if isinstance(public_jsonld.get("proof"), dict)
+                    else None
+                ),
             },
         }
 
+    internal_jsonld = replay_service.build_jsonld_export(replay, projection=ReplayProjectionKind.INTERNAL)
     return {
         "lookup_key": lookup_key,
         "lookup_value": lookup_value,
@@ -187,6 +194,11 @@ async def get_replay_artifacts(
         "evidence_bundle": replay.evidence_bundle,
         "transition_receipts": replay.transition_receipts,
         "signer_chain": replay.signer_chain,
+        "approval_transition_chain": (
+            internal_jsonld.get("proof", {}).get("approval_transition_chain")
+            if isinstance(internal_jsonld.get("proof"), dict)
+            else None
+        ),
     }
 
 
