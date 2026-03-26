@@ -310,10 +310,11 @@ Status as of March 26, 2026:
   - Python governance now applies approval transitions via Rust and persists
     append-only transition history metadata (`approval_transition_head` and
     transition count) into workflow-facing output state
+  - replay publication surfaces now expose approval transition chain metadata:
+    replay timeline events, replay artifact payloads, and JSON-LD proof output
 - remaining to close phase scope:
-  - extend approval transition history from fixture-level verification into
-    broader external verifier bundle flows (for example replay-bundle
-    publication paths)
+  - promote approval transition history from Python replay publication payloads
+    into first-class Rust replay artifact/bundle contracts across crates
 
 ### Phase 4: TypeScript Operator Workflow Surface
 
