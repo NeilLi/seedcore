@@ -1,0 +1,122 @@
+{
+  "phase": "phase_0_contract_freeze",
+  "as_of": "2026-03-26",
+  "frozen_artifacts": [
+    "ActionIntent",
+    "TransferApprovalEnvelope",
+    "PolicyDecision",
+    "ExecutionToken",
+    "PolicyReceipt",
+    "TransitionReceipt",
+    "EvidenceBundle",
+    "ExplanationPayload"
+  ],
+  "required_dispositions": [
+    "allow",
+    "deny",
+    "quarantine",
+    "escalate"
+  ],
+  "required_explanation_fields": [
+    "disposition",
+    "matched_policy_refs",
+    "authority_path_summary",
+    "missing_prerequisites",
+    "trust_gaps",
+    "minted_artifacts",
+    "obligations"
+  ],
+  "required_docs": [
+    "docs/development/contract_freeze_zero_trust_terms.md",
+    "docs/development/killer_demo_execution_spine.md",
+    "docs/development/next_killer_demo_contract_freeze.md",
+    "docs/development/rust_workspace_proposal.md"
+  ],
+  "required_rust_public_types": {
+    "structs": [
+      "ActionIntent",
+      "TransferApprovalEnvelope",
+      "PolicyDecision",
+      "ExecutionToken",
+      "PolicyReceipt",
+      "TransitionReceipt",
+      "EvidenceBundle",
+      "ExplanationPayload"
+    ],
+    "enums": [
+      "Disposition",
+      "ApprovalStatus"
+    ]
+  },
+  "required_ts_contract_values": {
+    "dispositions": [
+      "allow",
+      "deny",
+      "quarantine",
+      "escalate"
+    ],
+    "approval_statuses": [
+      "PENDING",
+      "PARTIALLY_APPROVED",
+      "APPROVED",
+      "EXPIRED",
+      "REVOKED",
+      "SUPERSEDED"
+    ]
+  },
+  "restricted_custody_transfer_scenarios": {
+    "allow_case": {
+      "required_files": [
+        "input.action_intent.json",
+        "input.approval_envelope.json",
+        "input.asset_state.json",
+        "input.telemetry_summary.json",
+        "input.authority_graph_summary.json",
+        "expected.policy_evaluation.json",
+        "expected.execution_token.json",
+        "expected.verification_report.json"
+      ],
+      "execution_token_expectation": "required_object"
+    },
+    "deny_missing_approval": {
+      "required_files": [
+        "input.action_intent.json",
+        "input.approval_envelope.json",
+        "input.asset_state.json",
+        "input.telemetry_summary.json",
+        "input.authority_graph_summary.json",
+        "expected.policy_evaluation.json",
+        "expected.execution_token.json",
+        "expected.verification_report.json"
+      ],
+      "execution_token_expectation": "required_null"
+    },
+    "quarantine_stale_telemetry": {
+      "required_files": [
+        "input.action_intent.json",
+        "input.approval_envelope.json",
+        "input.asset_state.json",
+        "input.telemetry_summary.json",
+        "input.authority_graph_summary.json",
+        "expected.policy_evaluation.json",
+        "expected.execution_token.json",
+        "expected.verification_report.json"
+      ],
+      "execution_token_expectation": "required_null"
+    },
+    "escalate_break_glass": {
+      "required_files": [
+        "input.action_intent.json",
+        "input.approval_envelope.json",
+        "input.asset_state.json",
+        "input.telemetry_summary.json",
+        "input.authority_graph_summary.json",
+        "input.break_glass.json",
+        "expected.policy_evaluation.json",
+        "expected.execution_token.json",
+        "expected.verification_report.json"
+      ],
+      "execution_token_expectation": "required_null"
+    }
+  }
+}

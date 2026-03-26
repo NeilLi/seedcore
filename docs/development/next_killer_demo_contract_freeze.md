@@ -482,6 +482,13 @@ Optional but useful fourth deliverable:
 
 4. deny and quarantine examples for incomplete approvals, stale telemetry, and custody mismatch
 
+Closure gate:
+
+- freeze manifest:
+  [phase0_contract_freeze_manifest.json](/Users/ningli/project/seedcore/docs/development/phase0_contract_freeze_manifest.json)
+- validation command:
+  `python scripts/tools/verify_phase0_contract_freeze.py`
+
 ## Versioning Discipline
 
 For the next killer demo, each artifact family should have explicit ownership

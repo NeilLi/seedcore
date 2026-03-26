@@ -295,6 +295,11 @@ begins. See
 [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md) and
 [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md).
 
+Phase 0 closure is now machine-checkable through
+[phase0_contract_freeze_manifest.json](/Users/ningli/project/seedcore/docs/development/phase0_contract_freeze_manifest.json)
+with the validation gate
+`python scripts/tools/verify_phase0_contract_freeze.py`.
+
 The recommended multi-language boundary plan for that work now lives in
 [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
 

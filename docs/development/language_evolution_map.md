@@ -234,6 +234,18 @@ See:
 
 - `docs/development/killer_demo_execution_spine.md`
 - `docs/development/next_killer_demo_contract_freeze.md`
+- `docs/development/phase0_contract_freeze_manifest.json`
+
+Status as of March 26, 2026:
+
+- completed:
+  - freeze manifest created for authority-bearing artifacts, disposition truth
+    table values, explanation payload fields, and Restricted Custody Transfer
+    fixture scenarios
+  - machine-checkable gate added at
+    `scripts/tools/verify_phase0_contract_freeze.py`
+  - regression coverage added at
+    `tests/test_phase0_contract_freeze.py`
 
 ### Phase 1: Rust Proof Kernel
 
@@ -247,7 +259,7 @@ Expected deliverables:
 - deterministic hash compatibility tests
 - a basic verifier CLI
 
-Status as of March 25, 2026:
+Status as of March 26, 2026:
 
 - completed for baseline scope:
   - `seedcore-proof-core` canonicalization, hashing, signing, signature
@@ -268,7 +280,7 @@ Expected deliverables:
 - one transfer proof page
 - business-readable status mapping from the runtime truth table
 
-Status as of March 25, 2026:
+Status as of March 26, 2026:
 
 - completed for baseline scope:
   - `ts/packages/contracts` provides strict TS contract parsing for verifier
@@ -365,11 +377,13 @@ Once the Rust kernels exist:
 
 This is controlled boundary tightening, not a rewrite.
 
-## Phase Scoreboard (As Of March 25, 2026)
+## Phase Scoreboard (As Of March 26, 2026)
 
-1. Phase 0 (Contract Freeze First): In progress
-Reason: contract-freeze documents exist, but full freeze enforcement is not yet
-closed as a runtime gate.
+1. Phase 0 (Contract Freeze First): Completed
+Reason: freeze requirements are now machine-checkable through
+`docs/development/phase0_contract_freeze_manifest.json` and
+`scripts/tools/verify_phase0_contract_freeze.py`, with regression protection in
+`tests/test_phase0_contract_freeze.py`.
 
 2. Phase 1 (Rust Proof Kernel): Implemented for baseline scope
 Reason: `seedcore-proof-core` and `seedcore-verify` are implemented with
@@ -380,9 +394,10 @@ Reason: `ts/packages/contracts`, `ts/services/verification-api`, and
 `ts/apps/proof-surface` are implemented, including transfer and asset proof
 pages with business-readable state mapping.
 
-4. Phase 3 (Rust Approval Engine): Partially complete
-Reason: `seedcore-approval-core` is implemented, but full runtime cutover and
-phase-close criteria are still pending.
+4. Phase 3 (Rust Approval Engine): Implemented for baseline scope
+Reason: `seedcore-approval-core` and approval-history verification are
+implemented, with Rust-backed runtime replay and workflow integration in the
+Restricted Custody Transfer baseline path.
 
 5. Phase 4 (TypeScript Operator Workflow Surface): Not complete
 Reason: the narrow operator workflow console remains to be built.
