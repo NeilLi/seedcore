@@ -87,6 +87,7 @@ def _sample_stats(values: list[float]) -> dict[str, float]:
 
 def main() -> int:
     iterations = int(os.getenv("SEEDCORE_TASK_BENCH_ITERS", "8"))
+    warmup_iterations = int(os.getenv("SEEDCORE_TASK_BENCH_WARMUP_ITERS", "1"))
     timeout_s = float(os.getenv("SEEDCORE_TASK_BENCH_TIMEOUT_S", "30"))
     poll_s = float(os.getenv("SEEDCORE_TASK_BENCH_POLL_S", "0.5"))
 
@@ -94,10 +95,12 @@ def main() -> int:
     health = session.get(f"{API_BASE}/health", timeout=5)
     health.raise_for_status()
 
-    samples: list[TaskSample] = []
+    warmup_samples: list[TaskSample] = []
+    measured_samples: list[TaskSample] = []
     failures: list[dict[str, Any]] = []
 
-    for index in range(iterations):
+    total_runs = warmup_iterations + iterations
+    for index in range(total_runs):
         create_started = time.perf_counter()
         response = session.post(f"{API_V1}/tasks", json=_task_payload(index), timeout=10)
         response.raise_for_status()
@@ -126,12 +129,33 @@ def main() -> int:
             started_at=exec_meta.get("started_at"),
             finished_at=exec_meta.get("finished_at"),
         )
-        samples.append(sample)
+
+        if index < warmup_iterations:
+            warmup_samples.append(sample)
+        else:
+            measured_samples.append(sample)
 
         if sample.status != "completed":
             failures.append({"task_id": task_id, "status": sample.status, "error": terminal.get("error")})
 
-    for sample in samples:
+    for sample in warmup_samples:
+        print(
+            "[WARMUP] "
+            + json.dumps(
+                {
+                    "task_id": sample.task_id,
+                    "status": sample.status,
+                    "decision_kind": sample.decision_kind,
+                    "route_reason": sample.route_reason,
+                    "queue_wait_ms": round(sample.queue_wait_ms or 0.0, 3),
+                    "exec_latency_ms": round(float(sample.exec_latency_ms or 0.0), 3),
+                    "wall_ms": round(sample.wall_ms, 3),
+                },
+                sort_keys=True,
+            )
+        )
+
+    for sample in measured_samples:
         print(
             "[TASK] "
             + json.dumps(
@@ -152,15 +176,16 @@ def main() -> int:
         print(f"Task flow benchmark failed: {failures}", file=sys.stderr)
         return 1
 
-    queue_values = [sample.queue_wait_ms for sample in samples if sample.queue_wait_ms is not None]
-    exec_values = [float(sample.exec_latency_ms) for sample in samples if sample.exec_latency_ms is not None]
-    wall_values = [sample.wall_ms for sample in samples]
+    queue_values = [sample.queue_wait_ms for sample in measured_samples if sample.queue_wait_ms is not None]
+    exec_values = [float(sample.exec_latency_ms) for sample in measured_samples if sample.exec_latency_ms is not None]
+    wall_values = [sample.wall_ms for sample in measured_samples]
 
     summary = {
-        "iterations": len(samples),
-        "statuses": sorted({sample.status for sample in samples}),
-        "route_reasons": sorted({sample.route_reason for sample in samples if sample.route_reason}),
-        "decision_kinds": sorted({sample.decision_kind for sample in samples if sample.decision_kind}),
+        "warmup_iterations": len(warmup_samples),
+        "iterations": len(measured_samples),
+        "statuses": sorted({sample.status for sample in measured_samples}),
+        "route_reasons": sorted({sample.route_reason for sample in measured_samples if sample.route_reason}),
+        "decision_kinds": sorted({sample.decision_kind for sample in measured_samples if sample.decision_kind}),
         "queue_wait_ms": _sample_stats(queue_values) if queue_values else {},
         "exec_latency_ms": _sample_stats(exec_values) if exec_values else {},
         "wall_ms": _sample_stats(wall_values),

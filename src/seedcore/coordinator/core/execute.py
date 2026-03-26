@@ -528,6 +528,22 @@ async def execute_task(
     route_config: RouteConfig,
     execution_config: ExecutionConfig,
 ) -> Dict[str, Any]:
+    # 0. DIRECT FAST GENERAL-QUERY SHORTCUT
+    # For a very narrow one-shot query shape, we can bypass eventizer,
+    # enrichment, drift, PKG, and routing entirely. This keeps the control
+    # plane honest about the "direct" path and materially reduces hot-path
+    # overhead for benchmark and shell-style fast queries.
+    direct_fast_query = await _handle_direct_fast_general_query(task, execution_config)
+    if direct_fast_query is not None:
+        final_result = normalize_envelope(
+            direct_fast_query,
+            task_id=task.task_id,
+            path="coordinator_fast_query",
+        )
+        if final_result.get("decision_kind") is None:
+            final_result["decision_kind"] = DecisionKind.FAST_PATH.value
+        return final_result
+
     task_context_dict = await _process_task_input(
         task=task,
         eventizer_helper=execution_config.eventizer_helper,
@@ -630,26 +646,6 @@ async def execute_task(
 
         final_result = normalize_envelope(
             result, task_id=ctx.task_id, path="coordinator_fast_path"
-        )
-        if final_result.get("decision_kind") is None:
-            final_result["decision_kind"] = DecisionKind.FAST_PATH.value
-        return final_result
-
-    # 1.8. DIRECT FAST GENERAL-QUERY SHORTCUT
-    # For narrow, low-risk one-shot queries we can bypass the heavyweight
-    # coordinator pipeline entirely. In practice this avoids paying for:
-    # - synchronous embedding generation / semantic cache setup
-    # - drift / OCPS updates
-    # - PKG routing evaluation
-    #
-    # The candidate check is intentionally strict so action, workflow, or
-    # tool-emitting tasks still pass through the normal governed path.
-    direct_fast_query = await _handle_direct_fast_general_query(task, execution_config)
-    if direct_fast_query is not None:
-        final_result = normalize_envelope(
-            direct_fast_query,
-            task_id=ctx.task_id,
-            path="coordinator_fast_query",
         )
         if final_result.get("decision_kind") is None:
             final_result["decision_kind"] = DecisionKind.FAST_PATH.value
