@@ -11,6 +11,7 @@ from typing import Any, Dict, Mapping
 from urllib.parse import quote
 
 from seedcore.integrations.rust_kernel import (
+    apply_transfer_approval_transition_with_rust,
     approval_binding_hash_with_rust,
     mint_execution_token_with_rust,
     summarize_transfer_approval_with_rust,
@@ -1864,6 +1865,60 @@ def _evaluate_restricted_custody_transfer_prerequisites(
                 approved_by.append(value)
 
     approval_envelope_payload = approval_context.get("approval_envelope")
+    approval_transition_payload = approval_context.get("approval_transition")
+    if isinstance(approval_envelope_payload, Mapping) and isinstance(approval_transition_payload, Mapping):
+        transition_now = _utcnow()
+        action_timestamp = str(action_intent.timestamp or "").strip()
+        if action_timestamp:
+            try:
+                transition_now = _parse_iso8601(action_timestamp)
+            except Exception:
+                transition_now = _utcnow()
+        rust_transition = apply_transfer_approval_transition_with_rust(
+            dict(approval_envelope_payload),
+            dict(approval_transition_payload),
+            now=transition_now,
+        )
+        if not bool(rust_transition.get("valid")):
+            missing_prerequisites = [
+                {
+                    "code": "approval_transition",
+                    "outcome": "invalid",
+                    "message": "Restricted custody transfer approval transition failed Rust validation.",
+                    "details": {
+                        "rust_error_code": rust_transition.get("error_code"),
+                        "rust_details": list(rust_transition.get("details") or []),
+                    },
+                }
+            ]
+            return _escalate_decision(
+                "Restricted custody transfer approval transition is invalid.",
+                policy_case.policy_snapshot,
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=_policy_case_explanations(
+                    policy_case,
+                    "restricted_custody_transfer_approval_transition_invalid",
+                ),
+                authz_graph={
+                    "mode": "transfer_prerequisite_check",
+                    "disposition": "escalate",
+                    "reason": "approval_transition_invalid",
+                    "matched_policy_refs": [],
+                    "authority_paths": [],
+                    "authority_path_summary": [],
+                    "missing_prerequisites": missing_prerequisites,
+                    "trust_gaps": [],
+                },
+            ).model_copy(update={"required_approvals": required_approvals})
+        updated_envelope = rust_transition.get("approval_envelope")
+        if isinstance(updated_envelope, Mapping):
+            approval_envelope_payload = dict(updated_envelope)
+            approval_context["approval_envelope"] = dict(updated_envelope)
+        transition_binding_hash = _approval_binding_hash_string(rust_transition.get("binding_hash"))
+        if transition_binding_hash is not None:
+            approval_context["approval_binding_hash"] = transition_binding_hash
+        approval_context.pop("approval_transition", None)
+
     if isinstance(approval_envelope_payload, Mapping):
         rust_summary = summarize_transfer_approval_with_rust(dict(approval_envelope_payload))
         if not bool(rust_summary.get("valid")):

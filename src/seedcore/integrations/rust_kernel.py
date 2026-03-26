@@ -139,6 +139,41 @@ def summarize_transfer_approval_with_rust(envelope: Mapping[str, Any]) -> dict[s
     return output
 
 
+def apply_transfer_approval_transition_with_rust(
+    envelope: Mapping[str, Any],
+    transition: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now_value = _isoformat_utc(now or datetime.now(timezone.utc))
+    envelope_path = _write_temp_json(dict(envelope))
+    transition_path = _write_temp_json(dict(transition))
+    try:
+        output = _run_verify_cli(
+            [
+                "apply-approval-transition",
+                "--artifact",
+                envelope_path,
+                "--transition",
+                transition_path,
+                "--now",
+                now_value,
+            ]
+        )
+    finally:
+        _unlink_quietly(envelope_path)
+        _unlink_quietly(transition_path)
+    if "valid" not in output:
+        return {
+            "valid": False,
+            "approval_envelope": None,
+            "binding_hash": None,
+            "error_code": "rust_apply_approval_transition_failed",
+            "details": [output],
+        }
+    return output
+
+
 def map_token_error_for_hal(error_code: str | None) -> str:
     if error_code in {"token_expired"}:
         return "expired ExecutionToken"

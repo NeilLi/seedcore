@@ -1,10 +1,13 @@
-use seedcore_approval_core::{approval_binding_hash, validate_envelope};
+use seedcore_approval_core::{
+    apply_transition, approval_binding_hash, validate_envelope, ApprovalTransition,
+};
 use seedcore_kernel_testkit::FixtureStaticResolver;
 use seedcore_kernel_testkit::{
     load_transfer_fixture, run_transfer_fixture_dir, FixtureDebugSigner, TransferVerificationReport,
 };
 use seedcore_kernel_types::{
-    ApprovalStatus, ArtifactHash, Disposition, Timestamp, TransferApprovalEnvelope,
+    ApprovalStatus, ArtifactHash, Disposition, RevocationRecord, RoleApproval, Timestamp,
+    TransferApprovalEnvelope,
 };
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
@@ -87,6 +90,17 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let report = approval_summary_path(Path::new(&artifact_path))?;
             print_json(&report)
         }
+        "apply-approval-transition" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let transition_path = flag_value(&args, "--transition")?;
+            let now = timestamp_from_flag(&args, "--now", "2026-04-02T08:00:30Z")?;
+            let report = apply_approval_transition_path(
+                Path::new(&artifact_path),
+                Path::new(&transition_path),
+                now,
+            )?;
+            print_json(&report)
+        }
         "verify-receipt" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let report = verify_receipt_path(Path::new(&artifact_path))?;
@@ -116,6 +130,7 @@ fn usage() -> String {
         "  seedcore-verify validate-approval --artifact <path>",
         "  seedcore-verify approval-binding-hash --artifact <path>",
         "  seedcore-verify approval-summary --artifact <path>",
+        "  seedcore-verify apply-approval-transition --artifact <path> --transition <path> [--now <rfc3339>]",
         "  seedcore-verify mint-token --claims <path>",
         "  seedcore-verify verify-token --artifact <path>",
         "  seedcore-verify enforce-token --token <path> --request <path>",
@@ -253,6 +268,43 @@ fn approval_summary_path(path: &Path) -> Result<ApprovalSummaryReport, String> {
     }
 }
 
+fn apply_approval_transition_path(
+    artifact_path: &Path,
+    transition_path: &Path,
+    now: Timestamp,
+) -> Result<ApprovalTransitionReport, String> {
+    let envelope: TransferApprovalEnvelope = read_json_file(artifact_path)?;
+    let transition_input: ApprovalTransitionInput = read_json_file(transition_path)?;
+    Ok(apply_approval_transition(envelope, transition_input, now))
+}
+
+fn apply_approval_transition(
+    envelope: TransferApprovalEnvelope,
+    transition_input: ApprovalTransitionInput,
+    now: Timestamp,
+) -> ApprovalTransitionReport {
+    let transition = transition_input.into_core_transition();
+    match apply_transition(&envelope, transition, now) {
+        Ok(updated) => ApprovalTransitionReport {
+            valid: true,
+            approval_envelope: Some(updated.clone()),
+            binding_hash: updated
+                .approval_binding_hash
+                .as_ref()
+                .map(artifact_hash_to_string),
+            error_code: None,
+            details: Vec::new(),
+        },
+        Err(error) => ApprovalTransitionReport {
+            valid: false,
+            approval_envelope: None,
+            binding_hash: None,
+            error_code: Some("approval_transition_failed".to_string()),
+            details: vec![error.to_string()],
+        },
+    }
+}
+
 fn summarize_transfer_dir(dir: &Path) -> Result<TransferTrustSummary, String> {
     let report = verify_transfer_dir(dir)?;
     let fixture = load_transfer_fixture(dir).map_err(|error| error.to_string())?;
@@ -377,6 +429,71 @@ struct ApprovalSummaryReport {
     required_roles: Vec<String>,
     approved_by: Vec<String>,
     co_signed: bool,
+    binding_hash: Option<String>,
+    error_code: Option<String>,
+    details: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ApprovalTransitionInput {
+    AddApproval {
+        role: String,
+        principal_ref: String,
+        approval_ref: String,
+        approved_at: Option<Timestamp>,
+    },
+    Revoke {
+        revoked_by: String,
+        revoked_at: Timestamp,
+        reason: String,
+    },
+    Expire {
+        expired_at: Timestamp,
+    },
+    Supersede {
+        successor_envelope_id: String,
+    },
+}
+
+impl ApprovalTransitionInput {
+    fn into_core_transition(self) -> ApprovalTransition {
+        match self {
+            Self::AddApproval {
+                role,
+                principal_ref,
+                approval_ref,
+                approved_at,
+            } => ApprovalTransition::AddApproval(RoleApproval {
+                role,
+                principal_ref,
+                status: ApprovalStatus::Approved,
+                approved_at,
+                approval_ref,
+            }),
+            Self::Revoke {
+                revoked_by,
+                revoked_at,
+                reason,
+            } => ApprovalTransition::Revoke(RevocationRecord {
+                revoked_by,
+                revoked_at,
+                reason,
+            }),
+            Self::Expire { expired_at } => ApprovalTransition::Expire(expired_at),
+            Self::Supersede {
+                successor_envelope_id,
+            } => ApprovalTransition::Supersede {
+                successor_envelope_id,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ApprovalTransitionReport {
+    valid: bool,
+    approval_envelope: Option<TransferApprovalEnvelope>,
     binding_hash: Option<String>,
     error_code: Option<String>,
     details: Vec<String>,
@@ -555,5 +672,41 @@ mod tests {
             report.binding_hash.as_deref(),
             Some("sha256:788be3571af35b5719c93056f02f2fd839f5fadd93e18a929f2d080d8bfc67df")
         );
+    }
+
+    #[test]
+    fn apply_approval_transition_add_approval_advances_envelope() {
+        let mut envelope: TransferApprovalEnvelope =
+            read_json_file(approval_fixture("allow_case")).expect("fixture should load");
+        envelope.status = ApprovalStatus::PartiallyApproved;
+        if let Some(first) = envelope.required_approvals.get_mut(0) {
+            first.status = ApprovalStatus::Approved;
+            first.approved_at = Some(Timestamp::from_str("2026-04-02T08:00:01Z").unwrap());
+        }
+        if let Some(second) = envelope.required_approvals.get_mut(1) {
+            second.status = ApprovalStatus::Pending;
+            second.approved_at = None;
+        }
+        envelope.approval_binding_hash = None;
+        envelope.version = 1;
+
+        let report = apply_approval_transition(
+            envelope,
+            ApprovalTransitionInput::AddApproval {
+                role: "QUALITY_INSPECTOR".to_string(),
+                principal_ref: "principal:quality_insp_017".to_string(),
+                approval_ref: "approval:quality_insp_017".to_string(),
+                approved_at: Some(Timestamp::from_str("2026-04-02T08:00:30Z").unwrap()),
+            },
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        );
+
+        assert!(report.valid);
+        let updated = report
+            .approval_envelope
+            .expect("updated envelope should be present");
+        assert_eq!(updated.status, ApprovalStatus::Approved);
+        assert_eq!(updated.version, 2);
+        assert!(report.binding_hash.is_some());
     }
 }

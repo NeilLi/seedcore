@@ -1254,6 +1254,113 @@ def test_evaluate_intent_restricted_custody_transfer_escalates_on_rust_binding_m
     )
 
 
+def test_evaluate_intent_restricted_custody_transfer_applies_rust_transition(monkeypatch) -> None:
+    payload = _transfer_payload()
+    approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
+    approval_context.pop("approval_binding_hash")
+    approval_context.pop("required_roles")
+    approval_context.pop("approved_by")
+    approval_context["approval_envelope"] = {
+        "approval_envelope_id": "approval-transfer-001",
+        "workflow_type": "custody_transfer",
+        "status": "PARTIALLY_APPROVED",
+        "asset_ref": "asset:lot-8841",
+        "lot_id": "lot-8841",
+        "from_custodian_ref": "principal:facility_mgr_001",
+        "to_custodian_ref": "principal:outbound_mgr_002",
+        "transfer_context": {
+            "from_zone": "vault_a",
+            "to_zone": "handoff_bay_3",
+            "facility_ref": "facility:north_warehouse",
+            "custody_point_ref": "custody_point:handoff_bay_3",
+        },
+        "required_approvals": [
+            {
+                "role": "FACILITY_MANAGER",
+                "principal_ref": "principal:facility_mgr_001",
+                "status": "APPROVED",
+                "approved_at": "2099-03-20T12:00:02+00:00",
+                "approval_ref": "approval:facility_mgr_001",
+            },
+            {
+                "role": "QUALITY_INSPECTOR",
+                "principal_ref": "principal:quality_insp_017",
+                "status": "PENDING",
+                "approved_at": None,
+                "approval_ref": "approval:quality_insp_017",
+            },
+        ],
+        "policy_snapshot_ref": "snapshot:1",
+        "expires_at": "2099-03-20T12:10:00+00:00",
+        "created_at": "2099-03-20T12:00:00+00:00",
+        "version": 1,
+    }
+    approval_context["approval_transition"] = {
+        "type": "add_approval",
+        "role": "QUALITY_INSPECTOR",
+        "principal_ref": "principal:quality_insp_017",
+        "approval_ref": "approval:quality_insp_017",
+        "approved_at": "2099-03-20T12:00:03+00:00",
+    }
+
+    monkeypatch.setattr(
+        governance_mod,
+        "apply_transfer_approval_transition_with_rust",
+        lambda envelope, transition, now: {
+            "valid": True,
+            "approval_envelope": {
+                **dict(envelope),
+                "status": "APPROVED",
+                "version": 2,
+                "required_approvals": [
+                    {
+                        "role": "FACILITY_MANAGER",
+                        "principal_ref": "principal:facility_mgr_001",
+                        "status": "APPROVED",
+                        "approved_at": "2099-03-20T12:00:02+00:00",
+                        "approval_ref": "approval:facility_mgr_001",
+                    },
+                    {
+                        "role": "QUALITY_INSPECTOR",
+                        "principal_ref": "principal:quality_insp_017",
+                        "status": "APPROVED",
+                        "approved_at": "2099-03-20T12:00:03+00:00",
+                        "approval_ref": "approval:quality_insp_017",
+                    },
+                ],
+            },
+            "binding_hash": "sha256:approval-binding-transfer-001",
+            "error_code": None,
+            "details": [],
+        },
+    )
+    monkeypatch.setattr(
+        governance_mod,
+        "summarize_transfer_approval_with_rust",
+        lambda envelope: {
+            "valid": True,
+            "status": "APPROVED",
+            "required_roles": ["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+            "approved_by": [
+                "principal:facility_mgr_001",
+                "principal:quality_insp_017",
+            ],
+            "co_signed": True,
+            "binding_hash": "sha256:approval-binding-transfer-001",
+            "error_code": None,
+            "details": [],
+        },
+    )
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is True
+    assert decision.disposition == "allow"
+    assert decision.execution_token is not None
+    assert decision.execution_token.constraints["approval_binding_hash"] == "sha256:approval-binding-transfer-001"
+    assert decision.execution_token.constraints["co_signed"] is True
+
+
 def test_evaluate_intent_restricted_custody_transfer_quarantines_when_telemetry_is_stale(monkeypatch) -> None:
     payload = _transfer_payload()
     now = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
