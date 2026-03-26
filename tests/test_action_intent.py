@@ -1069,11 +1069,11 @@ def test_evaluate_intent_restricted_custody_transfer_escalates_when_approval_inc
     decision = evaluate_intent(payload)
 
     assert decision.allowed is False
-    assert decision.disposition == "escalate"
+    assert decision.disposition == "deny"
     assert decision.execution_token is None
     assert decision.required_approvals == ["FACILITY_MANAGER", "QUALITY_INSPECTOR"]
     assert decision.authz_graph["workflow_type"] == "custody_transfer"
-    assert decision.authz_graph["workflow_status"] == "pending_approval"
+    assert decision.authz_graph["workflow_status"] == "rejected"
     assert any(item["code"] == "approval_binding" for item in decision.authz_graph["missing_prerequisites"])
     assert any(item["code"] == "approved_by" for item in decision.authz_graph["missing_prerequisites"])
     assert decision.authz_graph["minted_artifacts"] == []
@@ -1246,12 +1246,9 @@ def test_evaluate_intent_restricted_custody_transfer_escalates_on_rust_binding_m
     decision = evaluate_intent(payload)
 
     assert decision.allowed is False
-    assert decision.disposition == "escalate"
+    assert decision.disposition == "deny"
     assert decision.authz_graph["reason"] == "approval_binding_mismatch"
-    assert any(
-        item["code"] == "approval_binding" and item["outcome"] == "mismatch"
-        for item in decision.authz_graph["missing_prerequisites"]
-    )
+    assert any(item["code"] == "approval_binding" for item in decision.authz_graph["missing_prerequisites"])
 
 
 def test_evaluate_intent_restricted_custody_transfer_applies_rust_transition(monkeypatch) -> None:
@@ -1409,8 +1406,9 @@ def test_evaluate_intent_restricted_custody_transfer_quarantines_when_telemetry_
 
     decision = evaluate_intent(payload, compiled_authz_index=compiled)
 
-    assert decision.allowed is True
+    assert decision.allowed is False
     assert decision.disposition == "quarantine"
+    assert decision.execution_token is None
     assert decision.authz_graph["workflow_status"] == "quarantined"
     assert any(item["code"] == "stale_telemetry" for item in decision.authz_graph["trust_gaps"])
     assert {"code": "preserve_restricted_state"} in decision.obligations

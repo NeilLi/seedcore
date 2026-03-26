@@ -13,6 +13,7 @@ from urllib.parse import quote
 from seedcore.integrations.rust_kernel import (
     apply_transfer_approval_transition_with_rust,
     approval_binding_hash_with_rust,
+    evaluate_policy_with_rust,
     mint_execution_token_with_rust,
     summarize_transfer_approval_with_rust,
     validate_transfer_approval_with_rust,
@@ -952,21 +953,261 @@ def evaluate_intent(
     transfer_prerequisite_violation = _evaluate_restricted_custody_transfer_prerequisites(
         policy_case=policy_case,
     )
-    if transfer_prerequisite_violation is not None:
+    use_rust_policy_core = (
+        _is_restricted_custody_transfer(action_intent)
+        and _pdp_use_rust_policy_core_for_restricted_transfer()
+    )
+    if transfer_prerequisite_violation is not None and not use_rust_policy_core:
         return _finalize_policy_decision_contract(
             policy_case=policy_case,
             policy_decision=transfer_prerequisite_violation,
         )
 
-    authz_graph_violation, break_glass_context, transition_evaluation, compiled_match, authz_evaluator = _evaluate_compiled_authz_graph_policy(
-        action_intent=action_intent,
-        policy_case=policy_case,
-        compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
-    )
-    if authz_graph_violation is not None:
+    authz_graph_violation = None
+    break_glass_context = BreakGlassDecisionContext()
+    transition_evaluation = None
+    compiled_match = None
+    authz_evaluator = None
+    if transfer_prerequisite_violation is None:
+        authz_graph_violation, break_glass_context, transition_evaluation, compiled_match, authz_evaluator = _evaluate_compiled_authz_graph_policy(
+            action_intent=action_intent,
+            policy_case=policy_case,
+            compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
+        )
+        if authz_graph_violation is not None and not use_rust_policy_core:
+            return _finalize_policy_decision_contract(
+                policy_case=policy_case,
+                policy_decision=authz_graph_violation,
+            )
+
+    if use_rust_policy_core:
+        authority_graph = _authz_graph_decision_metadata(
+            transition_evaluation=transition_evaluation,
+            compiled_match=compiled_match,
+            evaluator=authz_evaluator,
+        )
+        transfer_missing = (
+            _extract_policy_codes(transfer_prerequisite_violation.authz_graph.get("missing_prerequisites"))
+            if transfer_prerequisite_violation is not None and isinstance(transfer_prerequisite_violation.authz_graph, Mapping)
+            else []
+        )
+        if transfer_prerequisite_violation is not None and isinstance(transfer_prerequisite_violation.authz_graph, Mapping):
+            transfer_authz_graph = dict(transfer_prerequisite_violation.authz_graph)
+            if not authority_graph:
+                authority_graph = transfer_authz_graph
+            elif authority_graph.get("reason") is None and transfer_authz_graph.get("reason") is not None:
+                authority_graph["reason"] = transfer_authz_graph.get("reason")
+        transition_missing = _extract_policy_codes(authority_graph.get("missing_prerequisites"))
+        transition_gaps = _extract_policy_codes(authority_graph.get("trust_gaps"))
+        if authz_graph_violation is not None and isinstance(authz_graph_violation.authz_graph, Mapping):
+            transition_missing = _merge_policy_code_lists(
+                transition_missing,
+                _extract_policy_codes(authz_graph_violation.authz_graph.get("missing_prerequisites")),
+            )
+            transition_gaps = _merge_policy_code_lists(
+                transition_gaps,
+                _extract_policy_codes(authz_graph_violation.authz_graph.get("trust_gaps")),
+            )
+            if not authority_graph:
+                authority_graph = dict(authz_graph_violation.authz_graph)
+
+        approval_context = _approval_context(action_intent)
+        approval_envelope = (
+            dict(approval_context.get("approval_envelope"))
+            if isinstance(approval_context.get("approval_envelope"), Mapping)
+            else _synthesized_transfer_approval_envelope(
+                action_intent=action_intent,
+                policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
+            )
+        )
+        telemetry_summary = policy_case.telemetry_summary if isinstance(policy_case.telemetry_summary, Mapping) else {}
+        rust_input = {
+            "action_intent": {
+                "intent_id": action_intent.intent_id,
+                "timestamp": action_intent.timestamp,
+                "valid_until": action_intent.valid_until,
+                "principal": {
+                    "principal_ref": f"principal:{action_intent.principal.agent_id}",
+                    "organization_ref": None,
+                    "role_refs": [f"role:{action_intent.principal.role_profile}"],
+                },
+                "action": {
+                    "action_type": action_intent.action.type,
+                    "target_zone": action_intent.resource.target_zone,
+                    "endpoint_id": (
+                        action_intent.action.parameters.get("endpoint_id")
+                        if isinstance(action_intent.action.parameters, Mapping)
+                        else None
+                    ),
+                },
+                "resource": {
+                    "asset_ref": action_intent.resource.asset_id,
+                    "lot_id": action_intent.resource.lot_id,
+                },
+                "environment": {
+                    "source_registration_id": action_intent.resource.source_registration_id,
+                    "registration_decision_id": action_intent.resource.registration_decision_id,
+                    "attributes": {},
+                },
+            },
+            "approval_envelope": approval_envelope,
+            "policy_snapshot_ref": policy_snapshot or action_intent.action.security_contract.version,
+            "asset_state": {
+                "asset_ref": action_intent.resource.asset_id,
+                "current_custodian_ref": _transfer_context_value(
+                    action_intent,
+                    "expected_current_custodian",
+                    "from_custodian_ref",
+                ),
+                "current_zone_ref": _transfer_context_value(action_intent, "from_zone"),
+                "custody_point_ref": _transfer_context_value(action_intent, "custody_point_ref"),
+                "transferable": bool(
+                    (transition_evaluation is None)
+                    or (
+                        getattr(getattr(transition_evaluation, "asset_state", None), "transferable", True)
+                    )
+                ),
+                "restricted": bool(
+                    getattr(getattr(transition_evaluation, "asset_state", None), "restricted", False)
+                ),
+                "evidence_refs": [],
+                "approved_registration_refs": [],
+            },
+            "authority_graph_summary": {
+                "matched_policy_refs": list(
+                    authority_graph.get("matched_policy_refs")
+                    if isinstance(authority_graph.get("matched_policy_refs"), list)
+                    else []
+                ),
+                "authority_paths": list(
+                    authority_graph.get("authority_path_summary")
+                    if isinstance(authority_graph.get("authority_path_summary"), list)
+                    else []
+                ),
+                "missing_prerequisites": _merge_policy_code_lists(
+                    _rust_kernel_missing_prerequisites(transfer_missing),
+                    _rust_kernel_missing_prerequisites(transition_missing),
+                ),
+                "trust_gaps": transition_gaps,
+            },
+            "telemetry_summary": {
+                "observed_at": telemetry_summary.get("observed_at"),
+                "stale": bool(
+                    any(code in {"stale_telemetry", "telemetry_freshness"} for code in transition_gaps)
+                    or bool(telemetry_summary.get("stale"))
+                ),
+                "attested": not bool(telemetry_summary.get("missing_attestation", False)),
+                "seal_present": telemetry_summary.get("seal_present"),
+            },
+            "break_glass": {
+                "present": bool(getattr(break_glass_context, "present", False)),
+                "validated": bool(getattr(break_glass_context, "validated", False)),
+                "principal_ref": (
+                    f"principal:{break_glass_context.principal_id}"
+                    if getattr(break_glass_context, "principal_id", None)
+                    else None
+                ),
+                "reason": getattr(break_glass_context, "reason", None),
+            },
+        }
+        rust_eval = evaluate_policy_with_rust(rust_input)
+        if rust_eval.get("error") is not None:
+            return _finalize_policy_decision_contract(
+                policy_case=policy_case,
+                policy_decision=_deny_decision(
+                    "Rust policy kernel evaluation failed.",
+                    "rust_policy_evaluation_failed",
+                    policy_snapshot,
+                    risk_score=_policy_case_risk_score(policy_case),
+                    cognitive_assessment=policy_case.cognitive_assessment,
+                    explanations=_policy_case_explanations(
+                        policy_case,
+                        "rust_policy_evaluation_failed",
+                    ),
+                    authz_graph={"mode": "rust_policy_core", "rust_error": rust_eval.get("error")},
+                ),
+            )
+
+        rust_disposition = str(rust_eval.get("disposition") or "deny").strip().lower()
+        if rust_disposition not in {"allow", "deny", "quarantine", "escalate"}:
+            rust_disposition = "deny"
+        token_valid_until = min(
+            valid_until,
+            now + timedelta(seconds=_execution_token_ttl_seconds()),
+        )
+        execution_constraints = dict(
+            _transition_execution_constraints(transition_evaluation)
+            if transition_evaluation is not None
+            else {}
+        )
+        if _is_restricted_custody_transfer(action_intent):
+            execution_constraints.update(_restricted_custody_transfer_execution_constraints(action_intent))
+        token = (
+            _mint_execution_token(
+                action_intent=action_intent,
+                issued_at=now,
+                valid_until=token_valid_until,
+                extra_constraints=execution_constraints or None,
+            )
+            if rust_disposition == "allow"
+            else None
+        )
+        explanation = rust_eval.get("explanation") if isinstance(rust_eval.get("explanation"), Mapping) else {}
+        explanation_missing = _extract_policy_codes(explanation.get("missing_prerequisites"))
+        explanation_gaps = _extract_policy_codes(explanation.get("trust_gaps"))
+        authority_graph["mode"] = "rust_policy_core"
+        authority_graph["disposition"] = rust_disposition
+        authority_graph["missing_prerequisites"] = [
+            {"code": code, "outcome": "missing"}
+            for code in _merge_policy_code_lists(
+                _extract_policy_codes(authority_graph.get("missing_prerequisites")),
+                explanation_missing,
+            )
+        ]
+        authority_graph["trust_gaps"] = [
+            {"code": code}
+            for code in _merge_policy_code_lists(
+                _extract_policy_codes(authority_graph.get("trust_gaps")),
+                explanation_gaps,
+            )
+        ]
+        authority_graph["matched_policy_refs"] = (
+            list(explanation.get("matched_policy_refs"))
+            if isinstance(explanation.get("matched_policy_refs"), list)
+            else list(authority_graph.get("matched_policy_refs") or [])
+        )
+        authority_graph["authority_path_summary"] = (
+            list(explanation.get("authority_path_summary"))
+            if isinstance(explanation.get("authority_path_summary"), list)
+            else list(authority_graph.get("authority_path_summary") or [])
+        )
+        rust_obligations = [
+            {"code": str(item.get("obligation_type")).strip()}
+            for item in (explanation.get("obligations") if isinstance(explanation.get("obligations"), list) else [])
+            if isinstance(item, Mapping) and str(item.get("obligation_type") or "").strip()
+        ]
         return _finalize_policy_decision_contract(
             policy_case=policy_case,
-            policy_decision=authz_graph_violation,
+            policy_decision=PolicyDecision(
+                allowed=rust_disposition == "allow",
+                execution_token=token,
+                reason=_rust_policy_reason(rust_disposition),
+                policy_snapshot=policy_snapshot or action_intent.action.security_contract.version,
+                disposition=rust_disposition,  # type: ignore[arg-type]
+                risk_score=_policy_case_risk_score(policy_case),
+                explanations=_policy_case_explanations(policy_case, _rust_policy_reason(rust_disposition)),
+                required_approvals=_transfer_required_approvals(action_intent),
+                evidence_gaps=_extract_policy_codes(authority_graph.get("trust_gaps")),
+                cognitive_trace_ref=(
+                    policy_case.cognitive_assessment.trace_ref
+                    if policy_case.cognitive_assessment is not None
+                    else None
+                ),
+                obligations=rust_obligations,
+                break_glass=break_glass_context,
+                authz_graph=authority_graph,
+                governed_receipt=_serialize_governed_receipt(transition_evaluation),
+            ),
         )
 
     token_valid_until = min(
@@ -2677,6 +2918,11 @@ def _pdp_use_authz_graph_transitions() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _pdp_use_rust_policy_core_for_restricted_transfer() -> bool:
+    raw = os.getenv("SEEDCORE_PDP_USE_RUST_POLICY_CORE_TRANSFER", "true")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _pdp_use_ray_authz_cache() -> bool:
     raw = os.getenv("SEEDCORE_PDP_USE_RAY_AUTHZ_CACHE", "false")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
@@ -2723,6 +2969,106 @@ def _coerce_risk_score(value: Any) -> float | None:
     if not isinstance(value, (int, float)):
         return None
     return round(max(0.0, min(1.0, float(value))), 3)
+
+
+def _extract_policy_codes(values: Any) -> list[str]:
+    codes: list[str] = []
+    if not isinstance(values, list):
+        return codes
+    for item in values:
+        if isinstance(item, Mapping):
+            candidate = item.get("code")
+        else:
+            candidate = item
+        value = str(candidate or "").strip()
+        if value and value not in codes:
+            codes.append(value)
+    return codes
+
+
+def _merge_policy_code_lists(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for item in group:
+            value = str(item).strip()
+            if value and value not in merged:
+                merged.append(value)
+    return merged
+
+
+def _rust_kernel_missing_prerequisites(codes: list[str]) -> list[str]:
+    telemetry_codes = {"telemetry_freshness", "stale_telemetry", "missing_telemetry"}
+    return [code for code in codes if code not in telemetry_codes]
+
+
+def _synthesized_transfer_approval_envelope(
+    *,
+    action_intent: ActionIntent,
+    policy_snapshot: str,
+) -> dict[str, Any]:
+    approval_context = _approval_context(action_intent)
+    required_roles = _transfer_required_approvals(action_intent)
+    approved_by = [
+        str(item).strip()
+        for item in (approval_context.get("approved_by") if isinstance(approval_context.get("approved_by"), list) else [])
+        if str(item).strip()
+    ]
+    from_custodian = _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref") or ""
+    to_custodian = _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref") or ""
+    status = "APPROVED" if required_roles and len(approved_by) >= len(required_roles) else "PENDING"
+    binding_hash = _approval_binding_hash_string(approval_context.get("approval_binding_hash"))
+
+    required_approvals: list[dict[str, Any]] = []
+    for role in required_roles:
+        principal = next(
+            (ref for ref in approved_by if role.split("_")[0].lower() in ref.lower()),
+            approved_by[0] if approved_by else from_custodian or None,
+        )
+        required_approvals.append(
+            {
+                "role": role,
+                "principal_ref": principal or "principal:unknown",
+                "status": "APPROVED" if principal in approved_by else "PENDING",
+                "approved_at": action_intent.timestamp,
+                "approval_ref": f"approval:{role.lower()}",
+            }
+        )
+
+    return {
+        "approval_envelope_id": str(approval_context.get("approval_envelope_id") or f"approval:{action_intent.intent_id}"),
+        "workflow_type": RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE,
+        "status": status,
+        "asset_ref": str(action_intent.resource.asset_id),
+        "lot_id": action_intent.resource.lot_id,
+        "from_custodian_ref": from_custodian or "principal:unknown",
+        "to_custodian_ref": to_custodian or "principal:unknown",
+        "transfer_context": {
+            "from_zone": _transfer_context_value(action_intent, "from_zone"),
+            "to_zone": _transfer_context_value(action_intent, "to_zone") or action_intent.resource.target_zone,
+            "facility_ref": _transfer_context_value(action_intent, "facility_ref"),
+            "custody_point_ref": _transfer_context_value(action_intent, "custody_point_ref"),
+        },
+        "required_approvals": required_approvals,
+        "approval_binding_hash": (
+            {"algorithm": "sha256", "value": binding_hash.split(":", 1)[1]}
+            if binding_hash and ":" in binding_hash
+            else None
+        ),
+        "policy_snapshot_ref": policy_snapshot,
+        "expires_at": action_intent.valid_until,
+        "created_at": action_intent.timestamp,
+        "version": 1,
+    }
+
+
+def _rust_policy_reason(disposition: str) -> str:
+    if disposition == "allow":
+        return "restricted_custody_transfer"
+    if disposition == "deny":
+        return "approval_incomplete"
+    if disposition == "quarantine":
+        return "quarantine"
+    return POLICY_ESCALATION_CODE
 
 
 def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:

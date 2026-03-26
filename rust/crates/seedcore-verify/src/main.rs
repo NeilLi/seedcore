@@ -11,6 +11,7 @@ use seedcore_kernel_types::{
     ReplayArtifactPayload, RevocationRecord, RoleApproval, Timestamp, TransferApprovalEnvelope,
 };
 use seedcore_policy_core::PolicyEvaluation;
+use seedcore_policy_core::FrozenDecisionInput;
 use seedcore_proof_core::{
     hash_artifact, verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
     ReplayVerificationReport, Signer, VerificationReport,
@@ -65,6 +66,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let evaluation: PolicyEvaluation = read_json_file(&artifact_path)?;
             let report = PolicyEvaluationReport::from(&evaluation);
             print_json(&report)
+        }
+        "evaluate-policy" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let input: FrozenDecisionInput = read_json_file(&artifact_path)?;
+            let evaluation = seedcore_policy_core::evaluate(&input)
+                .map_err(|error| format!("policy_evaluation_failed:{error}"))?;
+            print_json(&evaluation)
         }
         "verify-transfer" | "verify-transfer-dir" => {
             let dir = PathBuf::from(flag_value(&args, "--dir")?);
@@ -150,6 +158,7 @@ fn usage() -> String {
         "  seedcore-verify verify-token --artifact <path>",
         "  seedcore-verify enforce-token --token <path> --request <path>",
         "  seedcore-verify verify-policy-eval --artifact <path>",
+        "  seedcore-verify evaluate-policy --artifact <path>",
         "  seedcore-verify verify-transfer-dir --dir <path>",
         "  seedcore-verify explain --artifact <path>",
     ]

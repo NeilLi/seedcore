@@ -79,6 +79,23 @@ def mint_execution_token_with_rust(claims: Mapping[str, Any]) -> dict[str, Any]:
     return output
 
 
+def evaluate_policy_with_rust(frozen_input: Mapping[str, Any]) -> dict[str, Any]:
+    input_path = _write_temp_json(dict(frozen_input))
+    try:
+        output = _run_verify_cli(
+            [
+                "evaluate-policy",
+                "--artifact",
+                input_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(input_path)
+    if "disposition" not in output:
+        return {"error": "rust_evaluate_policy_failed", "details": [output]}
+    return output
+
+
 def validate_transfer_approval_with_rust(envelope: Mapping[str, Any]) -> dict[str, Any]:
     envelope_path = _write_temp_json(dict(envelope))
     try:

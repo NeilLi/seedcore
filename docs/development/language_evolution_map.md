@@ -381,6 +381,18 @@ Move the deterministic decision kernel only after:
 This is the hardest migration and should happen after the surrounding contracts
 stop moving.
 
+Status as of March 26, 2026:
+
+- completed for baseline scope:
+  - Restricted Custody Transfer decision disposition now resolves through Rust
+    policy-core evaluation (`seedcore-policy-core`) via `seedcore-verify
+    evaluate-policy`
+  - Python governance now assembles frozen decision input and defers final
+    disposition authority for this workflow to Rust (`allow`, `deny`,
+    `quarantine`, `escalate`)
+  - allow-path token minting remains Rust-backed and now occurs only for
+    Rust-authorized allow outcomes on this workflow
+
 ### Phase 6: Selective Python Slimming
 
 Once the Rust kernels exist:
@@ -390,6 +402,16 @@ Once the Rust kernels exist:
 - move authority-critical checks out of Python
 
 This is controlled boundary tightening, not a rewrite.
+
+Status as of March 26, 2026:
+
+- completed for baseline scope:
+  - Python remains orchestration/advisory on Restricted Custody Transfer while
+    authority-critical disposition semantics are owned by Rust policy-core
+  - Python no longer serves as the final disposition authority on the baseline
+    Restricted Custody Transfer path
+  - token verification/enforcement and replay verification remain Rust-kernel
+    mediated in runtime integration paths
 
 ## Phase Scoreboard (As Of March 26, 2026)
 
@@ -417,13 +439,15 @@ Restricted Custody Transfer baseline path.
 Reason: a narrow `ts/apps/operator-console` and supporting verification API
 review/catalog endpoints are implemented for Restricted Custody Transfer.
 
-6. Phase 5 (Rust PDP Decision Kernel): Partially complete
-Reason: `seedcore-policy-core` and `seedcore-token-core` are implemented, but
-full operational cutover and freeze-aligned closure are still pending.
+6. Phase 5 (Rust PDP Decision Kernel): Implemented for baseline scope
+Reason: Restricted Custody Transfer disposition authority is now resolved by
+Rust policy-core through runtime integration (`evaluate-policy`), with
+workflow-final outcomes no longer interpreted only in Python.
 
-7. Phase 6 (Selective Python Slimming): Started, not complete
-Reason: Python-to-Rust integration is active, but authority-critical logic is
-not yet fully demoted from Python.
+7. Phase 6 (Selective Python Slimming): Implemented for baseline scope
+Reason: on the baseline Restricted Custody Transfer workflow, Python is demoted
+to orchestration/input assembly while Rust owns final authority-bearing decision
+semantics and verifier-critical checks.
 
 ## Contract Strategy Across Python, Rust, and TypeScript
 
