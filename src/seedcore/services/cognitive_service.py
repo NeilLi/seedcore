@@ -938,7 +938,7 @@ class CognitiveOrchestrator:
                 try:
                     with dspy.context(lm=execution_lm, max_depth=max_depth):
                         logger.debug(f"⚡ Executing {context.cog_type.value} on {profile.value}")
-                        raw_result = core.forward(context)
+                        raw_result = core.forward(context, direct_lm=execution_lm)
                 except TypeError:
                     # If max_depth is not supported in context, configure it separately
                     with dspy.context(lm=execution_lm):
@@ -949,7 +949,7 @@ class CognitiveOrchestrator:
                             except Exception:
                                 pass  # Ignore if max_depth not supported in settings
                         logger.debug(f"⚡ Executing {context.cog_type.value} on {profile.value}")
-                        raw_result = core.forward(context)
+                        raw_result = core.forward(context, direct_lm=execution_lm)
             else:
                 # Fallback for older DSPy (Risky)
                 logger.warning("dspy.context missing; using global settings.")
@@ -959,7 +959,7 @@ class CognitiveOrchestrator:
                     dspy.settings.configure(max_depth=max_depth)
                 except Exception:
                     pass  # Ignore if max_depth not supported
-                raw_result = core.forward(context)
+                raw_result = core.forward(context, direct_lm=execution_lm)
 
             # 5. Metadata Injection
             result = normalize_task_payloads(raw_result)

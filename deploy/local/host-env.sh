@@ -47,6 +47,16 @@ if [[ -f "${ENV_FILE}" ]]; then
   done < <(grep -E '^GOOGLE_LLM_[A-Z0-9_]*=' "${ENV_FILE}" || true)
 fi
 
+looks_like_placeholder_openai_key() {
+  local key="${1:-}"
+  [[ -z "${key}" ]] && return 0
+  [[ "${key}" == *"REPLACE_ME"* ]] && return 0
+  [[ "${key}" == *"YOUR_"* ]] && return 0
+  [[ "${key}" == *"HERE"* ]] && return 0
+  [[ "${key}" == *"example"* ]] && return 0
+  return 1
+}
+
 export PROJECT_ROOT
 export PYTHONPATH="${PROJECT_ROOT}/src"
 export PATH="${PROJECT_ROOT}/.venv/bin:/opt/homebrew/opt/postgresql@17/bin:${PATH}"
@@ -94,3 +104,16 @@ export DGL_GRAPHBOLT_SKIP="${DGL_GRAPHBOLT_SKIP:-1}"
 export RAY_USAGE_STATS_ENABLED="${RAY_USAGE_STATS_ENABLED:-0}"
 export SEEDCORE_SKIP_EAGER_RAY="${SEEDCORE_SKIP_EAGER_RAY:-1}"
 export SEEDCORE_DISPATCHER_MAIN_INTERVAL_S="${SEEDCORE_DISPATCHER_MAIN_INTERVAL_S:-0.05}"
+
+# Local host-mode should prefer a working provider over container defaults.
+# If Gemini credentials are present but OpenAI is unset or clearly placeholder-only,
+# switch local cognitive defaults to Google so both DSPy and direct fast-query paths
+# use the same functioning provider.
+if [[ -n "${GOOGLE_API_KEY:-}" ]] && looks_like_placeholder_openai_key "${OPENAI_API_KEY:-}"; then
+  export LLM_PROVIDER_FAST="${LLM_PROVIDER_FAST:-google}"
+  export LLM_PROVIDER_DEEP="${LLM_PROVIDER_DEEP:-google}"
+  export LLM_PROVIDER="${LLM_PROVIDER:-google}"
+  export LLM_PROVIDERS="${LLM_PROVIDERS:-google,anthropic,nim}"
+  export GOOGLE_LLM_FAST="${GOOGLE_LLM_FAST:-gemini-flash-latest}"
+  export GOOGLE_LLM_DEEP="${GOOGLE_LLM_DEEP:-gemini-pro-latest}"
+fi

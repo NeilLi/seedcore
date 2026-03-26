@@ -25,6 +25,7 @@ class TaskSample:
     status: str
     decision_kind: str | None
     route_reason: str | None
+    cognitive_engine: str | None
     queue_wait_ms: float | None
     exec_latency_ms: float | None
     wall_ms: float
@@ -43,7 +44,7 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 def _task_payload(index: int) -> dict[str, Any]:
     nonce = f"{time.time_ns()}-{index}"
-    description = f"benchmark fast query {index} [{nonce}]"
+    description = f"runtime smoke check benchmark {index} [{nonce}]"
     return {
         "type": "query",
         "description": description,
@@ -111,6 +112,11 @@ def main() -> int:
 
         exec_meta = (((terminal.get("result") or {}).get("meta") or {}).get("exec") or {})
         routing = ((terminal.get("result") or {}).get("routing") or {})
+        result_payload = terminal.get("result") or {}
+        engine = (
+            (((result_payload.get("payload") or {}).get("meta") or {}).get("cognitive_engine"))
+            or ((((result_payload.get("payload") or {}).get("results") or [{}])[0].get("output") or {}).get("meta") or {}).get("cognitive_engine")
+        )
         created_at = _parse_iso(terminal.get("created_at"))
         started_at = _parse_iso(exec_meta.get("started_at"))
         finished_at = _parse_iso(exec_meta.get("finished_at"))
@@ -123,6 +129,7 @@ def main() -> int:
             status=str(terminal.get("status") or "").lower(),
             decision_kind=(terminal.get("result") or {}).get("decision_kind"),
             route_reason=routing.get("reason"),
+            cognitive_engine=engine,
             queue_wait_ms=queue_wait_ms,
             exec_latency_ms=exec_meta.get("latency_ms"),
             wall_ms=wall_ms,
@@ -147,6 +154,7 @@ def main() -> int:
                     "status": sample.status,
                     "decision_kind": sample.decision_kind,
                     "route_reason": sample.route_reason,
+                    "cognitive_engine": sample.cognitive_engine,
                     "queue_wait_ms": round(sample.queue_wait_ms or 0.0, 3),
                     "exec_latency_ms": round(float(sample.exec_latency_ms or 0.0), 3),
                     "wall_ms": round(sample.wall_ms, 3),
@@ -164,6 +172,7 @@ def main() -> int:
                     "status": sample.status,
                     "decision_kind": sample.decision_kind,
                     "route_reason": sample.route_reason,
+                    "cognitive_engine": sample.cognitive_engine,
                     "queue_wait_ms": round(sample.queue_wait_ms or 0.0, 3),
                     "exec_latency_ms": round(float(sample.exec_latency_ms or 0.0), 3),
                     "wall_ms": round(sample.wall_ms, 3),
@@ -186,6 +195,7 @@ def main() -> int:
         "statuses": sorted({sample.status for sample in measured_samples}),
         "route_reasons": sorted({sample.route_reason for sample in measured_samples if sample.route_reason}),
         "decision_kinds": sorted({sample.decision_kind for sample in measured_samples if sample.decision_kind}),
+        "cognitive_engines": sorted({sample.cognitive_engine for sample in measured_samples if sample.cognitive_engine}),
         "queue_wait_ms": _sample_stats(queue_values) if queue_values else {},
         "exec_latency_ms": _sample_stats(exec_values) if exec_values else {},
         "wall_ms": _sample_stats(wall_values),
