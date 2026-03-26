@@ -1177,6 +1177,20 @@ class ReplayService:
                 or replay.governed_receipt.get("approval_envelope_id")
                 or approval_context.get("approval_envelope_id")
             ),
+            "approval_transition_head": (
+                replay.authz_graph.get("approval_transition_head")
+                or replay.governed_receipt.get("approval_transition_head")
+                or approval_context.get("approval_transition_head")
+            ),
+            "approval_transition_count": (
+                replay.authz_graph.get("approval_transition_count")
+                if isinstance(replay.authz_graph.get("approval_transition_count"), int)
+                else replay.governed_receipt.get("approval_transition_count")
+                if isinstance(replay.governed_receipt.get("approval_transition_count"), int)
+                else len(approval_context.get("approval_transition_history"))
+                if isinstance(approval_context.get("approval_transition_history"), list)
+                else 0
+            ),
         }
 
     def _build_authorization_summary(self, replay: ReplayRecord) -> Dict[str, Any]:

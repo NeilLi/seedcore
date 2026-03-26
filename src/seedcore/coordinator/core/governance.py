@@ -1867,6 +1867,20 @@ def _evaluate_restricted_custody_transfer_prerequisites(
     approval_envelope_payload = approval_context.get("approval_envelope")
     approval_transition_payload = approval_context.get("approval_transition")
     if isinstance(approval_envelope_payload, Mapping) and isinstance(approval_transition_payload, Mapping):
+        history_events = (
+            list(approval_context.get("approval_transition_history"))
+            if isinstance(approval_context.get("approval_transition_history"), list)
+            else []
+        )
+        history_head = approval_context.get("approval_transition_head")
+        history_payload = {
+            "events": history_events,
+            "chain_head": (
+                str(history_head).strip()
+                if history_head is not None and str(history_head).strip()
+                else None
+            ),
+        }
         transition_now = _utcnow()
         action_timestamp = str(action_intent.timestamp or "").strip()
         if action_timestamp:
@@ -1877,6 +1891,7 @@ def _evaluate_restricted_custody_transfer_prerequisites(
         rust_transition = apply_transfer_approval_transition_with_rust(
             dict(approval_envelope_payload),
             dict(approval_transition_payload),
+            history=history_payload,
             now=transition_now,
         )
         if not bool(rust_transition.get("valid")):
@@ -1917,6 +1932,24 @@ def _evaluate_restricted_custody_transfer_prerequisites(
         transition_binding_hash = _approval_binding_hash_string(rust_transition.get("binding_hash"))
         if transition_binding_hash is not None:
             approval_context["approval_binding_hash"] = transition_binding_hash
+        transition_history = rust_transition.get("history")
+        if isinstance(transition_history, Mapping):
+            raw_events = transition_history.get("events")
+            if isinstance(raw_events, list):
+                approval_context["approval_transition_history"] = list(raw_events)
+            chain_head_raw = transition_history.get("chain_head")
+            chain_head = (
+                str(chain_head_raw).strip()
+                if chain_head_raw is not None and str(chain_head_raw).strip()
+                else None
+            )
+            if chain_head is not None:
+                approval_context["approval_transition_head"] = chain_head
+            else:
+                approval_context.pop("approval_transition_head", None)
+        transition_event = rust_transition.get("transition_event")
+        if isinstance(transition_event, Mapping):
+            approval_context["last_approval_transition_event"] = dict(transition_event)
         approval_context.pop("approval_transition", None)
 
     if isinstance(approval_envelope_payload, Mapping):
@@ -2227,6 +2260,11 @@ def _restricted_custody_transfer_execution_constraints(
         "next_custodian": _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref"),
         "approval_envelope_id": approval_context.get("approval_envelope_id"),
         "approval_binding_hash": _approval_binding_hash_string(approval_context.get("approval_binding_hash")),
+        "approval_transition_head": (
+            str(approval_context.get("approval_transition_head")).strip()
+            if approval_context.get("approval_transition_head") is not None and str(approval_context.get("approval_transition_head")).strip()
+            else None
+        ),
         "approved_by": list(approved_by),
         "co_signed": bool(required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(required_approvals)),
     }
@@ -2296,6 +2334,18 @@ def _finalize_policy_decision_contract(
             if isinstance(approval_context.get("approved_by"), list)
             else []
         )
+        transition_history = (
+            list(approval_context.get("approval_transition_history"))
+            if isinstance(approval_context.get("approval_transition_history"), list)
+            else []
+        )
+        authz_graph["approval_transition_count"] = len(transition_history)
+        transition_head_raw = approval_context.get("approval_transition_head")
+        authz_graph["approval_transition_head"] = (
+            str(transition_head_raw).strip()
+            if transition_head_raw is not None and str(transition_head_raw).strip()
+            else None
+        )
 
     policy_decision.required_approvals = list(policy_decision.required_approvals or _transfer_required_approvals(action_intent))
     policy_decision.obligations = _workflow_obligations(
@@ -2322,6 +2372,21 @@ def _finalize_policy_decision_contract(
                 "approval_binding_hash": approval_context.get("approval_binding_hash"),
                 "approved_by": list(approved_by),
                 "co_signed": bool(policy_decision.required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(policy_decision.required_approvals)),
+                "approval_transition_count": len(
+                    approval_context.get("approval_transition_history")
+                    if isinstance(approval_context.get("approval_transition_history"), list)
+                    else []
+                ),
+                "approval_transition_head": (
+                    str(approval_context.get("approval_transition_head")).strip()
+                    if approval_context.get("approval_transition_head") is not None and str(approval_context.get("approval_transition_head")).strip()
+                    else None
+                ),
+                "last_approval_transition_event": (
+                    dict(approval_context.get("last_approval_transition_event"))
+                    if isinstance(approval_context.get("last_approval_transition_event"), Mapping)
+                    else {}
+                ),
                 "from_zone": _transfer_context_value(action_intent, "from_zone"),
                 "to_zone": _transfer_context_value(action_intent, "to_zone") or action_intent.resource.target_zone,
                 "expected_current_custodian": _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref"),
@@ -2335,6 +2400,9 @@ def _finalize_policy_decision_contract(
                 "approval_binding_hash": approval_context.get("approval_binding_hash"),
                 "approved_by": list(approved_by),
                 "co_signed": advisory["co_signed"],
+                "approval_transition_count": advisory["approval_transition_count"],
+                "approval_transition_head": advisory["approval_transition_head"],
+                "last_approval_transition_event": advisory["last_approval_transition_event"],
                 "from_zone": advisory["from_zone"],
                 "target_zone": advisory["to_zone"],
                 "expected_current_custodian": advisory["expected_current_custodian"],

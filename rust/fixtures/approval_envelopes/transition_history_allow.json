@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "event_id": "approval-transition-event:sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
+      "event_hash": "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
+      "previous_event_hash": null,
+      "occurred_at": "2026-04-02T08:00:30Z",
+      "transition_type": "add_approval",
+      "envelope_id": "approval-transfer-001",
+      "previous_status": "PARTIALLY_APPROVED",
+      "next_status": "APPROVED",
+      "previous_binding_hash": null,
+      "next_binding_hash": "sha256:fd6236849fc43a3d10c071da4a211964f652dcf83a91cf6a258cd6e3aabc4f9c",
+      "envelope_version": 2
+    }
+  ],
+  "chain_head": "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
+}

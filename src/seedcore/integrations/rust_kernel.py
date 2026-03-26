@@ -143,11 +143,14 @@ def apply_transfer_approval_transition_with_rust(
     envelope: Mapping[str, Any],
     transition: Mapping[str, Any],
     *,
+    history: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now_value = _isoformat_utc(now or datetime.now(timezone.utc))
     envelope_path = _write_temp_json(dict(envelope))
     transition_path = _write_temp_json(dict(transition))
+    history_payload = dict(history) if isinstance(history, Mapping) else {"events": [], "chain_head": None}
+    history_path = _write_temp_json(history_payload)
     try:
         output = _run_verify_cli(
             [
@@ -156,6 +159,8 @@ def apply_transfer_approval_transition_with_rust(
                 envelope_path,
                 "--transition",
                 transition_path,
+                "--history",
+                history_path,
                 "--now",
                 now_value,
             ]
@@ -163,11 +168,14 @@ def apply_transfer_approval_transition_with_rust(
     finally:
         _unlink_quietly(envelope_path)
         _unlink_quietly(transition_path)
+        _unlink_quietly(history_path)
     if "valid" not in output:
         return {
             "valid": False,
             "approval_envelope": None,
             "binding_hash": None,
+            "transition_event": None,
+            "history": history_payload,
             "error_code": "rust_apply_approval_transition_failed",
             "details": [output],
         }

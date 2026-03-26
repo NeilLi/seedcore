@@ -1306,7 +1306,7 @@ def test_evaluate_intent_restricted_custody_transfer_applies_rust_transition(mon
     monkeypatch.setattr(
         governance_mod,
         "apply_transfer_approval_transition_with_rust",
-        lambda envelope, transition, now: {
+        lambda envelope, transition, history, now: {
             "valid": True,
             "approval_envelope": {
                 **dict(envelope),
@@ -1330,6 +1330,37 @@ def test_evaluate_intent_restricted_custody_transfer_applies_rust_transition(mon
                 ],
             },
             "binding_hash": "sha256:approval-binding-transfer-001",
+            "transition_event": {
+                "event_id": "approval-transition-event:sha256:transition-event-001",
+                "event_hash": "sha256:transition-event-001",
+                "previous_event_hash": history.get("chain_head"),
+                "occurred_at": "2099-03-20T12:00:00+00:00",
+                "transition_type": "add_approval",
+                "envelope_id": "approval-transfer-001",
+                "previous_status": "PARTIALLY_APPROVED",
+                "next_status": "APPROVED",
+                "previous_binding_hash": None,
+                "next_binding_hash": "sha256:approval-binding-transfer-001",
+                "envelope_version": 2,
+            },
+            "history": {
+                "events": [
+                    {
+                        "event_id": "approval-transition-event:sha256:transition-event-001",
+                        "event_hash": "sha256:transition-event-001",
+                        "previous_event_hash": history.get("chain_head"),
+                        "occurred_at": "2099-03-20T12:00:00+00:00",
+                        "transition_type": "add_approval",
+                        "envelope_id": "approval-transfer-001",
+                        "previous_status": "PARTIALLY_APPROVED",
+                        "next_status": "APPROVED",
+                        "previous_binding_hash": None,
+                        "next_binding_hash": "sha256:approval-binding-transfer-001",
+                        "envelope_version": 2,
+                    }
+                ],
+                "chain_head": "sha256:transition-event-001",
+            },
             "error_code": None,
             "details": [],
         },
@@ -1358,7 +1389,10 @@ def test_evaluate_intent_restricted_custody_transfer_applies_rust_transition(mon
     assert decision.disposition == "allow"
     assert decision.execution_token is not None
     assert decision.execution_token.constraints["approval_binding_hash"] == "sha256:approval-binding-transfer-001"
+    assert decision.execution_token.constraints["approval_transition_head"] == "sha256:transition-event-001"
     assert decision.execution_token.constraints["co_signed"] is True
+    assert decision.authz_graph["approval_transition_count"] == 1
+    assert decision.authz_graph["approval_transition_head"] == "sha256:transition-event-001"
 
 
 def test_evaluate_intent_restricted_custody_transfer_quarantines_when_telemetry_is_stale(monkeypatch) -> None:

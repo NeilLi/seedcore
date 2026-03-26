@@ -11,7 +11,7 @@ use seedcore_kernel_types::{
 };
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
-    verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
+    hash_artifact, verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
     ReplayVerificationReport, VerificationReport,
 };
 use seedcore_token_core::{
@@ -93,12 +93,19 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "apply-approval-transition" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let transition_path = flag_value(&args, "--transition")?;
+            let history_path = optional_flag_value(&args, "--history");
             let now = timestamp_from_flag(&args, "--now", "2026-04-02T08:00:30Z")?;
             let report = apply_approval_transition_path(
                 Path::new(&artifact_path),
                 Path::new(&transition_path),
+                history_path.as_deref().map(Path::new),
                 now,
             )?;
+            print_json(&report)
+        }
+        "verify-approval-history" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let report = verify_approval_history_path(Path::new(&artifact_path))?;
             print_json(&report)
         }
         "verify-receipt" => {
@@ -130,7 +137,8 @@ fn usage() -> String {
         "  seedcore-verify validate-approval --artifact <path>",
         "  seedcore-verify approval-binding-hash --artifact <path>",
         "  seedcore-verify approval-summary --artifact <path>",
-        "  seedcore-verify apply-approval-transition --artifact <path> --transition <path> [--now <rfc3339>]",
+        "  seedcore-verify apply-approval-transition --artifact <path> --transition <path> [--history <path>] [--now <rfc3339>]",
+        "  seedcore-verify verify-approval-history --artifact <path>",
         "  seedcore-verify mint-token --claims <path>",
         "  seedcore-verify verify-token --artifact <path>",
         "  seedcore-verify enforce-token --token <path> --request <path>",
@@ -271,36 +279,124 @@ fn approval_summary_path(path: &Path) -> Result<ApprovalSummaryReport, String> {
 fn apply_approval_transition_path(
     artifact_path: &Path,
     transition_path: &Path,
+    history_path: Option<&Path>,
     now: Timestamp,
 ) -> Result<ApprovalTransitionReport, String> {
     let envelope: TransferApprovalEnvelope = read_json_file(artifact_path)?;
     let transition_input: ApprovalTransitionInput = read_json_file(transition_path)?;
-    Ok(apply_approval_transition(envelope, transition_input, now))
+    let history = match history_path {
+        Some(path) => read_json_file(path)?,
+        None => ApprovalTransitionHistory::default(),
+    };
+    Ok(apply_approval_transition(
+        envelope,
+        transition_input,
+        history,
+        now,
+    ))
 }
 
 fn apply_approval_transition(
     envelope: TransferApprovalEnvelope,
     transition_input: ApprovalTransitionInput,
+    history: ApprovalTransitionHistory,
     now: Timestamp,
 ) -> ApprovalTransitionReport {
+    if let Err(error) = validate_transition_history(&history) {
+        return ApprovalTransitionReport {
+            valid: false,
+            approval_envelope: None,
+            binding_hash: None,
+            transition_event: None,
+            history: Some(history),
+            error_code: Some("approval_transition_history_invalid".to_string()),
+            details: vec![error],
+        };
+    }
+
+    let transition_type = transition_input.transition_type().to_string();
+    let previous_status = approval_status_label(envelope.status).to_string();
+    let previous_binding_hash = envelope
+        .approval_binding_hash
+        .as_ref()
+        .map(artifact_hash_to_string);
+    let previous_event_hash = history.chain_head.clone();
     let transition = transition_input.into_core_transition();
-    match apply_transition(&envelope, transition, now) {
-        Ok(updated) => ApprovalTransitionReport {
-            valid: true,
-            approval_envelope: Some(updated.clone()),
-            binding_hash: updated
+    match apply_transition(&envelope, transition, now.clone()) {
+        Ok(updated) => {
+            let next_binding_hash = updated
                 .approval_binding_hash
                 .as_ref()
-                .map(artifact_hash_to_string),
-            error_code: None,
-            details: Vec::new(),
-        },
+                .map(artifact_hash_to_string);
+            let transition_event = match build_transition_event(
+                &updated,
+                previous_event_hash,
+                now,
+                transition_type,
+                previous_status,
+                previous_binding_hash,
+                next_binding_hash.clone(),
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    return ApprovalTransitionReport {
+                        valid: false,
+                        approval_envelope: None,
+                        binding_hash: None,
+                        transition_event: None,
+                        history: Some(history),
+                        error_code: Some("approval_transition_event_failed".to_string()),
+                        details: vec![error],
+                    };
+                }
+            };
+            let mut updated_history = history;
+            updated_history.events.push(transition_event.clone());
+            updated_history.chain_head = Some(transition_event.event_hash.clone());
+            ApprovalTransitionReport {
+                valid: true,
+                approval_envelope: Some(updated.clone()),
+                binding_hash: next_binding_hash,
+                transition_event: Some(transition_event),
+                history: Some(updated_history),
+                error_code: None,
+                details: Vec::new(),
+            }
+        }
         Err(error) => ApprovalTransitionReport {
             valid: false,
             approval_envelope: None,
             binding_hash: None,
+            transition_event: None,
+            history: Some(history),
             error_code: Some("approval_transition_failed".to_string()),
             details: vec![error.to_string()],
+        },
+    }
+}
+
+fn verify_approval_history_path(path: &Path) -> Result<ApprovalTransitionHistoryReport, String> {
+    let history: ApprovalTransitionHistory = read_json_file(path)?;
+    Ok(verify_approval_history_path_from_value(&history))
+}
+
+fn verify_approval_history_path_from_value(
+    history: &ApprovalTransitionHistory,
+) -> ApprovalTransitionHistoryReport {
+    match validate_transition_history(history) {
+        Ok(()) => ApprovalTransitionHistoryReport {
+            valid: true,
+            chain_head: history.chain_head.clone(),
+            event_count: history.events.len(),
+            error_code: None,
+            details: Vec::new(),
+        },
+        Err(error) => ApprovalTransitionHistoryReport {
+            valid: false,
+            chain_head: history.chain_head.clone(),
+            event_count: history.events.len(),
+            error_code: Some("approval_transition_history_invalid".to_string()),
+            details: vec![error],
         },
     }
 }
@@ -350,6 +446,79 @@ fn approval_status_label(status: ApprovalStatus) -> &'static str {
 
 fn artifact_hash_to_string(hash: &ArtifactHash) -> String {
     format!("{}:{}", hash.algorithm, hash.value)
+}
+
+fn build_transition_event(
+    updated: &TransferApprovalEnvelope,
+    previous_event_hash: Option<String>,
+    now: Timestamp,
+    transition_type: String,
+    previous_status: String,
+    previous_binding_hash: Option<String>,
+    next_binding_hash: Option<String>,
+) -> Result<ApprovalTransitionEvent, String> {
+    let material = ApprovalTransitionEventHashMaterial {
+        previous_event_hash: previous_event_hash.clone(),
+        occurred_at: now.clone(),
+        transition_type: transition_type.clone(),
+        envelope_id: updated.approval_envelope_id.clone(),
+        previous_status,
+        next_status: approval_status_label(updated.status).to_string(),
+        previous_binding_hash,
+        next_binding_hash,
+        envelope_version: updated.version,
+    };
+    let event_hash = hash_artifact(&material)
+        .map_err(|error| format!("transition_event_hash_failed:{error}"))
+        .map(|hash| artifact_hash_to_string(&hash))?;
+    Ok(ApprovalTransitionEvent {
+        event_id: format!("approval-transition-event:{event_hash}"),
+        event_hash,
+        previous_event_hash,
+        occurred_at: now,
+        transition_type: material.transition_type,
+        envelope_id: material.envelope_id,
+        previous_status: material.previous_status,
+        next_status: material.next_status,
+        previous_binding_hash: material.previous_binding_hash,
+        next_binding_hash: material.next_binding_hash,
+        envelope_version: material.envelope_version,
+    })
+}
+
+fn transition_event_hash_from_event(event: &ApprovalTransitionEvent) -> Result<String, String> {
+    let material = ApprovalTransitionEventHashMaterial {
+        previous_event_hash: event.previous_event_hash.clone(),
+        occurred_at: event.occurred_at.clone(),
+        transition_type: event.transition_type.clone(),
+        envelope_id: event.envelope_id.clone(),
+        previous_status: event.previous_status.clone(),
+        next_status: event.next_status.clone(),
+        previous_binding_hash: event.previous_binding_hash.clone(),
+        next_binding_hash: event.next_binding_hash.clone(),
+        envelope_version: event.envelope_version,
+    };
+    hash_artifact(&material)
+        .map_err(|error| format!("transition_event_hash_failed:{error}"))
+        .map(|hash| artifact_hash_to_string(&hash))
+}
+
+fn validate_transition_history(history: &ApprovalTransitionHistory) -> Result<(), String> {
+    let mut expected_previous: Option<String> = None;
+    for (index, event) in history.events.iter().enumerate() {
+        if event.previous_event_hash != expected_previous {
+            return Err(format!("history_chain_mismatch:{index}"));
+        }
+        let expected_hash = transition_event_hash_from_event(event)?;
+        if expected_hash != event.event_hash {
+            return Err(format!("history_hash_mismatch:{index}"));
+        }
+        expected_previous = Some(event.event_hash.clone());
+    }
+    if history.chain_head != expected_previous {
+        return Err("history_chain_head_mismatch".to_string());
+    }
+    Ok(())
 }
 
 fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> {
@@ -457,6 +626,15 @@ enum ApprovalTransitionInput {
 }
 
 impl ApprovalTransitionInput {
+    fn transition_type(&self) -> &'static str {
+        match self {
+            Self::AddApproval { .. } => "add_approval",
+            Self::Revoke { .. } => "revoke",
+            Self::Expire { .. } => "expire",
+            Self::Supersede { .. } => "supersede",
+        }
+    }
+
     fn into_core_transition(self) -> ApprovalTransition {
         match self {
             Self::AddApproval {
@@ -495,8 +673,53 @@ struct ApprovalTransitionReport {
     valid: bool,
     approval_envelope: Option<TransferApprovalEnvelope>,
     binding_hash: Option<String>,
+    transition_event: Option<ApprovalTransitionEvent>,
+    history: Option<ApprovalTransitionHistory>,
     error_code: Option<String>,
     details: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct ApprovalTransitionHistory {
+    events: Vec<ApprovalTransitionEvent>,
+    chain_head: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ApprovalTransitionEvent {
+    event_id: String,
+    event_hash: String,
+    previous_event_hash: Option<String>,
+    occurred_at: Timestamp,
+    transition_type: String,
+    envelope_id: String,
+    previous_status: String,
+    next_status: String,
+    previous_binding_hash: Option<String>,
+    next_binding_hash: Option<String>,
+    envelope_version: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ApprovalTransitionHistoryReport {
+    valid: bool,
+    chain_head: Option<String>,
+    event_count: usize,
+    error_code: Option<String>,
+    details: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ApprovalTransitionEventHashMaterial {
+    previous_event_hash: Option<String>,
+    occurred_at: Timestamp,
+    transition_type: String,
+    envelope_id: String,
+    previous_status: String,
+    next_status: String,
+    previous_binding_hash: Option<String>,
+    next_binding_hash: Option<String>,
+    envelope_version: u32,
 }
 
 #[cfg(test)]
@@ -532,6 +755,12 @@ mod tests {
             .join("../../fixtures/transfers")
             .join(name)
             .join("input.approval_envelope.json")
+    }
+
+    fn approval_history_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/approval_envelopes")
+            .join(name)
     }
 
     #[test]
@@ -675,6 +904,20 @@ mod tests {
     }
 
     #[test]
+    fn verify_approval_history_fixture_is_valid() {
+        let report = verify_approval_history_path(&approval_history_fixture(
+            "transition_history_allow.json",
+        ))
+        .expect("approval transition history fixture should load");
+        assert!(report.valid);
+        assert_eq!(report.event_count, 1);
+        assert_eq!(
+            report.chain_head.as_deref(),
+            Some("sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72")
+        );
+    }
+
+    #[test]
     fn apply_approval_transition_add_approval_advances_envelope() {
         let mut envelope: TransferApprovalEnvelope =
             read_json_file(approval_fixture("allow_case")).expect("fixture should load");
@@ -698,6 +941,7 @@ mod tests {
                 approval_ref: "approval:quality_insp_017".to_string(),
                 approved_at: Some(Timestamp::from_str("2026-04-02T08:00:30Z").unwrap()),
             },
+            ApprovalTransitionHistory::default(),
             Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
         );
 
@@ -708,5 +952,53 @@ mod tests {
         assert_eq!(updated.status, ApprovalStatus::Approved);
         assert_eq!(updated.version, 2);
         assert!(report.binding_hash.is_some());
+        assert!(report.transition_event.is_some());
+        let history = report.history.expect("history should be present");
+        assert_eq!(history.events.len(), 1);
+        assert_eq!(
+            history.chain_head,
+            report.transition_event.map(|event| event.event_hash)
+        );
+    }
+
+    #[test]
+    fn verify_approval_history_accepts_generated_chain_and_rejects_tamper() {
+        let mut envelope: TransferApprovalEnvelope =
+            read_json_file(approval_fixture("allow_case")).expect("fixture should load");
+        envelope.status = ApprovalStatus::PartiallyApproved;
+        if let Some(second) = envelope.required_approvals.get_mut(1) {
+            second.status = ApprovalStatus::Pending;
+            second.approved_at = None;
+        }
+        envelope.approval_binding_hash = None;
+        envelope.version = 1;
+
+        let report = apply_approval_transition(
+            envelope,
+            ApprovalTransitionInput::AddApproval {
+                role: "QUALITY_INSPECTOR".to_string(),
+                principal_ref: "principal:quality_insp_017".to_string(),
+                approval_ref: "approval:quality_insp_017".to_string(),
+                approved_at: Some(Timestamp::from_str("2026-04-02T08:00:30Z").unwrap()),
+            },
+            ApprovalTransitionHistory::default(),
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        );
+        assert!(report.valid);
+        let history = report.history.expect("history should be present");
+
+        let summary = verify_approval_history_path_from_value(&history);
+        assert!(summary.valid);
+        assert_eq!(summary.event_count, 1);
+        assert_eq!(summary.chain_head, history.chain_head);
+
+        let mut tampered = history.clone();
+        tampered.events[0].next_status = "PENDING".to_string();
+        let tampered_summary = verify_approval_history_path_from_value(&tampered);
+        assert!(!tampered_summary.valid);
+        assert_eq!(
+            tampered_summary.error_code.as_deref(),
+            Some("approval_transition_history_invalid")
+        );
     }
 }
