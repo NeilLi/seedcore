@@ -1695,6 +1695,7 @@ class BaseAgent:
 
         # Coerce to V2 TaskView (use original_task, which may have been modified by behaviors)
         tv = self._coerce_task_view(original_task)
+        self._inject_general_query_tool_if_needed(task_dict, tv)
         logger.debug(
             f"[{self.agent_id}] TaskView coerced: task_id={tv.task_id}, type={tv.task_type}, "
             f"tools_count={len(tv.tools)}"
@@ -2191,6 +2192,31 @@ class BaseAgent:
             return 1.0
         return max(0.0, min(1.0, len(results) / n))
 
+    def _should_skip_salience(self, tv, results, errors) -> bool:
+        """
+        Keep the hot path lean for simple successful query tasks.
+
+        Salience scoring performs heartbeat + ML work that is useful for
+        high-stakes or failure-heavy tasks, but it dominates latency for
+        one-shot general queries that already completed successfully.
+        """
+        if errors or not results:
+            return False
+
+        task_type = str(getattr(tv, "task_type", "") or "").strip().lower()
+        interaction_mode = str(getattr(tv, "interaction_mode", "") or "").strip().lower()
+        if task_type not in {"query", "general_query", "chat"}:
+            return False
+        if interaction_mode not in {"one_shot", "coordinator_routed", ""}:
+            return False
+        if len(results) != 1:
+            return False
+
+        only_result = results[0] if isinstance(results[0], dict) else {}
+        if str(only_result.get("tool") or "").strip().lower() != "general_query":
+            return False
+        return True
+
     async def _maybe_salience(self, tv, results, errors) -> float:
         """
         Optional salience scoring via ML service.
@@ -2209,6 +2235,13 @@ class BaseAgent:
         if not results and not errors:
             logger.debug(
                 f"Agent {self.agent_id} no tool calls executed, skipping salience"
+            )
+            return 0.0
+
+        if self._should_skip_salience(tv, results, errors):
+            logger.debug(
+                "Agent %s skipping salience for simple successful general_query hot path",
+                self.agent_id,
             )
             return 0.0
 
@@ -2853,6 +2886,70 @@ class BaseAgent:
             tv.created_at_ts = None
 
         return tv
+
+    def _inject_general_query_tool_if_needed(
+        self, task_dict: Dict[str, Any], tv: "_TaskView"
+    ) -> bool:
+        """
+        Prevent plain query/chat tasks from devolving into no-op success.
+
+        Some fallback routes land on a generalist agent without the
+        ToolAutoInjection behavior enabled. When that happens, query tasks can
+        complete successfully with an empty payload. This helper mirrors the
+        same narrow ``general_query`` call shape so the agent does real work.
+        """
+        if tv.tools:
+            return False
+
+        task_type = str(tv.task_type or "").strip().lower()
+        interaction_mode = str(tv.interaction_mode or "").strip().lower()
+        if task_type not in {"query", "general_query", "chat"} and interaction_mode != "agent_tunnel":
+            return False
+
+        params = task_dict.setdefault("params", {})
+        if not isinstance(params, dict):
+            params = {}
+            task_dict["params"] = params
+        routing = params.setdefault("routing", {})
+        if not isinstance(routing, dict):
+            routing = {}
+            params["routing"] = routing
+
+        description = (
+            str(tv.prompt or "").strip()
+            or str(task_dict.get("description") or "").strip()
+            or task_type
+        )
+        task_data = {
+            "task_id": task_dict.get("task_id") or task_dict.get("id") or tv.task_id,
+            "type": task_dict.get("type") or tv.task_type,
+            "description": task_dict.get("description") or description,
+            "params": dict(params),
+        }
+        tool_call = {
+            "name": "general_query",
+            "args": {
+                "description": description,
+                "task_data": task_data,
+            },
+        }
+
+        routing_tools = routing.get("tools")
+        if not isinstance(routing_tools, list):
+            routing_tools = []
+        if "general_query" not in routing_tools:
+            routing_tools.append("general_query")
+        routing["tools"] = routing_tools
+        params["tool_calls"] = [tool_call]
+        task_dict["tool_calls"] = [tool_call]
+        tv.tools = [{"name": "general_query", "args": dict(tool_call["args"])}]
+
+        logger.info(
+            "[%s] Injected general_query tool for %s task with no explicit tools",
+            self.agent_id,
+            task_type or interaction_mode or "unknown",
+        )
+        return True
 
     def _make_json_safe(self, obj: Any) -> Any:
         """

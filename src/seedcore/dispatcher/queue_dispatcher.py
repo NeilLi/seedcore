@@ -66,7 +66,9 @@ class Dispatcher:
         self.claim_batch = 10
         self.lease_interval = 10
         self.requeue_interval = 30
-        self.main_interval = 0.25
+        self.main_interval = float(
+            os.getenv("SEEDCORE_DISPATCHER_MAIN_INTERVAL_S", "0.25")
+        )
 
         # 6. Observability
         self._metrics = {

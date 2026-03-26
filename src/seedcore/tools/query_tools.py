@@ -180,11 +180,16 @@ class GeneralQueryTool:
             # Put them in params so they're preserved through TaskPayload normalization
             constraints = incoming_params.get("constraints") or incoming.get("constraints") or {}
             available_tools = incoming_params.get("available_tools") or incoming.get("available_tools") or {}
+            force_rag = bool(incoming_params.get("force_rag"))
             
             # Put problem_statement in params.query (cognitive service will extract to top level)
             params["query"] = {
                 "problem_statement": description,
             }
+            # Fast one-shot general queries should skip retrieval unless the caller
+            # explicitly asks for RAG. This keeps the hot path lean and avoids
+            # spending most of the latency budget on memory hydration.
+            params["cognitive"]["skip_retrieval"] = not force_rag
             
             # Put constraints and available_tools in params (cognitive service will extract to top level)
             if constraints:

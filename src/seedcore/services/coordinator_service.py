@@ -864,6 +864,10 @@ class Coordinator:
             # C. Core Pipeline
             # 1. Persist Inbox (System of Record)
             correlation_id = task_dict.get("correlation_id") or uuid.uuid4().hex
+            already_persisted = any(
+                task_dict.get(field) is not None
+                for field in ("status", "created_at", "updated_at")
+            )
             
             # Server-side snapshot_id enforcement: Ensure task has snapshot_id
             # This is done at the Coordinator level (server-side) to enforce snapshot scoping
@@ -885,7 +889,7 @@ class Coordinator:
                         e
                     )
             
-            if self.graph_task_repo and self._session_factory:
+            if self.graph_task_repo and self._session_factory and not already_persisted:
                 async with self._session_factory() as session:
                     async with session.begin():
                         await self.graph_task_repo.create_task(

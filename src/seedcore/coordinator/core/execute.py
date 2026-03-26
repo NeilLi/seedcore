@@ -19,6 +19,7 @@ This module:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import inspect
 import json
 import os
@@ -634,6 +635,26 @@ async def execute_task(
             final_result["decision_kind"] = DecisionKind.FAST_PATH.value
         return final_result
 
+    # 1.8. DIRECT FAST GENERAL-QUERY SHORTCUT
+    # For narrow, low-risk one-shot queries we can bypass the heavyweight
+    # coordinator pipeline entirely. In practice this avoids paying for:
+    # - synchronous embedding generation / semantic cache setup
+    # - drift / OCPS updates
+    # - PKG routing evaluation
+    #
+    # The candidate check is intentionally strict so action, workflow, or
+    # tool-emitting tasks still pass through the normal governed path.
+    direct_fast_query = await _handle_direct_fast_general_query(task, execution_config)
+    if direct_fast_query is not None:
+        final_result = normalize_envelope(
+            direct_fast_query,
+            task_id=ctx.task_id,
+            path="coordinator_fast_query",
+        )
+        if final_result.get("decision_kind") is None:
+            final_result["decision_kind"] = DecisionKind.FAST_PATH.value
+        return final_result
+
     pkg_mandatory = _is_pkg_mandatory_action(task)
 
     # 2. PHASE 1: INTENT EMBEDDING (Reliability Optimized)
@@ -982,6 +1003,10 @@ async def _handle_fast_path(
     _inject_operational_summary_hint(task, task_payload_dict)
 
     timeout = _clamp_timeout_s((config.fast_path_latency_slo_ms / 1000.0) * 2.0)
+
+    direct_fast_query = await _handle_direct_fast_general_query(task, config)
+    if direct_fast_query is not None:
+        return direct_fast_query
 
     try:
         return await config.organism_execute(
@@ -2771,6 +2796,142 @@ def _inject_operational_summary_hint(
         routing_tools,
     )
     return True
+
+
+def _is_direct_fast_general_query_candidate(task: TaskPayload) -> bool:
+    """Identify low-risk one-shot query tasks that can bypass the agent wrapper."""
+    task_type = str(getattr(task, "type", "") or "").strip().lower()
+    if task_type not in {"query", "general_query"}:
+        return False
+
+    params = task.params or {}
+    interaction = params.get("interaction") or {}
+    if str(interaction.get("mode") or "").strip().lower() not in {"", "one_shot"}:
+        return False
+
+    cognitive = params.get("cognitive") or {}
+    decision_kind = str(cognitive.get("decision_kind") or "").strip().lower()
+    if decision_kind and decision_kind not in {
+        DecisionKind.FAST_PATH.value,
+        "fast",
+    }:
+        return False
+
+    tool_calls = params.get("tool_calls") or []
+    if not tool_calls:
+        return True
+    if len(tool_calls) != 1:
+        return False
+    only_call = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+    return str(only_call.get("name") or "").strip().lower() == "general_query"
+
+
+async def _handle_direct_fast_general_query(
+    task: TaskPayload,
+    config: ExecutionConfig,
+) -> Dict[str, Any] | None:
+    """
+    Execute a simple fast query directly against Cognitive Service.
+
+    This avoids paying the extra organ/agent hop for the most common low-risk
+    one-shot query shape while preserving the canonical task envelope.
+    """
+    if not config.cognitive_client or not _is_direct_fast_general_query_candidate(task):
+        return None
+
+    params = task.params or {}
+    query_params = params.get("query") or {}
+    description = (
+        str(query_params.get("problem_statement") or "").strip()
+        or str(task.description or "").strip()
+        or str(task.type or "query")
+    )
+    force_rag = bool(params.get("force_rag"))
+
+    direct_task = _build_stateless_cognitive_task(
+        task,
+        extra_cognitive={
+            "skip_retrieval": not force_rag,
+            "decision_kind": DecisionKind.FAST_PATH.value,
+            "cog_type": CognitiveType.PROBLEM_SOLVING.value,
+        },
+    )
+    started = datetime.now(timezone.utc)
+    try:
+        response = await config.cognitive_client.execute_async(
+            agent_id="coordinator_fast_query",
+            cog_type=CognitiveType.PROBLEM_SOLVING,
+            decision_kind=DecisionKind.FAST_PATH,
+            task=direct_task,
+            timeout=_clamp_timeout_s(config.fast_path_latency_slo_ms / 1000.0),
+        )
+    except Exception as exc:
+        logger.warning(
+            "[Coordinator] Direct fast general_query shortcut failed for task %s: %s",
+            task.task_id,
+            exc,
+            exc_info=True,
+        )
+        return None
+
+    finished = datetime.now(timezone.utc)
+    latency_ms = round((finished - started).total_seconds() * 1000.0, 3)
+    cognitive_payload = response.get("result") if isinstance(response, dict) else {}
+    cognitive_meta = cognitive_payload.get("meta") if isinstance(cognitive_payload, dict) else {}
+    tool_output = {
+        "success": bool(response.get("success", True)) if isinstance(response, dict) else True,
+        "query_type": "general_query",
+        "query": description,
+        "plan": (cognitive_payload.get("solution_steps") if isinstance(cognitive_payload, dict) else None) or [],
+        "thought": (cognitive_payload.get("thought") if isinstance(cognitive_payload, dict) else None) or "",
+        "meta": cognitive_meta or {},
+    }
+    success = bool(response.get("success", True)) if isinstance(response, dict) else True
+    error = None if success else str((response or {}).get("error") or "cognitive_query_failed")
+    payload = {
+        "meta": {"organ_id": "coordinator"},
+        "errors": [] if success else [{"tool": "general_query", "error": error}],
+        "quality": 1.0 if success else 0.0,
+        "results": [{"tool": "general_query", "ok": success, "output": tool_output}],
+        "agent_id": "coordinator_fast_query",
+        "salience": 0.0,
+        "skill_fit": 0.0,
+    }
+    meta = {
+        "exec": {
+            "started_at": started.isoformat(),
+            "finished_at": finished.isoformat(),
+            "latency_ms": latency_ms,
+            "attempt": 1,
+        },
+        "agent_id": "coordinator_fast_query",
+        "organ_id": "coordinator",
+        "task_type": str(task.type or ""),
+        "interaction": {"mode": (params.get("interaction") or {}).get("mode"), "conversation_id": None},
+        "routing_hints": ((params.get("routing") or {}).get("hints") or {}),
+        "routing_decision": {"routed_at": finished.isoformat()},
+        "requested_agent_id": "coordinator_fast_query",
+        "requested_organ_id": "coordinator",
+    }
+    envelope = make_envelope(
+        task_id=task.task_id,
+        success=success,
+        payload=payload,
+        error=error,
+        error_type=None if success else "cognitive_query_error",
+        retry=not success,
+        decision_kind=DecisionKind.FAST_PATH.value,
+        meta=meta,
+        path="coordinator_fast_query",
+    )
+    envelope["routing"] = {
+        "reason": "coordinator-direct-general-query",
+        "agent_id": "coordinator_fast_query",
+        "organ_id": "coordinator",
+        "is_high_stakes": False,
+        "router_latency": "included_in_trace",
+    }
+    return envelope
 
 
 def _payload_has_substantive_summary_content(payload: Any) -> bool:
