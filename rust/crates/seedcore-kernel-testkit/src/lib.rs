@@ -5,8 +5,8 @@
 
 use seedcore_approval_core::{approval_binding_hash, validate_envelope};
 use seedcore_kernel_types::{
-    ActionIntent, ArtifactHash, IntentAction, IntentEnvironment, IntentPrincipal, IntentResource,
-    SignatureEnvelope, Timestamp, TransferApprovalEnvelope,
+    ActionIntent, ApprovalTransitionHistory, ArtifactHash, IntentAction, IntentEnvironment,
+    IntentPrincipal, IntentResource, SignatureEnvelope, Timestamp, TransferApprovalEnvelope,
 };
 use seedcore_policy_core::{evaluate, FrozenDecisionInput, PolicyEvaluation};
 use seedcore_proof_core::{
@@ -166,6 +166,13 @@ pub fn load_replay_bundle(path: impl AsRef<Path>) -> Result<ReplayBundle, Fixtur
 
 /// Loads one receipt artifact fixture file.
 pub fn load_receipt_artifact(path: impl AsRef<Path>) -> Result<ReplayArtifact, FixtureError> {
+    read_json_file(path)
+}
+
+/// Loads one approval transition history fixture file.
+pub fn load_approval_transition_history(
+    path: impl AsRef<Path>,
+) -> Result<ApprovalTransitionHistory, FixtureError> {
     read_json_file(path)
 }
 
@@ -426,6 +433,12 @@ mod tests {
             .join(name)
     }
 
+    fn approval_history_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/approval_envelopes")
+            .join(name)
+    }
+
     #[test]
     fn loads_allow_case_with_expected_token_object() {
         let fixture =
@@ -460,5 +473,18 @@ mod tests {
             assert!(report.verified, "fixture `{name}` should verify");
             assert_eq!(report.actual_policy_evaluation.disposition, disposition);
         }
+    }
+
+    #[test]
+    fn loads_approval_transition_history_fixture() {
+        let history = load_approval_transition_history(approval_history_fixture(
+            "transition_history_allow.json",
+        ))
+        .expect("approval history fixture should load");
+        assert_eq!(history.events.len(), 1);
+        assert_eq!(
+            history.chain_head.as_deref(),
+            Some("sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72")
+        );
     }
 }

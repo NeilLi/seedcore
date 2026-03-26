@@ -239,6 +239,31 @@ pub struct TransferApprovalEnvelope {
     pub version: u32,
 }
 
+/// Append-only approval transition event bound to an approval envelope
+/// lifecycle change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalTransitionEvent {
+    pub event_id: String,
+    pub event_hash: String,
+    pub previous_event_hash: Option<String>,
+    pub occurred_at: Timestamp,
+    pub transition_type: String,
+    pub envelope_id: String,
+    pub previous_status: String,
+    pub next_status: String,
+    pub previous_binding_hash: Option<String>,
+    pub next_binding_hash: Option<String>,
+    pub envelope_version: u32,
+}
+
+/// Canonical append-only transition chain for approval lifecycle events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ApprovalTransitionHistory {
+    #[serde(default)]
+    pub events: Vec<ApprovalTransitionEvent>,
+    pub chain_head: Option<String>,
+}
+
 /// Principal context bound to an action intent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentPrincipal {
@@ -396,6 +421,53 @@ pub struct EvidenceBundle {
     pub created_at: Timestamp,
 }
 
+/// Typed replay artifact payload variants for offline chain verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "artifact_type", content = "artifact", rename_all = "snake_case")]
+pub enum ReplayArtifactPayload {
+    ActionIntent(ActionIntent),
+    TransferApprovalEnvelope(TransferApprovalEnvelope),
+    PolicyDecision(PolicyDecision),
+    ExecutionToken(ExecutionToken),
+    PolicyReceipt(PolicyReceipt),
+    TransitionReceipt(TransitionReceipt),
+    EvidenceBundle(EvidenceBundle),
+    ApprovalTransitionHistory(ApprovalTransitionHistory),
+}
+
+impl ReplayArtifactPayload {
+    pub const fn artifact_type(&self) -> &'static str {
+        match self {
+            Self::ActionIntent(_) => "action_intent",
+            Self::TransferApprovalEnvelope(_) => "transfer_approval_envelope",
+            Self::PolicyDecision(_) => "policy_decision",
+            Self::ExecutionToken(_) => "execution_token",
+            Self::PolicyReceipt(_) => "policy_receipt",
+            Self::TransitionReceipt(_) => "transition_receipt",
+            Self::EvidenceBundle(_) => "evidence_bundle",
+            Self::ApprovalTransitionHistory(_) => "approval_transition_history",
+        }
+    }
+}
+
+/// One typed artifact in a deterministic replay chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplayArtifact {
+    pub artifact_id: String,
+    #[serde(flatten)]
+    pub payload: ReplayArtifactPayload,
+    pub artifact_hash: ArtifactHash,
+    pub signature: SignatureEnvelope,
+    pub previous_artifact_hash: Option<ArtifactHash>,
+}
+
+/// Deterministic replay bundle for offline verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ReplayBundle {
+    #[serde(default)]
+    pub artifacts: Vec<ReplayArtifact>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,6 +572,31 @@ mod tests {
     }
 
     #[test]
+    fn approval_transition_history_round_trips() {
+        let history = ApprovalTransitionHistory {
+            events: vec![ApprovalTransitionEvent {
+                event_id: "approval-transition-event:sha256:event-001".to_string(),
+                event_hash: "sha256:event-001".to_string(),
+                previous_event_hash: None,
+                occurred_at: Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+                transition_type: "add_approval".to_string(),
+                envelope_id: "approval-transfer-001".to_string(),
+                previous_status: "PARTIALLY_APPROVED".to_string(),
+                next_status: "APPROVED".to_string(),
+                previous_binding_hash: None,
+                next_binding_hash: Some("sha256:binding-001".to_string()),
+                envelope_version: 2,
+            }],
+            chain_head: Some("sha256:event-001".to_string()),
+        };
+
+        let value = serde_json::to_value(&history).expect("history should serialize");
+        let parsed: ApprovalTransitionHistory =
+            serde_json::from_value(value).expect("history should deserialize");
+        assert_eq!(parsed, history);
+    }
+
+    #[test]
     fn policy_decision_allowed_matches_disposition() {
         let decision = PolicyDecision {
             policy_decision_id: "decision:intent-transfer-001".to_string(),
@@ -519,5 +616,14 @@ mod tests {
         };
         assert!(decision.allowed);
         assert_eq!(decision.disposition, Disposition::Allow);
+    }
+
+    #[test]
+    fn replay_artifact_payload_type_labels_are_stable() {
+        let payload = ReplayArtifactPayload::ApprovalTransitionHistory(ApprovalTransitionHistory {
+            events: Vec::new(),
+            chain_head: None,
+        });
+        assert_eq!(payload.artifact_type(), "approval_transition_history");
     }
 }

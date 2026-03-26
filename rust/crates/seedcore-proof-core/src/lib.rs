@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 pub use seedcore_kernel_types::{
-    ArtifactHash, Placeholder as KernelPlaceholder, SignatureEnvelope,
+    ArtifactHash, Placeholder as KernelPlaceholder, ReplayArtifact, ReplayArtifactPayload,
+    ReplayBundle, SignatureEnvelope,
 };
 
 /// Error raised when an artifact cannot be canonicalized deterministically.
@@ -89,23 +90,6 @@ pub struct VerificationReport {
     pub artifact_type: String,
     pub error_code: Option<String>,
     pub details: Vec<String>,
-}
-
-/// Replay artifact item used for offline chain verification.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ReplayArtifact {
-    pub artifact_id: String,
-    pub artifact_type: String,
-    pub artifact: Value,
-    pub artifact_hash: ArtifactHash,
-    pub signature: SignatureEnvelope,
-    pub previous_artifact_hash: Option<ArtifactHash>,
-}
-
-/// Replay bundle used for deterministic offline verification.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ReplayBundle {
-    pub artifacts: Vec<ReplayArtifact>,
 }
 
 /// Machine-readable report for replay-chain verification.
@@ -271,12 +255,12 @@ fn verify_replay_artifact_item(
     artifact: &ReplayArtifact,
     resolver: &dyn KeyResolver,
 ) -> VerificationReport {
-    let computed_hash = match hash_artifact(&artifact.artifact) {
+    let computed_hash = match hash_artifact(&artifact.payload) {
         Ok(hash) => hash,
         Err(error) => {
             return VerificationReport {
                 verified: false,
-                artifact_type: artifact.artifact_type.clone(),
+                artifact_type: artifact.payload.artifact_type().to_string(),
                 error_code: Some("canonicalization_failed".to_string()),
                 details: vec![error.to_string()],
             };
@@ -286,7 +270,7 @@ fn verify_replay_artifact_item(
     if computed_hash != artifact.artifact_hash {
         return VerificationReport {
             verified: false,
-            artifact_type: artifact.artifact_type.clone(),
+            artifact_type: artifact.payload.artifact_type().to_string(),
             error_code: Some("artifact_hash_mismatch".to_string()),
             details: vec![
                 format!("expected={}", artifact.artifact_hash),
@@ -298,7 +282,7 @@ fn verify_replay_artifact_item(
     verify_signature_envelope(
         &artifact.signature,
         &artifact.artifact_hash,
-        artifact.artifact_type.clone(),
+        artifact.payload.artifact_type().to_string(),
         resolver,
     )
 }
@@ -371,8 +355,12 @@ fn sort_value(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seedcore_kernel_types::{
+        Disposition, ExplanationPayload, PolicyReceipt, ReplayArtifactPayload, Timestamp,
+        TransitionReceipt,
+    };
     use serde::Serialize;
-    use serde_json::json;
+    use std::str::FromStr;
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
     struct DemoArtifact {
@@ -421,6 +409,48 @@ mod tests {
         }
     }
 
+    fn artifact_signer() -> SignatureEnvelope {
+        SignatureEnvelope {
+            signer_type: "service".to_string(),
+            signer_id: "seedcore-verify".to_string(),
+            signing_scheme: "debug_hash_v1".to_string(),
+            key_ref: Some("test-key".to_string()),
+            attestation_level: "baseline".to_string(),
+            signature: "sha256:placeholder".to_string(),
+        }
+    }
+
+    fn sample_policy_receipt() -> PolicyReceipt {
+        PolicyReceipt {
+            policy_receipt_id: "policy-receipt:intent-transfer-001".to_string(),
+            policy_decision_id: "decision:intent-transfer-001".to_string(),
+            intent_id: "intent-transfer-001".to_string(),
+            policy_snapshot_ref: "snapshot:pkg-prod-2026-04-02".to_string(),
+            disposition: Disposition::Allow,
+            explanation: ExplanationPayload::empty(Disposition::Allow),
+            governed_receipt_hash: ArtifactHash::sha256_hex("governed-receipt-hash"),
+            signer: artifact_signer(),
+            timestamp: Timestamp::from_str("2026-04-02T08:00:10Z").unwrap(),
+        }
+    }
+
+    fn sample_transition_receipt() -> TransitionReceipt {
+        TransitionReceipt {
+            transition_receipt_id: "transition-receipt:intent-transfer-001".to_string(),
+            intent_id: "intent-transfer-001".to_string(),
+            execution_token_id: "token:intent-transfer-001".to_string(),
+            endpoint_id: "hal://robot_sim/1".to_string(),
+            hardware_uuid: "hw-sim-001".to_string(),
+            actuator_result_hash: ArtifactHash::sha256_hex("actuator-result"),
+            from_zone: Some("vault_a".to_string()),
+            to_zone: Some("handoff_bay_3".to_string()),
+            executed_at: Timestamp::from_str("2026-04-02T08:00:20Z").unwrap(),
+            receipt_nonce: "nonce-transfer-001".to_string(),
+            payload_hash: ArtifactHash::sha256_hex("payload-transfer-001"),
+            signer: artifact_signer(),
+        }
+    }
+
     #[test]
     fn canonicalize_sorts_object_keys() {
         let bytes = canonicalize(&demo_artifact()).expect("artifact should canonicalize");
@@ -455,31 +485,23 @@ mod tests {
 
     #[test]
     fn verify_replay_chain_accepts_valid_linked_artifacts() {
-        let artifact_one = json!({
-            "policy_receipt_id": "policy-receipt:intent-transfer-001",
-            "disposition": "allow",
-        });
+        let artifact_one = ReplayArtifactPayload::PolicyReceipt(sample_policy_receipt());
         let artifact_one_hash = hash_artifact(&artifact_one).expect("hash should compute");
-        let artifact_two = json!({
-            "transition_receipt_id": "transition-receipt:intent-transfer-001",
-            "decision_ref": "policy-receipt:intent-transfer-001",
-        });
+        let artifact_two = ReplayArtifactPayload::TransitionReceipt(sample_transition_receipt());
         let artifact_two_hash = hash_artifact(&artifact_two).expect("hash should compute");
 
         let bundle = ReplayBundle {
             artifacts: vec![
                 ReplayArtifact {
                     artifact_id: "policy-receipt:intent-transfer-001".to_string(),
-                    artifact_type: "policy_receipt".to_string(),
-                    artifact: artifact_one,
+                    payload: artifact_one,
                     artifact_hash: artifact_one_hash.clone(),
                     signature: DebugSigner.sign_hash(&artifact_one_hash).unwrap(),
                     previous_artifact_hash: None,
                 },
                 ReplayArtifact {
                     artifact_id: "transition-receipt:intent-transfer-001".to_string(),
-                    artifact_type: "transition_receipt".to_string(),
-                    artifact: artifact_two,
+                    payload: artifact_two,
                     artifact_hash: artifact_two_hash.clone(),
                     signature: DebugSigner.sign_hash(&artifact_two_hash).unwrap(),
                     previous_artifact_hash: Some(artifact_one_hash),
@@ -499,31 +521,23 @@ mod tests {
 
     #[test]
     fn verify_replay_chain_rejects_broken_links() {
-        let artifact_one = json!({
-            "policy_receipt_id": "policy-receipt:intent-transfer-001",
-            "disposition": "allow",
-        });
+        let artifact_one = ReplayArtifactPayload::PolicyReceipt(sample_policy_receipt());
         let artifact_one_hash = hash_artifact(&artifact_one).expect("hash should compute");
-        let artifact_two = json!({
-            "transition_receipt_id": "transition-receipt:intent-transfer-001",
-            "decision_ref": "policy-receipt:intent-transfer-001",
-        });
+        let artifact_two = ReplayArtifactPayload::TransitionReceipt(sample_transition_receipt());
         let artifact_two_hash = hash_artifact(&artifact_two).expect("hash should compute");
 
         let bundle = ReplayBundle {
             artifacts: vec![
                 ReplayArtifact {
                     artifact_id: "a".to_string(),
-                    artifact_type: "policy_receipt".to_string(),
-                    artifact: artifact_one,
+                    payload: artifact_one,
                     artifact_hash: artifact_one_hash.clone(),
                     signature: DebugSigner.sign_hash(&artifact_one_hash).unwrap(),
                     previous_artifact_hash: Some(ArtifactHash::sha256_hex("wrong")),
                 },
                 ReplayArtifact {
                     artifact_id: "b".to_string(),
-                    artifact_type: "transition_receipt".to_string(),
-                    artifact: artifact_two,
+                    payload: artifact_two,
                     artifact_hash: artifact_two_hash.clone(),
                     signature: DebugSigner.sign_hash(&artifact_two_hash).unwrap(),
                     previous_artifact_hash: None,

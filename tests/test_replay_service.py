@@ -12,6 +12,7 @@ import mock_ray_dependencies  # noqa: F401
 
 import pytest
 
+import seedcore.services.replay_service as replay_service_module
 from seedcore.hal.custody.transition_receipts import build_transition_receipt
 from seedcore.services.replay_service import ReplayProjectionKind, ReplayService
 from seedcore.ops.evidence.verification import build_signed_artifact
@@ -303,16 +304,16 @@ def _apply_transfer_workflow_metadata(
 def _sample_approval_transition_history() -> List[Dict[str, Any]]:
     return [
         {
-            "event_id": "approval-transition-event:sha256:transition-event-001",
-            "event_hash": "sha256:transition-event-001",
+            "event_id": "approval-transition-event:sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
+            "event_hash": "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
             "previous_event_hash": None,
-            "occurred_at": "2026-03-20T09:59:30+00:00",
+            "occurred_at": "2026-04-02T08:00:30Z",
             "transition_type": "add_approval",
             "envelope_id": "approval-transfer-001",
             "previous_status": "PARTIALLY_APPROVED",
             "next_status": "APPROVED",
             "previous_binding_hash": None,
-            "next_binding_hash": "sha256:approval-binding-transfer-001",
+            "next_binding_hash": "sha256:fd6236849fc43a3d10c071da4a211964f652dcf83a91cf6a258cd6e3aabc4f9c",
             "envelope_version": 2,
         }
     ]
@@ -359,6 +360,19 @@ async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified
     assert replay.verification_status.verified is True
     assert replay.verification_status.artifact_results["policy_receipt"]["verified"] is True
     assert replay.verification_status.artifact_results["evidence_bundle"]["verified"] is True
+    assert replay.verification_status.artifact_results["rust_replay_chain"]["verified"] is True
+    assert replay.verification_status.artifact_results["rust_replay_chain"]["artifact_count"] == 6
+    assert [
+        item.get("artifact_type")
+        for item in replay.verification_status.artifact_results["rust_replay_chain"]["artifact_reports"]
+    ] == [
+        "action_intent",
+        "policy_decision",
+        "policy_receipt",
+        "execution_token",
+        "transition_receipt",
+        "evidence_bundle",
+    ]
     assert replay.verification_status.signer_policy["evidence_bundle"]["preferred_scheme"] in {"ed25519", "hmac_sha256"}
     assert replay.asset_custody_state["current_zone"] == "vault-a"
     assert [item.event_type for item in replay.replay_timeline] == [
@@ -601,14 +615,15 @@ async def test_replay_projection_and_jsonld_include_approval_transition_chain() 
     _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
 
     assert replay.public_projection["approvals"]["approval_transition_count"] == 1
-    assert replay.public_projection["approvals"]["approval_transition_head"] == "sha256:transition-event-001"
+    assert replay.public_projection["approvals"]["approval_transition_head"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
     assert any(item.event_type == "approval_transition_applied" for item in replay.replay_timeline)
     assert any(
         item.get("claim") == "approval_transition_chain_available" and item.get("value") is True
         for item in replay.public_projection["verifiable_claims"]
     )
+    assert replay.verification_status.artifact_results["approval_transition_history"]["valid"] is True
     assert replay.jsonld_export["proof"]["approval_transition_chain"]["count"] == 1
-    assert replay.jsonld_export["proof"]["approval_transition_chain"]["head"] == "sha256:transition-event-001"
+    assert replay.jsonld_export["proof"]["approval_transition_chain"]["head"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
 
 
 @pytest.mark.asyncio
@@ -636,6 +651,74 @@ async def test_public_jsonld_approval_transition_chain_exposes_hash_only_fields(
 
     chain = public_jsonld["proof"]["approval_transition_chain"]
     assert chain["count"] == 1
-    assert chain["head"] == "sha256:transition-event-001"
-    assert chain["events"][0]["event_hash"] == "sha256:transition-event-001"
+    assert chain["head"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
+    assert chain["events"][0]["event_hash"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
     assert "previous_status" not in chain["events"][0]
+
+
+@pytest.mark.asyncio
+async def test_replay_verification_flags_invalid_approval_transition_history_chain() -> None:
+    transition_history = _sample_approval_transition_history()
+    transition_history[0]["previous_event_hash"] = "sha256:unexpected-head"
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(
+            task_id="task-transfer-chain-3",
+            intent_id="intent-transfer-chain-3",
+            asset_id="asset-transfer-chain-3",
+        ),
+        disposition="allow",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001", "principal:quality_insp_017"],
+        approval_transition_history=transition_history,
+        approval_transition_head="sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-chain-3"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.verification_status.verified is False
+    assert replay.verification_status.artifact_results["approval_transition_history"]["valid"] is False
+    assert replay.verification_status.artifact_results["rust_replay_chain"]["verified"] is True
+    assert any(
+        isinstance(item, str) and item.startswith("approval_transition_history:")
+        for item in replay.verification_status.issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_allow_replay_requires_execution_token_in_rust_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = _apply_transfer_workflow_metadata(
+        _build_audit_record(
+            task_id="task-transfer-token-required-1",
+            intent_id="intent-transfer-token-required-1",
+            asset_id="asset-transfer-token-required-1",
+        ),
+        disposition="allow",
+        required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        approved_by=["principal:facility_mgr_001", "principal:quality_insp_017"],
+    )
+
+    monkeypatch.setattr(
+        replay_service_module,
+        "mint_execution_token_with_rust",
+        lambda claims: {"error": "mint_failed", "claims": dict(claims)},
+    )
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-token-required-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    rust_chain = replay.verification_status.artifact_results["rust_replay_chain"]
+    assert rust_chain["execution_token_required"] is True
+    assert rust_chain["execution_token_present"] is False
+    assert rust_chain["execution_token_verified"] is False
+    assert rust_chain["verified"] is False
+    assert any(item == "rust_replay_chain:allow_missing_execution_token" for item in replay.verification_status.issues)

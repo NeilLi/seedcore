@@ -213,16 +213,16 @@ def test_replay_artifacts_include_approval_transition_chain_for_transfer_flow() 
         approved_by=["principal:facility_mgr_001", "principal:quality_insp_017"],
         approval_transition_history=[
             {
-                "event_id": "approval-transition-event:sha256:transition-event-001",
-                "event_hash": "sha256:transition-event-001",
+                "event_id": "approval-transition-event:sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
+                "event_hash": "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72",
                 "previous_event_hash": None,
-                "occurred_at": "2026-03-20T09:59:30+00:00",
+                "occurred_at": "2026-04-02T08:00:30Z",
                 "transition_type": "add_approval",
                 "envelope_id": "approval-transfer-001",
                 "previous_status": "PARTIALLY_APPROVED",
                 "next_status": "APPROVED",
                 "previous_binding_hash": None,
-                "next_binding_hash": "sha256:approval-binding-transfer-001",
+                "next_binding_hash": "sha256:fd6236849fc43a3d10c071da4a211964f652dcf83a91cf6a258cd6e3aabc4f9c",
                 "envelope_version": 2,
             }
         ],
@@ -233,14 +233,14 @@ def test_replay_artifacts_include_approval_transition_chain_for_transfer_flow() 
     assert internal.status_code == 200
     internal_body = internal.json()
     assert internal_body["approval_transition_chain"]["count"] == 1
-    assert internal_body["approval_transition_chain"]["head"] == "sha256:transition-event-001"
+    assert internal_body["approval_transition_chain"]["head"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
     assert internal_body["approval_transition_chain"]["events"][0]["previous_status"] == "PARTIALLY_APPROVED"
 
     public = client.get("/replay/artifacts", params={"audit_id": record["id"], "projection": "public"})
     assert public.status_code == 200
     public_chain = public.json()["public_artifacts"]["approval_transition_chain"]
     assert public_chain["count"] == 1
-    assert public_chain["head"] == "sha256:transition-event-001"
+    assert public_chain["head"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
     assert "previous_status" not in public_chain["events"][0]
 
 

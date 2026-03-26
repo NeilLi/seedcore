@@ -18,6 +18,12 @@ from seedcore.coordinator.dao import (
     DigitalTwinDAO,
     GovernedExecutionAuditDAO,
 )
+from seedcore.integrations.rust_kernel import (
+    mint_execution_token_with_rust,
+    seal_replay_bundle_with_rust,
+    verify_approval_transition_history_with_rust,
+    verify_replay_bundle_with_rust,
+)
 from seedcore.hal.custody.transition_receipts import verify_transition_receipt_result
 from seedcore.models import DatabaseTask as Task
 from seedcore.models.replay import (
@@ -182,6 +188,7 @@ class ReplayService:
         )
         signer_chain = self._build_signer_chain(policy_receipt=policy_receipt, evidence_bundle=evidence_bundle, transition_receipts=transition_receipts)
         verification_status = self._build_verification_status(
+            record=record,
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
@@ -801,6 +808,7 @@ class ReplayService:
     def _build_verification_status(
         self,
         *,
+        record: Mapping[str, Any],
         policy_receipt: Mapping[str, Any],
         evidence_bundle: Mapping[str, Any],
         transition_receipts: Sequence[Mapping[str, Any]],
@@ -850,6 +858,93 @@ class ReplayService:
                     f"transition_receipt:{receipt.get('transition_receipt_id')}:{transition_result['error']}"
                 )
         artifact_results["transition_receipts"] = transition_results
+        approval_context = self._approval_context_from_record(record)
+        approval_history_events = (
+            list(approval_context.get("approval_transition_history"))
+            if isinstance(approval_context.get("approval_transition_history"), list)
+            else []
+        )
+        if approval_history_events:
+            approval_history_payload = {
+                "events": approval_history_events,
+                "chain_head": approval_context.get("approval_transition_head"),
+            }
+            history_result = verify_approval_transition_history_with_rust(approval_history_payload)
+            artifact_results["approval_transition_history"] = history_result
+            if not bool(history_result.get("valid")):
+                issues.append(
+                    f"approval_transition_history:{history_result.get('error_code') or 'invalid'}"
+                )
+        rust_replay_artifacts = self._build_rust_replay_artifacts(
+            record=record,
+            policy_receipt=policy_receipt,
+            evidence_bundle=evidence_bundle,
+            transition_receipts=transition_receipts,
+            approval_context=approval_context,
+        )
+        expected_allow_chain = self._normalize_disposition(
+            (
+                policy_receipt.get("decision", {}).get("disposition")
+                if isinstance(policy_receipt.get("decision"), dict)
+                else None
+            )
+            or policy_receipt.get("authz_disposition")
+            or (
+                record.get("policy_decision", {}).get("disposition")
+                if isinstance(record.get("policy_decision"), dict)
+                else None
+            )
+        ) == "allow"
+        if rust_replay_artifacts:
+            sealed_bundle = seal_replay_bundle_with_rust(rust_replay_artifacts)
+            if isinstance(sealed_bundle.get("artifacts"), list) and sealed_bundle.get("artifacts"):
+                rust_chain_result = verify_replay_bundle_with_rust(sealed_bundle)
+                rust_chain_result["artifact_count"] = len(sealed_bundle["artifacts"])
+                rust_chain_result["artifact_ids"] = [
+                    str(item.get("artifact_id"))
+                    for item in sealed_bundle["artifacts"]
+                    if isinstance(item, dict) and item.get("artifact_id") is not None
+                ]
+            else:
+                rust_chain_result = {
+                    "verified": False,
+                    "error_code": str(sealed_bundle.get("error_code") or "rust_replay_bundle_seal_failed"),
+                    "details": list(sealed_bundle.get("details") or []),
+                    "artifact_reports": [],
+                    "chain_checks": [],
+                }
+            if expected_allow_chain:
+                reports = (
+                    list(rust_chain_result.get("artifact_reports"))
+                    if isinstance(rust_chain_result.get("artifact_reports"), list)
+                    else []
+                )
+                token_report = next(
+                    (
+                        item
+                        for item in reports
+                        if isinstance(item, dict) and item.get("artifact_type") == "execution_token"
+                    ),
+                    None,
+                )
+                rust_chain_result["execution_token_required"] = True
+                rust_chain_result["execution_token_present"] = token_report is not None
+                rust_chain_result["execution_token_verified"] = bool(
+                    isinstance(token_report, dict) and token_report.get("verified")
+                )
+                if token_report is None:
+                    rust_chain_result["verified"] = False
+                    if rust_chain_result.get("error_code") is None:
+                        rust_chain_result["error_code"] = "allow_missing_execution_token"
+                    issues.append("rust_replay_chain:allow_missing_execution_token")
+                elif not bool(token_report.get("verified")):
+                    rust_chain_result["verified"] = False
+                    if rust_chain_result.get("error_code") is None:
+                        rust_chain_result["error_code"] = "allow_invalid_execution_token"
+                    issues.append("rust_replay_chain:allow_invalid_execution_token")
+            artifact_results["rust_replay_chain"] = rust_chain_result
+            if not bool(rust_chain_result.get("verified")):
+                issues.append(f"rust_replay_chain:{rust_chain_result.get('error_code') or 'invalid'}")
 
         signature_valid = not any(
             marker in issue
@@ -1186,6 +1281,741 @@ class ReplayService:
         parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
         approval_context = parameters.get("approval_context")
         return dict(approval_context) if isinstance(approval_context, dict) else {}
+
+    def _approval_context_from_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+        action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+        approval_context = parameters.get("approval_context")
+        return dict(approval_context) if isinstance(approval_context, dict) else {}
+
+    def _build_rust_replay_artifacts(
+        self,
+        *,
+        record: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+        evidence_bundle: Mapping[str, Any],
+        transition_receipts: Sequence[Mapping[str, Any]],
+        approval_context: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        policy_artifact = self._rust_policy_receipt_artifact(record=record, policy_receipt=policy_receipt)
+        if not policy_artifact:
+            return []
+
+        artifacts: List[Dict[str, Any]] = []
+        action_intent_artifact = self._rust_action_intent_artifact(
+            record=record,
+            policy_receipt=policy_receipt,
+            transition_receipts=transition_receipts,
+            evidence_bundle=evidence_bundle,
+        )
+        if action_intent_artifact:
+            artifacts.append(action_intent_artifact)
+        policy_decision_artifact = self._rust_policy_decision_artifact(
+            record=record,
+            policy_receipt=policy_receipt,
+            action_intent_id=(
+                str(action_intent_artifact.get("artifact_id"))
+                if isinstance(action_intent_artifact, dict)
+                and action_intent_artifact.get("artifact_id") is not None
+                else str(policy_receipt.get("intent_id") or record.get("intent_id") or "")
+            ),
+        )
+        if policy_decision_artifact:
+            artifacts.append(policy_decision_artifact)
+        artifacts.append(policy_artifact)
+        execution_token_artifact = self._rust_execution_token_artifact(
+            record=record,
+            policy_receipt=policy_receipt,
+            transition_receipts=transition_receipts,
+            evidence_bundle=evidence_bundle,
+        )
+        if execution_token_artifact:
+            artifacts.append(execution_token_artifact)
+        approval_history = (
+            list(approval_context.get("approval_transition_history"))
+            if isinstance(approval_context.get("approval_transition_history"), list)
+            else []
+        )
+        if approval_history:
+            artifacts.append(
+                {
+                    "artifact_id": f"approval-transition-history:{policy_artifact['artifact_id']}",
+                    "artifact_type": "approval_transition_history",
+                    "artifact": {
+                        "events": [dict(item) for item in approval_history if isinstance(item, dict)],
+                        "chain_head": approval_context.get("approval_transition_head"),
+                    },
+                }
+            )
+
+        for receipt in transition_receipts:
+            converted = self._rust_transition_receipt_artifact(record=record, transition_receipt=receipt)
+            if converted:
+                artifacts.append(converted)
+
+        evidence_artifact = self._rust_evidence_bundle_artifact(
+            record=record,
+            evidence_bundle=evidence_bundle,
+            policy_receipt_id=policy_artifact["artifact_id"],
+            transition_receipts=transition_receipts,
+        )
+        if evidence_artifact:
+            artifacts.append(evidence_artifact)
+        return artifacts
+
+    def _rust_action_intent_artifact(
+        self,
+        *,
+        record: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+        transition_receipts: Sequence[Mapping[str, Any]],
+        evidence_bundle: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+        resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
+        principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
+        environment = action_intent.get("environment") if isinstance(action_intent.get("environment"), dict) else {}
+        fingerprint = (
+            evidence_bundle.get("asset_fingerprint")
+            if isinstance(evidence_bundle.get("asset_fingerprint"), dict)
+            else {}
+        )
+        capture_context = (
+            fingerprint.get("capture_context")
+            if isinstance(fingerprint.get("capture_context"), dict)
+            else {}
+        )
+
+        intent_id = str(action_intent.get("intent_id") or record.get("intent_id") or "").strip()
+        if not intent_id:
+            return None
+        target_zone = (
+            action.get("target_zone")
+            or parameters.get("target_zone")
+            or (transition_receipts[0].get("to_zone") if transition_receipts else None)
+        )
+        endpoint_id = (
+            action.get("endpoint_id")
+            or parameters.get("endpoint_id")
+            or (transition_receipts[0].get("endpoint_id") if transition_receipts else None)
+        )
+        asset_ref = (
+            resource.get("asset_ref")
+            or resource.get("asset_id")
+            or policy_receipt.get("asset_ref")
+            or capture_context.get("asset_id")
+            or f"asset:{intent_id}"
+        )
+        role_refs = principal.get("role_refs")
+        if not isinstance(role_refs, list):
+            role_refs = []
+
+        environment_attributes = (
+            {
+                str(key): str(value)
+                for key, value in environment.get("attributes", {}).items()
+                if str(key).strip()
+            }
+            if isinstance(environment.get("attributes"), dict)
+            else {}
+        )
+
+        timestamp = str(
+            action_intent.get("timestamp")
+            or policy_receipt.get("timestamp")
+            or record.get("recorded_at")
+            or self._utcnow().isoformat()
+        )
+        valid_until = str(action_intent.get("valid_until") or timestamp)
+        return {
+            "artifact_id": intent_id,
+            "artifact_type": "action_intent",
+            "artifact": {
+                "intent_id": intent_id,
+                "timestamp": timestamp,
+                "valid_until": valid_until,
+                "principal": {
+                    "principal_ref": str(
+                        principal.get("principal_ref")
+                        or action_intent.get("subject_ref")
+                        or record.get("actor_agent_id")
+                        or "principal:unknown"
+                    ),
+                    "organization_ref": (
+                        str(principal.get("organization_ref"))
+                        if principal.get("organization_ref") is not None and str(principal.get("organization_ref")).strip()
+                        else str(record.get("actor_organ_id"))
+                        if record.get("actor_organ_id") is not None and str(record.get("actor_organ_id")).strip()
+                        else None
+                    ),
+                    "role_refs": [str(item) for item in role_refs if item is not None and str(item).strip()],
+                },
+                "action": {
+                    "action_type": str(action.get("type") or action.get("action_type") or "TRANSFER_CUSTODY"),
+                    "target_zone": target_zone,
+                    "endpoint_id": endpoint_id,
+                },
+                "resource": {
+                    "asset_ref": str(asset_ref),
+                    "lot_id": resource.get("lot_id"),
+                },
+                "environment": {
+                    "source_registration_id": (
+                        environment.get("source_registration_id")
+                        or parameters.get("source_registration_id")
+                    ),
+                    "registration_decision_id": (
+                        environment.get("registration_decision_id")
+                        or parameters.get("registration_decision_id")
+                    ),
+                    "attributes": environment_attributes,
+                },
+            },
+        }
+
+    def _rust_policy_decision_artifact(
+        self,
+        *,
+        record: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+        action_intent_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+        governed_receipt = (
+            policy_decision.get("governed_receipt")
+            if isinstance(policy_decision.get("governed_receipt"), dict)
+            else {}
+        )
+        disposition = self._normalize_disposition(
+            policy_decision.get("disposition")
+            or policy_receipt.get("authz_disposition")
+            or authz_graph.get("disposition")
+            or governed_receipt.get("disposition")
+        )
+        intent_id = str(policy_receipt.get("intent_id") or record.get("intent_id") or "").strip()
+        if not intent_id:
+            return None
+        policy_decision_id = str(
+            policy_receipt.get("policy_decision_id")
+            or policy_decision.get("policy_decision_id")
+            or f"decision:{intent_id}"
+        ).strip()
+        if not policy_decision_id:
+            return None
+        policy_snapshot_ref = str(
+            record.get("policy_snapshot")
+            or policy_receipt.get("policy_version")
+            or "snapshot:unknown"
+        )
+        allowed_value = policy_decision.get("allowed")
+        allowed = bool(allowed_value) if isinstance(allowed_value, bool) else disposition == "allow"
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=authz_graph,
+            replay_governed_receipt=governed_receipt,
+        )
+        reason = (
+            str(policy_decision.get("reason")).strip()
+            if policy_decision.get("reason") is not None and str(policy_decision.get("reason")).strip()
+            else str(authz_graph.get("reason")).strip()
+            if authz_graph.get("reason") is not None and str(authz_graph.get("reason")).strip()
+            else str(governed_receipt.get("reason")).strip()
+            if governed_receipt.get("reason") is not None and str(governed_receipt.get("reason")).strip()
+            else None
+        )
+        return {
+            "artifact_id": policy_decision_id,
+            "artifact_type": "policy_decision",
+            "artifact": {
+                "policy_decision_id": policy_decision_id,
+                "allowed": allowed,
+                "disposition": disposition,
+                "reason": reason,
+                "policy_snapshot_ref": policy_snapshot_ref,
+                "explanation": {
+                    "disposition": disposition,
+                    "matched_policy_refs": self._string_list(authz_graph.get("matched_policy_refs")),
+                    "authority_path_summary": self._string_list(authz_graph.get("authority_path_summary")),
+                    "missing_prerequisites": self._string_list(authz_graph.get("missing_prerequisites")),
+                    "trust_gaps": trust_gap_codes,
+                    "minted_artifacts": self._minted_artifact_refs(authz_graph.get("minted_artifacts")),
+                    "obligations": self._obligation_entries(authz_graph.get("obligations")),
+                },
+                "governed_decision_artifact": {
+                    "decision_id": policy_decision_id,
+                    "action_intent_ref": action_intent_id or intent_id,
+                    "policy_snapshot_ref": policy_snapshot_ref,
+                    "disposition": disposition,
+                    "asset_ref": str(
+                        policy_receipt.get("asset_ref")
+                        or authz_graph.get("asset_ref")
+                        or governed_receipt.get("asset_ref")
+                        or f"asset:{intent_id}"
+                    ),
+                },
+                "execution_token": None,
+            },
+        }
+
+    def _rust_execution_token_artifact(
+        self,
+        *,
+        record: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+        transition_receipts: Sequence[Mapping[str, Any]],
+        evidence_bundle: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        disposition = self._normalize_disposition(
+            (
+                policy_receipt.get("decision", {}).get("disposition")
+                if isinstance(policy_receipt.get("decision"), dict)
+                else None
+            )
+            or policy_receipt.get("authz_disposition")
+            or policy_decision.get("disposition")
+        )
+        if disposition != "allow":
+            return None
+
+        existing = policy_decision.get("execution_token")
+        if isinstance(existing, Mapping):
+            required = {
+                "token_id",
+                "intent_id",
+                "issued_at",
+                "valid_until",
+                "contract_version",
+                "constraints",
+                "artifact_hash",
+                "signature",
+            }
+            if required.issubset(set(existing.keys())):
+                token_id = str(existing.get("token_id") or "").strip()
+                if token_id:
+                    return {
+                        "artifact_id": token_id,
+                        "artifact_type": "execution_token",
+                        "artifact": dict(existing),
+                    }
+
+        action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+        resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
+        environment = action_intent.get("environment") if isinstance(action_intent.get("environment"), dict) else {}
+        principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
+        decision = policy_receipt.get("decision") if isinstance(policy_receipt.get("decision"), dict) else {}
+
+        issued_dt = self._parse_datetime(
+            str(
+                policy_receipt.get("timestamp")
+                or record.get("recorded_at")
+                or self._utcnow().isoformat()
+            )
+        )
+        valid_until_dt = issued_dt + timedelta(minutes=1)
+        intent_id = str(policy_receipt.get("intent_id") or record.get("intent_id") or "").strip()
+        if not intent_id:
+            return None
+        token_id = str(
+            record.get("token_id")
+            or evidence_bundle.get("execution_token_id")
+            or f"token:{intent_id}"
+        ).strip()
+        action_type = str(action.get("type") or action.get("action_type") or "TRANSFER_CUSTODY")
+        target_zone = (
+            action.get("target_zone")
+            or parameters.get("target_zone")
+            or (transition_receipts[0].get("to_zone") if transition_receipts else None)
+        )
+        endpoint_id = (
+            action.get("endpoint_id")
+            or parameters.get("endpoint_id")
+            or (transition_receipts[0].get("endpoint_id") if transition_receipts else None)
+        )
+        asset_id = (
+            resource.get("asset_id")
+            or resource.get("asset_ref")
+            or policy_receipt.get("asset_ref")
+            or f"asset:{intent_id}"
+        )
+        minted = mint_execution_token_with_rust(
+            {
+                "token_id": token_id,
+                "intent_id": intent_id,
+                "issued_at": issued_dt.isoformat().replace("+00:00", "Z"),
+                "valid_until": valid_until_dt.isoformat().replace("+00:00", "Z"),
+                "contract_version": str(
+                    policy_receipt.get("policy_version")
+                    or record.get("policy_snapshot")
+                    or "transfer-v1"
+                ),
+                "constraints": {
+                    "action_type": action_type,
+                    "target_zone": target_zone,
+                    "asset_id": asset_id,
+                    "principal_agent_id": (
+                        principal.get("principal_ref")
+                        or principal.get("agent_id")
+                        or record.get("actor_agent_id")
+                    ),
+                    "source_registration_id": (
+                        environment.get("source_registration_id")
+                        or parameters.get("source_registration_id")
+                    ),
+                    "registration_decision_id": (
+                        environment.get("registration_decision_id")
+                        or parameters.get("registration_decision_id")
+                    ),
+                    "endpoint_id": endpoint_id,
+                    "authz_disposition": str(decision.get("disposition") or disposition),
+                },
+            }
+        )
+        if not isinstance(minted, Mapping) or minted.get("token_id") is None:
+            return None
+        return {
+            "artifact_id": str(minted.get("token_id")),
+            "artifact_type": "execution_token",
+            "artifact": dict(minted),
+        }
+
+    def _rust_policy_receipt_artifact(
+        self,
+        *,
+        record: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        policy_receipt_id = str(policy_receipt.get("policy_receipt_id") or "").strip()
+        intent_id = str(policy_receipt.get("intent_id") or record.get("intent_id") or "").strip()
+        if not policy_receipt_id or not intent_id:
+            return None
+
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        decision = policy_receipt.get("decision") if isinstance(policy_receipt.get("decision"), dict) else {}
+        authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+        governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
+        disposition = self._normalize_disposition(
+            decision.get("disposition")
+            or policy_receipt.get("authz_disposition")
+            or policy_decision.get("disposition")
+            or authz_graph.get("disposition")
+            or governed_receipt.get("disposition")
+        )
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=authz_graph,
+            replay_governed_receipt=governed_receipt,
+        )
+
+        return {
+            "artifact_id": policy_receipt_id,
+            "artifact_type": "policy_receipt",
+            "artifact": {
+                "policy_receipt_id": policy_receipt_id,
+                "policy_decision_id": str(
+                    policy_receipt.get("policy_decision_id") or f"decision:{intent_id}"
+                ),
+                "intent_id": intent_id,
+                "policy_snapshot_ref": str(
+                    record.get("policy_snapshot")
+                    or policy_receipt.get("policy_version")
+                    or "snapshot:unknown"
+                ),
+                "disposition": disposition,
+                "explanation": {
+                    "disposition": disposition,
+                    "matched_policy_refs": self._string_list(authz_graph.get("matched_policy_refs")),
+                    "authority_path_summary": self._string_list(authz_graph.get("authority_path_summary")),
+                    "missing_prerequisites": self._string_list(authz_graph.get("missing_prerequisites")),
+                    "trust_gaps": trust_gap_codes,
+                    "minted_artifacts": self._minted_artifact_refs(authz_graph.get("minted_artifacts")),
+                    "obligations": self._obligation_entries(authz_graph.get("obligations")),
+                },
+                "governed_receipt_hash": self._artifact_hash_object(
+                    policy_receipt.get("governed_receipt_hash")
+                    or governed_receipt.get("decision_hash")
+                    or f"governed_receipt:{policy_receipt_id}",
+                    fallback_seed=f"governed_receipt:{policy_receipt_id}",
+                ),
+                "signer": self._signature_envelope(policy_receipt, artifact_type="policy_receipt"),
+                "timestamp": str(
+                    policy_receipt.get("timestamp")
+                    or record.get("recorded_at")
+                    or self._utcnow().isoformat()
+                ),
+            },
+        }
+
+    def _rust_transition_receipt_artifact(
+        self,
+        *,
+        record: Mapping[str, Any],
+        transition_receipt: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        transition_receipt_id = str(transition_receipt.get("transition_receipt_id") or "").strip()
+        if not transition_receipt_id:
+            return None
+        intent_id = str(transition_receipt.get("intent_id") or record.get("intent_id") or "").strip()
+        execution_token_id = str(
+            transition_receipt.get("execution_token_id")
+            or record.get("token_id")
+            or f"token:{intent_id or 'unknown'}"
+        )
+        endpoint_id = str(transition_receipt.get("endpoint_id") or "seedcore://endpoint/unknown")
+        hardware_uuid = str(transition_receipt.get("hardware_uuid") or "hardware:unknown")
+        executed_at = str(
+            transition_receipt.get("executed_at")
+            or record.get("recorded_at")
+            or self._utcnow().isoformat()
+        )
+
+        return {
+            "artifact_id": transition_receipt_id,
+            "artifact_type": "transition_receipt",
+            "artifact": {
+                "transition_receipt_id": transition_receipt_id,
+                "intent_id": intent_id,
+                "execution_token_id": execution_token_id,
+                "endpoint_id": endpoint_id,
+                "hardware_uuid": hardware_uuid,
+                "actuator_result_hash": self._artifact_hash_object(
+                    transition_receipt.get("actuator_result_hash"),
+                    fallback_seed=f"actuator_result:{transition_receipt_id}",
+                ),
+                "from_zone": transition_receipt.get("from_zone"),
+                "to_zone": transition_receipt.get("to_zone"),
+                "executed_at": executed_at,
+                "receipt_nonce": str(
+                    transition_receipt.get("receipt_nonce")
+                    or f"nonce:{transition_receipt_id}"
+                ),
+                "payload_hash": self._artifact_hash_object(
+                    transition_receipt.get("payload_hash"),
+                    fallback_seed=f"payload:{transition_receipt_id}",
+                ),
+                "signer": self._signature_envelope(
+                    transition_receipt,
+                    artifact_type="transition_receipt",
+                ),
+            },
+        }
+
+    def _rust_evidence_bundle_artifact(
+        self,
+        *,
+        record: Mapping[str, Any],
+        evidence_bundle: Mapping[str, Any],
+        policy_receipt_id: str,
+        transition_receipts: Sequence[Mapping[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        evidence_bundle_id = str(evidence_bundle.get("evidence_bundle_id") or "").strip()
+        intent_id = str(evidence_bundle.get("intent_id") or record.get("intent_id") or "").strip()
+        if not evidence_bundle_id or not intent_id:
+            return None
+        created_at = str(
+            evidence_bundle.get("created_at")
+            or record.get("recorded_at")
+            or self._utcnow().isoformat()
+        )
+        transition_ids = [
+            str(item.get("transition_receipt_id"))
+            for item in transition_receipts
+            if isinstance(item, Mapping) and item.get("transition_receipt_id") is not None
+        ]
+        if not transition_ids:
+            transition_ids = [
+                str(item)
+                for item in (evidence_bundle.get("transition_receipt_ids") or [])
+                if item is not None and str(item).strip()
+            ]
+
+        telemetry_refs_raw = evidence_bundle.get("telemetry_refs")
+        telemetry_refs = []
+        if isinstance(telemetry_refs_raw, list):
+            for index, item in enumerate(telemetry_refs_raw):
+                if not isinstance(item, Mapping):
+                    continue
+                telemetry_id = str(
+                    item.get("telemetry_id")
+                    or item.get("id")
+                    or item.get("kind")
+                    or f"telemetry:{evidence_bundle_id}:{index}"
+                )
+                captured_at = str(item.get("captured_at") or created_at)
+                telemetry_hash = self._artifact_hash_object(
+                    item.get("hash") or item.get("sha256"),
+                    fallback_seed=f"telemetry:{evidence_bundle_id}:{index}",
+                )
+                telemetry_refs.append(
+                    {
+                        "telemetry_id": telemetry_id,
+                        "captured_at": captured_at,
+                        "hash": telemetry_hash,
+                    }
+                )
+
+        media_refs_raw = evidence_bundle.get("media_refs")
+        media_refs = []
+        if isinstance(media_refs_raw, list):
+            for index, item in enumerate(media_refs_raw):
+                if not isinstance(item, Mapping):
+                    continue
+                media_id = str(
+                    item.get("media_id")
+                    or item.get("id")
+                    or item.get("uri")
+                    or item.get("source")
+                    or f"media:{evidence_bundle_id}:{index}"
+                )
+                media_type = str(item.get("media_type") or item.get("kind") or "unknown")
+                media_hash = self._artifact_hash_object(
+                    item.get("hash") or item.get("sha256"),
+                    fallback_seed=f"media:{evidence_bundle_id}:{index}",
+                )
+                media_refs.append(
+                    {
+                        "media_id": media_id,
+                        "media_type": media_type,
+                        "hash": media_hash,
+                    }
+                )
+
+        return {
+            "artifact_id": evidence_bundle_id,
+            "artifact_type": "evidence_bundle",
+            "artifact": {
+                "evidence_bundle_id": evidence_bundle_id,
+                "intent_id": intent_id,
+                "execution_token_id": evidence_bundle.get("execution_token_id"),
+                "policy_receipt_id": (
+                    evidence_bundle.get("policy_receipt_id")
+                    or policy_receipt_id
+                ),
+                "transition_receipt_ids": transition_ids,
+                "telemetry_refs": telemetry_refs,
+                "media_refs": media_refs,
+                "signer": self._signature_envelope(
+                    evidence_bundle,
+                    artifact_type="evidence_bundle",
+                ),
+                "created_at": created_at,
+            },
+        }
+
+    def _normalize_disposition(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"allow", "deny", "quarantine", "escalate"}:
+            return normalized
+        return "deny"
+
+    def _string_list(self, value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        output: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                candidate = item.strip()
+                if candidate:
+                    output.append(candidate)
+        return output
+
+    def _artifact_hash_object(self, value: Any, *, fallback_seed: str) -> Dict[str, str]:
+        if isinstance(value, Mapping):
+            algorithm = str(value.get("algorithm") or "").strip()
+            hash_value = str(value.get("value") or "").strip()
+            if algorithm and hash_value:
+                return {"algorithm": algorithm, "value": hash_value}
+        if isinstance(value, str):
+            candidate = value.strip()
+            if candidate:
+                if ":" in candidate:
+                    algorithm, hash_value = candidate.split(":", 1)
+                    algorithm = algorithm.strip()
+                    hash_value = hash_value.strip()
+                    if algorithm and hash_value:
+                        return {"algorithm": algorithm, "value": hash_value}
+                return {"algorithm": "sha256", "value": candidate}
+        return {"algorithm": "sha256", "value": hashlib.sha256(fallback_seed.encode("utf-8")).hexdigest()}
+
+    def _signature_envelope(self, payload: Mapping[str, Any], *, artifact_type: str) -> Dict[str, Any]:
+        metadata = payload.get("signer_metadata") if isinstance(payload.get("signer_metadata"), dict) else {}
+        signature = payload.get("signature")
+        signature_value = (
+            str(signature).strip()
+            if signature is not None and str(signature).strip()
+            else f"sha256:{hashlib.sha256(f'{artifact_type}:signature'.encode('utf-8')).hexdigest()}"
+        )
+        key_ref_raw = metadata.get("key_ref")
+        key_ref = str(key_ref_raw).strip() if isinstance(key_ref_raw, str) and key_ref_raw.strip() else None
+        return {
+            "signer_type": str(metadata.get("signer_type") or "service"),
+            "signer_id": str(metadata.get("signer_id") or f"seedcore:{artifact_type}"),
+            "signing_scheme": str(metadata.get("signing_scheme") or "debug_hash_v1"),
+            "key_ref": key_ref,
+            "attestation_level": str(metadata.get("attestation_level") or "baseline"),
+            "signature": signature_value,
+        }
+
+    def _minted_artifact_refs(self, value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        refs: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                candidate = item.strip()
+                if candidate:
+                    refs.append(candidate)
+                continue
+            if isinstance(item, dict):
+                kind = str(item.get("kind") or "").strip()
+                ref = str(item.get("ref") or "").strip()
+                if kind and ref:
+                    refs.append(f"{kind}:{ref}")
+                elif ref:
+                    refs.append(ref)
+                elif kind:
+                    refs.append(kind)
+        return refs
+
+    def _obligation_entries(self, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        obligations: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            obligation_type = str(item.get("obligation_type") or item.get("code") or "").strip()
+            if not obligation_type:
+                continue
+            reference = (
+                str(item.get("reference")).strip()
+                if item.get("reference") is not None and str(item.get("reference")).strip()
+                else str(item.get("ref")).strip()
+                if item.get("ref") is not None and str(item.get("ref")).strip()
+                else None
+            )
+            details_raw = item.get("details")
+            details = (
+                {
+                    str(key): str(val)
+                    for key, val in details_raw.items()
+                    if str(key).strip()
+                }
+                if isinstance(details_raw, dict)
+                else {}
+            )
+            obligations.append(
+                {
+                    "obligation_type": obligation_type,
+                    "reference": reference,
+                    "details": details,
+                }
+            )
+        return obligations
 
     def _workflow_type(self, replay: ReplayRecord) -> Optional[str]:
         workflow_type = replay.authz_graph.get("workflow_type")

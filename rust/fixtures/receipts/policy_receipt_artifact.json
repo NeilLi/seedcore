@@ -3,11 +3,44 @@
   "artifact_type": "policy_receipt",
   "artifact": {
     "policy_receipt_id": "policy-receipt:intent-transfer-001",
-    "disposition": "allow"
+    "policy_decision_id": "decision:intent-transfer-001",
+    "intent_id": "intent-transfer-001",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "disposition": "allow",
+    "explanation": {
+      "disposition": "allow",
+      "matched_policy_refs": [
+        "policy:transfer-v1"
+      ],
+      "authority_path_summary": [
+        "facility_manager -> transfer_lot"
+      ],
+      "missing_prerequisites": [],
+      "trust_gaps": [],
+      "minted_artifacts": [
+        "governed_decision:intent-transfer-001",
+        "policy_receipt:intent-transfer-001",
+        "execution_token:intent-transfer-001"
+      ],
+      "obligations": []
+    },
+    "governed_receipt_hash": {
+      "algorithm": "sha256",
+      "value": "governed-receipt-hash-001"
+    },
+    "signer": {
+      "signer_type": "service",
+      "signer_id": "seedcore-verify",
+      "signing_scheme": "debug_hash_v1",
+      "key_ref": "test-key",
+      "attestation_level": "baseline",
+      "signature": "sha256:policy-receipt-inner-signature-001"
+    },
+    "timestamp": "2026-04-02T08:00:10Z"
   },
   "artifact_hash": {
     "algorithm": "sha256",
-    "value": "6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+    "value": "d0b58a4ae24b3c27de14f6bbee5135a5a1c792f0465da0f6c914918b752182b4"
   },
   "signature": {
     "signer_type": "service",
@@ -15,7 +48,7 @@
     "signing_scheme": "debug_hash_v1",
     "key_ref": "test-key",
     "attestation_level": "baseline",
-    "signature": "sha256:6b12c5ff1d2b83ba8444eeacd0639d1718508654844f8055f5233a5533bfce2c"
+    "signature": "sha256:d0b58a4ae24b3c27de14f6bbee5135a5a1c792f0465da0f6c914918b752182b4"
   },
   "previous_artifact_hash": null
 }

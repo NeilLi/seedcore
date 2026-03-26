@@ -3,16 +3,17 @@ use seedcore_approval_core::{
 };
 use seedcore_kernel_testkit::FixtureStaticResolver;
 use seedcore_kernel_testkit::{
-    load_transfer_fixture, run_transfer_fixture_dir, FixtureDebugSigner, TransferVerificationReport,
+    load_replay_bundle, load_transfer_fixture, run_transfer_fixture_dir, FixtureDebugSigner,
+    TransferVerificationReport,
 };
 use seedcore_kernel_types::{
-    ApprovalStatus, ArtifactHash, Disposition, RevocationRecord, RoleApproval, Timestamp,
-    TransferApprovalEnvelope,
+    ApprovalStatus, ApprovalTransitionEvent, ApprovalTransitionHistory, ArtifactHash, Disposition,
+    ReplayArtifactPayload, RevocationRecord, RoleApproval, Timestamp, TransferApprovalEnvelope,
 };
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
     hash_artifact, verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
-    ReplayVerificationReport, VerificationReport,
+    ReplayVerificationReport, Signer, VerificationReport,
 };
 use seedcore_token_core::{
     enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
@@ -118,6 +119,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let report = verify_chain_bundle(Path::new(&bundle_path))?;
             print_json(&report)
         }
+        "seal-replay-bundle" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let bundle = seal_replay_bundle_path(Path::new(&artifact_path))?;
+            print_json(&bundle)
+        }
         "explain" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let evaluation: PolicyEvaluation = read_json_file(&artifact_path)?;
@@ -132,6 +138,7 @@ fn usage() -> String {
         "usage:",
         "  seedcore-verify verify-receipt --artifact <path>",
         "  seedcore-verify verify-chain --bundle <path>",
+        "  seedcore-verify seal-replay-bundle --artifact <path>",
         "  seedcore-verify verify-transfer --dir <path>",
         "  seedcore-verify summarize-transfer --dir <path>",
         "  seedcore-verify validate-approval --artifact <path>",
@@ -526,6 +533,36 @@ fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> 
     Ok(verify_replay_chain(&bundle, &FixtureStaticResolver))
 }
 
+fn seal_replay_bundle_path(path: &Path) -> Result<ReplayBundle, String> {
+    let input: ReplayBundleInput = read_json_file(path)?;
+    seal_replay_bundle(input)
+}
+
+fn seal_replay_bundle(input: ReplayBundleInput) -> Result<ReplayBundle, String> {
+    if input.artifacts.is_empty() {
+        return Err("empty_replay_bundle_input".to_string());
+    }
+
+    let mut previous_hash: Option<ArtifactHash> = None;
+    let mut sealed = Vec::with_capacity(input.artifacts.len());
+    for item in input.artifacts {
+        let artifact_hash =
+            hash_artifact(&item.payload).map_err(|error| format!("replay_hash_failed:{error}"))?;
+        let signature = FixtureDebugSigner
+            .sign_hash(&artifact_hash)
+            .map_err(|error| format!("replay_sign_failed:{error}"))?;
+        sealed.push(ReplayArtifact {
+            artifact_id: item.artifact_id,
+            payload: item.payload,
+            artifact_hash: artifact_hash.clone(),
+            signature,
+            previous_artifact_hash: previous_hash.clone(),
+        });
+        previous_hash = Some(artifact_hash);
+    }
+    Ok(ReplayBundle { artifacts: sealed })
+}
+
 fn verify_receipt_path(path: &Path) -> Result<VerificationReport, String> {
     let artifact: ReplayArtifact = read_json_file(path)?;
     Ok(verify_receipt_artifact(&artifact, &FixtureStaticResolver))
@@ -679,27 +716,6 @@ struct ApprovalTransitionReport {
     details: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-struct ApprovalTransitionHistory {
-    events: Vec<ApprovalTransitionEvent>,
-    chain_head: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ApprovalTransitionEvent {
-    event_id: String,
-    event_hash: String,
-    previous_event_hash: Option<String>,
-    occurred_at: Timestamp,
-    transition_type: String,
-    envelope_id: String,
-    previous_status: String,
-    next_status: String,
-    previous_binding_hash: Option<String>,
-    next_binding_hash: Option<String>,
-    envelope_version: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ApprovalTransitionHistoryReport {
     valid: bool,
@@ -720,6 +736,19 @@ struct ApprovalTransitionEventHashMaterial {
     previous_binding_hash: Option<String>,
     next_binding_hash: Option<String>,
     envelope_version: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReplayArtifactInput {
+    artifact_id: String,
+    #[serde(flatten)]
+    payload: ReplayArtifactPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct ReplayBundleInput {
+    #[serde(default)]
+    artifacts: Vec<ReplayArtifactInput>,
 }
 
 #[cfg(test)]
@@ -838,6 +867,32 @@ mod tests {
         assert!(report.verified);
         assert_eq!(report.error_code, None);
         assert_eq!(report.artifact_type, "policy_receipt");
+    }
+
+    #[test]
+    fn seal_replay_bundle_produces_linked_verifiable_chain() {
+        let bundle = load_replay_bundle(replay_bundle_fixture("allow_chain.json"))
+            .expect("fixture should load");
+        let input = ReplayBundleInput {
+            artifacts: bundle
+                .artifacts
+                .into_iter()
+                .map(|artifact| ReplayArtifactInput {
+                    artifact_id: artifact.artifact_id,
+                    payload: artifact.payload,
+                })
+                .collect(),
+        };
+
+        let sealed = seal_replay_bundle(input).expect("replay bundle should seal");
+        assert_eq!(sealed.artifacts.len(), 2);
+        assert!(sealed.artifacts[0].previous_artifact_hash.is_none());
+        assert_eq!(
+            sealed.artifacts[1].previous_artifact_hash.as_ref(),
+            Some(&sealed.artifacts[0].artifact_hash)
+        );
+        let report = verify_replay_chain(&sealed, &FixtureStaticResolver);
+        assert!(report.verified);
     }
 
     #[test]

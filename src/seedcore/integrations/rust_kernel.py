@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 def verify_execution_token_with_rust(
@@ -182,6 +182,76 @@ def apply_transfer_approval_transition_with_rust(
     return output
 
 
+def verify_approval_transition_history_with_rust(history: Mapping[str, Any]) -> dict[str, Any]:
+    history_path = _write_temp_json(dict(history))
+    try:
+        output = _run_verify_cli(
+            [
+                "verify-approval-history",
+                "--artifact",
+                history_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(history_path)
+    if "valid" not in output:
+        return {
+            "valid": False,
+            "chain_head": history.get("chain_head"),
+            "event_count": len(history.get("events")) if isinstance(history.get("events"), list) else 0,
+            "error_code": "rust_verify_approval_history_failed",
+            "details": [output],
+        }
+    return output
+
+
+def seal_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    payload = {
+        "artifacts": [dict(item) for item in artifacts if isinstance(item, Mapping)],
+    }
+    artifact_path = _write_temp_json(payload)
+    try:
+        output = _run_verify_cli(
+            [
+                "seal-replay-bundle",
+                "--artifact",
+                artifact_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(artifact_path)
+    if "artifacts" not in output:
+        return {
+            "error_code": "rust_seal_replay_bundle_failed",
+            "details": [output],
+            "artifacts": [],
+        }
+    return output
+
+
+def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    bundle_path = _write_temp_json(dict(bundle))
+    try:
+        output = _run_verify_cli(
+            [
+                "verify-chain",
+                "--bundle",
+                bundle_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(bundle_path)
+    if "verified" not in output:
+        return {
+            "verified": False,
+            "error_code": "rust_verify_replay_chain_failed",
+            "details": [output],
+            "artifact_reports": [],
+            "chain_checks": [],
+        }
+    return output
+
+
 def map_token_error_for_hal(error_code: str | None) -> str:
     if error_code in {"token_expired"}:
         return "expired ExecutionToken"
@@ -206,6 +276,7 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
     binary = _resolve_verify_binary(repo_root)
 
     try:
+        completed: subprocess.CompletedProcess[str] | None = None
         if binary is not None:
             completed = subprocess.run(
                 [str(binary), *args],
@@ -213,6 +284,14 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
                 capture_output=True,
                 text=True,
             )
+            if completed.returncode != 0:
+                completed = subprocess.run(
+                    ["cargo", "run", "-q", "-p", "seedcore-verify", "--", *args],
+                    cwd=rust_dir,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
         else:
             completed = subprocess.run(
                 ["cargo", "run", "-q", "-p", "seedcore-verify", "--", *args],
@@ -243,9 +322,9 @@ def _resolve_verify_binary(repo_root: Path) -> Path | None:
         if candidate.exists() and candidate.is_file():
             return candidate
     default_candidates = [
-        Path("/usr/local/bin/seedcore-verify"),
-        repo_root / "rust" / "target" / "release" / "seedcore-verify",
         repo_root / "rust" / "target" / "debug" / "seedcore-verify",
+        repo_root / "rust" / "target" / "release" / "seedcore-verify",
+        Path("/usr/local/bin/seedcore-verify"),
     ]
     for candidate in default_candidates:
         if candidate.exists() and candidate.is_file():

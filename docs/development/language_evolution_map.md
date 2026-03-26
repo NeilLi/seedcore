@@ -315,9 +315,23 @@ Status as of March 26, 2026:
   - Rust replay-bundle fixtures now include approval transition history
     artifacts (`allow_chain_with_approval_transition.json`) verified by
     `seedcore-verify verify-chain`
-- remaining to close phase scope:
-  - promote approval transition history from Python replay publication payloads
-    into first-class Rust replay artifact/bundle contracts across crates
+  - `seedcore-kernel-types` now defines shared approval transition history
+    contracts, and both `seedcore-verify` and `seedcore-kernel-testkit` use
+    those shared types directly
+  - replay verification status now validates approval transition history
+    through Rust `verify-approval-history`, not only Python projection logic
+  - replay artifact payloads in `seedcore-proof-core` now use typed kernel
+    contracts (`ReplayArtifactPayload`) instead of generic JSON-value payloads;
+    verifier fixtures and receipt/replay-chain verification now operate on
+    canonical typed artifact structs end-to-end
+  - replay service now emits typed Rust replay artifact inputs and validates the
+    sealed chain through Rust (`seal-replay-bundle` + `verify-chain`) as part of
+    runtime verification status reporting, including typed action intent,
+    policy decision, policy receipt, approval transition history, transition
+    receipt, execution token (allow path), and evidence bundle artifacts
+  - allow-path replay verification now enforces execution-token presence and
+    validity inside the Rust replay chain (missing/invalid token fails replay
+    verification)
 
 ### Phase 4: TypeScript Operator Workflow Surface
 
