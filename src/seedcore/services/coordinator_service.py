@@ -890,6 +890,7 @@ class Coordinator:
                         e
                     )
             
+            created_route_task_record = False
             if self.graph_task_repo and self._session_factory and not already_persisted:
                 async with self._session_factory() as session:
                     async with session.begin():
@@ -898,6 +899,7 @@ class Coordinator:
                             task_dict,
                             agent_id=task_dict.get("params", {}).get("agent_id"),
                         )
+                created_route_task_record = True
 
             # Check if this is a planning task that needs immediate ACK
             # Planning tasks can take 60+ seconds and would timeout the dispatcher
@@ -965,11 +967,14 @@ class Coordinator:
                 exec_config,
             )
             if direct_fast_query is not None:
-                return normalize_envelope(
+                envelope = normalize_envelope(
                     direct_fast_query,
                     task_id=task_id,
                     path="coordinator_fast_query",
                 )
+                if created_route_task_record:
+                    await self._finalize_ad_hoc_route_task_record(task_id, envelope)
+                return envelope
             route_config = self._build_route_config()
 
             result = await execute_task(
@@ -979,7 +984,10 @@ class Coordinator:
             )
 
             # Normalize result to canonical envelope format
-            return normalize_envelope(result, task_id=task_id, path="coordinator")
+            envelope = normalize_envelope(result, task_id=task_id, path="coordinator")
+            if created_route_task_record:
+                await self._finalize_ad_hoc_route_task_record(task_id, envelope)
+            return envelope
 
         except Exception as e:
             logger.exception(f"Coordinator Route/Execute Failed: {e}")
@@ -989,7 +997,7 @@ class Coordinator:
                 else task_obj.task_id if "task_obj" in locals()
                 else "unknown"
             )
-            return make_envelope(
+            envelope = make_envelope(
                 task_id=task_id,
                 success=False,
                 error=str(e),
@@ -997,6 +1005,59 @@ class Coordinator:
                 decision_kind=DecisionKind.ERROR.value,
                 path="coordinator",
             )
+            if (
+                "created_route_task_record" in locals()
+                and created_route_task_record
+                and self._session_factory
+                and task_id != "unknown"
+            ):
+                try:
+                    await self._finalize_ad_hoc_route_task_record(task_id, envelope)
+                except Exception:
+                    logger.warning(
+                        "Failed to finalize ad-hoc route task record for %s after fatal error",
+                        task_id,
+                        exc_info=True,
+                    )
+            return envelope
+
+    async def _finalize_ad_hoc_route_task_record(
+        self,
+        task_id: str,
+        envelope: Dict[str, Any],
+    ) -> None:
+        """
+        Persist terminal status for ad-hoc /route-and-execute requests.
+
+        Direct coordinator requests may be persisted for traceability even when they
+        did not originate from the `/tasks` inbox flow. Those rows must be driven to
+        a terminal state here, otherwise they remain as misleading `created` drafts.
+        """
+        if not self._session_factory:
+            return
+
+        status = "completed" if bool(envelope.get("success")) else "failed"
+        error = None if status == "completed" else str(envelope.get("error") or "")
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE tasks
+                        SET status = :status,
+                            result = CAST(:result_json AS jsonb),
+                            error = :error,
+                            updated_at = NOW()
+                        WHERE id = CAST(:task_id AS uuid)
+                        """
+                    ),
+                    {
+                        "task_id": str(task_id),
+                        "status": status,
+                        "result_json": json.dumps(envelope),
+                        "error": error,
+                    },
+                )
 
     @staticmethod
     def _extract_eventizer_tags(eventizer_data: Dict[str, Any]) -> list[str]:
