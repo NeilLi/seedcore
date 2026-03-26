@@ -8,6 +8,7 @@ Current packages:
 - `@seedcore/verification-console`: CLI that invokes `seedcore-verify summarize-transfer`
 - `@seedcore/verification-api`: TS verification facade over `seedcore-verify`
 - `@seedcore/proof-surface`: TS proof pages (`/transfer` and `/asset`)
+- `@seedcore/operator-console`: TS operator workflow surface for Restricted Custody Transfer
 
 Quick start:
 
@@ -35,7 +36,14 @@ In another terminal:
 npm --prefix ts run serve:proof-surface
 ```
 
+In another terminal for workflow operations:
+
+```bash
+npm --prefix ts run serve:operator-console
+```
+
 Then open:
 
 - `http://127.0.0.1:7072/transfer?dir=rust/fixtures/transfers/allow_case`
 - `http://127.0.0.1:7072/asset?dir=rust/fixtures/transfers/allow_case`
+- `http://127.0.0.1:7073/`

@@ -12,7 +12,8 @@
     "typecheck": "npm run --workspaces --if-present typecheck",
     "verify:transfer": "npm --workspace @seedcore/verification-console run verify:transfer --",
     "serve:verification-api": "npm --workspace @seedcore/verification-api run start",
-    "serve:proof-surface": "npm --workspace @seedcore/proof-surface run start"
+    "serve:proof-surface": "npm --workspace @seedcore/proof-surface run start",
+    "serve:operator-console": "npm --workspace @seedcore/operator-console run start"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",

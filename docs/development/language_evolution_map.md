@@ -355,6 +355,20 @@ Expected deliverables:
 - approval state view
 - explanation and review state view
 
+Status as of March 26, 2026:
+
+- completed for baseline scope:
+  - `ts/apps/operator-console` now provides a narrow Restricted Custody Transfer
+    operator workflow surface
+  - `ts/services/verification-api` now exposes:
+    - `/api/v1/transfers/catalog` for scenario/workflow intake listing
+    - `/api/v1/transfers/review` for approval, disposition, and explanation
+      review state in one payload
+  - operator review page now renders:
+    - approval state and transfer identity
+    - disposition and verifier status
+    - missing prerequisites and trust-gap review signals
+
 ### Phase 5: Rust PDP Decision Kernel
 
 Move the deterministic decision kernel only after:
@@ -399,8 +413,9 @@ Reason: `seedcore-approval-core` and approval-history verification are
 implemented, with Rust-backed runtime replay and workflow integration in the
 Restricted Custody Transfer baseline path.
 
-5. Phase 4 (TypeScript Operator Workflow Surface): Not complete
-Reason: the narrow operator workflow console remains to be built.
+5. Phase 4 (TypeScript Operator Workflow Surface): Implemented for baseline scope
+Reason: a narrow `ts/apps/operator-console` and supporting verification API
+review/catalog endpoints are implemented for Restricted Custody Transfer.
 
 6. Phase 5 (Rust PDP Decision Kernel): Partially complete
 Reason: `seedcore-policy-core` and `seedcore-token-core` are implemented, but

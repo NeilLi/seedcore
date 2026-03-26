@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import http from "node:http";
+import { readdirSync } from "node:fs";
 import { existsSync } from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -50,6 +51,20 @@ function resolveFixtureDir(rawPath?: string | null): string {
   return path.resolve(COMMAND_CWD, input);
 }
 
+function resolveTransferRoot(rawPath?: string | null): string {
+  const input = (rawPath ?? "").trim() || "rust/fixtures/transfers";
+  if (path.isAbsolute(input)) {
+    return input;
+  }
+  const candidates = [path.resolve(COMMAND_CWD, input), path.resolve(REPO_ROOT, input)];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return path.resolve(COMMAND_CWD, input);
+}
+
 function runVerifier(command: "summarize-transfer" | "verify-transfer", dir: string): unknown {
   const verifyBin = resolveVerifyBinary();
   const output = execFileSync(verifyBin, [command, "--dir", dir], {
@@ -57,6 +72,38 @@ function runVerifier(command: "summarize-transfer" | "verify-transfer", dir: str
     stdio: ["ignore", "pipe", "pipe"],
   });
   return JSON.parse(output);
+}
+
+function buildTransferReview(dir: string): {
+  summary: unknown;
+  transfer_proof: unknown;
+  asset_proof: unknown;
+} {
+  const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
+  const report = parseTransferVerificationReport(runVerifier("verify-transfer", dir));
+  return {
+    summary,
+    transfer_proof: toTransferProofView(report, summary),
+    asset_proof: toAssetProofView(report, summary),
+  };
+}
+
+function listTransferCatalog(root: string): Array<{ id: string; dir: string; summary: unknown }> {
+  if (!existsSync(root)) {
+    return [];
+  }
+  const entries = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
+  const items: Array<{ id: string; dir: string; summary: unknown }> = [];
+  for (const id of entries) {
+    const dir = path.join(root, id);
+    const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
+    items.push({ id, dir, summary });
+  }
+  return items;
 }
 
 function jsonResponse(
@@ -95,16 +142,23 @@ const server = http.createServer((req, res) => {
     }
 
     if (url.pathname === "/api/v1/transfers/proof") {
-      const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
-      const report = parseTransferVerificationReport(runVerifier("verify-transfer", dir));
-      jsonResponse(res, 200, toTransferProofView(report, summary));
+      jsonResponse(res, 200, buildTransferReview(dir).transfer_proof);
       return;
     }
 
     if (url.pathname === "/api/v1/assets/proof") {
-      const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
-      const report = parseTransferVerificationReport(runVerifier("verify-transfer", dir));
-      jsonResponse(res, 200, toAssetProofView(report, summary));
+      jsonResponse(res, 200, buildTransferReview(dir).asset_proof);
+      return;
+    }
+
+    if (url.pathname === "/api/v1/transfers/review") {
+      jsonResponse(res, 200, buildTransferReview(dir));
+      return;
+    }
+
+    if (url.pathname === "/api/v1/transfers/catalog") {
+      const root = resolveTransferRoot(url.searchParams.get("root"));
+      jsonResponse(res, 200, { root, items: listTransferCatalog(root) });
       return;
     }
 
@@ -120,4 +174,3 @@ server.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`verification-api listening on http://127.0.0.1:${port}`);
 });
-
