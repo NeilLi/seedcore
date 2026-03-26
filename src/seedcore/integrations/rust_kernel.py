@@ -79,6 +79,66 @@ def mint_execution_token_with_rust(claims: Mapping[str, Any]) -> dict[str, Any]:
     return output
 
 
+def validate_transfer_approval_with_rust(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    envelope_path = _write_temp_json(dict(envelope))
+    try:
+        output = _run_verify_cli(
+            [
+                "validate-approval",
+                "--artifact",
+                envelope_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(envelope_path)
+    if "valid" not in output:
+        return {"valid": False, "error_code": "rust_validate_approval_failed", "details": [output]}
+    return output
+
+
+def approval_binding_hash_with_rust(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    envelope_path = _write_temp_json(dict(envelope))
+    try:
+        output = _run_verify_cli(
+            [
+                "approval-binding-hash",
+                "--artifact",
+                envelope_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(envelope_path)
+    if "valid" not in output:
+        return {"valid": False, "error_code": "rust_approval_binding_hash_failed", "details": [output]}
+    return output
+
+
+def summarize_transfer_approval_with_rust(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    envelope_path = _write_temp_json(dict(envelope))
+    try:
+        output = _run_verify_cli(
+            [
+                "approval-summary",
+                "--artifact",
+                envelope_path,
+            ]
+        )
+    finally:
+        _unlink_quietly(envelope_path)
+    if "valid" not in output:
+        return {
+            "valid": False,
+            "status": None,
+            "required_roles": [],
+            "approved_by": [],
+            "co_signed": False,
+            "binding_hash": None,
+            "error_code": "rust_approval_summary_failed",
+            "details": [output],
+        }
+    return output
+
+
 def map_token_error_for_hal(error_code: str | None) -> str:
     if error_code in {"token_expired"}:
         return "expired ExecutionToken"

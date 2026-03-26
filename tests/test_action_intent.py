@@ -1116,6 +1116,144 @@ def test_evaluate_intent_restricted_custody_transfer_allows_with_canonical_expla
     assert decision.governed_receipt["co_signed"] is True
 
 
+def test_evaluate_intent_restricted_custody_transfer_uses_rust_envelope_when_context_missing(monkeypatch) -> None:
+    payload = _transfer_payload()
+    approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
+    approval_context.pop("approval_binding_hash")
+    approval_context.pop("required_roles")
+    approval_context.pop("approved_by")
+    approval_context["approval_envelope"] = {
+        "approval_envelope_id": "approval-transfer-001",
+        "workflow_type": "custody_transfer",
+        "status": "APPROVED",
+        "asset_ref": "asset:lot-8841",
+        "lot_id": "lot-8841",
+        "from_custodian_ref": "principal:facility_mgr_001",
+        "to_custodian_ref": "principal:outbound_mgr_002",
+        "transfer_context": {
+            "from_zone": "vault_a",
+            "to_zone": "handoff_bay_3",
+            "facility_ref": "facility:north_warehouse",
+            "custody_point_ref": "custody_point:handoff_bay_3",
+        },
+        "required_approvals": [
+            {
+                "role": "FACILITY_MANAGER",
+                "principal_ref": "principal:facility_mgr_001",
+                "status": "APPROVED",
+                "approved_at": "2099-03-20T12:00:02+00:00",
+                "approval_ref": "approval:facility_mgr_001",
+            },
+            {
+                "role": "QUALITY_INSPECTOR",
+                "principal_ref": "principal:quality_insp_017",
+                "status": "APPROVED",
+                "approved_at": "2099-03-20T12:00:03+00:00",
+                "approval_ref": "approval:quality_insp_017",
+            },
+        ],
+        "policy_snapshot_ref": "snapshot:1",
+        "expires_at": "2099-03-20T12:10:00+00:00",
+        "created_at": "2099-03-20T12:00:00+00:00",
+        "version": 1,
+    }
+
+    monkeypatch.setattr(
+        governance_mod,
+        "summarize_transfer_approval_with_rust",
+        lambda envelope: {
+            "valid": True,
+            "status": "APPROVED",
+            "required_roles": ["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+            "approved_by": [
+                "principal:facility_mgr_001",
+                "principal:quality_insp_017",
+            ],
+            "co_signed": True,
+            "binding_hash": "sha256:approval-binding-transfer-001",
+            "error_code": None,
+            "details": [],
+        },
+    )
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is True
+    assert decision.disposition == "allow"
+    assert decision.required_approvals == ["FACILITY_MANAGER", "QUALITY_INSPECTOR"]
+    assert decision.execution_token is not None
+    assert decision.execution_token.constraints["approval_binding_hash"] == "sha256:approval-binding-transfer-001"
+
+
+def test_evaluate_intent_restricted_custody_transfer_escalates_on_rust_binding_mismatch(monkeypatch) -> None:
+    payload = _transfer_payload()
+    approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
+    approval_context["approval_binding_hash"] = "sha256:provided-binding-hash"
+    approval_context["approval_envelope"] = {
+        "approval_envelope_id": "approval-transfer-001",
+        "workflow_type": "custody_transfer",
+        "status": "APPROVED",
+        "asset_ref": "asset:lot-8841",
+        "lot_id": "lot-8841",
+        "from_custodian_ref": "principal:facility_mgr_001",
+        "to_custodian_ref": "principal:outbound_mgr_002",
+        "transfer_context": {
+            "from_zone": "vault_a",
+            "to_zone": "handoff_bay_3",
+            "facility_ref": "facility:north_warehouse",
+            "custody_point_ref": "custody_point:handoff_bay_3",
+        },
+        "required_approvals": [
+            {
+                "role": "FACILITY_MANAGER",
+                "principal_ref": "principal:facility_mgr_001",
+                "status": "APPROVED",
+                "approved_at": "2099-03-20T12:00:02+00:00",
+                "approval_ref": "approval:facility_mgr_001",
+            },
+            {
+                "role": "QUALITY_INSPECTOR",
+                "principal_ref": "principal:quality_insp_017",
+                "status": "APPROVED",
+                "approved_at": "2099-03-20T12:00:03+00:00",
+                "approval_ref": "approval:quality_insp_017",
+            },
+        ],
+        "policy_snapshot_ref": "snapshot:1",
+        "expires_at": "2099-03-20T12:10:00+00:00",
+        "created_at": "2099-03-20T12:00:00+00:00",
+        "version": 1,
+    }
+
+    monkeypatch.setattr(
+        governance_mod,
+        "summarize_transfer_approval_with_rust",
+        lambda envelope: {
+            "valid": True,
+            "status": "APPROVED",
+            "required_roles": ["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+            "approved_by": [
+                "principal:facility_mgr_001",
+                "principal:quality_insp_017",
+            ],
+            "co_signed": True,
+            "binding_hash": "sha256:computed-binding-hash",
+            "error_code": None,
+            "details": [],
+        },
+    )
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is False
+    assert decision.disposition == "escalate"
+    assert decision.authz_graph["reason"] == "approval_binding_mismatch"
+    assert any(
+        item["code"] == "approval_binding" and item["outcome"] == "mismatch"
+        for item in decision.authz_graph["missing_prerequisites"]
+    )
+
+
 def test_evaluate_intent_restricted_custody_transfer_quarantines_when_telemetry_is_stale(monkeypatch) -> None:
     payload = _transfer_payload()
     now = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)

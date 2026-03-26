@@ -10,7 +10,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping
 from urllib.parse import quote
 
-from seedcore.integrations.rust_kernel import mint_execution_token_with_rust
+from seedcore.integrations.rust_kernel import (
+    approval_binding_hash_with_rust,
+    mint_execution_token_with_rust,
+    summarize_transfer_approval_with_rust,
+    validate_transfer_approval_with_rust,
+)
 from seedcore.models.action_intent import (
     ActionIntent,
     AuthorityLevel,
@@ -1776,6 +1781,16 @@ def _approval_context(action_intent: ActionIntent) -> Dict[str, Any]:
     return dict(approval_context) if isinstance(approval_context, Mapping) else {}
 
 
+def _set_approval_context(action_intent: ActionIntent, approval_context: Mapping[str, Any]) -> None:
+    parameters = (
+        dict(action_intent.action.parameters)
+        if isinstance(action_intent.action.parameters, Mapping)
+        else {}
+    )
+    parameters["approval_context"] = dict(approval_context)
+    action_intent.action.parameters = parameters
+
+
 def _is_restricted_custody_transfer(action_intent: ActionIntent) -> bool:
     action_type = str(action_intent.action.type or "").strip().upper()
     return (
@@ -1815,6 +1830,19 @@ def _transfer_required_approvals(action_intent: ActionIntent) -> list[str]:
     return values
 
 
+def _approval_binding_hash_string(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        algorithm = str(value.get("algorithm") or "").strip()
+        digest = str(value.get("value") or "").strip()
+        if algorithm and digest:
+            return f"{algorithm}:{digest}"
+        return None
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
 def _evaluate_restricted_custody_transfer_prerequisites(
     *,
     policy_case: PolicyCase,
@@ -1835,6 +1863,139 @@ def _evaluate_restricted_custody_transfer_prerequisites(
             if value and value not in approved_by:
                 approved_by.append(value)
 
+    approval_envelope_payload = approval_context.get("approval_envelope")
+    if isinstance(approval_envelope_payload, Mapping):
+        rust_summary = summarize_transfer_approval_with_rust(dict(approval_envelope_payload))
+        if not bool(rust_summary.get("valid")):
+            rust_validation = validate_transfer_approval_with_rust(dict(approval_envelope_payload))
+            rust_error_code = (
+                rust_summary.get("error_code")
+                or rust_validation.get("error_code")
+                or "approval_invalid"
+            )
+            rust_details = list(rust_summary.get("details") or rust_validation.get("details") or [])
+            missing_prerequisites = [
+                {
+                    "code": "approval_envelope",
+                    "outcome": "invalid",
+                    "message": "Restricted custody transfer approval envelope failed Rust validation.",
+                    "details": {
+                        "rust_error_code": rust_error_code,
+                        "rust_details": rust_details,
+                    },
+                }
+            ]
+            return _escalate_decision(
+                "Restricted custody transfer requires a valid approval envelope.",
+                policy_case.policy_snapshot,
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=_policy_case_explanations(
+                    policy_case,
+                    "restricted_custody_transfer_approval_envelope_invalid",
+                ),
+                authz_graph={
+                    "mode": "transfer_prerequisite_check",
+                    "disposition": "escalate",
+                    "reason": "approval_envelope_invalid",
+                    "matched_policy_refs": [],
+                    "authority_paths": [],
+                    "authority_path_summary": [],
+                    "missing_prerequisites": missing_prerequisites,
+                    "trust_gaps": [],
+                },
+            ).model_copy(update={"required_approvals": required_approvals})
+
+        computed_binding_hash = _approval_binding_hash_string(rust_summary.get("binding_hash"))
+        if computed_binding_hash is None:
+            rust_binding = approval_binding_hash_with_rust(dict(approval_envelope_payload))
+            missing_prerequisites = [
+                {
+                    "code": "approval_binding",
+                    "outcome": "invalid",
+                    "message": "Restricted custody transfer approval binding hash could not be computed by Rust.",
+                    "details": {
+                        "rust_error_code": rust_binding.get("error_code") or rust_summary.get("error_code"),
+                        "rust_details": list(
+                            rust_binding.get("details") or rust_summary.get("details") or []
+                        ),
+                    },
+                }
+            ]
+            return _escalate_decision(
+                "Restricted custody transfer requires a valid approval binding hash.",
+                policy_case.policy_snapshot,
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=_policy_case_explanations(
+                    policy_case,
+                    "restricted_custody_transfer_binding_hash_invalid",
+                ),
+                authz_graph={
+                    "mode": "transfer_prerequisite_check",
+                    "disposition": "escalate",
+                    "reason": "approval_binding_invalid",
+                    "matched_policy_refs": [],
+                    "authority_paths": [],
+                    "authority_path_summary": [],
+                    "missing_prerequisites": missing_prerequisites,
+                    "trust_gaps": [],
+                },
+            ).model_copy(update={"required_approvals": required_approvals})
+
+        provided_binding_hash = (
+            _approval_binding_hash_string(approval_context.get("approval_binding_hash"))
+            or _approval_binding_hash_string(approval_envelope_payload.get("approval_binding_hash"))
+        )
+        if provided_binding_hash is not None and provided_binding_hash != computed_binding_hash:
+            missing_prerequisites = [
+                {
+                    "code": "approval_binding",
+                    "outcome": "mismatch",
+                    "message": "Restricted custody transfer approval binding hash does not match Rust canonical hash.",
+                    "details": {
+                        "provided": provided_binding_hash,
+                        "computed": computed_binding_hash,
+                    },
+                }
+            ]
+            return _escalate_decision(
+                "Restricted custody transfer requires a matching approval binding hash.",
+                policy_case.policy_snapshot,
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=_policy_case_explanations(
+                    policy_case,
+                    "restricted_custody_transfer_binding_hash_mismatch",
+                ),
+                authz_graph={
+                    "mode": "transfer_prerequisite_check",
+                    "disposition": "escalate",
+                    "reason": "approval_binding_mismatch",
+                    "matched_policy_refs": [],
+                    "authority_paths": [],
+                    "authority_path_summary": [],
+                    "missing_prerequisites": missing_prerequisites,
+                    "trust_gaps": [],
+                },
+            ).model_copy(update={"required_approvals": required_approvals})
+
+        approval_context["approval_binding_hash"] = computed_binding_hash
+        envelope_id = str(approval_envelope_payload.get("approval_envelope_id") or "").strip()
+        if envelope_id and not str(approval_context.get("approval_envelope_id") or "").strip():
+            approval_context["approval_envelope_id"] = envelope_id
+        if not required_approvals:
+            required_roles_raw = rust_summary.get("required_roles")
+            if isinstance(required_roles_raw, list):
+                for item in required_roles_raw:
+                    value = str(item).strip()
+                    if value and value not in required_approvals:
+                        required_approvals.append(value)
+        if not approved_by:
+            approved_by_raw = rust_summary.get("approved_by")
+            if isinstance(approved_by_raw, list):
+                for item in approved_by_raw:
+                    value = str(item).strip()
+                    if value and value not in approved_by:
+                        approved_by.append(value)
+
     missing_prerequisites: list[dict[str, Any]] = []
     approval_envelope_id = approval_context.get("approval_envelope_id")
     if approval_envelope_id is None or not str(approval_envelope_id).strip():
@@ -1847,8 +2008,8 @@ def _evaluate_restricted_custody_transfer_prerequisites(
             }
         )
 
-    approval_binding_hash = approval_context.get("approval_binding_hash")
-    if approval_binding_hash is None or not str(approval_binding_hash).strip():
+    approval_binding_hash = _approval_binding_hash_string(approval_context.get("approval_binding_hash"))
+    if approval_binding_hash is None:
         missing_prerequisites.append(
             {
                 "code": "approval_binding",
@@ -1857,6 +2018,14 @@ def _evaluate_restricted_custody_transfer_prerequisites(
                 "details": {},
             }
         )
+    else:
+        approval_context["approval_binding_hash"] = approval_binding_hash
+
+    if required_approvals:
+        approval_context["required_roles"] = list(required_approvals)
+    if approved_by:
+        approval_context["approved_by"] = list(approved_by)
+    _set_approval_context(action_intent, approval_context)
 
     if not required_approvals:
         missing_prerequisites.append(
@@ -2002,7 +2171,7 @@ def _restricted_custody_transfer_execution_constraints(
         "expected_current_custodian": _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref"),
         "next_custodian": _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref"),
         "approval_envelope_id": approval_context.get("approval_envelope_id"),
-        "approval_binding_hash": approval_context.get("approval_binding_hash"),
+        "approval_binding_hash": _approval_binding_hash_string(approval_context.get("approval_binding_hash")),
         "approved_by": list(approved_by),
         "co_signed": bool(required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(required_approvals)),
     }
@@ -2477,6 +2646,13 @@ def _mint_execution_token(
     minted = mint_execution_token_with_rust(token_payload)
     if minted.get("error") is not None:
         raise ValueError(f"rust_token_mint_failed:{minted.get('error')}")
+    # Preserve strict Rust-minted constraints while carrying transfer-specific
+    # workflow bindings required by the execution spine.
+    minted_constraints = minted.get("constraints")
+    merged_constraints: Dict[str, Any] = dict(constraints)
+    if isinstance(minted_constraints, Mapping):
+        merged_constraints.update(dict(minted_constraints))
+    minted["constraints"] = merged_constraints
     return ExecutionToken(**minted)
 
 

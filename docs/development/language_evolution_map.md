@@ -293,6 +293,23 @@ Expected deliverables:
 - append-only approval history logic
 - invalid-transition test matrix
 
+Status as of March 26, 2026:
+
+- completed for baseline scope:
+  - `seedcore-approval-core` envelope validation, deterministic binding hash,
+    and lifecycle transition primitives
+  - `seedcore-verify` approval commands:
+    - `validate-approval`
+    - `approval-binding-hash`
+    - `approval-summary`
+  - Python governance Restricted Custody Transfer envelope derivation now
+    consumes Rust approval-summary outputs for required roles, approved
+    principals, and canonical binding hash
+- remaining to close phase scope:
+  - runtime lifecycle transition persistence and event chaining through the
+    approval-core boundary
+  - explicit append-only transition history artifacts for external verification
+
 ### Phase 4: TypeScript Operator Workflow Surface
 
 Build a narrow governed workflow surface after approval semantics stabilize.
@@ -324,6 +341,36 @@ Once the Rust kernels exist:
 - move authority-critical checks out of Python
 
 This is controlled boundary tightening, not a rewrite.
+
+## Phase Scoreboard (As Of March 25, 2026)
+
+1. Phase 0 (Contract Freeze First): In progress
+Reason: contract-freeze documents exist, but full freeze enforcement is not yet
+closed as a runtime gate.
+
+2. Phase 1 (Rust Proof Kernel): Implemented for baseline scope
+Reason: `seedcore-proof-core` and `seedcore-verify` are implemented with
+deterministic verification paths and fixture-backed tests.
+
+3. Phase 2 (TypeScript Proof Surface): Implemented for baseline scope
+Reason: `ts/packages/contracts`, `ts/services/verification-api`, and
+`ts/apps/proof-surface` are implemented, including transfer and asset proof
+pages with business-readable state mapping.
+
+4. Phase 3 (Rust Approval Engine): Partially complete
+Reason: `seedcore-approval-core` is implemented, but full runtime cutover and
+phase-close criteria are still pending.
+
+5. Phase 4 (TypeScript Operator Workflow Surface): Not complete
+Reason: the narrow operator workflow console remains to be built.
+
+6. Phase 5 (Rust PDP Decision Kernel): Partially complete
+Reason: `seedcore-policy-core` and `seedcore-token-core` are implemented, but
+full operational cutover and freeze-aligned closure are still pending.
+
+7. Phase 6 (Selective Python Slimming): Started, not complete
+Reason: Python-to-Rust integration is active, but authority-critical logic is
+not yet fully demoted from Python.
 
 ## Contract Strategy Across Python, Rust, and TypeScript
 
