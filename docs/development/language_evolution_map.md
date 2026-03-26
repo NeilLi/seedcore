@@ -302,13 +302,18 @@ Status as of March 26, 2026:
     - `validate-approval`
     - `approval-binding-hash`
     - `approval-summary`
+    - `apply-approval-transition`
+    - `verify-approval-history`
   - Python governance Restricted Custody Transfer envelope derivation now
     consumes Rust approval-summary outputs for required roles, approved
     principals, and canonical binding hash
+  - Python governance now applies approval transitions via Rust and persists
+    append-only transition history metadata (`approval_transition_head` and
+    transition count) into workflow-facing output state
 - remaining to close phase scope:
-  - runtime lifecycle transition persistence and event chaining through the
-    approval-core boundary
-  - explicit append-only transition history artifacts for external verification
+  - extend approval transition history from fixture-level verification into
+    broader external verifier bundle flows (for example replay-bundle
+    publication paths)
 
 ### Phase 4: TypeScript Operator Workflow Surface
 
