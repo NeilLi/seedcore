@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_async_pg_session, get_async_redis_client
@@ -32,6 +32,17 @@ class VerifyRequest(BaseModel):
     audit_id: Optional[str] = None
     subject_id: Optional[str] = None
     subject_type: Optional[str] = None
+
+
+class TrustBundlePublishRequest(BaseModel):
+    task_id: Optional[str] = None
+    intent_id: Optional[str] = None
+    audit_id: Optional[str] = None
+    bundle_version: Optional[str] = None
+    promote_current: bool = True
+    revoked_keys: List[str] = Field(default_factory=list)
+    revoked_nodes: List[str] = Field(default_factory=list)
+    revocation_cutoffs: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _raise_http_from_service_error(exc: ReplayServiceError) -> None:
@@ -279,6 +290,63 @@ async def revoke_trust_reference(payload: TrustRevokeRequest) -> Dict[str, Any]:
     finally:
         await _close_async_client(redis_client)
     return result
+
+
+@router.post("/trust/bundles/publish")
+async def publish_trust_bundle(
+    payload: TrustBundlePublishRequest,
+    session: AsyncSession = Depends(get_async_pg_session),
+) -> Dict[str, Any]:
+    redis_client = await get_async_redis_client()
+    try:
+        return await replay_service.publish_trust_bundle(
+            session,
+            task_id=payload.task_id,
+            intent_id=payload.intent_id,
+            audit_id=payload.audit_id,
+            bundle_version=payload.bundle_version,
+            promote_current=payload.promote_current,
+            revoked_keys=payload.revoked_keys,
+            revoked_nodes=payload.revoked_nodes,
+            revocation_cutoffs=payload.revocation_cutoffs,
+            redis_client=redis_client,
+        )
+    except ReplayServiceError as exc:
+        _raise_http_from_service_error(exc)
+    finally:
+        await _close_async_client(redis_client)
+
+
+@router.post("/trust/bundles/rotate")
+async def rotate_trust_bundle(
+    payload: TrustBundlePublishRequest,
+    session: AsyncSession = Depends(get_async_pg_session),
+) -> Dict[str, Any]:
+    return await publish_trust_bundle(payload=payload, session=session)
+
+
+@router.get("/trust/bundles/current")
+async def get_current_trust_bundle() -> Dict[str, Any]:
+    redis_client = await get_async_redis_client()
+    try:
+        snapshot = await replay_service.get_published_trust_bundle(redis_client=redis_client)
+    finally:
+        await _close_async_client(redis_client)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="No trust bundle has been published")
+    return snapshot
+
+
+@router.get("/trust/bundles/{bundle_id}")
+async def get_trust_bundle_by_id(bundle_id: str) -> Dict[str, Any]:
+    redis_client = await get_async_redis_client()
+    try:
+        snapshot = await replay_service.get_published_trust_bundle(bundle_id=bundle_id, redis_client=redis_client)
+    finally:
+        await _close_async_client(redis_client)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Trust bundle not found")
+    return snapshot
 
 
 @router.get("/trust/{public_id}", response_model=TrustPageProjection)

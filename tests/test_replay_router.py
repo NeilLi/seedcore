@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+import tempfile
 import importlib
 import uuid
 from typing import Any, Dict
@@ -155,6 +157,108 @@ def test_revoke_trust_reference_returns_gone_for_trust_surface() -> None:
     assert verify.status_code == 200
     assert verify.json()["verified"] is False
     assert verify.json()["reason"] == "revoked_reference"
+
+
+def test_publish_trust_bundle_from_env_registry_and_fetch_current() -> None:
+    record = _build_audit_record(task_id="task-router-bundle-1", intent_id="intent-router-bundle-1", asset_id="asset-1")
+    redis_client = _FakeRedis()
+    client = _make_client(record, redis_client=redis_client)
+    bundle_keys = {
+        "tpm-phase-a-key-01": {
+            "key_ref": "tpm-phase-a-key-01",
+            "key_algorithm": "ecdsa_p256_sha256",
+            "public_key": "BD2Ln1bf8fbp5LMDFFuNjKDNPw29UyTJ1PK3QkwlRRnXGtA+3PXiA0EUtdLWlylqxGt6fTQ8bpcAmVhO8pl09LU=",
+            "trust_anchor_type": "tpm2",
+            "signer_profile": "receipt",
+            "endpoint_id": "hal://phase-a-edge-01",
+            "node_id": "hal://phase-a-edge-01",
+            "revocation_id": "tpm2:tpm-phase-a-key-01",
+            "attestation_root": "ak-phase-a-01",
+        }
+    }
+    old_dir = os.getenv("SEEDCORE_TRUST_BUNDLE_DIR")
+    old_keys = os.getenv("SEEDCORE_TRUST_BUNDLE_KEYS_JSON")
+    with tempfile.TemporaryDirectory(prefix="seedcore-trust-bundle-") as tmpdir:
+        os.environ["SEEDCORE_TRUST_BUNDLE_DIR"] = tmpdir
+        os.environ["SEEDCORE_TRUST_BUNDLE_KEYS_JSON"] = json.dumps(bundle_keys)
+        try:
+            publish = client.post("/trust/bundles/publish", json={"bundle_version": "phase_a_v1"})
+            assert publish.status_code == 200
+            body = publish.json()
+            assert body["bundle_id"].startswith("tb-")
+            trusted = body["trust_bundle"]["trusted_keys"]["tpm-phase-a-key-01"]
+            assert trusted["trust_anchor_type"] == "tpm2"
+            assert trusted["endpoint_id"] == "hal://phase-a-edge-01"
+
+            current = client.get("/trust/bundles/current")
+            assert current.status_code == 200
+            assert current.json()["bundle_id"] == body["bundle_id"]
+
+            by_id = client.get(f"/trust/bundles/{body['bundle_id']}")
+            assert by_id.status_code == 200
+            assert by_id.json()["bundle_id"] == body["bundle_id"]
+        finally:
+            if old_dir is None:
+                os.environ.pop("SEEDCORE_TRUST_BUNDLE_DIR", None)
+            else:
+                os.environ["SEEDCORE_TRUST_BUNDLE_DIR"] = old_dir
+            if old_keys is None:
+                os.environ.pop("SEEDCORE_TRUST_BUNDLE_KEYS_JSON", None)
+            else:
+                os.environ["SEEDCORE_TRUST_BUNDLE_KEYS_JSON"] = old_keys
+
+
+def test_rotate_trust_bundle_promotes_new_snapshot_and_preserves_prior_snapshot() -> None:
+    record = _build_audit_record(task_id="task-router-bundle-2", intent_id="intent-router-bundle-2", asset_id="asset-1")
+    redis_client = _FakeRedis()
+    client = _make_client(record, redis_client=redis_client)
+    bundle_keys = {
+        "tpm-phase-a-key-02": {
+            "key_ref": "tpm-phase-a-key-02",
+            "key_algorithm": "ecdsa_p256_sha256",
+            "public_key": "BD2Ln1bf8fbp5LMDFFuNjKDNPw29UyTJ1PK3QkwlRRnXGtA+3PXiA0EUtdLWlylqxGt6fTQ8bpcAmVhO8pl09LU=",
+            "trust_anchor_type": "tpm2",
+        }
+    }
+    old_dir = os.getenv("SEEDCORE_TRUST_BUNDLE_DIR")
+    old_keys = os.getenv("SEEDCORE_TRUST_BUNDLE_KEYS_JSON")
+    with tempfile.TemporaryDirectory(prefix="seedcore-trust-bundle-rotate-") as tmpdir:
+        os.environ["SEEDCORE_TRUST_BUNDLE_DIR"] = tmpdir
+        os.environ["SEEDCORE_TRUST_BUNDLE_KEYS_JSON"] = json.dumps(bundle_keys)
+        try:
+            first = client.post(
+                "/trust/bundles/publish",
+                json={"bundle_version": "phase_a_v1", "revoked_keys": ["legacy-key-01"]},
+            )
+            assert first.status_code == 200
+            first_id = first.json()["bundle_id"]
+            assert "legacy-key-01" in first.json()["trust_bundle"]["revoked_keys"]
+
+            rotated = client.post(
+                "/trust/bundles/rotate",
+                json={"bundle_version": "phase_a_v2", "revoked_keys": ["tpm-phase-a-key-02"]},
+            )
+            assert rotated.status_code == 200
+            rotated_id = rotated.json()["bundle_id"]
+            assert rotated_id != first_id
+
+            current = client.get("/trust/bundles/current")
+            assert current.status_code == 200
+            assert current.json()["bundle_id"] == rotated_id
+            assert "tpm-phase-a-key-02" in current.json()["trust_bundle"]["revoked_keys"]
+
+            first_snapshot = client.get(f"/trust/bundles/{first_id}")
+            assert first_snapshot.status_code == 200
+            assert "legacy-key-01" in first_snapshot.json()["trust_bundle"]["revoked_keys"]
+        finally:
+            if old_dir is None:
+                os.environ.pop("SEEDCORE_TRUST_BUNDLE_DIR", None)
+            else:
+                os.environ["SEEDCORE_TRUST_BUNDLE_DIR"] = old_dir
+            if old_keys is None:
+                os.environ.pop("SEEDCORE_TRUST_BUNDLE_KEYS_JSON", None)
+            else:
+                os.environ["SEEDCORE_TRUST_BUNDLE_KEYS_JSON"] = old_keys
 
 
 def test_verify_post_requires_exactly_one_lookup() -> None:

@@ -7,6 +7,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import String, select, text
@@ -26,6 +27,7 @@ from seedcore.integrations.rust_kernel import (
 )
 from seedcore.hal.custody.transition_receipts import verify_transition_receipt_result
 from seedcore.models import DatabaseTask as Task
+from seedcore.models.evidence_bundle import TrustBundle, TrustBundleKey, TrustBundleTransparencyConfig
 from seedcore.models.replay import (
     PublicTrustReference,
     ReplayProjectionKind,
@@ -50,6 +52,7 @@ from seedcore.services.custody_graph_service import CustodyGraphService
 TRUST_TOKEN_PREFIX = "stp1"
 DEFAULT_TRUST_REFERENCE_TTL_HOURS = int(os.getenv("SEEDCORE_TRUST_REFERENCE_TTL_HOURS", "168"))
 TRUST_PROJECTION_VERSION = os.getenv("SEEDCORE_TRUST_PROJECTION_VERSION", "v1")
+DEFAULT_TRUST_BUNDLE_SCHEMA_VERSION = os.getenv("SEEDCORE_TRUST_BUNDLE_SCHEMA_VERSION", "phase_a_v1")
 
 
 class ReplayServiceError(ValueError):
@@ -346,6 +349,228 @@ class ReplayService:
             if isinstance(signer_metadata, dict):
                 signer_metadata.pop("key_ref", None)
         return payload
+
+    async def publish_trust_bundle(
+        self,
+        session,
+        *,
+        task_id: Optional[str] = None,
+        intent_id: Optional[str] = None,
+        audit_id: Optional[str] = None,
+        bundle_version: Optional[str] = None,
+        promote_current: bool = True,
+        revoked_keys: Optional[Sequence[str]] = None,
+        revoked_nodes: Optional[Sequence[str]] = None,
+        revocation_cutoffs: Optional[Mapping[str, Any]] = None,
+        redis_client: Any = None,
+    ) -> Dict[str, Any]:
+        replay: Optional[ReplayRecord] = None
+        lookup_key: Optional[str] = None
+        lookup_value: Optional[str] = None
+        if any(isinstance(value, str) and value.strip() for value in (task_id, intent_id, audit_id)):
+            lookup_key, lookup_value, replay = await self.assemble_replay_record(
+                session,
+                task_id=task_id,
+                intent_id=intent_id,
+                audit_id=audit_id,
+            )
+
+        bundle = self.build_trust_bundle(
+            replay=replay,
+            bundle_version=bundle_version,
+            revoked_keys=revoked_keys,
+            revoked_nodes=revoked_nodes,
+            revocation_cutoffs=revocation_cutoffs,
+        )
+        bundle_id = f"tb-{self._utcnow().strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+        published_at = self._utcnow().isoformat()
+        snapshot: Dict[str, Any] = {
+            "bundle_id": bundle_id,
+            "published_at": published_at,
+            "lookup_key": lookup_key,
+            "lookup_value": lookup_value,
+            "subject_id": replay.subject_id if replay is not None else None,
+            "subject_type": replay.subject_type if replay is not None else None,
+            "trust_bundle": bundle.model_dump(mode="json"),
+        }
+        self._persist_trust_bundle_snapshot(snapshot, promote_current=promote_current)
+        if redis_client is not None:
+            await self._cache_trust_bundle_snapshot(snapshot=snapshot, promote_current=promote_current, redis_client=redis_client)
+        return snapshot
+
+    async def get_published_trust_bundle(
+        self,
+        *,
+        bundle_id: Optional[str] = None,
+        redis_client: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        resolved_id = str(bundle_id).strip() if isinstance(bundle_id, str) and bundle_id.strip() else None
+        if resolved_id is None and redis_client is not None:
+            getter = getattr(redis_client, "get", None)
+            if callable(getter):
+                try:
+                    current = await getter("seedcore:trust_bundle:current")
+                    if isinstance(current, bytes):
+                        current = current.decode("utf-8", errors="ignore")
+                    if isinstance(current, str) and current.strip():
+                        resolved_id = current.strip()
+                except Exception:
+                    resolved_id = None
+        if resolved_id is None:
+            resolved_id = self._load_current_trust_bundle_id_from_disk()
+        if resolved_id is None:
+            return None
+
+        if redis_client is not None:
+            getter = getattr(redis_client, "get", None)
+            if callable(getter):
+                try:
+                    cached = await getter(f"seedcore:trust_bundle:{resolved_id}")
+                    if isinstance(cached, bytes):
+                        cached = cached.decode("utf-8", errors="ignore")
+                    if isinstance(cached, str) and cached.strip():
+                        parsed = json.loads(cached)
+                        if isinstance(parsed, dict):
+                            return parsed
+                except Exception:
+                    pass
+        return self._load_trust_bundle_snapshot_from_disk(resolved_id)
+
+    def build_trust_bundle(
+        self,
+        *,
+        replay: Optional[ReplayRecord] = None,
+        bundle_version: Optional[str] = None,
+        revoked_keys: Optional[Sequence[str]] = None,
+        revoked_nodes: Optional[Sequence[str]] = None,
+        revocation_cutoffs: Optional[Mapping[str, Any]] = None,
+    ) -> TrustBundle:
+        configured_keys = self._configured_trust_key_registry()
+        key_entries: Dict[str, Dict[str, Any]] = {
+            key_ref: dict(entry) for key_ref, entry in configured_keys.items()
+        }
+
+        endpoint_bindings: Dict[str, str] = {}
+        node_bindings: Dict[str, str] = {}
+        missing_public_keys: List[str] = []
+        attestation_roots: Dict[str, str] = self._load_json_object_env("SEEDCORE_TRUST_ATTESTATION_ROOTS_JSON")
+
+        for key_ref, entry in key_entries.items():
+            endpoint_id = self._optional_str(entry.get("endpoint_id"))
+            node_id = self._optional_str(entry.get("node_id"))
+            if endpoint_id:
+                endpoint_bindings[endpoint_id] = key_ref
+            if node_id:
+                node_bindings[node_id] = key_ref
+            attestation_root = self._optional_str(entry.get("attestation_root"))
+            if attestation_root:
+                attestation_roots[attestation_root] = self._optional_str(entry.get("attestation_root_value")) or "configured"
+
+        if replay is not None:
+            for artifact_type, payload in self._iter_replay_artifacts_for_bundle(replay):
+                signer_metadata = payload.get("signer_metadata") if isinstance(payload.get("signer_metadata"), Mapping) else {}
+                trust_proof = payload.get("trust_proof") if isinstance(payload.get("trust_proof"), Mapping) else {}
+                key_ref = self._optional_str(trust_proof.get("key_ref")) or self._optional_str(signer_metadata.get("key_ref"))
+                if not key_ref:
+                    continue
+                entry = key_entries.setdefault(key_ref, {"key_ref": key_ref})
+                entry.setdefault("signer_profile", self._signer_profile_for_artifact_type(artifact_type))
+                entry.setdefault(
+                    "key_algorithm",
+                    self._optional_str(trust_proof.get("key_algorithm"))
+                    or self._optional_str(signer_metadata.get("signing_scheme"))
+                    or "unknown",
+                )
+                entry.setdefault(
+                    "trust_anchor_type",
+                    self._optional_str(trust_proof.get("trust_anchor_type")) or "software",
+                )
+                entry.setdefault(
+                    "revocation_id",
+                    self._optional_str(trust_proof.get("revocation_id")),
+                )
+                entry.setdefault("endpoint_id", self._artifact_endpoint_id(payload, trust_proof))
+                entry.setdefault("node_id", self._artifact_node_id(signer_metadata, trust_proof))
+                attestation = trust_proof.get("attestation") if isinstance(trust_proof.get("attestation"), Mapping) else {}
+                ak_key_ref = self._optional_str(attestation.get("ak_key_ref"))
+                if ak_key_ref:
+                    entry.setdefault("attestation_root", ak_key_ref)
+                    attestation_roots.setdefault(ak_key_ref, "replay")
+                if not self._optional_str(entry.get("public_key")):
+                    missing_public_keys.append(key_ref)
+                endpoint_id = self._optional_str(entry.get("endpoint_id"))
+                node_id = self._optional_str(entry.get("node_id"))
+                if endpoint_id:
+                    endpoint_bindings[endpoint_id] = key_ref
+                if node_id:
+                    node_bindings[node_id] = key_ref
+
+        trusted_keys: Dict[str, TrustBundleKey] = {}
+        for key_ref, entry in key_entries.items():
+            public_key = self._optional_str(entry.get("public_key"))
+            if not public_key:
+                continue
+            trusted_keys[key_ref] = TrustBundleKey(
+                key_ref=key_ref,
+                key_algorithm=self._optional_str(entry.get("key_algorithm")) or "unknown",
+                public_key=public_key,
+                trust_anchor_type=self._optional_str(entry.get("trust_anchor_type")) or "software",
+                signer_profile=self._optional_str(entry.get("signer_profile")),
+                endpoint_id=self._optional_str(entry.get("endpoint_id")),
+                node_id=self._optional_str(entry.get("node_id")),
+                revocation_id=self._optional_str(entry.get("revocation_id")),
+                attestation_root=self._optional_str(entry.get("attestation_root")),
+                metadata=dict(entry.get("metadata") or {}),
+            )
+
+        revoked_key_set = set(self._load_string_set_env("SEEDCORE_TRUST_REVOKED_KEY_REFS_JSON"))
+        revoked_key_set.update(self._normalized_str_set(revoked_keys))
+        revoked_node_set = set(self._load_string_set_env("SEEDCORE_TRUST_REVOKED_NODE_IDS_JSON"))
+        revoked_node_set.update(self._normalized_str_set(revoked_nodes))
+        revocation_cutoff_map = {
+            key: str(value)
+            for key, value in self._load_json_object_env("SEEDCORE_TRUST_REVOKED_BEFORE_JSON").items()
+            if self._optional_str(key) and value is not None
+        }
+        for key, value in dict(revocation_cutoffs or {}).items():
+            normalized_key = self._optional_str(key)
+            if not normalized_key or value is None:
+                continue
+            revocation_cutoff_map[normalized_key] = str(value)
+
+        accepted_anchors = self._split_csv_env(
+            "SEEDCORE_TRUST_ACCEPTED_ANCHORS",
+            default=("tpm2", "kms", "vtpm"),
+        )
+        transparency = TrustBundleTransparencyConfig(
+            enabled=self._env_flag("SEEDCORE_TRANSPARENCY_ENABLED", default=False),
+            log_url=self._optional_str(os.getenv("SEEDCORE_TRANSPARENCY_LOG_URL")),
+            public_key=self._optional_str(os.getenv("SEEDCORE_TRANSPARENCY_PUBLIC_KEY")),
+            metadata={},
+        )
+        metadata: Dict[str, Any] = {
+            "generated_at": self._utcnow().isoformat(),
+            "source": "replay_service.publish_trust_bundle",
+            "missing_public_keys": sorted(set(missing_public_keys)),
+        }
+        if replay is not None:
+            metadata["audit_id"] = replay.audit_record_id
+            metadata["subject_id"] = replay.subject_id
+            metadata["subject_type"] = replay.subject_type
+
+        return TrustBundle(
+            version=self._optional_str(bundle_version) or DEFAULT_TRUST_BUNDLE_SCHEMA_VERSION,
+            trusted_keys=trusted_keys,
+            endpoint_bindings=endpoint_bindings,
+            node_bindings=node_bindings,
+            accepted_trust_anchor_types=accepted_anchors,
+            attestation_roots=attestation_roots,
+            revoked_keys=sorted(revoked_key_set),
+            revoked_nodes=sorted(revoked_node_set),
+            revocation_cutoffs=revocation_cutoff_map,
+            transparency=transparency,
+            metadata=metadata,
+        )
 
     def build_public_reference(
         self,
@@ -2275,6 +2500,243 @@ class ReplayService:
             public_claims=[],
             reason=reason,
         )
+
+    async def _cache_trust_bundle_snapshot(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        promote_current: bool,
+        redis_client: Any,
+    ) -> None:
+        setter = getattr(redis_client, "set", None)
+        if not callable(setter):
+            return
+        bundle_id = self._optional_str(snapshot.get("bundle_id"))
+        if not bundle_id:
+            return
+        payload = json.dumps(dict(snapshot), sort_keys=True, separators=(",", ":"))
+        try:
+            await setter(f"seedcore:trust_bundle:{bundle_id}", payload)
+            if promote_current:
+                await setter("seedcore:trust_bundle:current", bundle_id)
+        except Exception:
+            return
+
+    def _persist_trust_bundle_snapshot(self, snapshot: Mapping[str, Any], *, promote_current: bool) -> None:
+        bundle_id = self._optional_str(snapshot.get("bundle_id"))
+        if not bundle_id:
+            raise ReplayServiceError("invalid_trust_bundle", "Trust bundle snapshot is missing bundle_id")
+        bundle_dir = self._trust_bundle_dir()
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        target = self._trust_bundle_snapshot_path(bundle_id)
+        temp_path = target.with_suffix(f"{target.suffix}.tmp")
+        payload = json.dumps(dict(snapshot), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        temp_path.write_text(payload, encoding="utf-8")
+        temp_path.replace(target)
+        if promote_current:
+            current_payload = {
+                "bundle_id": bundle_id,
+                "published_at": snapshot.get("published_at"),
+            }
+            current_target = self._trust_bundle_current_pointer_path()
+            current_tmp = current_target.with_suffix(f"{current_target.suffix}.tmp")
+            current_tmp.write_text(
+                json.dumps(current_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            current_tmp.replace(current_target)
+
+    def _load_trust_bundle_snapshot_from_disk(self, bundle_id: str) -> Optional[Dict[str, Any]]:
+        path = self._trust_bundle_snapshot_path(bundle_id)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _load_current_trust_bundle_id_from_disk(self) -> Optional[str]:
+        pointer_path = self._trust_bundle_current_pointer_path()
+        if not pointer_path.exists():
+            return None
+        try:
+            payload = json.loads(pointer_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return self._optional_str(payload.get("bundle_id"))
+
+    def _trust_bundle_dir(self) -> Path:
+        configured = os.getenv("SEEDCORE_TRUST_BUNDLE_DIR", "/tmp/seedcore-trust-bundles")
+        return Path(configured).expanduser()
+
+    def _trust_bundle_snapshot_path(self, bundle_id: str) -> Path:
+        return self._trust_bundle_dir() / f"{bundle_id}.json"
+
+    def _trust_bundle_current_pointer_path(self) -> Path:
+        return self._trust_bundle_dir() / "current.json"
+
+    def _iter_replay_artifacts_for_bundle(self, replay: ReplayRecord) -> List[Tuple[str, Mapping[str, Any]]]:
+        artifacts: List[Tuple[str, Mapping[str, Any]]] = []
+        if isinstance(replay.policy_receipt, Mapping) and replay.policy_receipt:
+            artifacts.append(("policy_receipt", replay.policy_receipt))
+        if isinstance(replay.evidence_bundle, Mapping) and replay.evidence_bundle:
+            artifacts.append(("evidence_bundle", replay.evidence_bundle))
+        for item in replay.transition_receipts:
+            if isinstance(item, Mapping):
+                artifacts.append(("transition_receipt", item))
+        return artifacts
+
+    def _configured_trust_key_registry(self) -> Dict[str, Dict[str, Any]]:
+        entries: Dict[str, Dict[str, Any]] = {}
+        for key_ref, value in self._load_json_object_env("SEEDCORE_TRUST_BUNDLE_KEYS_JSON").items():
+            self._ingest_trust_registry_entry(entries, source_key=key_ref, raw_entry=value)
+        for env_name in ("SEEDCORE_EVIDENCE_PUBLIC_KEYS_JSON", "SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON"):
+            for key_ref, value in self._load_json_object_env(env_name).items():
+                self._ingest_trust_registry_entry(entries, source_key=key_ref, raw_entry=value)
+
+        tpm_key_ref = self._optional_str(os.getenv("SEEDCORE_TPM2_KEY_ID"))
+        tpm_public_key = self._optional_str(os.getenv("SEEDCORE_TPM2_PUBLIC_KEY_B64"))
+        if tpm_key_ref and tpm_public_key:
+            entries[tpm_key_ref] = {
+                **entries.get(tpm_key_ref, {}),
+                "key_ref": tpm_key_ref,
+                "public_key": tpm_public_key,
+                "key_algorithm": entries.get(tpm_key_ref, {}).get("key_algorithm") or "ecdsa_p256_sha256",
+                "trust_anchor_type": entries.get(tpm_key_ref, {}).get("trust_anchor_type") or "tpm2",
+                "signer_profile": entries.get(tpm_key_ref, {}).get("signer_profile") or "receipt",
+                "revocation_id": entries.get(tpm_key_ref, {}).get("revocation_id") or f"tpm2:{tpm_key_ref}",
+                "endpoint_id": entries.get(tpm_key_ref, {}).get("endpoint_id") or self._optional_str(os.getenv("SEEDCORE_TPM2_ENDPOINT_ID")),
+                "node_id": entries.get(tpm_key_ref, {}).get("node_id") or self._optional_str(os.getenv("SEEDCORE_TPM2_NODE_ID")),
+                "attestation_root": entries.get(tpm_key_ref, {}).get("attestation_root") or self._optional_str(os.getenv("SEEDCORE_TPM2_AK_KEY_REF")),
+                "metadata": dict(entries.get(tpm_key_ref, {}).get("metadata") or {}),
+            }
+        return entries
+
+    def _ingest_trust_registry_entry(
+        self,
+        entries: Dict[str, Dict[str, Any]],
+        *,
+        source_key: str,
+        raw_entry: Any,
+    ) -> None:
+        source_id = self._optional_str(source_key)
+        if not source_id:
+            return
+        if isinstance(raw_entry, str):
+            entries[source_id] = {
+                **entries.get(source_id, {}),
+                "key_ref": source_id,
+                "public_key": raw_entry.strip(),
+            }
+            return
+        if not isinstance(raw_entry, Mapping):
+            return
+        key_ref = (
+            self._optional_str(raw_entry.get("key_ref"))
+            or self._optional_str(raw_entry.get("key_id"))
+            or source_id
+        )
+        if not key_ref:
+            return
+        entry = dict(entries.get(key_ref, {}))
+        entry["key_ref"] = key_ref
+        public_key = self._optional_str(raw_entry.get("public_key"))
+        if public_key:
+            entry["public_key"] = public_key
+        for field in (
+            "key_algorithm",
+            "trust_anchor_type",
+            "signer_profile",
+            "endpoint_id",
+            "node_id",
+            "revocation_id",
+            "attestation_root",
+        ):
+            value = self._optional_str(raw_entry.get(field))
+            if value:
+                entry[field] = value
+        metadata = raw_entry.get("metadata")
+        if isinstance(metadata, Mapping):
+            entry["metadata"] = {str(key): value for key, value in metadata.items()}
+        entries[key_ref] = entry
+
+    def _artifact_endpoint_id(self, payload: Mapping[str, Any], trust_proof: Mapping[str, Any]) -> Optional[str]:
+        attestation = trust_proof.get("attestation")
+        if isinstance(attestation, Mapping):
+            summary = attestation.get("summary")
+            if isinstance(summary, Mapping):
+                endpoint_id = self._optional_str(summary.get("endpoint_id"))
+                if endpoint_id:
+                    return endpoint_id
+        return self._optional_str(payload.get("endpoint_id"))
+
+    def _artifact_node_id(self, signer_metadata: Mapping[str, Any], trust_proof: Mapping[str, Any]) -> Optional[str]:
+        attestation = trust_proof.get("attestation")
+        if isinstance(attestation, Mapping):
+            summary = attestation.get("summary")
+            if isinstance(summary, Mapping):
+                node_id = self._optional_str(summary.get("node_id"))
+                if node_id:
+                    return node_id
+        return self._optional_str(signer_metadata.get("node_id"))
+
+    def _signer_profile_for_artifact_type(self, artifact_type: str) -> str:
+        if artifact_type == "policy_receipt":
+            return "pdp"
+        if artifact_type == "transition_receipt":
+            return "receipt"
+        return "execution"
+
+    def _load_json_object_env(self, name: str) -> Dict[str, Any]:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return {}
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def _load_string_set_env(self, name: str) -> set[str]:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return set()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return set()
+        if not isinstance(payload, list):
+            return set()
+        return self._normalized_str_set(payload)
+
+    def _normalized_str_set(self, values: Optional[Sequence[Any]]) -> set[str]:
+        output: set[str] = set()
+        for value in list(values or []):
+            normalized = self._optional_str(value)
+            if normalized:
+                output.add(normalized)
+        return output
+
+    def _split_csv_env(self, name: str, *, default: Sequence[str]) -> List[str]:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return [item for item in default if item]
+        values = [segment.strip() for segment in raw.split(",") if segment.strip()]
+        return values or [item for item in default if item]
+
+    def _optional_str(self, value: Any) -> Optional[str]:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+        return None
+
+    def _env_flag(self, name: str, *, default: bool = False) -> bool:
+        raw = os.getenv(name, "true" if default else "false").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     def _revocation_key(self, jti: str) -> str:
         return f"seedcore:trust:revoked:{jti}"
