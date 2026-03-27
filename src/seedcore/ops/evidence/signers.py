@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Optional, Protocol
@@ -34,6 +34,7 @@ RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPES = {
 }
 _SOFTWARE_COUNTERS: dict[str, int] = {}
 _SOFTWARE_COUNTER_LOCK = Lock()
+HARDENED_SIGNING_ARTIFACT_TYPES = {"transition_receipt", "hal_capture"}
 
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
@@ -611,6 +612,7 @@ def resolve_artifact_signer(
 
 
 def resolve_signer_provider(*, request: SignerRequest) -> SignerProvider:
+    request = _apply_hardened_signing_requirements(request)
     explicit_provider = _explicit_provider_for_profile(request.signer_profile)
     if explicit_provider is not None:
         provider = explicit_provider
@@ -708,6 +710,8 @@ def _provider_matches_requirements(provider: SignerProvider, request: SignerRequ
     if trust_anchor == "tpm2":
         if not isinstance(provider, Tpm2P256SignerProvider):
             return False
+        if _requires_hardened_signing(request):
+            return provider.is_hardware_available()
         if _env_flag("SEEDCORE_TPM2_REQUIRE_HARDWARE", default=True):
             return provider.is_hardware_available()
         return provider.is_available()
@@ -773,6 +777,54 @@ def _requires_restricted_receipt_hardening(
         return False
     endpoint = endpoint_id.strip().lower()
     return endpoint.startswith("hal://") or endpoint.startswith("robot_sim://")
+
+
+def _apply_hardened_signing_requirements(request: SignerRequest) -> SignerRequest:
+    if not _requires_hardened_signing(request):
+        return request
+    return replace(
+        request,
+        required_key_algorithm=ECDSA_P256_SCHEME,
+        require_trust_anchor=request.require_trust_anchor or _required_hardened_trust_anchor(request.endpoint_id),
+    )
+
+
+def _requires_hardened_signing(request: SignerRequest) -> bool:
+    if not _env_flag("SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE", default=False):
+        return False
+    if request.artifact_type not in HARDENED_SIGNING_ARTIFACT_TYPES:
+        return False
+    return _is_attestable_endpoint(request.endpoint_id)
+
+
+def _required_hardened_trust_anchor(endpoint_id: Optional[str]) -> Optional[str]:
+    if not _is_attestable_endpoint(endpoint_id):
+        return None
+    normalized = str(endpoint_id).strip().lower()
+    if normalized.startswith("hal://"):
+        return (
+            os.getenv(
+                "SEEDCORE_HAL_CAPTURE_REQUIRED_TRUST_ANCHOR",
+                os.getenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "tpm2"),
+            ).strip().lower()
+            or "tpm2"
+        )
+    if normalized.startswith("robot_sim://"):
+        return (
+            os.getenv(
+                "SEEDCORE_HAL_CAPTURE_REQUIRED_TRUST_ANCHOR",
+                os.getenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "kms"),
+            ).strip().lower()
+            or "kms"
+        )
+    return None
+
+
+def _is_attestable_endpoint(endpoint_id: Optional[str]) -> bool:
+    if not isinstance(endpoint_id, str):
+        return False
+    normalized = endpoint_id.strip().lower()
+    return normalized.startswith("hal://") or normalized.startswith("robot_sim://")
 
 
 def _build_trust_proof(

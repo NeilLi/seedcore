@@ -235,6 +235,7 @@ Current closure checkpoint for strict TPM attestation path:
 - generate strict TPM fixtures with real AK cert + endorsement root + signed TPM quote: `python scripts/tools/generate_strict_tpm_receipt_fixtures.py`
 - verify strict receipt offline with trust bundle only: `cargo run -q -p seedcore-verify -- verify-receipt --artifact fixtures/receipts/restricted_transition_receipt_strict_tpm_artifact.json --trust-bundle fixtures/receipts/restricted_transition_trust_bundle_strict_tpm.json`
 - keep `seedcore-verify` strict fixture regression green (`verify_restricted_transition_receipt_strict_attestation_with_real_fixture`) before declaring Phase A mathematically closed
+- operationalize fleet rollout using the TPM checklist and drills in [tpm_fleet_rollout_runbook.md](/Users/ningli/project/seedcore/docs/development/tpm_fleet_rollout_runbook.md)
 
 ### Phase B: Multi-Party Governance
 

@@ -80,11 +80,13 @@ def verify_payload_signature(
     if policy.allowed_schemes and metadata.signing_scheme not in policy.allowed_schemes:
         result["error"] = "signing_scheme_not_allowed"
         return result
-    if policy.require_attestation and (
-        metadata.signing_scheme != "ed25519" or metadata.attestation_level != "attested"
-    ):
-        result["error"] = "attestation_required"
-        return result
+    if policy.require_attestation:
+        if metadata.attestation_level != "attested":
+            result["error"] = "attestation_required"
+            return result
+        if metadata.signing_scheme == "hmac_sha256":
+            result["error"] = "attestation_required"
+            return result
 
     if metadata.signing_scheme == "hmac_sha256":
         secret = (

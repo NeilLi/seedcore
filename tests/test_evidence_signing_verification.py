@@ -292,3 +292,28 @@ def test_restricted_hal_receipt_rejects_tpm_software_fallback_proof(monkeypatch)
     result = verify_transition_receipt_result(receipt)
     assert result["verified"] is False
     assert result["error"] == "software_fallback_not_allowed"
+
+
+def test_hardened_mode_blocks_non_restricted_tpm_software_fallback(monkeypatch) -> None:
+    private_pem, public_b64 = _generate_p256_materials()
+    monkeypatch.setenv("SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE", "true")
+    monkeypatch.setenv("SEEDCORE_SIGNER_PROVIDER_RECEIPT", "tpm2")
+    monkeypatch.setenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "tpm2")
+    monkeypatch.setenv("SEEDCORE_TPM2_REQUIRE_HARDWARE", "false")
+    monkeypatch.setenv("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", "true")
+    monkeypatch.delenv("SEEDCORE_TPM2_PERSISTENT_HANDLE", raising=False)
+    monkeypatch.setenv("SEEDCORE_TPM2_KEY_ID", "tpm2-hardened-mode-k1")
+    monkeypatch.setenv("SEEDCORE_TPM2_PUBLIC_KEY_B64", public_b64)
+    monkeypatch.setenv("SEEDCORE_TPM2_SOFTWARE_FALLBACK_PRIVATE_KEY_PEM", private_pem)
+
+    with pytest.raises(ValueError, match="transition_receipt requires ecdsa_p256_sha256 signer provider"):
+        build_transition_receipt(
+            intent_id="intent-tpm-hardened-mode",
+            token_id="token-tpm-hardened-mode",
+            actuator_endpoint="hal://edge-1",
+            hardware_uuid="edge-1",
+            actuator_result_hash="hash-tpm-hardened-mode",
+            from_zone="vault_a",
+            to_zone="handoff_bay_1",
+            workflow_type="inventory_move",
+        )

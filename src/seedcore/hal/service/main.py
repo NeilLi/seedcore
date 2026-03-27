@@ -242,8 +242,8 @@ async def forensic_seal(request: ForensicSealRequest):
     try:
         _validate_hashed_media_references(request.media_hash_references)
 
-        # 1. Initialize the edge sealer
-        sealer = ForensicSealer(device_identity=HARDWARE_UUID)
+        # 1. Initialize the edge sealer with an attestable endpoint identity.
+        sealer = ForensicSealer(device_identity=_derive_sealer_identity())
 
         # 2. Capture HAL telemetry only (no remote fetch/interpretation of social/video content)
         environmental_data: Dict[str, float] = {}
@@ -630,6 +630,15 @@ def _derive_actuator_endpoint(active_driver: BaseRobotDriver) -> str:
     if isinstance(active_driver, ReachyMiniDriver):
         return "hal://reachy-mini"
     return f"hal://{active_driver.__class__.__name__.lower()}"
+
+
+def _derive_sealer_identity() -> str:
+    if driver is not None:
+        return _derive_actuator_endpoint(driver)
+    normalized = str(HARDWARE_UUID).strip()
+    if "://" in normalized:
+        return normalized
+    return f"hal://{normalized}"
 
 
 def _hash_result(result: Dict[str, Any]) -> str:

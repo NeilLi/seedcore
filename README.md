@@ -31,6 +31,7 @@ The current baseline now includes:
 
 - signer-provider abstractions that can route trust-critical receipt signing through TPM 2.0, vTPM, cloud KMS, Ed25519, or legacy HMAC paths depending on policy and environment
 - restricted-custody HAL transition receipts that now use a Phase A trust contract with TPM-oriented `ecdsa_p256_sha256` signing on the hardened path
+- an opt-in hardened runtime mode (`SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE=true`) that forces attested HAL `transition_receipt` and `hal_capture` paths onto trust-anchor-backed `ecdsa_p256_sha256` signing
 - evidence bundles that bind transition receipt hashes into execution receipts for governed closure and replay checks
 - short-lived execution tokens with explicit TTL enforcement at both PDP issuance time and HAL validation time
 - Redis-backed token revocation and an operator-triggered emergency cutoff path at the HAL boundary
@@ -65,7 +66,8 @@ Current gap profile:
 
 - non-Phase-A and development paths still permit software-backed signing modes and should not be confused with the hardened restricted-custody path
 - fleet-scale physical TPM rollout, device provisioning, and production operating drills still need to mature beyond the current fixture and test harness baseline
-- the forensic sealer path still contains mocked signing behavior and should not be treated as production-grade device attestation yet
+- the forensic sealer path is still pilot-grade by default and should not be treated as production-grade device attestation until rollout/provisioning controls are exercised end to end
+- production rollout hardening and drills are tracked in [TPM Fleet Rollout Runbook](docs/development/tpm_fleet_rollout_runbook.md)
 
 ### 2. Policy Enforcement Layer
 
@@ -95,7 +97,7 @@ Current implementation:
 - evidence bundles include `intent_ref`, execution timing, telemetry, and execution receipts
 - HAL-backed transitions can carry signed `transition_receipt` payloads with nonce-based replay detection
 - governed closure persists receipt hash, nonce, transition sequence, endpoint identity, and authority source
-- forensic sealing captures a pre-contact evidence structure for edge-side custody events
+- forensic sealing captures a pre-contact evidence structure for edge-side custody events, with hardened-mode support for trust-anchor-backed `hal_capture` signing on attested endpoints
 
 Current gap profile:
 
@@ -358,7 +360,7 @@ The current repo baseline fully supports the physical custody chain:
 - **Stateless PDP:** Deterministic `ActionIntent` derivation and Policy Decision Point evaluation.
 - **Short-Lived Execution Tokens:** Signed `ExecutionToken` issuance on allow paths, currently capped to a short TTL for endpoint use.
 - **HAL Bridge (`robot_sim`):** Token expiry, revocation, and emergency-stop checks enforced at the simulator/actuator boundary.
-- **Hardware-Attested Execution:** HAL emits transition receipts with Ed25519 signing when configured, with HMAC fallback for local or incomplete setups.
+- **Hardware-Attested Execution:** restricted-custody and hardened attested HAL paths use trust-anchor-backed `ecdsa_p256_sha256`; non-restricted development paths can still use Ed25519/HMAC software modes unless hardened mode is enabled.
 - **Digital Evidence:** Cryptographically signed `EvidenceBundle` construction binds execution receipts and transition receipt hashes for replay, audit, and mathematically undeniable proof.
 
 ### Demo Runner
@@ -572,24 +574,37 @@ API_PORT=8002
 HAL_REQUIRE_EXECUTION_TOKEN=true
 SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS=5
 SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS=300
+SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE=false
+SEEDCORE_SIGNER_PROVIDER_RECEIPT=
+SEEDCORE_SIGNER_PROVIDER_EXECUTION=
+SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR=tpm2
+SEEDCORE_HAL_CAPTURE_REQUIRED_TRUST_ANCHOR=
+SEEDCORE_TPM2_REQUIRE_HARDWARE=true
+SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK=false
+SEEDCORE_TPM2_KEY_ID=
+SEEDCORE_TPM2_PERSISTENT_HANDLE=
+SEEDCORE_TPM2_PUBLIC_KEY_B64=
 SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=false
 SEEDCORE_PDP_BREAK_GLASS_REQUIRE_DETERMINISTIC_PROCEDURE=true
 SEEDCORE_PDP_BREAK_GLASS_HIGH_RISK_SCORE=0.85
 SEEDCORE_PDP_BREAK_GLASS_OCPS_THRESHOLD=0.70
 SEEDCORE_PDP_BREAK_GLASS_REASON_CODES=safety_incident,custody_breach,service_continuity,regulatory_hold
 SEEDCORE_HAL_ADMIN_TOKEN=change-me
-SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64=
-SEEDCORE_HAL_RECEIPT_KEY_ID=
+SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64=
+SEEDCORE_EVIDENCE_ED25519_KEY_ID=
 SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON=
 SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY=false
 SEEDCORE_VERIFY_BIN=/usr/local/bin/seedcore-verify
 ```
 
-HAL receipt signing prefers Ed25519:
+HAL signing posture:
 
-- set `SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64` on the HAL side to sign transition receipts
-- publish trusted verification keys with `SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON`
-- only enable `SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY=true` for controlled local setups
+- restricted-custody and hardened attested HAL paths should use `ecdsa_p256_sha256` with `SEEDCORE_SIGNER_PROVIDER_RECEIPT` / `SEEDCORE_SIGNER_PROVIDER_EXECUTION` and `SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR`
+- enable `SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE=true` to force attested `transition_receipt` and `hal_capture` signing away from software fallback modes
+- for strict physical TPM posture keep `SEEDCORE_TPM2_REQUIRE_HARDWARE=true` and `SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK=false`
+- software-backed Ed25519 mode remains available for non-restricted development via `SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64`
+- publish trusted verification keys with `SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON`; only enable `SEEDCORE_HAL_RECEIPT_TRUST_EMBEDDED_PUBLIC_KEY=true` in controlled local setups
+- use [TPM Fleet Rollout Runbook](docs/development/tpm_fleet_rollout_runbook.md) for provisioning/drill requirements before production claims
 
 Execution token enforcement is now designed for fast expiry and immediate operator intervention:
 
