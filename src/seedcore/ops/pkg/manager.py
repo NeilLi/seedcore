@@ -24,6 +24,7 @@ import json
 import logging
 import time
 import threading
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any, Tuple, List
 from collections import OrderedDict
@@ -533,6 +534,161 @@ class PKGManager:
                 "success": False,
                 "message": f"Failed to reload snapshot: {str(e)}",
                 "error": str(e),
+            }
+
+    async def activate_snapshot_version(
+        self,
+        *,
+        version: str,
+        actor: str = "system",
+        reason: Optional[str] = None,
+        target: str = "router",
+        region: str = "global",
+        rollout_percent: int = 100,
+        publish_update: bool = True,
+        edge_targets: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Activate a policy snapshot and stream the update to runtime listeners.
+
+        This is the control-plane endpoint used for hot rollout without pod restarts.
+        """
+        requested_version = str(version or "").strip()
+        if not requested_version:
+            return {
+                "success": False,
+                "error": "invalid_version",
+                "message": "Snapshot version is required.",
+            }
+
+        try:
+            snapshot = await self._client.get_snapshot_by_version(requested_version)
+            if snapshot is None:
+                return {
+                    "success": False,
+                    "error": "snapshot_not_found",
+                    "message": f"Snapshot version '{requested_version}' was not found.",
+                }
+
+            activated = await self._client.activate_snapshot(snapshot.id)
+            if activated is None:
+                return {
+                    "success": False,
+                    "error": "activation_failed",
+                    "message": f"Snapshot '{requested_version}' could not be activated.",
+                }
+
+            # Update rollout lane for coordinator/router execution.
+            deployment_rows: List[Dict[str, Any]] = []
+            try:
+                deployment_rows.append(
+                    await self._client.upsert_deployment(
+                        snapshot_id=snapshot.id,
+                        target=str(target or "router"),
+                        region=str(region or "global"),
+                        percent=int(rollout_percent),
+                        is_active=True,
+                        activated_by=str(actor or "system"),
+                    )
+                )
+            except Exception as deployment_exc:
+                logger.warning(
+                    "Failed to upsert primary deployment lane target=%s region=%s for %s: %s",
+                    target,
+                    region,
+                    snapshot.version,
+                    deployment_exc,
+                    exc_info=True,
+                )
+
+            # Optional edge targets for OTA lanes (for example: edge:door, edge:robot).
+            for edge_target in edge_targets or []:
+                normalized_edge_target = str(edge_target or "").strip()
+                if not normalized_edge_target:
+                    continue
+                try:
+                    deployment_rows.append(
+                        await self._client.upsert_deployment(
+                            snapshot_id=snapshot.id,
+                            target=normalized_edge_target,
+                            region=str(region or "global"),
+                            percent=100,
+                            is_active=True,
+                            activated_by=str(actor or "system"),
+                        )
+                    )
+                except Exception as edge_deploy_exc:
+                    logger.warning(
+                        "Failed to upsert edge deployment lane target=%s region=%s for %s: %s",
+                        normalized_edge_target,
+                        region,
+                        snapshot.version,
+                        edge_deploy_exc,
+                        exc_info=True,
+                    )
+
+            await self._load_and_activate_snapshot(snapshot, source="api_activate")
+
+            message = {
+                "kind": PKG_UPDATE_ACTIVATE_KIND,
+                "version": snapshot.version,
+                "snapshot_id": snapshot.id,
+                "target": str(target or "router"),
+                "region": str(region or "global"),
+                "rollout_percent": int(max(0, min(100, int(rollout_percent)))),
+                "actor": str(actor or "system"),
+                "reason": str(reason).strip() if reason is not None else None,
+                "edge_targets": [
+                    str(item).strip()
+                    for item in (edge_targets or [])
+                    if str(item).strip()
+                ],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            publish_result = await self.publish_update(message) if publish_update else {"published": False}
+
+            return {
+                "success": True,
+                "message": f"Activated snapshot {snapshot.version}",
+                "snapshot_id": snapshot.id,
+                "version": snapshot.version,
+                "mode": self._mode.value,
+                "deployment_lanes": deployment_rows,
+                "publish": publish_result,
+            }
+        except Exception as e:
+            logger.error("Failed to activate snapshot %s: %s", requested_version, e, exc_info=True)
+            return {
+                "success": False,
+                "error": "activation_exception",
+                "message": f"Failed to activate snapshot '{requested_version}': {e}",
+            }
+
+    async def publish_update(self, payload: Dict[str, Any] | str) -> Dict[str, Any]:
+        """
+        Publish a PKG update event to the runtime channel.
+        """
+        if self._redis_client is None:
+            return {
+                "published": False,
+                "error": "redis_unavailable",
+                "channel": PKG_REDIS_CHANNEL,
+            }
+        try:
+            message = payload if isinstance(payload, str) else json.dumps(payload, separators=(",", ":"), default=str)
+            published_count = await self._redis_client.publish(PKG_REDIS_CHANNEL, message)
+            return {
+                "published": bool(published_count),
+                "receivers": int(published_count or 0),
+                "channel": PKG_REDIS_CHANNEL,
+                "message": message,
+            }
+        except Exception as e:
+            logger.warning("Failed to publish PKG update event: %s", e, exc_info=True)
+            return {
+                "published": False,
+                "error": str(e),
+                "channel": PKG_REDIS_CHANNEL,
             }
 
     # --- Approve & Promote: Tier 1 → Tier 2/3 Promotion ---

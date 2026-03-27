@@ -319,6 +319,39 @@ async def test_redis_listener_handles_authz_graph_refresh_message(
 
     assert manager.refresh_active_authz_graph.call_count >= 1
 
+
+@pytest.mark.asyncio
+async def test_activate_snapshot_version_publishes_update_event(manager, mock_pkg_client, mock_redis_client):
+    snap = make_wasm_snapshot("rules@activate")
+    mock_pkg_client.get_snapshot_by_version.return_value = snap
+    mock_pkg_client.activate_snapshot.return_value = {
+        "id": snap.id,
+        "version": snap.version,
+        "env": "prod",
+        "is_active": True,
+    }
+    mock_pkg_client.upsert_deployment.return_value = {
+        "snapshot_id": snap.id,
+        "target": "router",
+        "region": "global",
+        "percent": 100,
+    }
+    mock_redis_client.publish = AsyncMock(return_value=1)
+
+    result = await manager.activate_snapshot_version(
+        version=snap.version,
+        actor="ops",
+        reason="test",
+        target="router",
+        region="global",
+        edge_targets=["edge:door"],
+    )
+
+    assert result["success"] is True
+    assert result["version"] == "rules@activate"
+    assert result["publish"]["published"] is True
+    assert mock_pkg_client.activate_snapshot.await_count == 1
+
 # ---------------------------------------------------------------------
 # Stop Logic
 # ---------------------------------------------------------------------

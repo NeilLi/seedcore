@@ -77,12 +77,14 @@ Current implementation:
 - coordinator execution follows a PKG-first flow and enforces a PKG-mandatory gate for action tasks
 - routing hints are extracted from PKG proto-plans rather than trusted from cognitive output alone
 - policy snapshots can be reloaded manually through the existing PKG management path
+- policy snapshots can be hot-activated fleet-wide through `POST /api/v1/pkg/snapshots/{snapshot_version}/activate`
+- edge policy consumers can resolve desired versions through `POST /api/v1/pkg/ota/heartbeat` and subscribe to `GET /api/v1/pkg/ota/stream`
 
-Current gap profile:
+Recent closure updates:
 
-- policy rollout is still operationally heavy; the current update flow restarts pods rather than streaming hot updates fleet-wide
-- OCPS drift thresholds remain useful routing signals, but high-risk break-glass policy should keep moving toward deterministic, explainable procedures
-- compliance distribution to edge runtimes is not yet an always-on OTA policy stream
+- policy rollout now supports hot fleet activation via `POST /api/v1/pkg/snapshots/{snapshot_version}/activate`, publishing runtime updates over the PKG stream without pod restarts
+- OCPS/risk signals now gate high-risk break-glass with deterministic procedure claims (`procedure_id`, `incident_id`, `reason_code`) and explicit deny/explanation paths
+- compliance distribution to edge runtimes now supports an always-on OTA policy stream via `POST /api/v1/pkg/ota/heartbeat` + `GET /api/v1/pkg/ota/stream`
 
 ### 3. Trusted Chain of Custody
 
@@ -531,6 +533,16 @@ curl http://localhost:8265/api/version
 # PKG status
 curl http://localhost:8002/api/v1/pkg/status
 curl http://localhost:8002/api/v1/pkg/authz-graph/status
+
+# Hot activate a snapshot (fleet-wide)
+curl -X POST http://localhost:8002/api/v1/pkg/snapshots/rules@8.0.0/activate \
+  -H "Content-Type: application/json" \
+  -d '{"actor":"ops","reason":"rollout","target":"router","region":"global","publish_update":true}'
+
+# Edge heartbeat + desired policy resolution
+curl -X POST http://localhost:8002/api/v1/pkg/ota/heartbeat \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"edge-1","device_type":"door","region":"global","snapshot_id":7,"version":"rules@7.0.0"}'
 ```
 
 ### Demo-Focused Setup Checks
@@ -561,6 +573,10 @@ HAL_REQUIRE_EXECUTION_TOKEN=true
 SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS=5
 SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS=300
 SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=false
+SEEDCORE_PDP_BREAK_GLASS_REQUIRE_DETERMINISTIC_PROCEDURE=true
+SEEDCORE_PDP_BREAK_GLASS_HIGH_RISK_SCORE=0.85
+SEEDCORE_PDP_BREAK_GLASS_OCPS_THRESHOLD=0.70
+SEEDCORE_PDP_BREAK_GLASS_REASON_CODES=safety_incident,custody_breach,service_continuity,regulatory_hold
 SEEDCORE_HAL_ADMIN_TOKEN=change-me
 SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64=
 SEEDCORE_HAL_RECEIPT_KEY_ID=
@@ -581,6 +597,13 @@ Execution token enforcement is now designed for fast expiry and immediate operat
 - `SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS` controls how long per-token revocation entries stay in Redis
 - `SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH` enables automatic PDP use of the active compiled authorization graph from the PKG manager
 - `SEEDCORE_HAL_ADMIN_TOKEN` protects HAL admin revocation and emergency-stop endpoints when set
+
+High-risk break-glass hardening (deterministic procedure mode):
+
+- `SEEDCORE_PDP_BREAK_GLASS_REQUIRE_DETERMINISTIC_PROCEDURE=true` enforces deterministic claims on high-risk break-glass attempts
+- `SEEDCORE_PDP_BREAK_GLASS_HIGH_RISK_SCORE` defines the cognitive/twin risk threshold for strict procedure enforcement
+- `SEEDCORE_PDP_BREAK_GLASS_OCPS_THRESHOLD` defines the OCPS drift threshold for strict procedure enforcement
+- `SEEDCORE_PDP_BREAK_GLASS_REASON_CODES` defines the allowed `reason_code` set for high-risk break-glass tokens
 
 ---
 
@@ -637,7 +660,10 @@ Versioned governed API surface under `/api/v1`:
   - `GET /api/v1/pkg/status`
   - `GET /api/v1/pkg/authz-graph/status`
   - `POST /api/v1/pkg/reload`
+  - `POST /api/v1/pkg/snapshots/{snapshot_version}/activate`
   - `POST /api/v1/pkg/authz-graph/refresh`
+  - `POST /api/v1/pkg/ota/heartbeat`
+  - `GET /api/v1/pkg/ota/stream`
   - `POST /api/v1/pkg/evaluate_async`
   - `POST /api/v1/pkg/snapshots/compare`
   - `POST /api/v1/pkg/snapshots/{snapshot_id}/compile-rules`

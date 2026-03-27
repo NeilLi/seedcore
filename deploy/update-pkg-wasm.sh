@@ -167,44 +167,42 @@ elif [ -n "${WASM_FILE}" ] && [ -f "${WASM_FILE}" ]; then
   print_status "INFO" "To ingest into DB, set PKG_VERSION (e.g., PKG_VERSION=rules@1.4.0)"
 fi
 
-# ---------- Restart Ray head pod to reload ----------
-print_status "INFO" "Restarting Ray head pod to reload PKG..."
-kubectl delete pod -n "${NAMESPACE}" "${HEAD_POD}"
+# ---------- Hot activation (no pod restart by default) ----------
+HOT_ACTIVATION_OK="false"
+PKG_FORCE_POD_RESTART="${PKG_FORCE_POD_RESTART:-false}"
 
-print_status "INFO" "Waiting for new head pod to be ready..."
-sleep 5
-kubectl wait --for=condition=ready pod -l ray.io/node-type=head -n "${NAMESPACE}" --timeout=300s
+if [ -n "${PKG_VERSION}" ] && [ "${PKG_ACTIVATE}" = "true" ]; then
+  print_status "INFO" "Attempting fleet-wide hot activation via SeedCore API..."
+  API_POD=$(kubectl -n "${NAMESPACE}" get pods -l "app=seedcore-api" --no-headers 2>/dev/null | head -n1 | awk '{print $1}')
+  if [ -z "${API_POD}" ]; then
+    print_status "WARN" "No seedcore-api pod found; cannot call hot activation endpoint"
+  else
+    ACTIVATE_PAYLOAD='{"actor":"update-pkg-wasm.sh","reason":"pkg_wasm_rollout","target":"router","region":"global","publish_update":true}'
+    ACTIVATE_RESP=$(
+      kubectl exec -n "${NAMESPACE}" "${API_POD}" -- \
+        curl -sS -X POST "http://localhost:8002/api/v1/pkg/snapshots/${PKG_VERSION}/activate" \
+          -H "Content-Type: application/json" \
+          -d "${ACTIVATE_PAYLOAD}" 2>/dev/null || echo ""
+    )
+    HOT_ACTIVATION_OK=$(echo "${ACTIVATE_RESP}" | jq -r '.success // "false"' 2>/dev/null || echo "false")
+    if [ "${HOT_ACTIVATION_OK}" = "true" ]; then
+      print_status "OK" "Hot activation published successfully (no pod restart required)"
+      echo "${ACTIVATE_RESP}" | jq '.' 2>/dev/null || true
+    else
+      print_status "WARN" "Hot activation failed or unavailable"
+      if [ -n "${ACTIVATE_RESP}" ]; then
+        echo "${ACTIVATE_RESP}" | jq '.' 2>/dev/null || echo "${ACTIVATE_RESP}"
+      fi
+    fi
+  fi
+fi
 
-NEW_HEAD_POD=$(kubectl -n "${NAMESPACE}" get pods -l "ray.io/node-type=head" --no-headers | head -n1 | awk '{print $1}')
-print_status "OK" "New head pod ready: ${NEW_HEAD_POD}"
-
-# ---------- Wait for coordinator to be ready ----------
-print_status "INFO" "Waiting for coordinator to be ready (this may take 30-60s)..."
-sleep 45
-
-# ---------- Verify PKG status ----------
-print_status "INFO" "Checking PKG status via health endpoint..."
-
-# Try to get PKG status
-PKG_STATUS=$(kubectl exec -n "${NAMESPACE}" "${NEW_HEAD_POD}" -- curl -s http://localhost:8000/pipeline/health 2>/dev/null | jq -r '.pkg.loaded' 2>/dev/null || echo "unknown")
-
-if [ "${PKG_STATUS}" = "true" ]; then
-  print_status "OK" "PKG successfully loaded!"
-  kubectl exec -n "${NAMESPACE}" "${NEW_HEAD_POD}" -- curl -s http://localhost:8000/pipeline/health 2>/dev/null | jq '.pkg'
-elif [ "${PKG_STATUS}" = "false" ]; then
-  print_status "ERROR" "PKG not loaded - check coordinator logs"
-  kubectl exec -n "${NAMESPACE}" "${NEW_HEAD_POD}" -- curl -s http://localhost:8000/pipeline/health 2>/dev/null | jq '.pkg'
-  echo
-  echo "Troubleshooting:"
-  echo "  1. Check coordinator logs: kubectl logs -n ${NAMESPACE} ${NEW_HEAD_POD} | grep -i pkg"
-  echo "  2. Verify WASM path: kubectl exec -n ${NAMESPACE} ${NEW_HEAD_POD} -- ls -lh /app/data/opt/pkg/policy_rules.wasm"
-  echo "  3. Check env var: kubectl exec -n ${NAMESPACE} ${NEW_HEAD_POD} -- env | grep PKG_WASM_PATH"
-  exit 1
-else
-  print_status "WARN" "Could not determine PKG status (coordinator may still be starting)"
-  echo "Check manually with:"
-  echo "  kubectl -n ${NAMESPACE} port-forward svc/seedcore-svc-serve-svc 8000:8000"
-  echo "  curl http://localhost:8000/pipeline/health | jq .pkg"
+if [ "${HOT_ACTIVATION_OK}" != "true" ] && [ "${PKG_FORCE_POD_RESTART}" = "true" ]; then
+  print_status "WARN" "Falling back to forced pod restart because PKG_FORCE_POD_RESTART=true"
+  kubectl delete pod -n "${NAMESPACE}" "${HEAD_POD}"
+  print_status "INFO" "Waiting for new head pod to be ready..."
+  sleep 5
+  kubectl wait --for=condition=ready pod -l ray.io/node-type=head -n "${NAMESPACE}" --timeout=300s
 fi
 
 # ---------- Final summary ----------
@@ -212,9 +210,8 @@ echo
 print_status "OK" "🎉 PKG WASM update complete!"
 echo
 echo "📦 Next Steps:"
-echo "   - Port-forward: kubectl -n ${NAMESPACE} port-forward svc/seedcore-svc-serve-svc 8000:8000"
-echo "   - Check status:  curl http://localhost:8000/pipeline/health | jq .pkg"
+echo "   - Check PKG API status: curl http://localhost:8002/api/v1/pkg/status"
+echo "   - Start edge OTA stream: curl -N \"http://localhost:8002/api/v1/pkg/ota/stream?device_id=edge-1&device_type=door&region=global\""
 echo "   - Test HGNN:     curl -X POST http://localhost:8002/api/v1/tasks \\"
 echo "                      -H 'Content-Type: application/json' \\"
 echo "                      -d '{\"type\":\"general_query\",\"description\":\"test\",\"params\":{\"ocps\":{\"S_t\":1.0,\"h\":1.0,\"h_clr\":0.5,\"flag_on\":true},\"kappa\":0.7,\"criticality\":0.7},\"run_immediately\":true}'"
-

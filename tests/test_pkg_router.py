@@ -114,3 +114,55 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
     assert result["available"] is True
     assert result["authz_graph_ready"] is True
     assert result["authz_graph"]["active_snapshot_version"] == "rules@7.0.0"
+
+
+@pytest.mark.asyncio
+async def test_pkg_activate_snapshot_calls_manager(monkeypatch):
+    manager = SimpleNamespace(
+        activate_snapshot_version=AsyncMock(
+            return_value={
+                "success": True,
+                "version": "rules@8.0.0",
+                "snapshot_id": 8,
+            }
+        )
+    )
+    monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
+
+    payload = pkg_router.PKGActivateSnapshotRequest(actor="ops", reason="test-activation")
+    result = await pkg_router.pkg_activate_snapshot("rules@8.0.0", payload)
+
+    assert result["success"] is True
+    manager.activate_snapshot_version.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pkg_ota_heartbeat_reports_outdated_compliance(monkeypatch):
+    mock_client = SimpleNamespace(
+        resolve_desired_snapshot_for_device=AsyncMock(
+            return_value={
+                "snapshot_id": 9,
+                "snapshot_version": "rules@9.0.0",
+                "target": "edge:door",
+                "region": "global",
+                "percent": 100,
+                "source": "deployment_lane",
+            }
+        ),
+        update_device_heartbeat=AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(pkg_router, "_resolve_pkg_client", AsyncMock(return_value=mock_client))
+
+    payload = pkg_router.PKGOTAHeartbeatRequest(
+        device_id="door-1",
+        device_type="door",
+        region="global",
+        snapshot_id=7,
+        version="rules@7.0.0",
+    )
+    result = await pkg_router.pkg_ota_heartbeat(payload)
+
+    assert result["ok"] is True
+    assert result["compliance"] == "outdated"
+    assert result["desired"]["snapshot_version"] == "rules@9.0.0"
+    mock_client.update_device_heartbeat.assert_awaited_once()

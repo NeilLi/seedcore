@@ -313,6 +313,11 @@ class BreakGlassDecisionContext(BaseModel):
     token_issued_at: Optional[str] = None
     token_expires_at: Optional[str] = None
     outcome: Optional[str] = None
+    procedure_id: Optional[str] = None
+    incident_id: Optional[str] = None
+    reason_code: Optional[str] = None
+    risk_score: Optional[float] = None
+    ocps_score: Optional[float] = None
 
 
 class PolicyDecision(BaseModel):

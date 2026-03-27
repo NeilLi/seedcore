@@ -244,6 +244,7 @@ def _build_break_glass_token(
     issued_at: datetime,
     expires_at: datetime,
     require_reason: bool = True,
+    extra_claims: dict | None = None,
 ) -> str:
     claims = {
         "sub": subject,
@@ -251,6 +252,8 @@ def _build_break_glass_token(
         "exp": int(expires_at.timestamp()),
         "require_reason": require_reason,
     }
+    if isinstance(extra_claims, dict):
+        claims.update(extra_claims)
     payload = base64.urlsafe_b64encode(
         json.dumps(claims, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).decode("ascii").rstrip("=")
@@ -706,6 +709,115 @@ def test_evaluate_intent_allows_break_glass_override_with_valid_token(monkeypatc
     assert decision.break_glass.used is True
     assert decision.break_glass.override_applied is True
     assert decision.break_glass.outcome == "break_glass_override"
+
+
+def test_evaluate_intent_denies_high_risk_break_glass_without_deterministic_procedure(monkeypatch):
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        "seedcore://zones/vault-a/assets/asset-1"
+    )
+    issued_at = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    break_glass_secret = "break-glass-secret"
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "break_glass_token": _build_break_glass_token(
+            secret=break_glass_secret,
+            subject="agent-1",
+            issued_at=issued_at,
+            expires_at=datetime(2099, 3, 20, 12, 0, 5, tzinfo=timezone.utc),
+        ),
+        "break_glass_reason": "operator approved emergency release",
+    }
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        policy_edge_manifests=[
+            {
+                "source_selector": "principal:agent-1",
+                "target_selector": "seedcore://zones/vault-a/assets/asset-1",
+                "relationship": "can_bypass",
+                "operation": "MUTATE",
+                "conditions": {"requires_break_glass": True, "bypass_deny": True, "zones": ["vault-a"]},
+            }
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_BREAK_GLASS_SECRET", break_glass_secret)
+
+    policy_case = governance_mod.prepare_policy_case(
+        payload,
+        cognitive_assessment={
+            "recommended_disposition": "allow",
+            "risk_score": 0.97,
+            "risk_factors": ["high_risk_release"],
+            "missing_evidence": [],
+            "policy_conflicts": [],
+            "required_approvals": [],
+        },
+    )
+    decision = evaluate_intent(policy_case, compiled_authz_index=compiled)
+
+    assert decision.allowed is False
+    assert decision.deny_code == "break_glass_procedure_required"
+    assert decision.break_glass.outcome == "deterministic_procedure_required"
+
+
+def test_evaluate_intent_allows_high_risk_break_glass_with_deterministic_procedure(monkeypatch):
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["resource_uri"] = (
+        "seedcore://zones/vault-a/assets/asset-1"
+    )
+    issued_at = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    break_glass_secret = "break-glass-secret"
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "break_glass_token": _build_break_glass_token(
+            secret=break_glass_secret,
+            subject="agent-1",
+            issued_at=issued_at,
+            expires_at=datetime(2099, 3, 20, 12, 0, 5, tzinfo=timezone.utc),
+            extra_claims={
+                "procedure_id": "bgp-2026-001",
+                "incident_id": "incident-42",
+                "reason_code": "safety_incident",
+            },
+        ),
+        "break_glass_reason": "operator approved emergency release",
+    }
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        policy_edge_manifests=[
+            {
+                "source_selector": "principal:agent-1",
+                "target_selector": "seedcore://zones/vault-a/assets/asset-1",
+                "relationship": "can_bypass",
+                "operation": "MUTATE",
+                "conditions": {"requires_break_glass": True, "bypass_deny": True, "zones": ["vault-a"]},
+            }
+        ],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+
+    monkeypatch.setenv("SEEDCORE_PDP_BREAK_GLASS_SECRET", break_glass_secret)
+
+    policy_case = governance_mod.prepare_policy_case(
+        payload,
+        cognitive_assessment={
+            "recommended_disposition": "allow",
+            "risk_score": 0.97,
+            "risk_factors": ["high_risk_release"],
+            "missing_evidence": [],
+            "policy_conflicts": [],
+            "required_approvals": [],
+        },
+    )
+    decision = evaluate_intent(policy_case, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.break_glass.validated is True
+    assert decision.break_glass.procedure_id == "bgp-2026-001"
+    assert decision.break_glass.incident_id == "incident-42"
+    assert decision.break_glass.reason_code == "safety_incident"
 
 
 def test_evaluate_intent_denies_invalid_break_glass_token(monkeypatch):

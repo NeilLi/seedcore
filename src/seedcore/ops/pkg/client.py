@@ -160,6 +160,10 @@ class PKGClient:
         """Get a specific snapshot by its numeric ID."""
         return await self.snapshots.get_snapshot_by_id(snapshot_id)
 
+    async def activate_snapshot(self, snapshot_id: int) -> Optional[Dict[str, Any]]:
+        """Activate snapshot for its env lane."""
+        return await self.snapshots.activate_snapshot(snapshot_id)
+
     async def get_subtask_types(self, snapshot_id: int) -> List[Dict[str, Any]]:
         """
         Return the "DNA registry" of subtask types for a given snapshot.
@@ -231,6 +235,72 @@ class PKGClient:
     ) -> List[Dict[str, Any]]:
         """Get deployment coverage statistics from the view."""
         return await self.deployments.get_deployment_coverage(target=target, region=region)
+
+    async def upsert_deployment(
+        self,
+        *,
+        snapshot_id: int,
+        target: str,
+        region: str = "global",
+        percent: int = 100,
+        is_active: bool = True,
+        activated_by: str = "system",
+    ) -> Dict[str, Any]:
+        """Upsert an active deployment lane."""
+        return await self.deployments.upsert_deployment(
+            snapshot_id=snapshot_id,
+            target=target,
+            region=region,
+            percent=percent,
+            is_active=is_active,
+            activated_by=activated_by,
+        )
+
+    async def get_effective_deployment(
+        self,
+        *,
+        target: str,
+        region: str = "global",
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve effective deployment lane (region-specific first, then global)."""
+        return await self.deployments.get_effective_deployment(target=target, region=region)
+
+    async def resolve_desired_snapshot_for_device(
+        self,
+        *,
+        device_type: str,
+        region: str = "global",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Resolve desired policy snapshot for an edge device.
+
+        Priority:
+        1. `pkg_deployments` lane `edge:<device_type>` (region first, then global)
+        2. active snapshot fallback.
+        """
+        target = f"edge:{str(device_type).strip().lower()}"
+        deployment = await self.get_effective_deployment(target=target, region=region)
+        if deployment:
+            return {
+                "snapshot_id": deployment.get("snapshot_id"),
+                "snapshot_version": deployment.get("snapshot_version"),
+                "target": deployment.get("target"),
+                "region": deployment.get("region"),
+                "percent": deployment.get("percent"),
+                "source": "deployment_lane",
+            }
+
+        active = await self.get_active_snapshot()
+        if active is None:
+            return None
+        return {
+            "snapshot_id": active.id,
+            "snapshot_version": active.version,
+            "target": target,
+            "region": region,
+            "percent": 100,
+            "source": "active_snapshot_fallback",
+        }
     
     # =========================
     # Validation (delegate to DAO)

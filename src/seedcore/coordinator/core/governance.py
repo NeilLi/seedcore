@@ -92,6 +92,7 @@ MISSING_ACTOR_TOKEN_DENY_CODE = "missing_actor_token"
 INVALID_BREAK_GLASS_TOKEN_DENY_CODE = "invalid_break_glass_token"
 BREAK_GLASS_TOKEN_SUBJECT_MISMATCH_DENY_CODE = "break_glass_token_subject_mismatch"
 BREAK_GLASS_TOKEN_EXPIRED_DENY_CODE = "break_glass_token_expired"
+BREAK_GLASS_PROCEDURE_REQUIRED_DENY_CODE = "break_glass_procedure_required"
 AUTHZ_GRAPH_DENY_CODE = "authz_graph_denied"
 AUTHZ_GRAPH_SNAPSHOT_MISMATCH_DENY_CODE = "authz_graph_snapshot_mismatch"
 EXECUTION_TOKEN_CONSTRAINT_KEYS = (
@@ -3386,6 +3387,11 @@ def _build_break_glass_context(
     override_applied: bool = False,
     required: bool = False,
     outcome: str | None = None,
+    procedure_id: str | None = None,
+    incident_id: str | None = None,
+    reason_code: str | None = None,
+    risk_score: float | None = None,
+    ocps_score: float | None = None,
 ) -> BreakGlassDecisionContext:
     token_issued_at = None
     token_expires_at = None
@@ -3408,6 +3414,11 @@ def _build_break_glass_context(
         token_issued_at=token_issued_at,
         token_expires_at=token_expires_at,
         outcome=outcome,
+        procedure_id=procedure_id,
+        incident_id=incident_id,
+        reason_code=reason_code,
+        risk_score=_coerce_risk_score(risk_score),
+        ocps_score=_coerce_risk_score(ocps_score),
     )
 
 
@@ -3664,6 +3675,92 @@ def _evaluate_break_glass_context(
             context,
         )
 
+    high_risk, risk_score, ocps_score, profile_reasons = _break_glass_high_risk_profile(
+        action_intent=action_intent,
+        policy_case=policy_case,
+    )
+    procedure_id = str(claims.get("procedure_id") or "").strip() or None
+    incident_id = str(claims.get("incident_id") or "").strip() or None
+    reason_code = str(claims.get("reason_code") or "").strip().lower() or None
+
+    if high_risk and _pdp_break_glass_require_deterministic_procedure():
+        missing_claims: list[str] = []
+        if not procedure_id:
+            missing_claims.append("procedure_id")
+        if not incident_id:
+            missing_claims.append("incident_id")
+        if not reason_code:
+            missing_claims.append("reason_code")
+        if missing_claims:
+            context = _build_break_glass_context(
+                action_intent,
+                claims=claims,
+                required=True,
+                outcome="deterministic_procedure_required",
+                procedure_id=procedure_id,
+                incident_id=incident_id,
+                reason_code=reason_code,
+                risk_score=risk_score,
+                ocps_score=ocps_score,
+            )
+            return (
+                _deny_decision(
+                    (
+                        "High-risk break-glass requires deterministic procedure claims "
+                        "(procedure_id, incident_id, reason_code)."
+                    ),
+                    BREAK_GLASS_PROCEDURE_REQUIRED_DENY_CODE,
+                    policy_snapshot,
+                    risk_score=_policy_case_risk_score(policy_case),
+                    cognitive_assessment=policy_case.cognitive_assessment,
+                    explanations=_policy_case_explanations(
+                        policy_case,
+                        "break_glass_deterministic_procedure_required",
+                    )
+                    + [
+                        f"break_glass_missing_claims={','.join(missing_claims)}",
+                        f"break_glass_profile={','.join(profile_reasons) if profile_reasons else 'none'}",
+                    ],
+                    break_glass=context,
+                ),
+                context,
+            )
+
+        allowed_reason_codes = _pdp_break_glass_reason_codes()
+        if allowed_reason_codes and reason_code not in allowed_reason_codes:
+            context = _build_break_glass_context(
+                action_intent,
+                claims=claims,
+                required=True,
+                outcome="reason_code_not_allowed",
+                procedure_id=procedure_id,
+                incident_id=incident_id,
+                reason_code=reason_code,
+                risk_score=risk_score,
+                ocps_score=ocps_score,
+            )
+            return (
+                _deny_decision(
+                    (
+                        "High-risk break-glass reason_code is not in the deterministic allowlist."
+                    ),
+                    BREAK_GLASS_PROCEDURE_REQUIRED_DENY_CODE,
+                    policy_snapshot,
+                    risk_score=_policy_case_risk_score(policy_case),
+                    cognitive_assessment=policy_case.cognitive_assessment,
+                    explanations=_policy_case_explanations(
+                        policy_case,
+                        "break_glass_reason_code_not_allowed",
+                    )
+                    + [
+                        f"break_glass_reason_code={reason_code}",
+                        f"break_glass_profile={','.join(profile_reasons) if profile_reasons else 'none'}",
+                    ],
+                    break_glass=context,
+                ),
+                context,
+            )
+
     return (
         None,
         _build_break_glass_context(
@@ -3672,6 +3769,11 @@ def _evaluate_break_glass_context(
             validated=True,
             required=required_reason,
             outcome="validated",
+            procedure_id=procedure_id,
+            incident_id=incident_id,
+            reason_code=reason_code,
+            risk_score=risk_score,
+            ocps_score=ocps_score,
         ),
     )
 
@@ -3731,6 +3833,86 @@ def _pdp_break_glass_token_max_skew_seconds() -> float:
         return max(0.0, float(raw))
     except (TypeError, ValueError):
         return 1.0
+
+
+def _pdp_break_glass_require_deterministic_procedure() -> bool:
+    raw = os.getenv("SEEDCORE_PDP_BREAK_GLASS_REQUIRE_DETERMINISTIC_PROCEDURE", "true").strip()
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
+def _pdp_break_glass_high_risk_score_threshold() -> float:
+    raw = os.getenv("SEEDCORE_PDP_BREAK_GLASS_HIGH_RISK_SCORE", "0.85").strip()
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return 0.85
+
+
+def _pdp_break_glass_high_ocps_threshold() -> float:
+    raw = os.getenv("SEEDCORE_PDP_BREAK_GLASS_OCPS_THRESHOLD", "0.70").strip()
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return 0.70
+
+
+def _pdp_break_glass_reason_codes() -> set[str]:
+    raw = os.getenv(
+        "SEEDCORE_PDP_BREAK_GLASS_REASON_CODES",
+        "safety_incident,custody_breach,service_continuity,regulatory_hold",
+    )
+    values = {
+        str(item).strip().lower()
+        for item in str(raw).split(",")
+        if str(item).strip()
+    }
+    return values
+
+
+def _extract_ocps_signal(summary: Mapping[str, Any] | None) -> float | None:
+    if not isinstance(summary, Mapping):
+        return None
+    candidates: list[Any] = [
+        summary.get("s_drift"),
+        summary.get("drift_score"),
+        summary.get("ocps_s_t"),
+    ]
+    ocps_payload = summary.get("ocps")
+    if isinstance(ocps_payload, Mapping):
+        candidates.extend(
+            [
+                ocps_payload.get("S_t"),
+                ocps_payload.get("s_drift"),
+                ocps_payload.get("drift_score"),
+            ]
+        )
+
+    resolved: float | None = None
+    for candidate in candidates:
+        if not isinstance(candidate, (int, float)):
+            continue
+        value = max(0.0, min(1.0, float(candidate)))
+        resolved = value if resolved is None else max(resolved, value)
+    return resolved
+
+
+def _break_glass_high_risk_profile(
+    *,
+    action_intent: ActionIntent,
+    policy_case: PolicyCase,
+) -> tuple[bool, float | None, float | None, list[str]]:
+    reasons: list[str] = []
+    risk_score = _policy_case_risk_score(policy_case)
+    ocps_score = _extract_ocps_signal(policy_case.telemetry_summary)
+
+    if isinstance(risk_score, (int, float)) and float(risk_score) >= _pdp_break_glass_high_risk_score_threshold():
+        reasons.append("risk_score_threshold")
+    if isinstance(ocps_score, (int, float)) and float(ocps_score) >= _pdp_break_glass_high_ocps_threshold():
+        reasons.append("ocps_threshold")
+    if _is_restricted_custody_transfer(action_intent):
+        reasons.append("restricted_custody_transfer")
+
+    return bool(reasons), _coerce_risk_score(risk_score), _coerce_risk_score(ocps_score), reasons
 
 
 def _sha256_hex(value: str) -> str:

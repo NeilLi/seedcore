@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+from datetime import timezone
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from fastapi import APIRouter, HTTPException  # pyright: ignore[reportMissingImports]
+from fastapi import APIRouter, HTTPException, Query  # pyright: ignore[reportMissingImports]
+from fastapi.responses import StreamingResponse  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from ...database import get_async_pg_session_factory, get_async_redis_client
@@ -17,10 +21,86 @@ from ...ops.pkg import (
     normalize_policy_result,
 )
 from ...ops.pkg.manager import PKGMode
+from ...ops.pkg.manager import PKG_REDIS_CHANNEL
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class PKGActivateSnapshotRequest(BaseModel):
+    actor: str = Field(default="system", description="Actor id performing activation.")
+    reason: Optional[str] = Field(default=None, description="Optional rollout reason.")
+    target: str = Field(default="router", description="Primary rollout lane target.")
+    region: str = Field(default="global", description="Deployment region.")
+    rollout_percent: int = Field(default=100, ge=0, le=100, description="Rollout percent for target lane.")
+    publish_update: bool = Field(default=True, description="Publish update to the runtime hot-update channel.")
+    edge_targets: List[str] = Field(
+        default_factory=list,
+        description="Optional additional edge rollout lanes (for example edge:door, edge:robot).",
+    )
+
+
+class PKGOTAHeartbeatRequest(BaseModel):
+    device_id: str = Field(..., description="Stable edge device identifier.")
+    device_type: str = Field(..., description="Device class (for example door, robot, sensor).")
+    region: str = Field(default="global", description="Region lane for rollout selection.")
+    snapshot_id: Optional[int] = Field(default=None, description="Current snapshot ID on the device.")
+    version: Optional[str] = Field(default=None, description="Current policy version on the device.")
+
+
+async def _resolve_pkg_client() -> PKGClient:
+    pkg_mgr = get_global_pkg_manager()
+    manager_client = getattr(pkg_mgr, "_client", None) if pkg_mgr is not None else None
+    if manager_client is not None:
+        return manager_client
+    return PKGClient(get_async_pg_session_factory())
+
+
+def _resolve_ota_compliance(
+    *,
+    current_snapshot_id: Optional[int],
+    current_version: Optional[str],
+    desired_snapshot_id: Optional[int],
+    desired_version: Optional[str],
+) -> str:
+    if desired_snapshot_id is None and not desired_version:
+        return "unknown"
+    if current_snapshot_id is not None and desired_snapshot_id is not None:
+        return "compliant" if int(current_snapshot_id) == int(desired_snapshot_id) else "outdated"
+    if current_version and desired_version:
+        return "compliant" if str(current_version).strip() == str(desired_version).strip() else "outdated"
+    return "unknown"
+
+
+def _sse_encode(event: str, payload: Dict[str, Any]) -> str:
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
+    )
+
+
+def _parse_pkg_stream_message(raw: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="ignore")
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if text.startswith("activate:"):
+        return {"kind": "activate", "version": text.split(":", 1)[1].strip()}
+    if text.startswith("authz_graph_refresh:"):
+        return {"kind": "authz_graph_refresh", "version": text.split(":", 1)[1].strip()}
+    if text == "authz_graph_refresh":
+        return {"kind": "authz_graph_refresh"}
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
 
 
 @router.post("/pkg/reload", response_model=Dict[str, Any])
@@ -50,6 +130,42 @@ async def pkg_reload() -> Dict[str, Any]:
             detail=result,
         )
     
+    return result
+
+
+@router.post("/pkg/snapshots/{snapshot_version}/activate", response_model=Dict[str, Any])
+async def pkg_activate_snapshot(
+    snapshot_version: str,
+    payload: PKGActivateSnapshotRequest,
+) -> Dict[str, Any]:
+    """
+    Activate a snapshot and broadcast hot-update events fleet-wide.
+    """
+    pkg_mgr = get_global_pkg_manager()
+    if not pkg_mgr:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PKG manager not initialized",
+                "message": "PKG manager needs to be initialized before activating snapshots.",
+            },
+        )
+
+    result = await pkg_mgr.activate_snapshot_version(
+        version=snapshot_version,
+        actor=payload.actor,
+        reason=payload.reason,
+        target=payload.target,
+        region=payload.region,
+        rollout_percent=payload.rollout_percent,
+        publish_update=payload.publish_update,
+        edge_targets=payload.edge_targets,
+    )
+    if not result.get("success"):
+        error = str(result.get("error") or "").strip()
+        if error == "snapshot_not_found":
+            raise HTTPException(status_code=404, detail=result)
+        raise HTTPException(status_code=500, detail=result)
     return result
 
 
@@ -217,6 +333,190 @@ async def pkg_status() -> Dict[str, Any]:
         "authz_graph": metadata.get("authz_graph", {}),
         "artifact_info": artifact_info,  # Diagnostic info about artifact
     }
+
+
+@router.post("/pkg/ota/heartbeat", response_model=Dict[str, Any])
+async def pkg_ota_heartbeat(payload: PKGOTAHeartbeatRequest) -> Dict[str, Any]:
+    """
+    Edge runtime heartbeat + desired policy resolution for OTA compliance.
+    """
+    pkg_client = await _resolve_pkg_client()
+    desired = await pkg_client.resolve_desired_snapshot_for_device(
+        device_type=payload.device_type,
+        region=payload.region,
+    )
+
+    await pkg_client.update_device_heartbeat(
+        device_id=payload.device_id,
+        device_type=payload.device_type,
+        snapshot_id=payload.snapshot_id,
+        version=payload.version,
+        region=payload.region,
+    )
+
+    desired_snapshot_id = desired.get("snapshot_id") if isinstance(desired, dict) else None
+    desired_version = desired.get("snapshot_version") if isinstance(desired, dict) else None
+    compliance = _resolve_ota_compliance(
+        current_snapshot_id=payload.snapshot_id,
+        current_version=payload.version,
+        desired_snapshot_id=desired_snapshot_id,
+        desired_version=desired_version,
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "ok": True,
+        "device_id": payload.device_id,
+        "device_type": payload.device_type,
+        "region": payload.region,
+        "observed_at": now,
+        "current": {
+            "snapshot_id": payload.snapshot_id,
+            "version": payload.version,
+        },
+        "desired": desired,
+        "compliance": compliance,
+        "next_action": "hold" if compliance == "compliant" else "upgrade",
+        "ota_stream": {
+            "channel": PKG_REDIS_CHANNEL,
+            "path": (
+                f"/api/v1/pkg/ota/stream?"
+                f"device_id={payload.device_id}&device_type={payload.device_type}&region={payload.region}"
+            ),
+        },
+    }
+
+
+@router.get("/pkg/ota/stream")
+async def pkg_ota_stream(
+    device_id: str = Query(..., description="Edge runtime identifier."),
+    device_type: str = Query(..., description="Edge device type."),
+    region: str = Query(default="global", description="Deployment region."),
+    snapshot_id: Optional[int] = Query(default=None, description="Current edge snapshot ID."),
+    version: Optional[str] = Query(default=None, description="Current edge policy version."),
+):
+    """
+    Always-on OTA policy stream for edge runtimes.
+
+    Sends:
+    - initial desired policy payload
+    - policy update events whenever `pkg_updates` receives snapshot activation messages.
+    """
+    pkg_client = await _resolve_pkg_client()
+
+    # Record startup heartbeat for immediate compliance visibility.
+    await pkg_client.update_device_heartbeat(
+        device_id=device_id,
+        device_type=device_type,
+        snapshot_id=snapshot_id,
+        version=version,
+        region=region,
+    )
+
+    async def _desired_policy_payload() -> Dict[str, Any]:
+        desired = await pkg_client.resolve_desired_snapshot_for_device(
+            device_type=device_type,
+            region=region,
+        )
+        desired_snapshot_id = desired.get("snapshot_id") if isinstance(desired, dict) else None
+        desired_version = desired.get("snapshot_version") if isinstance(desired, dict) else None
+        return {
+            "device_id": device_id,
+            "device_type": device_type,
+            "region": region,
+            "current": {
+                "snapshot_id": snapshot_id,
+                "version": version,
+            },
+            "desired": desired,
+            "compliance": _resolve_ota_compliance(
+                current_snapshot_id=snapshot_id,
+                current_version=version,
+                desired_snapshot_id=desired_snapshot_id,
+                desired_version=desired_version,
+            ),
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _event_stream():
+        pubsub = None
+        redis_client = None
+        try:
+            initial_payload = await _desired_policy_payload()
+            yield _sse_encode("desired_policy", initial_payload)
+            yield _sse_encode(
+                "stream_ready",
+                {
+                    "channel": PKG_REDIS_CHANNEL,
+                    "device_id": device_id,
+                    "device_type": device_type,
+                    "region": region,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+            try:
+                redis_client = await get_async_redis_client()
+            except Exception:
+                redis_client = None
+
+            if redis_client is None:
+                # Poll fallback when Redis is unavailable.
+                while True:
+                    await asyncio.sleep(10.0)
+                    yield _sse_encode(
+                        "desired_policy",
+                        await _desired_policy_payload(),
+                    )
+                    yield _sse_encode(
+                        "ping",
+                        {"observed_at": datetime.now(timezone.utc).isoformat()},
+                    )
+
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe(PKG_REDIS_CHANNEL)
+            while True:
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True,
+                    timeout=10.0,
+                )
+                if msg is None:
+                    yield _sse_encode(
+                        "ping",
+                        {"observed_at": datetime.now(timezone.utc).isoformat()},
+                    )
+                    continue
+
+                parsed = _parse_pkg_stream_message(msg.get("data"))
+                if not parsed:
+                    continue
+                kind = str(parsed.get("kind") or "").strip()
+                if kind in {"activate", "authz_graph_refresh"}:
+                    yield _sse_encode(
+                        "policy_update",
+                        {
+                            "event": parsed,
+                            "policy": await _desired_policy_payload(),
+                        },
+                    )
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if pubsub is not None:
+                try:
+                    await pubsub.close()
+                except Exception:
+                    pass
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 # Common hotel simulator predicates (extensible via Literal + str fallback)
 HotelPredicate = Literal[

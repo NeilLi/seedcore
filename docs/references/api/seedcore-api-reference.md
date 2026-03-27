@@ -223,9 +223,12 @@ Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/r
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
 | `POST` | `/api/v1/pkg/reload` | Reload the active PKG evaluator state. |
+| `POST` | `/api/v1/pkg/snapshots/{snapshot_version}/activate` | Activate a snapshot and publish hot-update events fleet-wide. |
 | `POST` | `/api/v1/pkg/authz-graph/refresh` | Refresh the active compiled authorization graph for the current PKG snapshot. |
 | `GET` | `/api/v1/pkg/status` | Report PKG runtime status. |
 | `GET` | `/api/v1/pkg/authz-graph/status` | Report active authorization graph runtime status. |
+| `POST` | `/api/v1/pkg/ota/heartbeat` | Record edge runtime heartbeat and resolve desired policy snapshot for compliance. |
+| `GET` | `/api/v1/pkg/ota/stream` | Open always-on OTA policy stream (SSE) for edge runtimes. |
 | `POST` | `/api/v1/pkg/evaluate_async` | Run asynchronous policy evaluation. |
 | `POST` | `/api/v1/pkg/snapshots/compare` | Compare two policy snapshots. |
 | `POST` | `/api/v1/pkg/snapshots/{snapshot_id}/compile-rules` | Compile rules for a specific snapshot. |
@@ -237,6 +240,8 @@ These endpoints support policy runtime inspection and snapshot-oriented operatio
 - `GET /api/v1/pkg/status` now includes `authz_graph_ready` plus an `authz_graph` summary when the PKG manager is initialized.
 - `GET /api/v1/pkg/authz-graph/status` is the focused operational status view for the active compiled authorization graph.
 - `POST /api/v1/pkg/authz-graph/refresh` rebuilds the active compiled authorization graph from snapshot-scoped sources without requiring a full PKG evaluator reload.
+- `POST /api/v1/pkg/snapshots/{snapshot_version}/activate` is the primary hot-rollout control-plane path for live policy activation.
+- `POST /api/v1/pkg/ota/heartbeat` + `GET /api/v1/pkg/ota/stream` provide edge compliance and always-on OTA distribution.
 - The PDP only auto-consumes the active compiled authorization graph when `SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=true`.
 - Redis PKG control-plane messages now support both evaluator activation and authz-graph refresh semantics.
 

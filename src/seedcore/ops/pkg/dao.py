@@ -240,6 +240,69 @@ class PKGSnapshotsDAO:
                 return None
 
             return await self._build_snapshot_data(snapshot_mapping, session)
+
+    async def activate_snapshot(self, snapshot_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Mark a snapshot as active for its environment.
+
+        This performs an atomic lane switch:
+        - deactivate existing active snapshot in the same env
+        - activate the requested snapshot
+        """
+        select_sql = text("""
+            SELECT id, version, env
+            FROM pkg_snapshots
+            WHERE id = :snapshot_id
+            LIMIT 1
+            FOR UPDATE
+        """)
+        deactivate_sql = text("""
+            UPDATE pkg_snapshots
+            SET is_active = FALSE
+            WHERE env = :env
+              AND id <> :snapshot_id
+              AND is_active = TRUE
+        """)
+        activate_sql = text("""
+            UPDATE pkg_snapshots
+            SET is_active = TRUE
+            WHERE id = :snapshot_id
+            RETURNING id, version, env, is_active, created_at
+        """)
+
+        async with self._sf() as session:
+            async with session.begin():
+                selected = await session.execute(select_sql, {"snapshot_id": snapshot_id})
+                selected_row = await _maybe_await(selected.first())
+                selected_mapping = await _row_mapping(selected_row)
+                if not selected_mapping:
+                    return None
+
+                env = selected_mapping.get("env")
+                if env is None:
+                    raise ValueError(f"Snapshot {snapshot_id} has no env")
+
+                await session.execute(
+                    deactivate_sql,
+                    {
+                        "env": env,
+                        "snapshot_id": snapshot_id,
+                    },
+                )
+
+                activated = await session.execute(
+                    activate_sql,
+                    {"snapshot_id": snapshot_id},
+                )
+                activated_row = await _maybe_await(activated.first())
+                activated_mapping = await _row_mapping(activated_row)
+
+                # Clear active snapshot cache because active row changed.
+                self._cached_snapshot = None
+                self._cached_snapshot_id = None
+                self._cached_snapshot_checksum = None
+
+                return activated_mapping if activated_mapping is not None else None
     
     async def store_wasm_artifact(
         self,
@@ -1204,6 +1267,111 @@ class PKGDeploymentsDAO:
         async with self._sf() as session:
             res = await session.execute(sql, params)
             return [dict(r._mapping) for r in res]
+
+    async def upsert_deployment(
+        self,
+        *,
+        snapshot_id: int,
+        target: str,
+        region: str = "global",
+        percent: int = 100,
+        is_active: bool = True,
+        activated_by: str = "system",
+    ) -> Dict[str, Any]:
+        """
+        Upsert deployment lane for OTA/control-plane rollout.
+        """
+        bounded_percent = max(0, min(100, int(percent)))
+        sql = text("""
+            INSERT INTO pkg_deployments (
+                snapshot_id,
+                target,
+                region,
+                percent,
+                is_active,
+                activated_at,
+                activated_by
+            )
+            VALUES (
+                :snapshot_id,
+                :target,
+                :region,
+                :percent,
+                :is_active,
+                now(),
+                :activated_by
+            )
+            ON CONFLICT (target, region)
+            DO UPDATE SET
+                snapshot_id = EXCLUDED.snapshot_id,
+                percent = EXCLUDED.percent,
+                is_active = EXCLUDED.is_active,
+                activated_at = now(),
+                activated_by = EXCLUDED.activated_by
+            RETURNING id, snapshot_id, target, region, percent, is_active, activated_at, activated_by
+        """)
+        async with self._sf() as session:
+            async with session.begin():
+                result = await session.execute(
+                    sql,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "target": target,
+                        "region": region,
+                        "percent": bounded_percent,
+                        "is_active": bool(is_active),
+                        "activated_by": activated_by,
+                    },
+                )
+                row = await _maybe_await(result.first())
+                mapping = await _row_mapping(row)
+                if not mapping:
+                    raise RuntimeError("Failed to upsert deployment lane")
+                return mapping
+
+    async def get_effective_deployment(
+        self,
+        *,
+        target: str,
+        region: str = "global",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Resolve the effective active deployment for a target and region.
+
+        Region-specific lane wins over global lane.
+        """
+        sql = text("""
+            SELECT
+                d.id,
+                d.snapshot_id,
+                s.version AS snapshot_version,
+                d.target,
+                d.region,
+                d.percent,
+                d.is_active,
+                d.activated_at,
+                d.activated_by
+            FROM pkg_deployments d
+            JOIN pkg_snapshots s ON s.id = d.snapshot_id
+            WHERE d.is_active = TRUE
+              AND d.target = :target
+              AND (d.region = :region OR d.region = 'global')
+            ORDER BY
+              CASE WHEN d.region = :region THEN 0 ELSE 1 END,
+              d.activated_at DESC
+            LIMIT 1
+        """)
+        async with self._sf() as session:
+            result = await session.execute(
+                sql,
+                {
+                    "target": target,
+                    "region": region,
+                },
+            )
+            row = await _maybe_await(result.first())
+            mapping = await _row_mapping(row)
+            return mapping if mapping is not None else None
 
     async def get_deployment_coverage(
         self, target: Optional[str] = None, region: Optional[str] = None
