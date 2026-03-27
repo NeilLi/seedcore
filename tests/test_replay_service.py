@@ -51,7 +51,7 @@ def _build_policy_receipt(*, task_id: str, intent_id: str, asset_id: str | None 
         "trust_gap_codes": [],
         "timestamp": "2026-03-20T10:00:00+00:00",
     }
-    _, signer_metadata, signature = build_signed_artifact(
+    _, signer_metadata, signature, _ = build_signed_artifact(
         artifact_type="policy_receipt",
         payload=payload,
     )
@@ -113,7 +113,7 @@ def _build_evidence_bundle(
         "node_id": "robot_sim://unit-1",
         "created_at": "2026-03-20T10:03:00+00:00",
     }
-    _, signer_metadata, signature = build_signed_artifact(
+    _, signer_metadata, signature, _ = build_signed_artifact(
         artifact_type="evidence_bundle",
         payload=payload,
         endpoint_id="robot_sim://unit-1",

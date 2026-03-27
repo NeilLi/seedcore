@@ -29,14 +29,56 @@ def build_signed_artifact(
     endpoint_id: Optional[str] = None,
     trust_level: Optional[str] = None,
     node_id: Optional[str] = None,
+    workflow_type: Optional[str] = None,
+    receipt_nonce: Optional[str] = None,
+    previous_receipt_hash: Optional[str] = None,
+    previous_receipt_counter: Optional[int] = None,
+    transparency_enabled: Optional[bool] = None,
 ) -> tuple[str, SignerMetadata, str, Optional[TrustProof]]:
-    workflow_type = payload.get("workflow_type") if isinstance(payload.get("workflow_type"), str) else None
-    receipt_nonce = payload.get("receipt_nonce") if isinstance(payload.get("receipt_nonce"), str) else None
-    previous_receipt_hash = payload.get("previous_receipt_hash") if isinstance(payload.get("previous_receipt_hash"), str) else None
-    previous_receipt_counter = (
-        int(payload.get("previous_receipt_counter"))
-        if payload.get("previous_receipt_counter") is not None
-        else None
+    resolved_workflow_type = (
+        workflow_type
+        if isinstance(workflow_type, str)
+        else (
+            payload.get("workflow_type")
+            if isinstance(payload.get("workflow_type"), str)
+            else None
+        )
+    )
+    resolved_receipt_nonce = (
+        receipt_nonce
+        if isinstance(receipt_nonce, str)
+        else (
+            payload.get("receipt_nonce")
+            if isinstance(payload.get("receipt_nonce"), str)
+            else None
+        )
+    )
+    resolved_previous_receipt_hash = (
+        previous_receipt_hash
+        if isinstance(previous_receipt_hash, str)
+        else (
+            payload.get("previous_receipt_hash")
+            if isinstance(payload.get("previous_receipt_hash"), str)
+            else None
+        )
+    )
+    resolved_previous_receipt_counter = (
+        int(previous_receipt_counter)
+        if previous_receipt_counter is not None
+        else (
+            int(payload.get("previous_receipt_counter"))
+            if payload.get("previous_receipt_counter") is not None
+            else None
+        )
+    )
+    resolved_transparency_enabled = (
+        bool(transparency_enabled)
+        if transparency_enabled is not None
+        else bool(
+            artifact_type == "transition_receipt"
+            and str(resolved_workflow_type or "").strip().lower()
+            in {"custody_transfer", "restricted_custody_transfer"}
+        )
     )
     payload_hash = sha256_hex(canonical_json(payload))
     signing_result = sign_artifact_request(
@@ -47,14 +89,11 @@ def build_signed_artifact(
             endpoint_id=endpoint_id,
             node_id=node_id,
             trust_level=trust_level,
-            workflow_type=workflow_type,
-            receipt_nonce=receipt_nonce,
-            previous_receipt_hash=previous_receipt_hash,
-            previous_receipt_counter=previous_receipt_counter,
-            transparency_enabled=bool(
-                artifact_type == "transition_receipt"
-                and str(workflow_type or "").strip().lower() in {"custody_transfer", "restricted_custody_transfer"}
-            ),
+            workflow_type=resolved_workflow_type,
+            receipt_nonce=resolved_receipt_nonce,
+            previous_receipt_hash=resolved_previous_receipt_hash,
+            previous_receipt_counter=resolved_previous_receipt_counter,
+            transparency_enabled=resolved_transparency_enabled,
         )
     )
     signer_metadata = build_signer_metadata(
@@ -133,7 +172,7 @@ def verify_policy_receipt_result(receipt: Mapping[str, Any] | PolicyReceipt) -> 
             "error": "invalid_policy_receipt",
             "policy": {},
         }
-    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata"})
+    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata", "trust_proof"})
     return verify_artifact_signature_result(
         artifact_type="policy_receipt",
         payload=payload,
@@ -157,7 +196,7 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
             "error": "invalid_evidence_bundle",
             "policy": {},
         }
-    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata"})
+    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata", "trust_proof"})
     node_id = str(model.node_id) if model.node_id is not None else None
     return verify_artifact_signature_result(
         artifact_type="evidence_bundle",
@@ -189,7 +228,7 @@ def verify_hal_capture_envelope_result(envelope: Mapping[str, Any] | HALCaptureE
             "error": "invalid_hal_capture_envelope",
             "policy": {},
         }
-    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata"})
+    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata", "trust_proof"})
     return verify_artifact_signature_result(
         artifact_type="hal_capture",
         payload=payload,

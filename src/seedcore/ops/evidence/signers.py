@@ -35,6 +35,11 @@ _SOFTWARE_COUNTERS: dict[str, int] = {}
 _SOFTWARE_COUNTER_LOCK = Lock()
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class SigningResult:
     signature: str
@@ -275,6 +280,10 @@ class KmsP256SignerProvider:
     def is_available(self) -> bool:
         return self._private_key is not None and self._public_key_bytes is not None and self._key_ref is not None
 
+    @property
+    def trust_anchor_type(self) -> str:
+        return self._trust_anchor_type
+
     def sign_hash(self, request: SignerRequest) -> SigningResult:
         if not self.is_available():
             raise ValueError("kms_p256_signer_not_configured")
@@ -322,17 +331,16 @@ class Tpm2P256SignerProvider:
         self._public_key_b64 = os.getenv("SEEDCORE_TPM2_PUBLIC_KEY_B64", "").strip() or None
         self._public_key_pem = os.getenv("SEEDCORE_TPM2_PUBLIC_KEY_PEM", "").strip() or None
         self._private_key_pem = os.getenv("SEEDCORE_TPM2_SOFTWARE_FALLBACK_PRIVATE_KEY_PEM", "").strip() or None
-        self._software_fallback = os.getenv("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", "true").lower() in {
-            "1",
-            "true",
-            "yes",
-        }
+        self._software_fallback = _env_flag("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", default=False)
         self._config_profile = os.getenv("SEEDCORE_TPM2_PROFILE", "tpm2_receipt_p256")
 
     def is_available(self) -> bool:
-        return self._can_use_tpm2_tools() or (
+        return self.is_hardware_available() or (
             self._software_fallback and _load_p256_private_key_from_pem(self._private_key_pem) is not None
         )
+
+    def is_hardware_available(self) -> bool:
+        return self._can_use_tpm2_tools()
 
     def sign_hash(self, request: SignerRequest) -> SigningResult:
         signature_bytes: bytes
@@ -690,11 +698,23 @@ def _explicit_provider_for_profile(profile: str) -> Optional[SignerProvider]:
 def _provider_matches_requirements(provider: SignerProvider, request: SignerRequest) -> bool:
     trust_anchor = request.require_trust_anchor
     if trust_anchor == "tpm2":
-        return isinstance(provider, Tpm2P256SignerProvider) and provider.is_available()
+        if not isinstance(provider, Tpm2P256SignerProvider):
+            return False
+        if _env_flag("SEEDCORE_TPM2_REQUIRE_HARDWARE", default=True):
+            return provider.is_hardware_available()
+        return provider.is_available()
     if trust_anchor == "kms":
-        return isinstance(provider, KmsP256SignerProvider) and provider.is_available()
+        return (
+            isinstance(provider, KmsP256SignerProvider)
+            and provider.is_available()
+            and provider.trust_anchor_type == "kms"
+        )
     if trust_anchor == "vtpm":
-        return isinstance(provider, KmsP256SignerProvider) and provider.is_available()
+        return (
+            isinstance(provider, KmsP256SignerProvider)
+            and provider.is_available()
+            and provider.trust_anchor_type == "vtpm"
+        )
     if request.required_key_algorithm == ECDSA_P256_SCHEME:
         if isinstance(provider, Tpm2P256SignerProvider):
             return provider.is_available()
@@ -760,6 +780,13 @@ def _build_trust_proof(
     extra_binding_metadata: Optional[dict[str, Any]] = None,
 ) -> TrustProof:
     public_key_fingerprint = _fingerprint_public_key(public_key_material)
+    attestation_summary: dict[str, str] = {"attestation_level": attestation_level}
+    if isinstance(request.endpoint_id, str) and request.endpoint_id.strip():
+        attestation_summary["endpoint_id"] = request.endpoint_id
+    if isinstance(request.node_id, str) and request.node_id.strip():
+        attestation_summary["node_id"] = request.node_id
+    if isinstance(request.workflow_type, str) and request.workflow_type.strip():
+        attestation_summary["workflow_type"] = request.workflow_type
     replay = ReplayProof(
         receipt_nonce=request.receipt_nonce,
         receipt_counter=_next_receipt_counter(
@@ -792,12 +819,7 @@ def _build_trust_proof(
             ak_key_ref=os.getenv("SEEDCORE_TPM2_AK_KEY_REF", "").strip() or None,
             quote=os.getenv("SEEDCORE_TPM2_ATTESTATION_QUOTE", "").strip() or None,
             endorsement_chain=_split_env_lines("SEEDCORE_TPM2_ENDORSEMENT_CHAIN"),
-            summary={
-                "endpoint_id": request.endpoint_id,
-                "node_id": request.node_id,
-                "attestation_level": attestation_level,
-                "workflow_type": request.workflow_type,
-            },
+            summary=attestation_summary,
             issued_at=datetime.now(timezone.utc).isoformat(),
         ),
         replay=replay if request.signer_profile == "receipt" else None,

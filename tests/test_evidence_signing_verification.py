@@ -5,6 +5,8 @@ import json
 import os
 import sys
 
+import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -100,7 +102,7 @@ def test_evidence_completeness_includes_required_artifacts() -> None:
 def test_signer_abstraction_supports_hmac_and_ed25519(monkeypatch) -> None:
     payload = {"artifact_id": "signing-demo", "status": "ok"}
 
-    _, hmac_metadata, hmac_signature = build_signed_artifact(
+    _, hmac_metadata, hmac_signature, _ = build_signed_artifact(
         artifact_type="evidence_bundle",
         payload=payload,
     )
@@ -129,7 +131,7 @@ def test_signer_abstraction_supports_hmac_and_ed25519(monkeypatch) -> None:
     )
     monkeypatch.setenv("SEEDCORE_EVIDENCE_ED25519_KEY_ID", "evidence-ed25519-k1")
 
-    _, ed_metadata, ed_signature = build_signed_artifact(
+    _, ed_metadata, ed_signature, _ = build_signed_artifact(
         artifact_type="evidence_bundle",
         payload=payload,
         endpoint_id="robot_sim://pybullet_r2d2_01",
@@ -156,6 +158,7 @@ def test_receipt_chains_validate_and_detect_tamper() -> None:
         transition_receipts=transition_results,
     )
     verification = service._build_verification_status(  # noqa: SLF001 - verification target
+        record=record,
         policy_receipt=record["policy_receipt"],
         evidence_bundle=record["evidence_bundle"],
         transition_receipts=transition_results,
@@ -217,3 +220,75 @@ def test_signed_artifacts_verify_cleanly() -> None:
     )
     assert verify_policy_receipt_result(record["policy_receipt"])["verified"] is True
     assert verify_evidence_bundle_result(record["evidence_bundle"])["verified"] is True
+
+
+def _generate_p256_materials() -> tuple[str, str]:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_b64 = base64.b64encode(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+    ).decode("ascii")
+    return private_pem, public_b64
+
+
+def test_restricted_hal_receipt_requires_tpm_hardware_by_default(monkeypatch) -> None:
+    private_pem, public_b64 = _generate_p256_materials()
+    monkeypatch.setenv("SEEDCORE_SIGNER_PROVIDER_RECEIPT", "tpm2")
+    monkeypatch.setenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "tpm2")
+    monkeypatch.delenv("SEEDCORE_TPM2_PERSISTENT_HANDLE", raising=False)
+    monkeypatch.setenv("SEEDCORE_TPM2_KEY_ID", "tpm2-receipt-k1")
+    monkeypatch.setenv("SEEDCORE_TPM2_PUBLIC_KEY_B64", public_b64)
+    monkeypatch.setenv("SEEDCORE_TPM2_SOFTWARE_FALLBACK_PRIVATE_KEY_PEM", private_pem)
+    monkeypatch.delenv("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", raising=False)
+    monkeypatch.delenv("SEEDCORE_TPM2_REQUIRE_HARDWARE", raising=False)
+
+    with pytest.raises(ValueError):
+        build_transition_receipt(
+            intent_id="intent-tpm-required",
+            token_id="token-tpm-required",
+            actuator_endpoint="hal://edge-1",
+            hardware_uuid="edge-1",
+            actuator_result_hash="hash-tpm-required",
+            from_zone="vault_a",
+            to_zone="handoff_bay_1",
+            workflow_type="custody_transfer",
+        )
+
+
+def test_restricted_hal_receipt_rejects_tpm_software_fallback_proof(monkeypatch) -> None:
+    private_pem, public_b64 = _generate_p256_materials()
+    key_ref = "tpm2-fallback-k1"
+    monkeypatch.setenv("SEEDCORE_SIGNER_PROVIDER_RECEIPT", "tpm2")
+    monkeypatch.setenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "tpm2")
+    monkeypatch.setenv("SEEDCORE_TPM2_REQUIRE_HARDWARE", "false")
+    monkeypatch.setenv("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", "true")
+    monkeypatch.delenv("SEEDCORE_TPM2_PERSISTENT_HANDLE", raising=False)
+    monkeypatch.setenv("SEEDCORE_TPM2_KEY_ID", key_ref)
+    monkeypatch.setenv("SEEDCORE_TPM2_PUBLIC_KEY_B64", public_b64)
+    monkeypatch.setenv("SEEDCORE_TPM2_SOFTWARE_FALLBACK_PRIVATE_KEY_PEM", private_pem)
+    monkeypatch.setenv(
+        "SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON",
+        json.dumps({key_ref: {"public_key": public_b64}}),
+    )
+
+    receipt = build_transition_receipt(
+        intent_id="intent-tpm-soft-fallback",
+        token_id="token-tpm-soft-fallback",
+        actuator_endpoint="hal://edge-1",
+        hardware_uuid="edge-1",
+        actuator_result_hash="hash-tpm-soft-fallback",
+        from_zone="vault_a",
+        to_zone="handoff_bay_1",
+        workflow_type="custody_transfer",
+    )
+    monkeypatch.setenv("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", "false")
+    result = verify_transition_receipt_result(receipt)
+    assert result["verified"] is False
+    assert result["error"] == "software_fallback_not_allowed"

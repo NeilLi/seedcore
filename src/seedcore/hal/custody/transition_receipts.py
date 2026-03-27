@@ -52,21 +52,10 @@ def build_transition_receipt(
         "to_zone": str(to_zone) if to_zone is not None else None,
         "executed_at": executed_at or datetime.now(timezone.utc).isoformat(),
         "receipt_nonce": receipt_nonce or str(uuid.uuid4()),
-        "previous_receipt_hash": (
-            str(previous_receipt_hash)
-            if previous_receipt_hash is not None
-            else None
-        ),
-        "previous_receipt_counter": (
-            int(previous_receipt_counter)
-            if previous_receipt_counter is not None
-            else None
-        ),
     }
-    signing_payload = dict(payload)
     payload_hash, signer_metadata, signature, trust_proof = build_signed_artifact(
         artifact_type="transition_receipt",
-        payload=signing_payload,
+        payload=dict(payload),
         endpoint_id=actuator_endpoint,
         trust_level=(
             "attested"
@@ -74,9 +63,14 @@ def build_transition_receipt(
             else "baseline"
         ),
         node_id=actuator_endpoint,
+        workflow_type=workflow_type,
+        receipt_nonce=payload["receipt_nonce"],
+        previous_receipt_hash=previous_receipt_hash,
+        previous_receipt_counter=previous_receipt_counter,
+        transparency_enabled=bool(
+            str(workflow_type or "").strip().lower() in RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPES
+        ),
     )
-    payload.pop("previous_receipt_hash", None)
-    payload.pop("previous_receipt_counter", None)
     return TransitionReceipt(
         **payload,
         payload_hash=payload_hash,
@@ -152,7 +146,7 @@ def verify_transition_receipt_result(
         public_key_resolver=_resolve_public_key,
         secret_resolver=lambda _metadata: os.getenv(
             "SEEDCORE_HAL_RECEIPT_SIGNING_SECRET",
-            "seedcore-hal-receipt-secret",
+            os.getenv("SEEDCORE_EVIDENCE_SIGNING_SECRET", "seedcore-dev-evidence-secret"),
         ),
     )
     if verification.get("error") is not None:
@@ -235,8 +229,22 @@ def _verify_restricted_trust_proof(
         return "invalid_signer_profile"
     if proof.key_algorithm != ECDSA_P256_SCHEME:
         return "invalid_key_algorithm"
+    required_anchor = _required_restricted_trust_anchor(model.endpoint_id)
     if proof.trust_anchor_type not in {"tpm2", "kms", "vtpm"}:
         return "invalid_trust_anchor"
+    if required_anchor is not None and proof.trust_anchor_type != required_anchor:
+        return "invalid_trust_anchor"
+    provider_mode = (
+        proof.key_binding.metadata.get("provider_mode")
+        if proof.key_binding is not None and isinstance(proof.key_binding.metadata, dict)
+        else None
+    )
+    if (
+        proof.trust_anchor_type == "tpm2"
+        and provider_mode == "software_fallback"
+        and not _env_flag("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", default=False)
+    ):
+        return "software_fallback_not_allowed"
     if proof.replay is None:
         return "missing_replay_proof"
     if proof.replay.receipt_nonce != model.receipt_nonce:
@@ -274,6 +282,22 @@ def _is_revoked(endpoint_id: str, proof: TrustProof) -> bool:
         if isinstance(cutoff, int) and proof.replay is not None and proof.replay.receipt_counter is not None:
             return int(proof.replay.receipt_counter) <= cutoff
     return False
+
+
+def _required_restricted_trust_anchor(endpoint_id: str) -> Optional[str]:
+    normalized = endpoint_id.strip().lower()
+    if normalized.startswith("hal://"):
+        configured = os.getenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "tpm2").strip().lower()
+        return configured or "tpm2"
+    if normalized.startswith("robot_sim://"):
+        configured = os.getenv("SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR", "kms").strip().lower()
+        return configured or "kms"
+    return None
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _load_string_set(name: str) -> set[str]:
