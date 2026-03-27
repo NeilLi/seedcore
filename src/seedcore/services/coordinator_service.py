@@ -66,7 +66,6 @@ from ..coordinator.core.execute import (
     execute_task as execute_task,
     RouteConfig,
     ExecutionConfig,
-    _handle_direct_fast_general_query,
 )
 from ..coordinator.core.governance import (
     build_governance_context,
@@ -962,19 +961,6 @@ class Coordinator:
 
             # 2. Compute Strategy (Fast vs Deep) - Standard synchronous processing
             exec_config = self._build_execution_config(correlation_id)
-            direct_fast_query = await _handle_direct_fast_general_query(
-                task_obj,
-                exec_config,
-            )
-            if direct_fast_query is not None:
-                envelope = normalize_envelope(
-                    direct_fast_query,
-                    task_id=task_id,
-                    path="coordinator_fast_query",
-                )
-                if created_route_task_record:
-                    await self._finalize_ad_hoc_route_task_record(task_id, envelope)
-                return envelope
             route_config = self._build_route_config()
 
             result = await execute_task(

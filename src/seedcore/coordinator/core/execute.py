@@ -528,22 +528,6 @@ async def execute_task(
     route_config: RouteConfig,
     execution_config: ExecutionConfig,
 ) -> Dict[str, Any]:
-    # 0. DIRECT FAST GENERAL-QUERY SHORTCUT
-    # For a very narrow one-shot query shape, we can bypass eventizer,
-    # enrichment, drift, PKG, and routing entirely. This keeps the control
-    # plane honest about the "direct" path and materially reduces hot-path
-    # overhead for benchmark and shell-style fast queries.
-    direct_fast_query = await _handle_direct_fast_general_query(task, execution_config)
-    if direct_fast_query is not None:
-        final_result = normalize_envelope(
-            direct_fast_query,
-            task_id=task.task_id,
-            path="coordinator_fast_query",
-        )
-        if final_result.get("decision_kind") is None:
-            final_result["decision_kind"] = DecisionKind.FAST_PATH.value
-        return final_result
-
     task_context_dict = await _process_task_input(
         task=task,
         eventizer_helper=execution_config.eventizer_helper,
@@ -999,10 +983,6 @@ async def _handle_fast_path(
     _inject_operational_summary_hint(task, task_payload_dict)
 
     timeout = _clamp_timeout_s((config.fast_path_latency_slo_ms / 1000.0) * 2.0)
-
-    direct_fast_query = await _handle_direct_fast_general_query(task, config)
-    if direct_fast_query is not None:
-        return direct_fast_query
 
     try:
         return await config.organism_execute(

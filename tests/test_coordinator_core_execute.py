@@ -671,6 +671,76 @@ class TestExecuteTask:
         assert delegated_task["params"]["routing"]["tools"] == ["general_query"]
         assert delegated_task["params"]["tool_calls"][0]["name"] == "general_query"
 
+    async def test_query_routes_via_organism_even_when_cognitive_client_exists(self):
+        """Coordinator should not short-circuit query execution directly to CognitiveService."""
+        task = TaskPayload(
+            task_id="task-query-organism-route",
+            type="query",
+            description="What is the current system status?",
+            params={
+                "interaction": {"mode": "one_shot"},
+                "cognitive": {
+                    "metadata": {"intent_class": {"authority": "HIGH"}},
+                },
+            },
+        )
+
+        surprise_computer = FakeSurpriseComputer(return_value={
+            "S": 0.05,
+            "x": [0.0, 0.0, 0.0, 0.0, 0.1, 0.0],
+            "weights": [0.25, 0.20, 0.15, 0.20, 0.10, 0.10],
+            "decision": "fast",
+            "decision_kind": "fast",
+            "ocps": {"S_t": 0.0, "h": 0.5, "flag_on": False},
+        })
+
+        route_config = RouteConfig(
+            surprise_computer=surprise_computer,
+            ocps_valve=NeuralCUSUMValve(
+                expected_baseline=0.1,
+                min_detectable_change=0.2,
+                threshold=2.5,
+                sigma=0.15,
+            ),
+            tau_fast_exit=0.38,
+            tau_plan_exit=0.57,
+            evaluate_pkg_func=AsyncMock(return_value={}),
+            ood_to01=lambda x: x,
+            pkg_timeout_s=2,
+        )
+
+        organism_execute = AsyncMock(return_value={
+            "success": True,
+            "result": {"summary": "all systems nominal"},
+        })
+        cognitive_client = Mock()
+        cognitive_client.execute_async = AsyncMock(return_value={
+            "success": True,
+            "result": {"thought": "should not be used for direct query shortcut"},
+        })
+
+        execution_config = ExecutionConfig(
+            compute_drift_score=AsyncMock(return_value=0.0),
+            organism_execute=organism_execute,
+            graph_task_repo=Mock(),
+            ml_client=Mock(),
+            metrics=Mock(),
+            cid="test-cid",
+            normalize_domain=lambda x: x.lower() if x else None,
+            cognitive_client=cognitive_client,
+        )
+
+        result = await execute_task(
+            task=task,
+            route_config=route_config,
+            execution_config=execution_config,
+        )
+
+        assert result["success"] is True
+        assert result["decision_kind"] == DecisionKind.FAST_PATH.value
+        organism_execute.assert_awaited_once()
+        cognitive_client.execute_async.assert_not_awaited()
+
     async def test_operational_summary_empty_fast_result_is_downgraded_to_failure(self):
         """Operational summary queries should not report clean success with empty payloads."""
         task = TaskPayload(
