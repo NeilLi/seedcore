@@ -1287,6 +1287,11 @@ class CustodyTransitionDAO:
                 endpoint_id=self._coerce_str(payload.get("endpoint_id")),
                 receipt_hash=self._coerce_str(payload.get("receipt_hash")),
                 receipt_nonce=self._coerce_str(payload.get("receipt_nonce")),
+                receipt_counter=(
+                    int(payload.get("receipt_counter"))
+                    if payload.get("receipt_counter") is not None
+                    else None
+                ),
                 previous_transition_event_id=self._coerce_str(payload.get("previous_transition_event_id")),
                 previous_receipt_hash=self._coerce_str(payload.get("previous_receipt_hash")),
                 evidence_bundle_id=self._coerce_str(payload.get("evidence_bundle_id")),
@@ -1398,6 +1403,7 @@ class CustodyTransitionDAO:
             "endpoint_id": row.endpoint_id,
             "receipt_hash": row.receipt_hash,
             "receipt_nonce": row.receipt_nonce,
+            "receipt_counter": row.receipt_counter,
             "previous_transition_event_id": row.previous_transition_event_id,
             "previous_receipt_hash": row.previous_receipt_hash,
             "evidence_bundle_id": row.evidence_bundle_id,
@@ -1602,6 +1608,7 @@ class AssetCustodyStateDAO:
         last_transition_seq: Optional[int] = None,
         last_receipt_hash: Optional[str] = None,
         last_receipt_nonce: Optional[str] = None,
+        last_receipt_counter: Optional[int] = None,
         last_endpoint_id: Optional[str] = None,
         last_task_id: Optional[str] = None,
         last_intent_id: Optional[str] = None,
@@ -1627,6 +1634,7 @@ class AssetCustodyStateDAO:
                 last_transition_seq=int(last_transition_seq or 0),
                 last_receipt_hash=last_receipt_hash,
                 last_receipt_nonce=last_receipt_nonce,
+                last_receipt_counter=int(last_receipt_counter) if last_receipt_counter is not None else None,
                 last_endpoint_id=last_endpoint_id,
                 last_task_id=self._coerce_uuid(last_task_id),
                 last_intent_id=last_intent_id,
@@ -1656,6 +1664,8 @@ class AssetCustodyStateDAO:
             row.last_receipt_hash = str(last_receipt_hash)
         if last_receipt_nonce is not None:
             row.last_receipt_nonce = str(last_receipt_nonce)
+        if last_receipt_counter is not None:
+            row.last_receipt_counter = int(last_receipt_counter)
         if last_endpoint_id is not None:
             row.last_endpoint_id = str(last_endpoint_id)
         if last_task_id is not None:
@@ -1682,6 +1692,7 @@ class AssetCustodyStateDAO:
             "last_transition_seq": int(getattr(row, "last_transition_seq", 0) or 0),
             "last_receipt_hash": row.last_receipt_hash,
             "last_receipt_nonce": row.last_receipt_nonce,
+            "last_receipt_counter": row.last_receipt_counter,
             "last_endpoint_id": row.last_endpoint_id,
             "last_task_id": str(row.last_task_id) if row.last_task_id is not None else None,
             "last_intent_id": row.last_intent_id,

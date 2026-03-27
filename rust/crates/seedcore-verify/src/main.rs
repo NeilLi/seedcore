@@ -3,12 +3,12 @@ use seedcore_approval_core::{
 };
 use seedcore_kernel_testkit::FixtureStaticResolver;
 use seedcore_kernel_testkit::{
-    load_replay_bundle, load_transfer_fixture, run_transfer_fixture_dir, FixtureDebugSigner,
-    TransferVerificationReport,
+    load_transfer_fixture, run_transfer_fixture_dir, FixtureDebugSigner, TransferVerificationReport,
 };
 use seedcore_kernel_types::{
     ApprovalStatus, ApprovalTransitionEvent, ApprovalTransitionHistory, ArtifactHash, Disposition,
     ReplayArtifactPayload, RevocationRecord, RoleApproval, Timestamp, TransferApprovalEnvelope,
+    TransitionReceipt, TrustBundle, TrustProof,
 };
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_policy_core::FrozenDecisionInput;
@@ -119,12 +119,28 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         "verify-receipt" => {
             let artifact_path = flag_value(&args, "--artifact")?;
-            let report = verify_receipt_path(Path::new(&artifact_path))?;
+            let trust_bundle_path = optional_flag_value(&args, "--trust-bundle");
+            let previous_path = optional_flag_value(&args, "--previous");
+            let report = verify_receipt_path(
+                Path::new(&artifact_path),
+                trust_bundle_path.as_deref().map(Path::new),
+                previous_path.as_deref().map(Path::new),
+            )?;
             print_json(&report)
         }
         "verify-chain" => {
             let bundle_path = flag_value(&args, "--bundle")?;
-            let report = verify_chain_bundle(Path::new(&bundle_path))?;
+            let trust_bundle_path = optional_flag_value(&args, "--trust-bundle");
+            let report = verify_chain_bundle(
+                Path::new(&bundle_path),
+                trust_bundle_path.as_deref().map(Path::new),
+            )?;
+            print_json(&report)
+        }
+        "inspect-trust" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let trust_bundle_path = flag_value(&args, "--trust-bundle")?;
+            let report = inspect_trust_path(Path::new(&artifact_path), Path::new(&trust_bundle_path))?;
             print_json(&report)
         }
         "seal-replay-bundle" => {
@@ -145,7 +161,9 @@ fn usage() -> String {
     [
         "usage:",
         "  seedcore-verify verify-receipt --artifact <path>",
-        "  seedcore-verify verify-chain --bundle <path>",
+        "  seedcore-verify verify-receipt --artifact <path> --trust-bundle <path> [--previous <path>]",
+        "  seedcore-verify verify-chain --bundle <path> [--trust-bundle <path>]",
+        "  seedcore-verify inspect-trust --artifact <path> --trust-bundle <path>",
         "  seedcore-verify seal-replay-bundle --artifact <path>",
         "  seedcore-verify verify-transfer --dir <path>",
         "  seedcore-verify summarize-transfer --dir <path>",
@@ -537,8 +555,36 @@ fn validate_transition_history(history: &ApprovalTransitionHistory) -> Result<()
     Ok(())
 }
 
-fn verify_chain_bundle(path: &Path) -> Result<ReplayVerificationReport, String> {
+fn verify_chain_bundle(
+    path: &Path,
+    trust_bundle_path: Option<&Path>,
+) -> Result<ReplayVerificationReport, String> {
     let bundle: ReplayBundle = read_json_file(path)?;
+    if let Some(bundle_path) = trust_bundle_path {
+        let trust_bundle: TrustBundle = read_json_file(bundle_path)?;
+        let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
+        let mut report = verify_replay_chain(&bundle, &resolver);
+        for (index, artifact) in bundle.artifacts.iter().enumerate() {
+            let previous_transition = previous_transition_receipt(&bundle, index);
+            report.artifact_reports[index] = apply_trust_bundle_checks(
+                report.artifact_reports[index].clone(),
+                artifact,
+                &trust_bundle,
+                previous_transition,
+            );
+        }
+        report.verified = report.artifact_reports.iter().all(|item| item.verified)
+            && report.error_code.is_none()
+            && report.chain_checks.iter().all(|item| !item.contains("mismatch"));
+        if !report.verified && report.error_code.is_none() {
+            report.error_code = report
+                .artifact_reports
+                .iter()
+                .find_map(|item| item.error_code.clone())
+                .or_else(|| Some("replay_artifact_verification_failed".to_string()));
+        }
+        return Ok(report);
+    }
     Ok(verify_replay_chain(&bundle, &FixtureStaticResolver))
 }
 
@@ -572,9 +618,53 @@ fn seal_replay_bundle(input: ReplayBundleInput) -> Result<ReplayBundle, String> 
     Ok(ReplayBundle { artifacts: sealed })
 }
 
-fn verify_receipt_path(path: &Path) -> Result<VerificationReport, String> {
+fn verify_receipt_path(
+    path: &Path,
+    trust_bundle_path: Option<&Path>,
+    previous_path: Option<&Path>,
+) -> Result<VerificationReport, String> {
     let artifact: ReplayArtifact = read_json_file(path)?;
+    if let Some(bundle_path) = trust_bundle_path {
+        let trust_bundle: TrustBundle = read_json_file(bundle_path)?;
+        let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
+        let report = verify_receipt_artifact(&artifact, &resolver);
+        let previous_artifact = match previous_path {
+            Some(path) => Some(read_json_file(path)?),
+            None => None,
+        };
+        return Ok(apply_trust_bundle_checks(
+            report,
+            &artifact,
+            &trust_bundle,
+            previous_artifact.as_ref(),
+        ));
+    }
     Ok(verify_receipt_artifact(&artifact, &FixtureStaticResolver))
+}
+
+fn inspect_trust_path(path: &Path, trust_bundle_path: &Path) -> Result<TrustInspectionReport, String> {
+    let artifact: ReplayArtifact = read_json_file(path)?;
+    let trust_bundle: TrustBundle = read_json_file(trust_bundle_path)?;
+    let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
+    let verification = verify_receipt_artifact(&artifact, &resolver);
+    let checked = apply_trust_bundle_checks(verification, &artifact, &trust_bundle, None);
+    let trust_proof = trust_proof_from_artifact(&artifact).cloned();
+    Ok(TrustInspectionReport {
+        artifact_id: artifact.artifact_id.clone(),
+        artifact_type: artifact.payload.artifact_type().to_string(),
+        key_ref: artifact.signature.key_ref.clone(),
+        trust_proof,
+        signature_valid: checked.signature_valid,
+        artifact_hash_valid: checked.artifact_hash_valid,
+        trust_anchor_valid: checked.trust_anchor_valid,
+        attestation_valid: checked.attestation_valid,
+        revocation_valid: checked.revocation_valid,
+        replay_status: checked.replay_status,
+        transparency_status: checked.transparency_status,
+        verified: checked.verified,
+        error_code: checked.error_code,
+        details: checked.details,
+    })
 }
 
 fn enforce_token_path(
@@ -592,11 +682,247 @@ fn mint_token_path(claims_path: &Path) -> Result<ExecutionToken, String> {
     mint_token(claims, &FixtureDebugSigner).map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Clone)]
+struct TrustBundleResolver {
+    bundle: TrustBundle,
+}
+
+impl TrustBundleResolver {
+    fn from_bundle(bundle: &TrustBundle) -> Self {
+        Self {
+            bundle: bundle.clone(),
+        }
+    }
+}
+
+impl seedcore_proof_core::KeyResolver for TrustBundleResolver {
+    fn resolve(&self, key_ref: &str) -> Result<seedcore_proof_core::KeyMaterial, seedcore_proof_core::VerificationError> {
+        let Some(entry) = self.bundle.trusted_keys.get(key_ref) else {
+            return Err(seedcore_proof_core::VerificationError::KeyNotFound);
+        };
+        let mut metadata = entry.metadata.clone();
+        metadata.insert("key_algorithm".to_string(), entry.key_algorithm.clone());
+        metadata.insert("trust_anchor_type".to_string(), entry.trust_anchor_type.clone());
+        if let Some(value) = &entry.endpoint_id {
+            metadata.insert("endpoint_id".to_string(), value.clone());
+        }
+        if let Some(value) = &entry.node_id {
+            metadata.insert("node_id".to_string(), value.clone());
+        }
+        if let Some(value) = &entry.revocation_id {
+            metadata.insert("revocation_id".to_string(), value.clone());
+        }
+        Ok(seedcore_proof_core::KeyMaterial {
+            key_ref: key_ref.to_string(),
+            public_material: entry.public_key.clone(),
+            metadata,
+        })
+    }
+}
+
+fn apply_trust_bundle_checks(
+    mut report: VerificationReport,
+    artifact: &ReplayArtifact,
+    trust_bundle: &TrustBundle,
+    previous_transition: Option<&ReplayArtifact>,
+) -> VerificationReport {
+    if !report.artifact_hash_valid {
+        return report;
+    }
+    if !report.signature_valid {
+        return report;
+    }
+    let Some(trust_proof) = trust_proof_from_artifact(artifact) else {
+        return report;
+    };
+
+    report.trust_anchor_valid = trust_bundle.accepted_trust_anchor_types.is_empty()
+        || trust_bundle
+            .accepted_trust_anchor_types
+            .iter()
+            .any(|item| item == &trust_proof.trust_anchor_type);
+    if !report.trust_anchor_valid {
+        report.verified = false;
+        report.error_code = Some("invalid_trust_anchor".to_string());
+        return report;
+    }
+
+    if let Some(key_ref) = artifact.signature.key_ref.as_deref() {
+        if key_ref != trust_proof.key_ref {
+            report.verified = false;
+            report.error_code = Some("key_ref_mismatch".to_string());
+            return report;
+        }
+        if let Some(entry) = trust_bundle.trusted_keys.get(key_ref) {
+            if entry.key_algorithm != trust_proof.key_algorithm {
+                report.verified = false;
+                report.error_code = Some("invalid_key_algorithm".to_string());
+                return report;
+            }
+            if let Some(endpoint_id) = &entry.endpoint_id {
+                if !artifact_endpoint_matches(artifact, endpoint_id) {
+                    report.verified = false;
+                    report.error_code = Some("endpoint_binding_mismatch".to_string());
+                    return report;
+                }
+            }
+        }
+    }
+
+    report.attestation_valid = trust_proof
+        .attestation
+        .as_ref()
+        .map(|item| item.attestation_type != "none")
+        .unwrap_or(false);
+    if !report.attestation_valid {
+        report.verified = false;
+        report.error_code = Some("missing_attestation_binding".to_string());
+        return report;
+    }
+
+    report.revocation_valid = !is_trust_proof_revoked(trust_proof, artifact, trust_bundle);
+    if !report.revocation_valid {
+        report.verified = false;
+        report.error_code = Some("revoked_signer".to_string());
+        return report;
+    }
+
+    let replay_status = replay_status_for_artifact(artifact, trust_proof, previous_transition);
+    report.replay_status = replay_status.clone();
+    if replay_status == "replayed" {
+        report.verified = false;
+        report.error_code = Some("replayed".to_string());
+        return report;
+    }
+
+    report.transparency_status = trust_proof
+        .transparency
+        .as_ref()
+        .map(|item| item.status.clone())
+        .unwrap_or_else(|| "not_configured".to_string());
+    if report.transparency_status == "anchor_verification_failed" {
+        report.verified = false;
+        report.error_code = Some("anchor_verification_failed".to_string());
+        return report;
+    }
+
+    report
+}
+
+fn trust_proof_from_artifact(artifact: &ReplayArtifact) -> Option<&TrustProof> {
+    match &artifact.payload {
+        ReplayArtifactPayload::PolicyReceipt(value) => value.trust_proof.as_ref(),
+        ReplayArtifactPayload::TransitionReceipt(value) => value.trust_proof.as_ref(),
+        ReplayArtifactPayload::EvidenceBundle(value) => value.trust_proof.as_ref(),
+        _ => None,
+    }
+}
+
+fn artifact_endpoint_matches(artifact: &ReplayArtifact, expected: &str) -> bool {
+    match &artifact.payload {
+        ReplayArtifactPayload::TransitionReceipt(value) => value.endpoint_id == expected,
+        _ => true,
+    }
+}
+
+fn previous_transition_receipt(bundle: &ReplayBundle, index: usize) -> Option<&ReplayArtifact> {
+    if index == 0 {
+        return None;
+    }
+    for candidate in bundle.artifacts[..index].iter().rev() {
+        if matches!(candidate.payload, ReplayArtifactPayload::TransitionReceipt(_)) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn replay_status_for_artifact(
+    _artifact: &ReplayArtifact,
+    trust_proof: &TrustProof,
+    previous_transition: Option<&ReplayArtifact>,
+) -> String {
+    let Some(replay) = trust_proof.replay.as_ref() else {
+        return "not_proven_offline".to_string();
+    };
+    let Some(counter) = replay.receipt_counter else {
+        return "not_proven_offline".to_string();
+    };
+    if let Some(previous) = previous_transition {
+        if let ReplayArtifactPayload::TransitionReceipt(previous_receipt) = &previous.payload {
+            let previous_hash = previous_receipt.payload_hash.to_string();
+            let previous_counter = previous_receipt
+                .trust_proof
+                .as_ref()
+                .and_then(|item| item.replay.as_ref())
+                .and_then(|item| item.receipt_counter);
+            if replay.previous_receipt_hash.as_deref() != Some(previous_hash.as_str()) {
+                return "replayed".to_string();
+            }
+            if let Some(previous_counter) = previous_counter {
+                if counter <= previous_counter {
+                    return "replayed".to_string();
+                }
+            }
+            return "valid".to_string();
+        }
+    }
+    "not_proven_offline".to_string()
+}
+
+fn is_trust_proof_revoked(
+    trust_proof: &TrustProof,
+    artifact: &ReplayArtifact,
+    trust_bundle: &TrustBundle,
+) -> bool {
+    if trust_bundle.revoked_keys.iter().any(|item| item == &trust_proof.key_ref) {
+        return true;
+    }
+    if let Some(revocation_id) = &trust_proof.revocation_id {
+        if let Some(cutoff) = trust_bundle.revocation_cutoffs.get(revocation_id) {
+            if let Ok(cutoff_counter) = cutoff.parse::<u64>() {
+                let receipt_counter = trust_proof
+                    .replay
+                    .as_ref()
+                    .and_then(|item| item.receipt_counter)
+                    .unwrap_or_default();
+                if receipt_counter <= cutoff_counter {
+                    return true;
+                }
+            }
+        }
+    }
+    if let ReplayArtifactPayload::TransitionReceipt(TransitionReceipt { endpoint_id, .. }) = &artifact.payload {
+        if trust_bundle.revoked_nodes.iter().any(|item| item == endpoint_id) {
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PolicyEvaluationReport {
     verified: bool,
     disposition: String,
     execution_token_expected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TrustInspectionReport {
+    artifact_id: String,
+    artifact_type: String,
+    key_ref: Option<String>,
+    trust_proof: Option<TrustProof>,
+    signature_valid: bool,
+    artifact_hash_valid: bool,
+    trust_anchor_valid: bool,
+    attestation_valid: bool,
+    revocation_valid: bool,
+    replay_status: String,
+    transparency_status: String,
+    verified: bool,
+    error_code: Option<String>,
+    details: Vec<String>,
 }
 
 impl From<&PolicyEvaluation> for PolicyEvaluationReport {
@@ -763,6 +1089,7 @@ struct ReplayBundleInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seedcore_kernel_testkit::load_replay_bundle;
 
     fn fixture_dir(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -777,6 +1104,12 @@ mod tests {
     }
 
     fn receipt_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/receipts")
+            .join(name)
+    }
+
+    fn trust_bundle_fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/receipts")
             .join(name)
@@ -847,7 +1180,7 @@ mod tests {
 
     #[test]
     fn verify_replay_bundle_fixture() {
-        let report = verify_chain_bundle(&replay_bundle_fixture("allow_chain.json"))
+        let report = verify_chain_bundle(&replay_bundle_fixture("allow_chain.json"), None)
             .expect("allow replay bundle should verify");
         assert!(report.verified);
         assert_eq!(report.error_code, None);
@@ -858,7 +1191,7 @@ mod tests {
     fn verify_replay_bundle_fixture_with_approval_transition_chain() {
         let report = verify_chain_bundle(&replay_bundle_fixture(
             "allow_chain_with_approval_transition.json",
-        ))
+        ), None)
         .expect("approval transition replay bundle should verify");
         assert!(report.verified);
         assert_eq!(report.error_code, None);
@@ -871,11 +1204,44 @@ mod tests {
 
     #[test]
     fn verify_receipt_fixture() {
-        let report = verify_receipt_path(&receipt_fixture("policy_receipt_artifact.json"))
+        let report = verify_receipt_path(&receipt_fixture("policy_receipt_artifact.json"), None, None)
             .expect("policy receipt artifact should verify");
         assert!(report.verified);
         assert_eq!(report.error_code, None);
         assert_eq!(report.artifact_type, "policy_receipt");
+    }
+
+    #[test]
+    fn verify_restricted_transition_receipt_with_trust_bundle() {
+        let report = verify_receipt_path(
+            &receipt_fixture("restricted_transition_receipt_artifact.json"),
+            Some(&trust_bundle_fixture("restricted_transition_trust_bundle.json")),
+            None,
+        )
+        .expect("restricted transition receipt should verify with trust bundle");
+        assert!(report.verified);
+        assert!(report.signature_valid);
+        assert!(report.artifact_hash_valid);
+        assert!(report.trust_anchor_valid);
+        assert!(report.attestation_valid);
+        assert!(report.revocation_valid);
+        assert_eq!(report.transparency_status, "anchored");
+    }
+
+    #[test]
+    fn verify_restricted_transition_receipt_rejects_revoked_key() {
+        let artifact: ReplayArtifact = read_json_file(receipt_fixture("restricted_transition_receipt_artifact.json"))
+            .expect("restricted transition receipt fixture should load");
+        let mut trust_bundle: TrustBundle =
+            read_json_file(trust_bundle_fixture("restricted_transition_trust_bundle.json"))
+                .expect("restricted trust bundle fixture should load");
+        trust_bundle.revoked_keys.push("tpm-phase-a-key-01".to_string());
+        let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
+        let base = verify_receipt_artifact(&artifact, &resolver);
+        let report = apply_trust_bundle_checks(base, &artifact, &trust_bundle, None);
+        assert!(!report.verified);
+        assert_eq!(report.error_code.as_deref(), Some("revoked_signer"));
+        assert!(!report.revocation_valid);
     }
 
     #[test]

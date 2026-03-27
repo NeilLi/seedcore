@@ -661,6 +661,11 @@ def _build_actuation_transition_receipt(
     target_zone = constraints.get("target_zone")
     from_zone = constraints.get("current_zone")
     to_zone = target_zone if isinstance(target_zone, str) and target_zone.strip() else None
+    workflow_type = None
+    if isinstance(constraints.get("approval_envelope_id"), str) and constraints.get("approval_envelope_id"):
+        workflow_type = "custody_transfer"
+    elif isinstance(constraints.get("workflow_type"), str) and constraints.get("workflow_type"):
+        workflow_type = str(constraints.get("workflow_type"))
 
     return build_transition_receipt(
         intent_id=intent_id,
@@ -671,6 +676,17 @@ def _build_actuation_transition_receipt(
         target_zone=str(target_zone) if target_zone is not None else None,
         from_zone=str(from_zone) if from_zone is not None else None,
         to_zone=to_zone,
+        workflow_type=workflow_type,
+        previous_receipt_hash=(
+            str(constraints.get("previous_receipt_hash"))
+            if constraints.get("previous_receipt_hash") is not None
+            else None
+        ),
+        previous_receipt_counter=(
+            int(constraints.get("previous_receipt_counter"))
+            if constraints.get("previous_receipt_counter") is not None
+            else None
+        ),
     )
 
 

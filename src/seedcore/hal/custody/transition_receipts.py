@@ -1,26 +1,24 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
+import json
 import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-
-from seedcore.models.evidence_bundle import SignerMetadata, TransitionReceipt
+from seedcore.models.evidence_bundle import SignerMetadata, TransitionReceipt, TrustProof
 from seedcore.ops.evidence.policy import (
     canonical_json,
-    load_ed25519_public_key,
     resolve_public_key_from_registry,
     sha256_hex,
     verify_payload_signature,
 )
-from seedcore.ops.evidence.signers import get_signer_policy
+from seedcore.ops.evidence.signers import (
+    ECDSA_P256_SCHEME,
+    RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPES,
+)
+from seedcore.ops.evidence.verification import build_signed_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +35,16 @@ def build_transition_receipt(
     to_zone: Optional[str] = None,
     executed_at: Optional[str] = None,
     receipt_nonce: Optional[str] = None,
+    workflow_type: Optional[str] = None,
+    previous_receipt_hash: Optional[str] = None,
+    previous_receipt_counter: Optional[int] = None,
 ) -> Dict[str, Any]:
     payload = {
         "transition_receipt_id": str(uuid.uuid4()),
         "intent_id": str(intent_id),
         "execution_token_id": str(token_id),
         "endpoint_id": str(actuator_endpoint),
+        "workflow_type": str(workflow_type) if workflow_type is not None else None,
         "hardware_uuid": str(hardware_uuid),
         "actuator_result_hash": str(actuator_result_hash),
         "target_zone": str(target_zone) if target_zone is not None else None,
@@ -50,17 +52,37 @@ def build_transition_receipt(
         "to_zone": str(to_zone) if to_zone is not None else None,
         "executed_at": executed_at or datetime.now(timezone.utc).isoformat(),
         "receipt_nonce": receipt_nonce or str(uuid.uuid4()),
+        "previous_receipt_hash": (
+            str(previous_receipt_hash)
+            if previous_receipt_hash is not None
+            else None
+        ),
+        "previous_receipt_counter": (
+            int(previous_receipt_counter)
+            if previous_receipt_counter is not None
+            else None
+        ),
     }
-    payload_hash = sha256_hex(canonical_json(payload))
-    signer_metadata, signature = _sign_transition_payload(
-        payload_hash=payload_hash,
+    signing_payload = dict(payload)
+    payload_hash, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="transition_receipt",
+        payload=signing_payload,
         endpoint_id=actuator_endpoint,
+        trust_level=(
+            "attested"
+            if is_attestable_transition_endpoint(actuator_endpoint)
+            else "baseline"
+        ),
+        node_id=actuator_endpoint,
     )
+    payload.pop("previous_receipt_hash", None)
+    payload.pop("previous_receipt_counter", None)
     return TransitionReceipt(
         **payload,
         payload_hash=payload_hash,
         signer_metadata=signer_metadata,
         signature=signature,
+        trust_proof=trust_proof,
     ).model_dump(mode="json")
 
 
@@ -70,12 +92,16 @@ def verify_transition_receipt(
     expected_intent_id: Optional[str] = None,
     expected_token_id: Optional[str] = None,
     expected_endpoint_id: Optional[str] = None,
+    expected_previous_receipt_hash: Optional[str] = None,
+    expected_min_receipt_counter: Optional[int] = None,
 ) -> Optional[str]:
     return verify_transition_receipt_result(
         receipt,
         expected_intent_id=expected_intent_id,
         expected_token_id=expected_token_id,
         expected_endpoint_id=expected_endpoint_id,
+        expected_previous_receipt_hash=expected_previous_receipt_hash,
+        expected_min_receipt_counter=expected_min_receipt_counter,
     ).get("error")
 
 
@@ -85,6 +111,8 @@ def verify_transition_receipt_result(
     expected_intent_id: Optional[str] = None,
     expected_token_id: Optional[str] = None,
     expected_endpoint_id: Optional[str] = None,
+    expected_previous_receipt_hash: Optional[str] = None,
+    expected_min_receipt_counter: Optional[int] = None,
 ) -> Dict[str, Any]:
     try:
         model = TransitionReceipt(**dict(receipt))
@@ -96,9 +124,12 @@ def verify_transition_receipt_result(
             "policy": {},
         }
 
-    payload = model.model_dump(mode="json", exclude={"payload_hash", "signer_metadata", "signature"})
+    payload = model.model_dump(
+        mode="json",
+        exclude={"payload_hash", "signer_metadata", "signature", "trust_proof"},
+    )
     expected_hash = sha256_hex(canonical_json(payload))
-    if not hmac.compare_digest(model.payload_hash, expected_hash):
+    if model.payload_hash != expected_hash:
         return {
             "artifact_type": "transition_receipt",
             "verified": False,
@@ -118,7 +149,7 @@ def verify_transition_receipt_result(
             else "baseline"
         ),
         attested=is_attestable_transition_endpoint(model.endpoint_id),
-        public_key_resolver=_resolve_ed25519_public_key,
+        public_key_resolver=_resolve_public_key,
         secret_resolver=lambda _metadata: os.getenv(
             "SEEDCORE_HAL_RECEIPT_SIGNING_SECRET",
             "seedcore-hal-receipt-secret",
@@ -126,6 +157,21 @@ def verify_transition_receipt_result(
     )
     if verification.get("error") is not None:
         return verification
+
+    trust_proof = model.trust_proof
+    if _requires_restricted_receipt_hardening(model):
+        trust_error = _verify_restricted_trust_proof(
+            model,
+            expected_previous_receipt_hash=expected_previous_receipt_hash,
+            expected_min_receipt_counter=expected_min_receipt_counter,
+        )
+        if trust_error is not None:
+            verification["verified"] = False
+            verification["error"] = trust_error
+            return verification
+    elif trust_proof is not None:
+        verification["trust_anchor_type"] = trust_proof.trust_anchor_type
+        verification["replay"] = trust_proof.replay.model_dump(mode="json") if trust_proof.replay is not None else {}
 
     if expected_intent_id is not None and model.intent_id != str(expected_intent_id):
         verification["verified"] = False
@@ -161,66 +207,7 @@ def is_attestable_transition_endpoint(endpoint_id: Optional[str]) -> bool:
     return normalized.startswith("hal://") or normalized.startswith("robot_sim://")
 
 
-def _sign_transition_payload(
-    *,
-    payload_hash: str,
-    endpoint_id: str,
-) -> tuple[SignerMetadata, str]:
-    policy = get_signer_policy(
-        artifact_type="transition_receipt",
-        endpoint_id=endpoint_id,
-        attested=is_attestable_transition_endpoint(endpoint_id),
-    )
-    private_key = _load_ed25519_private_key()
-    if policy.preferred_scheme == "ed25519" and private_key is not None:
-        public_key = private_key.public_key()
-        public_key_bytes = public_key.public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
-        key_ref = os.getenv("SEEDCORE_HAL_RECEIPT_KEY_ID") or _derive_key_ref(public_key_bytes)
-        signature = base64.b64encode(
-            private_key.sign(payload_hash.encode("utf-8"))
-        ).decode("ascii")
-        metadata = SignerMetadata(
-            signer_type="hal_endpoint",
-            signer_id=endpoint_id,
-            signing_scheme="ed25519",
-            key_ref=key_ref,
-            attestation_level="attested",
-            node_id=endpoint_id,
-            config_profile=policy.config_profile,
-        )
-        return metadata, signature
-
-    if policy.require_attestation:
-        raise ValueError("transition_receipt requires Ed25519 signing on attested endpoints")
-
-    metadata = SignerMetadata(
-        signer_type="hal_endpoint",
-        signer_id=endpoint_id,
-        signing_scheme="hmac_sha256",
-        key_ref=os.getenv("SEEDCORE_HAL_RECEIPT_KEY_ID"),
-        attestation_level="baseline",
-        node_id=endpoint_id,
-        config_profile=policy.config_profile,
-    )
-    return metadata, _sign_payload_hash(payload_hash)
-
-
-def _sign_payload_hash(payload_hash: str) -> str:
-    secret = os.getenv(
-        "SEEDCORE_HAL_RECEIPT_SIGNING_SECRET",
-        "seedcore-hal-receipt-secret",
-    )
-    return hmac.new(
-        secret.encode("utf-8"),
-        payload_hash.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
-
-def _resolve_ed25519_public_key(metadata: SignerMetadata) -> Optional[Ed25519PublicKey]:
+def _resolve_public_key(metadata: SignerMetadata):
     return resolve_public_key_from_registry(
         metadata,
         registry_env="SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON",
@@ -228,32 +215,86 @@ def _resolve_ed25519_public_key(metadata: SignerMetadata) -> Optional[Ed25519Pub
     )
 
 
-def _load_ed25519_private_key() -> Optional[Ed25519PrivateKey]:
-    encoded = os.getenv("SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64", "").strip()
-    pem = os.getenv("SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_PEM", "").strip()
-    if pem:
-        try:
-            loaded = serialization.load_pem_private_key(
-                pem.encode("utf-8"),
-                password=None,
-            )
-            if isinstance(loaded, Ed25519PrivateKey):
-                return loaded
-            return None
-        except Exception:
-            return None
-    if not encoded:
-        return None
+def _requires_restricted_receipt_hardening(model: TransitionReceipt) -> bool:
+    if not is_attestable_transition_endpoint(model.endpoint_id):
+        return False
+    workflow_type = str(model.workflow_type or "").strip().lower()
+    return workflow_type in RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPES
+
+
+def _verify_restricted_trust_proof(
+    model: TransitionReceipt,
+    *,
+    expected_previous_receipt_hash: Optional[str],
+    expected_min_receipt_counter: Optional[int],
+) -> Optional[str]:
+    proof = model.trust_proof
+    if proof is None:
+        return "missing_trust_proof"
+    if proof.signer_profile != "receipt":
+        return "invalid_signer_profile"
+    if proof.key_algorithm != ECDSA_P256_SCHEME:
+        return "invalid_key_algorithm"
+    if proof.trust_anchor_type not in {"tpm2", "kms", "vtpm"}:
+        return "invalid_trust_anchor"
+    if proof.replay is None:
+        return "missing_replay_proof"
+    if proof.replay.receipt_nonce != model.receipt_nonce:
+        return "receipt_nonce_mismatch"
+    if proof.replay.receipt_counter is None:
+        return "missing_receipt_counter"
+    if (
+        expected_min_receipt_counter is not None
+        and int(proof.replay.receipt_counter) <= int(expected_min_receipt_counter)
+    ):
+        return "receipt_counter_replayed"
+    if expected_previous_receipt_hash is not None and proof.replay.previous_receipt_hash != str(expected_previous_receipt_hash):
+        return "previous_receipt_hash_mismatch"
+    if _is_revoked(model.endpoint_id, proof):
+        return "revoked_signer"
+    transparency = proof.transparency
+    if transparency is not None and transparency.status not in {"not_configured", "anchored"}:
+        return "invalid_transparency_status"
+    return None
+
+
+def _is_revoked(endpoint_id: str, proof: TrustProof) -> bool:
+    revoked_keys = _load_string_set("SEEDCORE_TRUST_REVOKED_KEY_REFS_JSON")
+    revoked_nodes = _load_string_set("SEEDCORE_TRUST_REVOKED_NODE_IDS_JSON")
+    revoked_ids = _load_string_set("SEEDCORE_TRUST_REVOKED_REVOCATION_IDS_JSON")
+    if proof.key_ref in revoked_keys:
+        return True
+    if endpoint_id in revoked_nodes:
+        return True
+    if proof.revocation_id and proof.revocation_id in revoked_ids:
+        return True
+    cutoffs = _load_json_object("SEEDCORE_TRUST_REVOKED_BEFORE_JSON")
+    if proof.revocation_id and proof.revocation_id in cutoffs:
+        cutoff = cutoffs.get(proof.revocation_id)
+        if isinstance(cutoff, int) and proof.replay is not None and proof.replay.receipt_counter is not None:
+            return int(proof.replay.receipt_counter) <= cutoff
+    return False
+
+
+def _load_string_set(name: str) -> set[str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return set()
     try:
-        key_bytes = base64.b64decode(encoded, validate=True)
-        return Ed25519PrivateKey.from_private_bytes(key_bytes)
+        data = json.loads(raw)
     except Exception:
-        return None
+        return set()
+    if not isinstance(data, list):
+        return set()
+    return {str(item).strip() for item in data if str(item).strip()}
 
 
-def _load_ed25519_public_key(value: str) -> Optional[Ed25519PublicKey]:
-    return load_ed25519_public_key(value)
-
-
-def _derive_key_ref(public_key_bytes: bytes) -> str:
-    return hashlib.sha256(public_key_bytes).hexdigest()[:16]
+def _load_json_object(name: str) -> dict[str, Any]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}

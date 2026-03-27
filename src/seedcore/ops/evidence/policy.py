@@ -8,12 +8,13 @@ import os
 from typing import Any, Callable, Mapping, Optional
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from seedcore.models.evidence_bundle import SignerMetadata
-from seedcore.ops.evidence.signers import ArtifactSignerPolicy, get_signer_policy
+from seedcore.ops.evidence.signers import ArtifactSignerPolicy, ECDSA_P256_SCHEME, get_signer_policy
 
-PublicKeyResolver = Callable[[SignerMetadata], Optional[Ed25519PublicKey]]
+PublicKeyResolver = Callable[[SignerMetadata], Optional[Any]]
 SecretResolver = Callable[[SignerMetadata], Optional[str]]
 
 
@@ -126,6 +127,28 @@ def verify_payload_signature(
         result["verified"] = True
         return result
 
+    if metadata.signing_scheme == ECDSA_P256_SCHEME:
+        public_key = public_key_resolver(metadata) if public_key_resolver is not None else None
+        if public_key is None or not isinstance(public_key, ec.EllipticCurvePublicKey):
+            result["error"] = "missing_public_key"
+            return result
+        try:
+            signature_bytes = base64.b64decode(signature, validate=True)
+        except Exception:
+            result["error"] = "invalid_signature_encoding"
+            return result
+        try:
+            public_key.verify(
+                signature_bytes,
+                payload_hash.encode("utf-8"),
+                ec.ECDSA(hashlib_to_cryptography_hash("sha256")),
+            )
+        except Exception:
+            result["error"] = "signature_mismatch"
+            return result
+        result["verified"] = True
+        return result
+
     result["error"] = "unsupported_signing_scheme"
     return result
 
@@ -139,6 +162,19 @@ def load_ed25519_public_key(value: str) -> Optional[Ed25519PublicKey]:
             return None
         key_bytes = base64.b64decode(value, validate=True)
         return Ed25519PublicKey.from_public_bytes(key_bytes)
+    except Exception:
+        return None
+
+
+def load_p256_public_key(value: str) -> Optional[ec.EllipticCurvePublicKey]:
+    try:
+        if "BEGIN PUBLIC KEY" in value:
+            loaded = serialization.load_pem_public_key(value.encode("utf-8"))
+            if isinstance(loaded, ec.EllipticCurvePublicKey):
+                return loaded
+            return None
+        key_bytes = base64.b64decode(value, validate=True)
+        return ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), key_bytes)
     except Exception:
         return None
 
@@ -163,14 +199,14 @@ def resolve_public_key_from_registry(
         if isinstance(candidate, str) and candidate.strip():
             public_key = _extract_registry_public_key(registry.get(candidate.strip()))
             if public_key is not None:
-                return load_ed25519_public_key(public_key)
+                return load_public_key_for_scheme(metadata.signing_scheme, public_key)
     for value in registry.values():
         if not isinstance(value, dict):
             continue
         if value.get("key_id") == metadata.key_ref:
             public_key = _extract_registry_public_key(value)
             if public_key is not None:
-                return load_ed25519_public_key(public_key)
+                return load_public_key_for_scheme(metadata.signing_scheme, public_key)
     return None
 
 
@@ -228,3 +264,19 @@ def _extract_registry_public_key(value: Any) -> Optional[str]:
         if isinstance(public_key, str) and public_key.strip():
             return public_key.strip()
     return None
+
+
+def load_public_key_for_scheme(signing_scheme: str, value: str) -> Optional[Any]:
+    if signing_scheme == "ed25519":
+        return load_ed25519_public_key(value)
+    if signing_scheme == ECDSA_P256_SCHEME:
+        return load_p256_public_key(value)
+    return None
+
+
+def hashlib_to_cryptography_hash(name: str):
+    if name == "sha256":
+        from cryptography.hazmat.primitives import hashes
+
+        return hashes.SHA256()
+    raise ValueError(f"unsupported_hash:{name}")

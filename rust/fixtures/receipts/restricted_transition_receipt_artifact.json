@@ -1,0 +1,93 @@
+{
+  "artifact_id": "transition-receipt-phase-a-001",
+  "artifact_type": "transition_receipt",
+  "artifact": {
+    "transition_receipt_id": "transition-receipt-phase-a-001",
+    "intent_id": "intent-transfer-phase-a-001",
+    "execution_token_id": "token-transfer-phase-a-001",
+    "endpoint_id": "hal://phase-a-edge-01",
+    "workflow_type": "custody_transfer",
+    "hardware_uuid": "hw-phase-a-001",
+    "actuator_result_hash": {
+      "algorithm": "sha256",
+      "value": "4f8e3e11c20b2a7f2d5d6a4d8c4f3a876f4fef39c6f93b4f4c032f1f4ad1fd0a"
+    },
+    "from_zone": "vault_a",
+    "to_zone": "handoff_bay_3",
+    "executed_at": "2026-04-02T08:00:20+00:00",
+    "receipt_nonce": "nonce-phase-a-001",
+    "payload_hash": {
+      "algorithm": "sha256",
+      "value": "ab56b4d92b40713acc5af89985d4b7864b2d8d3e7d0f6f0a8f3dfb0c1a6f9e88"
+    },
+    "signer": {
+      "signer_type": "hal_endpoint",
+      "signer_id": "hal://phase-a-edge-01",
+      "signing_scheme": "ecdsa_p256_sha256",
+      "key_ref": "tpm-phase-a-key-01",
+      "attestation_level": "attested",
+      "signature": "fixture-inner-signature-phase-a-001"
+    },
+    "trust_proof": {
+      "signer_profile": "receipt",
+      "trust_anchor_type": "tpm2",
+      "key_algorithm": "ecdsa_p256_sha256",
+      "key_ref": "tpm-phase-a-key-01",
+      "public_key_fingerprint": "sha256:01069ccca6cb7a96a625872747084d75062ced6dc0057b2d55c11fc2d8a4664b",
+      "key_binding": {
+        "binding_type": "tpm2_ak_binding",
+        "key_handle": "0x81010020",
+        "key_label": "hal://phase-a-edge-01",
+        "certificate_chain": [
+          "ak-cert-phase-a"
+        ],
+        "metadata": {
+          "provider_mode": "fixture"
+        }
+      },
+      "attestation": {
+        "attestation_type": "tpm2_ak_binding",
+        "ak_key_ref": "ak-phase-a-01",
+        "quote": "fixture-quote-phase-a",
+        "endorsement_chain": [
+          "ek-cert-phase-a"
+        ],
+        "summary": {
+          "endpoint_id": "hal://phase-a-edge-01",
+          "node_id": "hal://phase-a-edge-01",
+          "attestation_level": "attested",
+          "workflow_type": "custody_transfer"
+        },
+        "issued_at": "2026-04-02T08:00:20+00:00"
+      },
+      "replay": {
+        "receipt_nonce": "nonce-phase-a-001",
+        "receipt_counter": 1
+      },
+      "revocation_id": "tpm2:tpm-phase-a-key-01",
+      "transparency": {
+        "status": "anchored",
+        "log_url": "https://rekor.sigstore.dev",
+        "entry_id": "rekor-entry-phase-a-001",
+        "integrated_time": "2026-04-02T08:00:21+00:00",
+        "proof_hash": "proof-phase-a-001",
+        "details": {
+          "provider": "fixture"
+        }
+      }
+    }
+  },
+  "artifact_hash": {
+    "algorithm": "sha256",
+    "value": "0a00cd59ca434aa8b155b38b9d7c136f058922638e6f91c3b548b09a1b4c7660"
+  },
+  "signature": {
+    "signer_type": "hal_endpoint",
+    "signer_id": "hal://phase-a-edge-01",
+    "signing_scheme": "ecdsa_p256_sha256",
+    "key_ref": "tpm-phase-a-key-01",
+    "attestation_level": "attested",
+    "signature": "MEUCIQDhMGgjZJrjCDq/XtCs/bJETSPCB8nPUBiY1ndvLQvLGgIgBzhkCKQeaFcpi6dPBZY+QXI5NhsyoQJKWJ2Uxy/CA5s="
+  },
+  "previous_artifact_hash": null
+}

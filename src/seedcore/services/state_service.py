@@ -633,6 +633,7 @@ def _project_asset_custody_states(rows: list[AssetCustodyState]) -> Dict[str, An
             "last_transition_seq": int(getattr(row, "last_transition_seq", 0) or 0),
             "last_receipt_hash": row.last_receipt_hash,
             "last_receipt_nonce": row.last_receipt_nonce,
+            "last_receipt_counter": getattr(row, "last_receipt_counter", None),
             "last_endpoint_id": row.last_endpoint_id,
             "updated_at": (
                 row.updated_at.isoformat()

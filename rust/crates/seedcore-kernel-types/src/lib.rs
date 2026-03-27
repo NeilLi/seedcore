@@ -134,6 +134,142 @@ pub struct SignatureEnvelope {
     pub signature: String,
 }
 
+/// Key-binding evidence for a trust-bearing signer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KeyBindingProof {
+    pub binding_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_label: Option<String>,
+    #[serde(default)]
+    pub certificate_chain: Vec<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Attestation summary bound to a trust-bearing signer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AttestationProof {
+    pub attestation_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ak_key_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    #[serde(default)]
+    pub endorsement_chain: Vec<String>,
+    #[serde(default)]
+    pub summary: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+}
+
+/// Replay-protection proof carried by attested transition receipts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ReplayProof {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_counter: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_receipt_hash: Option<String>,
+}
+
+/// External transparency anchoring metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TransparencyProof {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrated_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_hash: Option<String>,
+    #[serde(default)]
+    pub details: BTreeMap<String, String>,
+}
+
+/// Shared trust-bearing proof envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TrustProof {
+    pub signer_profile: String,
+    pub trust_anchor_type: String,
+    pub key_algorithm: String,
+    pub key_ref: String,
+    pub public_key_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_binding: Option<KeyBindingProof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<AttestationProof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ReplayProof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<TransparencyProof>,
+}
+
+/// Trusted verification key entry loaded by `seedcore-verify`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TrustBundleKey {
+    pub key_ref: String,
+    pub key_algorithm: String,
+    pub public_key: String,
+    pub trust_anchor_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_root: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Transparency configuration distributed with a trust bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TrustBundleTransparencyConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Standalone trust bundle used by the offline verifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TrustBundle {
+    pub version: String,
+    #[serde(default)]
+    pub trusted_keys: BTreeMap<String, TrustBundleKey>,
+    #[serde(default)]
+    pub endpoint_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub node_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub accepted_trust_anchor_types: Vec<String>,
+    #[serde(default)]
+    pub attestation_roots: BTreeMap<String, String>,
+    #[serde(default)]
+    pub revoked_keys: Vec<String>,
+    #[serde(default)]
+    pub revoked_nodes: Vec<String>,
+    #[serde(default)]
+    pub revocation_cutoffs: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<TrustBundleTransparencyConfig>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
 /// Deterministic obligation entry included in the explanation payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Obligation {
@@ -369,6 +505,8 @@ pub struct PolicyReceipt {
     pub governed_receipt_hash: ArtifactHash,
     pub signer: SignatureEnvelope,
     pub timestamp: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_proof: Option<TrustProof>,
 }
 
 /// Canonical transition receipt artifact.
@@ -378,6 +516,8 @@ pub struct TransitionReceipt {
     pub intent_id: String,
     pub execution_token_id: String,
     pub endpoint_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_type: Option<String>,
     pub hardware_uuid: String,
     pub actuator_result_hash: ArtifactHash,
     pub from_zone: Option<String>,
@@ -386,6 +526,8 @@ pub struct TransitionReceipt {
     pub receipt_nonce: String,
     pub payload_hash: ArtifactHash,
     pub signer: SignatureEnvelope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_proof: Option<TrustProof>,
 }
 
 /// Telemetry reference bound into an evidence bundle.
@@ -419,6 +561,8 @@ pub struct EvidenceBundle {
     pub media_refs: Vec<MediaRef>,
     pub signer: SignatureEnvelope,
     pub created_at: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_proof: Option<TrustProof>,
 }
 
 /// Typed replay artifact payload variants for offline chain verification.

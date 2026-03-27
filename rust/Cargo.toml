@@ -17,6 +17,7 @@ authors = ["SeedCore Contributors <contributors@seedcore.ai>"]
 repository = "https://github.com/NeilLi/seedcore"
 
 [workspace.dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }

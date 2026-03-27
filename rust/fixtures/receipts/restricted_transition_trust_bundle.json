@@ -1,0 +1,41 @@
+{
+  "version": "phase_a_v1",
+  "trusted_keys": {
+    "tpm-phase-a-key-01": {
+      "key_ref": "tpm-phase-a-key-01",
+      "key_algorithm": "ecdsa_p256_sha256",
+      "public_key": "BD2Ln1bf8fbp5LMDFFuNjKDNPw29UyTJ1PK3QkwlRRnXGtA+3PXiA0EUtdLWlylqxGt6fTQ8bpcAmVhO8pl09LU=",
+      "trust_anchor_type": "tpm2",
+      "signer_profile": "receipt",
+      "endpoint_id": "hal://phase-a-edge-01",
+      "node_id": "hal://phase-a-edge-01",
+      "revocation_id": "tpm2:tpm-phase-a-key-01",
+      "attestation_root": "ak-phase-a-01",
+      "metadata": {}
+    }
+  },
+  "endpoint_bindings": {
+    "hal://phase-a-edge-01": "tpm-phase-a-key-01"
+  },
+  "node_bindings": {
+    "hal://phase-a-edge-01": "tpm-phase-a-key-01"
+  },
+  "accepted_trust_anchor_types": [
+    "tpm2",
+    "kms",
+    "vtpm"
+  ],
+  "attestation_roots": {
+    "ak-phase-a-01": "fixture-root"
+  },
+  "revoked_keys": [],
+  "revoked_nodes": [],
+  "revocation_cutoffs": {},
+  "transparency": {
+    "enabled": true,
+    "log_url": "https://rekor.sigstore.dev",
+    "public_key": "fixture-rekor-key",
+    "metadata": {}
+  },
+  "metadata": {}
+}

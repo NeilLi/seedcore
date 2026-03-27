@@ -32,6 +32,7 @@ class AssetCustodyState(Base):
     last_transition_seq: Mapped[int] = mapped_column(nullable=False, default=0)
     last_receipt_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     last_receipt_nonce: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    last_receipt_counter: Mapped[Optional[int]] = mapped_column(nullable=True)
     last_endpoint_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     last_task_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True),

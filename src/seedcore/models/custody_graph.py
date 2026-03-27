@@ -75,6 +75,7 @@ class CustodyTransitionEvent(Base):
     endpoint_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     receipt_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     receipt_nonce: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    receipt_counter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     previous_transition_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     previous_receipt_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     evidence_bundle_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

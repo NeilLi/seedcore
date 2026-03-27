@@ -3,15 +3,20 @@
 //! This crate will own canonical serialization, hashing, signing abstractions,
 //! artifact verification, and replay-chain verification.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 pub use seedcore_kernel_types::{
     ArtifactHash, Placeholder as KernelPlaceholder, ReplayArtifact, ReplayArtifactPayload,
-    ReplayBundle, SignatureEnvelope,
+    ReplayBundle, SignatureEnvelope, TrustBundle, TrustBundleKey, TrustProof,
 };
 
 /// Error raised when an artifact cannot be canonicalized deterministically.
@@ -37,6 +42,8 @@ pub enum VerificationError {
     KeyNotFound,
     #[error("unsupported_signing_scheme")]
     UnsupportedSigningScheme,
+    #[error("invalid_key_material")]
+    InvalidKeyMaterial,
 }
 
 /// Top-level proof-core error.
@@ -90,6 +97,13 @@ pub struct VerificationReport {
     pub artifact_type: String,
     pub error_code: Option<String>,
     pub details: Vec<String>,
+    pub signature_valid: bool,
+    pub artifact_hash_valid: bool,
+    pub trust_anchor_valid: bool,
+    pub attestation_valid: bool,
+    pub revocation_valid: bool,
+    pub replay_status: String,
+    pub transparency_status: String,
 }
 
 /// Machine-readable report for replay-chain verification.
@@ -149,6 +163,13 @@ pub fn verify_signed_artifact<T: CanonicalArtifact>(
                 artifact_type: std::any::type_name::<T>().to_string(),
                 error_code: Some("canonicalization_failed".to_string()),
                 details: vec![error.to_string()],
+                signature_valid: false,
+                artifact_hash_valid: false,
+                trust_anchor_valid: false,
+                attestation_valid: false,
+                revocation_valid: false,
+                replay_status: "not_proven_offline".to_string(),
+                transparency_status: "not_configured".to_string(),
             };
         }
     };
@@ -162,6 +183,13 @@ pub fn verify_signed_artifact<T: CanonicalArtifact>(
                 format!("expected={}", artifact.artifact_hash),
                 format!("computed={}", computed_hash),
             ],
+            signature_valid: false,
+            artifact_hash_valid: false,
+            trust_anchor_valid: false,
+            attestation_valid: false,
+            revocation_valid: false,
+            replay_status: "not_proven_offline".to_string(),
+            transparency_status: "not_configured".to_string(),
         };
     }
 
@@ -263,6 +291,13 @@ fn verify_replay_artifact_item(
                 artifact_type: artifact.payload.artifact_type().to_string(),
                 error_code: Some("canonicalization_failed".to_string()),
                 details: vec![error.to_string()],
+                signature_valid: false,
+                artifact_hash_valid: false,
+                trust_anchor_valid: false,
+                attestation_valid: false,
+                revocation_valid: false,
+                replay_status: "not_proven_offline".to_string(),
+                transparency_status: "not_configured".to_string(),
             };
         }
     };
@@ -276,6 +311,13 @@ fn verify_replay_artifact_item(
                 format!("expected={}", artifact.artifact_hash),
                 format!("computed={}", computed_hash),
             ],
+            signature_valid: false,
+            artifact_hash_valid: false,
+            trust_anchor_valid: false,
+            attestation_valid: false,
+            revocation_valid: false,
+            replay_status: "not_proven_offline".to_string(),
+            transparency_status: "not_configured".to_string(),
         };
     }
 
@@ -299,6 +341,13 @@ fn verify_signature_envelope(
             artifact_type,
             error_code: Some(VerificationError::MissingKeyRef.to_string()),
             details: Vec::new(),
+            signature_valid: false,
+            artifact_hash_valid: true,
+            trust_anchor_valid: false,
+            attestation_valid: false,
+            revocation_valid: false,
+            replay_status: "not_proven_offline".to_string(),
+            transparency_status: "not_configured".to_string(),
         };
     };
 
@@ -308,6 +357,13 @@ fn verify_signature_envelope(
             artifact_type,
             error_code: Some(error.to_string()),
             details: vec![format!("key_ref={key_ref}")],
+            signature_valid: false,
+            artifact_hash_valid: true,
+            trust_anchor_valid: false,
+            attestation_valid: false,
+            revocation_valid: false,
+            replay_status: "not_proven_offline".to_string(),
+            transparency_status: "not_configured".to_string(),
         };
     }
 
@@ -319,6 +375,13 @@ fn verify_signature_envelope(
                     artifact_type,
                     error_code: None,
                     details: vec!["signature_verified".to_string()],
+                    signature_valid: true,
+                    artifact_hash_valid: true,
+                    trust_anchor_valid: true,
+                    attestation_valid: true,
+                    revocation_valid: true,
+                    replay_status: "not_proven_offline".to_string(),
+                    transparency_status: "not_configured".to_string(),
                 }
             } else {
                 VerificationReport {
@@ -326,15 +389,345 @@ fn verify_signature_envelope(
                     artifact_type,
                     error_code: Some("signature_mismatch".to_string()),
                     details: vec!["debug_hash_v1 comparison failed".to_string()],
+                    signature_valid: false,
+                    artifact_hash_valid: true,
+                    trust_anchor_valid: true,
+                    attestation_valid: false,
+                    revocation_valid: false,
+                    replay_status: "not_proven_offline".to_string(),
+                    transparency_status: "not_configured".to_string(),
                 }
             }
         }
+        "hmac_sha256" => verify_hmac_signature(
+            signature,
+            artifact_hash,
+            artifact_type,
+            resolver,
+            key_ref,
+        ),
+        "ed25519" => verify_ed25519_signature(
+            signature,
+            artifact_hash,
+            artifact_type,
+            resolver,
+            key_ref,
+        ),
+        "ecdsa_p256_sha256" => verify_p256_signature(
+            signature,
+            artifact_hash,
+            artifact_type,
+            resolver,
+            key_ref,
+        ),
         _ => VerificationReport {
             verified: false,
             artifact_type,
             error_code: Some(VerificationError::UnsupportedSigningScheme.to_string()),
             details: vec![format!("scheme={}", signature.signing_scheme)],
+            signature_valid: false,
+            artifact_hash_valid: true,
+            trust_anchor_valid: false,
+            attestation_valid: false,
+            revocation_valid: false,
+            replay_status: "not_proven_offline".to_string(),
+            transparency_status: "not_configured".to_string(),
         },
+    }
+}
+
+fn verify_hmac_signature(
+    signature: &SignatureEnvelope,
+    artifact_hash: &ArtifactHash,
+    artifact_type: String,
+    resolver: &dyn KeyResolver,
+    key_ref: &str,
+) -> VerificationReport {
+    let key_material = match resolver.resolve(key_ref) {
+        Ok(value) => value,
+        Err(error) => {
+            return VerificationReport {
+                verified: false,
+                artifact_type,
+                error_code: Some(error.to_string()),
+                details: vec![format!("key_ref={key_ref}")],
+                signature_valid: false,
+                artifact_hash_valid: true,
+                trust_anchor_valid: false,
+                attestation_valid: false,
+                revocation_valid: false,
+                replay_status: "not_proven_offline".to_string(),
+                transparency_status: "not_configured".to_string(),
+            }
+        }
+    };
+    let Some(secret) = key_material.metadata.get("hmac_secret") else {
+        return VerificationReport {
+            verified: false,
+            artifact_type,
+            error_code: Some("missing_hmac_secret".to_string()),
+            details: vec![format!("key_ref={key_ref}")],
+            signature_valid: false,
+            artifact_hash_valid: true,
+            trust_anchor_valid: false,
+            attestation_valid: false,
+            revocation_valid: false,
+            replay_status: "not_proven_offline".to_string(),
+            transparency_status: "not_configured".to_string(),
+        };
+    };
+    let expected = hmac_sha256_hex(secret, &artifact_hash.to_string());
+    if expected == signature.signature {
+        success_report(artifact_type)
+    } else {
+        signature_mismatch_report(artifact_type, "hmac_sha256 comparison failed".to_string())
+    }
+}
+
+fn verify_ed25519_signature(
+    signature: &SignatureEnvelope,
+    artifact_hash: &ArtifactHash,
+    artifact_type: String,
+    resolver: &dyn KeyResolver,
+    key_ref: &str,
+) -> VerificationReport {
+    let key_material = match resolver.resolve(key_ref) {
+        Ok(value) => value,
+        Err(error) => {
+            return resolver_error_report(artifact_type, error.to_string(), key_ref);
+        }
+    };
+    let signature_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature.signature) {
+        Ok(bytes) => bytes,
+        Err(_) => return signature_mismatch_report(artifact_type, "ed25519_signature_decode_failed".to_string()),
+    };
+    let public_key_pem = match public_material_to_pem(&key_material.public_material, "ed25519") {
+        Ok(value) => value,
+        Err(error) => return invalid_key_material_report(artifact_type, error),
+    };
+    match verify_with_openssl(
+        &public_key_pem,
+        &signature_bytes,
+        artifact_hash.to_string().as_bytes(),
+        "ed25519",
+    ) {
+        Ok(true) => {
+        success_report(artifact_type)
+        }
+        Ok(false) => signature_mismatch_report(artifact_type, "ed25519 signature verification failed".to_string()),
+        Err(error) => invalid_key_material_report(artifact_type, error),
+    }
+}
+
+fn verify_p256_signature(
+    signature: &SignatureEnvelope,
+    artifact_hash: &ArtifactHash,
+    artifact_type: String,
+    resolver: &dyn KeyResolver,
+    key_ref: &str,
+) -> VerificationReport {
+    let key_material = match resolver.resolve(key_ref) {
+        Ok(value) => value,
+        Err(error) => {
+            return resolver_error_report(artifact_type, error.to_string(), key_ref);
+        }
+    };
+    let signature_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature.signature) {
+        Ok(bytes) => bytes,
+        Err(_) => return signature_mismatch_report(artifact_type, "p256_signature_decode_failed".to_string()),
+    };
+    let public_key_pem = match public_material_to_pem(&key_material.public_material, "p256") {
+        Ok(value) => value,
+        Err(error) => return invalid_key_material_report(artifact_type, error),
+    };
+    match verify_with_openssl(
+        &public_key_pem,
+        &signature_bytes,
+        artifact_hash.to_string().as_bytes(),
+        "p256",
+    ) {
+        Ok(true) => success_report(artifact_type),
+        Ok(false) => signature_mismatch_report(artifact_type, "ecdsa_p256 signature verification failed".to_string()),
+        Err(error) => invalid_key_material_report(artifact_type, error),
+    }
+}
+
+fn success_report(artifact_type: String) -> VerificationReport {
+    VerificationReport {
+        verified: true,
+        artifact_type,
+        error_code: None,
+        details: vec!["signature_verified".to_string()],
+        signature_valid: true,
+        artifact_hash_valid: true,
+        trust_anchor_valid: true,
+        attestation_valid: true,
+        revocation_valid: true,
+        replay_status: "not_proven_offline".to_string(),
+        transparency_status: "not_configured".to_string(),
+    }
+}
+
+fn signature_mismatch_report(artifact_type: String, detail: String) -> VerificationReport {
+    VerificationReport {
+        verified: false,
+        artifact_type,
+        error_code: Some("signature_mismatch".to_string()),
+        details: vec![detail],
+        signature_valid: false,
+        artifact_hash_valid: true,
+        trust_anchor_valid: true,
+        attestation_valid: false,
+        revocation_valid: false,
+        replay_status: "not_proven_offline".to_string(),
+        transparency_status: "not_configured".to_string(),
+    }
+}
+
+fn invalid_key_material_report(artifact_type: String, detail: String) -> VerificationReport {
+    VerificationReport {
+        verified: false,
+        artifact_type,
+        error_code: Some(VerificationError::InvalidKeyMaterial.to_string()),
+        details: vec![detail],
+        signature_valid: false,
+        artifact_hash_valid: true,
+        trust_anchor_valid: false,
+        attestation_valid: false,
+        revocation_valid: false,
+        replay_status: "not_proven_offline".to_string(),
+        transparency_status: "not_configured".to_string(),
+    }
+}
+
+fn resolver_error_report(artifact_type: String, error: String, key_ref: &str) -> VerificationReport {
+    VerificationReport {
+        verified: false,
+        artifact_type,
+        error_code: Some(error),
+        details: vec![format!("key_ref={key_ref}")],
+        signature_valid: false,
+        artifact_hash_valid: true,
+        trust_anchor_valid: false,
+        attestation_valid: false,
+        revocation_valid: false,
+        replay_status: "not_proven_offline".to_string(),
+        transparency_status: "not_configured".to_string(),
+    }
+}
+
+fn hmac_sha256_hex(secret: &str, message: &str) -> String {
+    let block_size = 64usize;
+    let mut key = secret.as_bytes().to_vec();
+    if key.len() > block_size {
+        key = Sha256::digest(&key).to_vec();
+    }
+    key.resize(block_size, 0);
+    let mut o_key_pad = vec![0x5c; block_size];
+    let mut i_key_pad = vec![0x36; block_size];
+    for (idx, value) in key.iter().enumerate() {
+        o_key_pad[idx] ^= value;
+        i_key_pad[idx] ^= value;
+    }
+    let mut inner = Sha256::new();
+    inner.update(&i_key_pad);
+    inner.update(message.as_bytes());
+    let inner_hash = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(&o_key_pad);
+    outer.update(inner_hash);
+    hex::encode(outer.finalize())
+}
+
+fn public_material_to_pem(public_material: &str, scheme: &str) -> Result<String, String> {
+    if public_material.contains("BEGIN PUBLIC KEY") {
+        return Ok(public_material.to_string());
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(public_material)
+        .map_err(|_| "public_key_decode_failed".to_string())?;
+    let der = match scheme {
+        "p256" => {
+            let mut prefix = hex::decode("3059301306072A8648CE3D020106082A8648CE3D030107034200")
+                .map_err(|_| "p256_prefix_invalid".to_string())?;
+            prefix.extend(raw);
+            prefix
+        }
+        "ed25519" => {
+            let mut prefix =
+                hex::decode("302a300506032b6570032100").map_err(|_| "ed25519_prefix_invalid".to_string())?;
+            prefix.extend(raw);
+            prefix
+        }
+        _ => return Err("unsupported_public_key_scheme".to_string()),
+    };
+    Ok(bytes_to_pem("PUBLIC KEY", &der))
+}
+
+fn bytes_to_pem(label: &str, der: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut body = String::new();
+    for chunk in encoded.as_bytes().chunks(64) {
+        body.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+        body.push('\n');
+    }
+    format!("-----BEGIN {label}-----\n{body}-----END {label}-----\n")
+}
+
+fn verify_with_openssl(
+    public_key_pem: &str,
+    signature: &[u8],
+    message: &[u8],
+    scheme: &str,
+) -> Result<bool, String> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "clock_error".to_string())?
+        .as_nanos();
+    let dir = std::env::temp_dir();
+    let key_path = dir.join(format!("seedcore_verify_key_{stamp}.pem"));
+    let sig_path = dir.join(format!("seedcore_verify_sig_{stamp}.bin"));
+    let msg_path = dir.join(format!("seedcore_verify_msg_{stamp}.bin"));
+    fs::write(&key_path, public_key_pem).map_err(|error| format!("key_write_failed:{error}"))?;
+    fs::write(&sig_path, signature).map_err(|error| format!("sig_write_failed:{error}"))?;
+    fs::write(&msg_path, message).map_err(|error| format!("msg_write_failed:{error}"))?;
+    let output = match scheme {
+        "p256" => Command::new("openssl")
+            .args([
+                "dgst",
+                "-sha256",
+                "-verify",
+                key_path.to_string_lossy().as_ref(),
+                "-signature",
+                sig_path.to_string_lossy().as_ref(),
+                msg_path.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .map_err(|error| format!("openssl_unavailable:{error}"))?,
+        "ed25519" => Command::new("openssl")
+            .args([
+                "pkeyutl",
+                "-verify",
+                "-pubin",
+                "-inkey",
+                key_path.to_string_lossy().as_ref(),
+                "-rawin",
+                "-in",
+                msg_path.to_string_lossy().as_ref(),
+                "-sigfile",
+                sig_path.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .map_err(|error| format!("openssl_unavailable:{error}"))?,
+        _ => return Err("unsupported_signature_scheme".to_string()),
+    };
+    cleanup_temp_paths(&[key_path, sig_path, msg_path]);
+    Ok(output.status.success())
+}
+
+fn cleanup_temp_paths(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -431,6 +824,7 @@ mod tests {
             governed_receipt_hash: ArtifactHash::sha256_hex("governed-receipt-hash"),
             signer: artifact_signer(),
             timestamp: Timestamp::from_str("2026-04-02T08:00:10Z").unwrap(),
+            trust_proof: None,
         }
     }
 
@@ -440,6 +834,7 @@ mod tests {
             intent_id: "intent-transfer-001".to_string(),
             execution_token_id: "token:intent-transfer-001".to_string(),
             endpoint_id: "hal://robot_sim/1".to_string(),
+            workflow_type: Some("custody_transfer".to_string()),
             hardware_uuid: "hw-sim-001".to_string(),
             actuator_result_hash: ArtifactHash::sha256_hex("actuator-result"),
             from_zone: Some("vault_a".to_string()),
@@ -448,6 +843,7 @@ mod tests {
             receipt_nonce: "nonce-transfer-001".to_string(),
             payload_hash: ArtifactHash::sha256_hex("payload-transfer-001"),
             signer: artifact_signer(),
+            trust_proof: None,
         }
     }
 

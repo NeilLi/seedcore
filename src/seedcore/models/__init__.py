@@ -46,7 +46,20 @@ from .action_intent import (
     TwinRevisionStage,
     TwinSnapshot,
 )
-from .evidence_bundle import EvidenceBundle, HALCaptureEnvelope, PolicyReceipt, TransitionReceipt
+from .evidence_bundle import (
+    AttestationProof,
+    EvidenceBundle,
+    HALCaptureEnvelope,
+    KeyBindingProof,
+    PolicyReceipt,
+    ReplayProof,
+    TransitionReceipt,
+    TransparencyProof,
+    TrustBundle,
+    TrustBundleKey,
+    TrustBundleTransparencyConfig,
+    TrustProof,
+)
 from .replay import (
     PublicTrustReference,
     ReplayProjectionKind,
@@ -75,18 +88,26 @@ __all__ = [
     "TwinSnapshot",
     "EvidenceBundle",
     "HALCaptureEnvelope",
+    "KeyBindingProof",
     "PolicyReceipt",
     "PublicTrustReference",
+    "ReplayProof",
     "ReplayProjectionKind",
     "ReplayRecord",
     "ReplayTimelineEvent",
     "ReplayVerificationStatus",
+    "TransparencyProof",
     "TrustCertificate",
+    "TrustBundle",
+    "TrustBundleKey",
+    "TrustBundleTransparencyConfig",
+    "TrustProof",
     "TrustPageProjection",
     "TransitionReceipt",
     "Task",
     "TaskPayload",
     "VerificationResult",
+    "AttestationProof",
 ]
 try:
     __all__.extend([

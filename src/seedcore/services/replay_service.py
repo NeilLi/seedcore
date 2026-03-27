@@ -473,7 +473,7 @@ class ReplayService:
             "issued_at": issued_at,
             "expires_at": expires_at,
         }
-        payload_hash, signer_metadata, signature = build_signed_artifact(
+        payload_hash, signer_metadata, signature, _trust_proof = build_signed_artifact(
             artifact_type="trust_certificate",
             payload=certificate_payload,
             endpoint_id=None,
@@ -1747,6 +1747,7 @@ class ReplayService:
                     or record.get("recorded_at")
                     or self._utcnow().isoformat()
                 ),
+                "trust_proof": self._trust_proof_payload(policy_receipt),
             },
         }
 
@@ -1781,6 +1782,7 @@ class ReplayService:
                 "intent_id": intent_id,
                 "execution_token_id": execution_token_id,
                 "endpoint_id": endpoint_id,
+                "workflow_type": transition_receipt.get("workflow_type"),
                 "hardware_uuid": hardware_uuid,
                 "actuator_result_hash": self._artifact_hash_object(
                     transition_receipt.get("actuator_result_hash"),
@@ -1801,6 +1803,7 @@ class ReplayService:
                     transition_receipt,
                     artifact_type="transition_receipt",
                 ),
+                "trust_proof": self._trust_proof_payload(transition_receipt),
             },
         }
 
@@ -1903,6 +1906,7 @@ class ReplayService:
                     artifact_type="evidence_bundle",
                 ),
                 "created_at": created_at,
+                "trust_proof": self._trust_proof_payload(evidence_bundle),
             },
         }
 
@@ -1911,6 +1915,12 @@ class ReplayService:
         if normalized in {"allow", "deny", "quarantine", "escalate"}:
             return normalized
         return "deny"
+
+    def _trust_proof_payload(self, payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+        proof = payload.get("trust_proof")
+        if not isinstance(proof, Mapping):
+            return None
+        return dict(proof)
 
     def _string_list(self, value: Any) -> List[str]:
         if not isinstance(value, list):

@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from seedcore.models.evidence_bundle import EvidenceBundle, HALCaptureEnvelope, PolicyReceipt, SignerMetadata
+from seedcore.models.evidence_bundle import (
+    EvidenceBundle,
+    HALCaptureEnvelope,
+    PolicyReceipt,
+    SignerMetadata,
+    TrustProof,
+)
 from seedcore.ops.evidence.policy import (
     canonical_json,
     resolve_public_key_from_registry,
     sha256_hex,
     verify_payload_signature,
 )
-from seedcore.ops.evidence.signers import build_signer_metadata, resolve_artifact_signer
+from seedcore.ops.evidence.signers import (
+    SignerRequest,
+    build_signer_metadata,
+    sign_artifact_request,
+)
 
 
 def build_signed_artifact(
@@ -19,20 +29,39 @@ def build_signed_artifact(
     endpoint_id: Optional[str] = None,
     trust_level: Optional[str] = None,
     node_id: Optional[str] = None,
-) -> tuple[str, SignerMetadata, str]:
-    signer = resolve_artifact_signer(
-        artifact_type=artifact_type,
-        endpoint_id=endpoint_id,
-        trust_level=trust_level,
-        node_id=node_id,
+) -> tuple[str, SignerMetadata, str, Optional[TrustProof]]:
+    workflow_type = payload.get("workflow_type") if isinstance(payload.get("workflow_type"), str) else None
+    receipt_nonce = payload.get("receipt_nonce") if isinstance(payload.get("receipt_nonce"), str) else None
+    previous_receipt_hash = payload.get("previous_receipt_hash") if isinstance(payload.get("previous_receipt_hash"), str) else None
+    previous_receipt_counter = (
+        int(payload.get("previous_receipt_counter"))
+        if payload.get("previous_receipt_counter") is not None
+        else None
     )
     payload_hash = sha256_hex(canonical_json(payload))
-    signing_result = signer.sign(payload_hash)
+    signing_result = sign_artifact_request(
+        SignerRequest(
+            artifact_type=artifact_type,
+            signer_profile="receipt" if artifact_type == "transition_receipt" else ("pdp" if artifact_type == "policy_receipt" else "execution"),
+            payload_hash=payload_hash,
+            endpoint_id=endpoint_id,
+            node_id=node_id,
+            trust_level=trust_level,
+            workflow_type=workflow_type,
+            receipt_nonce=receipt_nonce,
+            previous_receipt_hash=previous_receipt_hash,
+            previous_receipt_counter=previous_receipt_counter,
+            transparency_enabled=bool(
+                artifact_type == "transition_receipt"
+                and str(workflow_type or "").strip().lower() in {"custody_transfer", "restricted_custody_transfer"}
+            ),
+        )
+    )
     signer_metadata = build_signer_metadata(
         signing_result=signing_result,
         node_id=node_id,
     )
-    return payload_hash, signer_metadata, signing_result.signature
+    return payload_hash, signer_metadata, signing_result.signature, signing_result.trust_proof
 
 
 def verify_artifact_signature(
@@ -44,6 +73,7 @@ def verify_artifact_signature(
     endpoint_id: Optional[str] = None,
     trust_level: Optional[str] = None,
     attested: Optional[bool] = None,
+    trust_proof: Mapping[str, Any] | TrustProof | None = None,
 ) -> Optional[str]:
     result = verify_artifact_signature_result(
         artifact_type=artifact_type,
@@ -53,6 +83,7 @@ def verify_artifact_signature(
         endpoint_id=endpoint_id,
         trust_level=trust_level,
         attested=attested,
+        trust_proof=trust_proof,
     )
     return result.get("error")
 
@@ -66,8 +97,9 @@ def verify_artifact_signature_result(
     endpoint_id: Optional[str] = None,
     trust_level: Optional[str] = None,
     attested: Optional[bool] = None,
+    trust_proof: Mapping[str, Any] | TrustProof | None = None,
 ) -> dict[str, Any]:
-    return verify_payload_signature(
+    result = verify_payload_signature(
         artifact_type=artifact_type,
         payload=payload,
         signer_metadata=signer_metadata,
@@ -77,6 +109,14 @@ def verify_artifact_signature_result(
         attested=attested,
         public_key_resolver=_resolve_ed25519_public_key,
     )
+    if result.get("error") is not None:
+        return result
+    if trust_proof is not None:
+        proof = trust_proof if isinstance(trust_proof, TrustProof) else TrustProof(**dict(trust_proof))
+        result["trust_proof"] = proof.model_dump(mode="json")
+        result["trust_anchor_type"] = proof.trust_anchor_type
+        result["key_algorithm"] = proof.key_algorithm
+    return result
 
 
 def verify_policy_receipt(receipt: Mapping[str, Any] | PolicyReceipt) -> Optional[str]:
@@ -99,6 +139,7 @@ def verify_policy_receipt_result(receipt: Mapping[str, Any] | PolicyReceipt) -> 
         payload=payload,
         signer_metadata=model.signer_metadata,
         signature=model.signature,
+        trust_proof=model.trust_proof,
     )
 
 
@@ -130,6 +171,7 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
             else "baseline"
         ),
         attested=model.signer_metadata.attestation_level == "attested",
+        trust_proof=model.trust_proof,
     )
 
 
@@ -156,6 +198,7 @@ def verify_hal_capture_envelope_result(envelope: Mapping[str, Any] | HALCaptureE
         endpoint_id=model.node_id,
         trust_level="attested",
         attested=True,
+        trust_proof=model.trust_proof,
     )
 
 

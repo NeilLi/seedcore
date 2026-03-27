@@ -1119,6 +1119,7 @@ class ToolManager:
         transition_seq: Optional[int] = None
         receipt_hash: Optional[str] = None
         receipt_nonce: Optional[str] = None
+        receipt_counter: Optional[int] = None
         endpoint_id: Optional[str] = None
         authority_source = "governed_execution_receipt"
 
@@ -1130,6 +1131,16 @@ class ToolManager:
                 expected_intent_id=intent_id,
                 expected_token_id=execution_token_id,
                 expected_endpoint_id=str(actuator_endpoint),
+                expected_previous_receipt_hash=(
+                    prior_state.get("last_receipt_hash")
+                    if isinstance(prior_state, dict)
+                    else None
+                ),
+                expected_min_receipt_counter=(
+                    int(prior_state.get("last_receipt_counter"))
+                    if isinstance(prior_state, dict) and prior_state.get("last_receipt_counter") is not None
+                    else None
+                ),
             )
             if transition_error is not None:
                 raise ToolError(
@@ -1140,6 +1151,10 @@ class ToolManager:
             if not isinstance(receipt_hash, str) or not receipt_hash:
                 raise ToolError("custody.ledger.record", "invalid_transition_receipt:missing_payload_hash")
             receipt_nonce = transition_receipt.get("receipt_nonce")
+            trust_proof = transition_receipt.get("trust_proof") if isinstance(transition_receipt.get("trust_proof"), dict) else {}
+            replay_proof = trust_proof.get("replay") if isinstance(trust_proof.get("replay"), dict) else {}
+            if replay_proof.get("receipt_counter") is not None:
+                receipt_counter = int(replay_proof.get("receipt_counter"))
             endpoint_id = (
                 str(transition_receipt.get("endpoint_id"))
                 if transition_receipt.get("endpoint_id") is not None
@@ -1155,6 +1170,11 @@ class ToolManager:
                 if isinstance(prior_state, dict)
                 else None
             )
+            previous_counter = (
+                int(prior_state.get("last_receipt_counter") or 0)
+                if isinstance(prior_state, dict)
+                else 0
+            )
             if previous_hash and previous_hash == receipt_hash:
                 raise ToolError("custody.ledger.record", "replayed_transition_receipt")
             if (
@@ -1164,6 +1184,8 @@ class ToolManager:
                 and previous_nonce == receipt_nonce
             ):
                 raise ToolError("custody.ledger.record", "replayed_transition_nonce")
+            if receipt_counter is not None and previous_counter and receipt_counter <= previous_counter:
+                raise ToolError("custody.ledger.record", "replayed_transition_counter")
             previous_seq = (
                 int(prior_state.get("last_transition_seq") or 0)
                 if isinstance(prior_state, dict)
@@ -1204,6 +1226,7 @@ class ToolManager:
                 if receipt_nonce is not None
                 else None
             ),
+            "last_receipt_counter": receipt_counter,
             "last_endpoint_id": endpoint_id,
             "last_task_id": (
                 str(record.get("task_id"))

@@ -637,6 +637,7 @@ class CustodyGraphService:
             "endpoint_id": (custody_update or {}).get("last_endpoint_id") or (transition_receipt.get("endpoint_id") if isinstance(transition_receipt, Mapping) else None),
             "receipt_hash": (custody_update or {}).get("last_receipt_hash"),
             "receipt_nonce": (custody_update or {}).get("last_receipt_nonce"),
+            "receipt_counter": (custody_update or {}).get("last_receipt_counter"),
             "evidence_bundle_id": evidence_bundle.get("evidence_bundle_id"),
             "policy_receipt_id": policy_receipt.get("policy_receipt_id"),
             "transition_receipt_id": transition_receipt_id,

@@ -71,7 +71,7 @@ class ForensicSealer:
             "node_id": self.device_identity,
             "captured_at": timestamp,
         }
-        _, signer_metadata, signature = build_signed_artifact(
+        _, signer_metadata, signature, trust_proof = build_signed_artifact(
             artifact_type="hal_capture",
             payload=payload,
             endpoint_id=self.device_identity,
@@ -86,6 +86,7 @@ class ForensicSealer:
             **payload,
             signer_metadata=signer_metadata,
             signature=signature,
+            trust_proof=trust_proof,
         )
         envelope.media_refs.append(
             {

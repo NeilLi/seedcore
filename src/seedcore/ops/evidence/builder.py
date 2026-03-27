@@ -80,7 +80,7 @@ def build_policy_receipt_artifact(
         if isinstance(execution_token.get("constraints"), dict)
         else None
     )
-    _, signer_metadata, signature = build_signed_artifact(
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
         artifact_type="policy_receipt",
         payload=payload,
         endpoint_id=str(endpoint_id) if endpoint_id is not None else None,
@@ -91,6 +91,7 @@ def build_policy_receipt_artifact(
         **payload,
         signer_metadata=signer_metadata,
         signature=signature,
+        trust_proof=trust_proof,
     )
 
 
@@ -196,7 +197,7 @@ def build_evidence_bundle(
         "node_id": node_id,
         "created_at": executed_at,
     }
-    _, signer_metadata, signature = build_signed_artifact(
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
         artifact_type="evidence_bundle",
         payload=payload,
         endpoint_id=actuator_endpoint,
@@ -209,6 +210,7 @@ def build_evidence_bundle(
         **bundle_payload,
         signer_metadata=signer_metadata,
         signature=signature,
+        trust_proof=trust_proof,
     )
 
 
