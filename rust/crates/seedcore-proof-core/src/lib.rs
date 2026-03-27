@@ -271,6 +271,16 @@ pub fn verify_receipt_artifact(
     verify_replay_artifact_item(artifact, resolver)
 }
 
+/// Verifies a detached signature envelope over an already-computed artifact hash.
+pub fn verify_detached_signature(
+    signature: &SignatureEnvelope,
+    artifact_hash: &ArtifactHash,
+    artifact_type: impl Into<String>,
+    resolver: &dyn KeyResolver,
+) -> VerificationReport {
+    verify_signature_envelope(signature, artifact_hash, artifact_type.into(), resolver)
+}
+
 fn canonical_json_bytes<T: Serialize + ?Sized>(
     artifact: &T,
 ) -> Result<Vec<u8>, CanonicalizationError> {

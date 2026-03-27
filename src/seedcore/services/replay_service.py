@@ -393,6 +393,10 @@ class ReplayService:
             "subject_type": replay.subject_type if replay is not None else None,
             "trust_bundle": bundle.model_dump(mode="json"),
         }
+        signed_envelope = self._build_signed_trust_bundle_envelope(snapshot)
+        snapshot["payload_hash"] = signed_envelope["payload_hash"]
+        snapshot["signature_envelope"] = signed_envelope["signature_envelope"]
+        snapshot["trust_proof"] = signed_envelope.get("trust_proof")
         self._persist_trust_bundle_snapshot(snapshot, promote_current=promote_current)
         if redis_client is not None:
             await self._cache_trust_bundle_snapshot(snapshot=snapshot, promote_current=promote_current, redis_client=redis_client)
@@ -571,6 +575,33 @@ class ReplayService:
             transparency=transparency,
             metadata=metadata,
         )
+
+    def _build_signed_trust_bundle_envelope(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+        trust_bundle = snapshot.get("trust_bundle")
+        if not isinstance(trust_bundle, Mapping):
+            raise ReplayServiceError("invalid_trust_bundle", "Trust bundle snapshot payload is missing trust_bundle")
+        try:
+            payload_hash, signer_metadata, signature, trust_proof = build_signed_artifact(
+                artifact_type="trust_certificate",
+                payload=dict(trust_bundle),
+                endpoint_id=None,
+                trust_level="baseline",
+                node_id=None,
+            )
+        except Exception as exc:
+            raise ReplayServiceError("trust_bundle_signing_failed", f"Unable to sign trust bundle: {exc}") from exc
+        return {
+            "payload_hash": payload_hash,
+            "signature_envelope": {
+                "signer_type": signer_metadata.signer_type,
+                "signer_id": signer_metadata.signer_id,
+                "signing_scheme": signer_metadata.signing_scheme,
+                "key_ref": signer_metadata.key_ref,
+                "attestation_level": signer_metadata.attestation_level,
+                "signature": signature,
+            },
+            "trust_proof": trust_proof.model_dump(mode="json") if trust_proof is not None else None,
+        }
 
     def build_public_reference(
         self,

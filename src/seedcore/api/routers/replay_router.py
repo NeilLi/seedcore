@@ -349,6 +349,16 @@ async def get_trust_bundle_by_id(bundle_id: str) -> Dict[str, Any]:
     return snapshot
 
 
+@router.get("/trust/bundles/current/signed")
+async def get_current_signed_trust_bundle() -> Dict[str, Any]:
+    return await get_current_trust_bundle()
+
+
+@router.get("/trust/bundles/{bundle_id}/signed")
+async def get_signed_trust_bundle_by_id(bundle_id: str) -> Dict[str, Any]:
+    return await get_trust_bundle_by_id(bundle_id=bundle_id)
+
+
 @router.get("/trust/{public_id}", response_model=TrustPageProjection)
 async def get_public_trust_projection(
     public_id: str,

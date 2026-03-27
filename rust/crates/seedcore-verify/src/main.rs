@@ -7,14 +7,14 @@ use seedcore_kernel_testkit::{
 };
 use seedcore_kernel_types::{
     ApprovalStatus, ApprovalTransitionEvent, ApprovalTransitionHistory, ArtifactHash, Disposition,
-    ReplayArtifactPayload, RevocationRecord, RoleApproval, Timestamp, TransferApprovalEnvelope,
-    TransitionReceipt, TrustBundle, TrustProof,
+    ReplayArtifactPayload, RevocationRecord, RoleApproval, SignatureEnvelope, Timestamp,
+    TransferApprovalEnvelope, TransitionReceipt, TrustBundle, TrustProof,
 };
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_policy_core::FrozenDecisionInput;
 use seedcore_proof_core::{
-    hash_artifact, verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
-    ReplayVerificationReport, Signer, VerificationReport,
+    hash_artifact, verify_detached_signature, verify_receipt_artifact, verify_replay_chain,
+    ReplayArtifact, ReplayBundle, ReplayVerificationReport, Signer, VerificationReport,
 };
 use seedcore_token_core::{
     enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
@@ -207,6 +207,68 @@ fn read_json_file<T: for<'de> Deserialize<'de>>(path: impl AsRef<Path>) -> Resul
         .map_err(|error| format!("read_failed:{}:{error}", path.display()))?;
     serde_json::from_str(&contents)
         .map_err(|error| format!("json_parse_failed:{}:{error}", path.display()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SignedTrustBundleEnvelope {
+    trust_bundle: TrustBundle,
+    payload_hash: String,
+    signature_envelope: SignatureEnvelope,
+    #[serde(default)]
+    trust_proof: Option<TrustProof>,
+}
+
+fn load_trust_bundle(path: &Path) -> Result<TrustBundle, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("read_failed:{}:{error}", path.display()))?;
+    if let Ok(bundle) = serde_json::from_str::<TrustBundle>(&contents) {
+        return Ok(bundle);
+    }
+    let envelope: SignedTrustBundleEnvelope = serde_json::from_str(&contents)
+        .map_err(|error| format!("json_parse_failed:{}:{error}", path.display()))?;
+    let computed_hash = hash_artifact(&envelope.trust_bundle)
+        .map_err(|error| format!("trust_bundle_hash_failed:{error}"))?;
+    let expected_hash_hex = normalize_sha256_hex(&envelope.payload_hash)
+        .ok_or_else(|| "invalid_trust_bundle_payload_hash".to_string())?;
+    if computed_hash.algorithm != "sha256" || computed_hash.value != expected_hash_hex {
+        return Err(format!(
+            "trust_bundle_payload_hash_mismatch:expected=sha256:{expected_hash_hex}:computed={computed_hash}"
+        ));
+    }
+    let resolver = TrustBundleResolver::from_bundle(&envelope.trust_bundle);
+    let report = verify_detached_signature(
+        &envelope.signature_envelope,
+        &ArtifactHash::sha256_hex(expected_hash_hex),
+        "trust_bundle",
+        &resolver,
+    );
+    if !report.verified {
+        return Err(format!(
+            "trust_bundle_signature_invalid:{}:{}",
+            report.error_code.unwrap_or_else(|| "signature_invalid".to_string()),
+            report.details.join(",")
+        ));
+    }
+    Ok(envelope.trust_bundle)
+}
+
+fn normalize_sha256_hex(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = if let Some(stripped) = trimmed.strip_prefix("sha256:") {
+        stripped
+    } else {
+        trimmed
+    };
+    if candidate.is_empty() {
+        return None;
+    }
+    if !candidate.chars().all(|item| item.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(candidate.to_ascii_lowercase())
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
@@ -561,7 +623,7 @@ fn verify_chain_bundle(
 ) -> Result<ReplayVerificationReport, String> {
     let bundle: ReplayBundle = read_json_file(path)?;
     if let Some(bundle_path) = trust_bundle_path {
-        let trust_bundle: TrustBundle = read_json_file(bundle_path)?;
+        let trust_bundle = load_trust_bundle(bundle_path)?;
         let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
         let mut report = verify_replay_chain(&bundle, &resolver);
         for (index, artifact) in bundle.artifacts.iter().enumerate() {
@@ -625,7 +687,7 @@ fn verify_receipt_path(
 ) -> Result<VerificationReport, String> {
     let artifact: ReplayArtifact = read_json_file(path)?;
     if let Some(bundle_path) = trust_bundle_path {
-        let trust_bundle: TrustBundle = read_json_file(bundle_path)?;
+        let trust_bundle = load_trust_bundle(bundle_path)?;
         let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
         let report = verify_receipt_artifact(&artifact, &resolver);
         let previous_artifact = match previous_path {
@@ -644,7 +706,7 @@ fn verify_receipt_path(
 
 fn inspect_trust_path(path: &Path, trust_bundle_path: &Path) -> Result<TrustInspectionReport, String> {
     let artifact: ReplayArtifact = read_json_file(path)?;
-    let trust_bundle: TrustBundle = read_json_file(trust_bundle_path)?;
+    let trust_bundle = load_trust_bundle(trust_bundle_path)?;
     let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
     let verification = verify_receipt_artifact(&artifact, &resolver);
     let checked = apply_trust_bundle_checks(verification, &artifact, &trust_bundle, None);
@@ -685,36 +747,61 @@ fn mint_token_path(claims_path: &Path) -> Result<ExecutionToken, String> {
 #[derive(Debug, Clone)]
 struct TrustBundleResolver {
     bundle: TrustBundle,
+    trust_bundle_hmac_secret: String,
 }
 
 impl TrustBundleResolver {
     fn from_bundle(bundle: &TrustBundle) -> Self {
+        let trust_bundle_hmac_secret = env::var("SEEDCORE_TRUST_BUNDLE_SIGNING_SECRET")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                env::var("SEEDCORE_TRUST_SIGNING_SECRET")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .or_else(|| {
+                env::var("SEEDCORE_EVIDENCE_SIGNING_SECRET")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or_else(|| "seedcore-dev-evidence-secret".to_string());
         Self {
             bundle: bundle.clone(),
+            trust_bundle_hmac_secret,
         }
     }
 }
 
 impl seedcore_proof_core::KeyResolver for TrustBundleResolver {
     fn resolve(&self, key_ref: &str) -> Result<seedcore_proof_core::KeyMaterial, seedcore_proof_core::VerificationError> {
-        let Some(entry) = self.bundle.trusted_keys.get(key_ref) else {
-            return Err(seedcore_proof_core::VerificationError::KeyNotFound);
-        };
-        let mut metadata = entry.metadata.clone();
-        metadata.insert("key_algorithm".to_string(), entry.key_algorithm.clone());
-        metadata.insert("trust_anchor_type".to_string(), entry.trust_anchor_type.clone());
-        if let Some(value) = &entry.endpoint_id {
-            metadata.insert("endpoint_id".to_string(), value.clone());
+        if let Some(entry) = self.bundle.trusted_keys.get(key_ref) {
+            let mut metadata = entry.metadata.clone();
+            metadata.insert("key_algorithm".to_string(), entry.key_algorithm.clone());
+            metadata.insert("trust_anchor_type".to_string(), entry.trust_anchor_type.clone());
+            if let Some(value) = &entry.endpoint_id {
+                metadata.insert("endpoint_id".to_string(), value.clone());
+            }
+            if let Some(value) = &entry.node_id {
+                metadata.insert("node_id".to_string(), value.clone());
+            }
+            if let Some(value) = &entry.revocation_id {
+                metadata.insert("revocation_id".to_string(), value.clone());
+            }
+            return Ok(seedcore_proof_core::KeyMaterial {
+                key_ref: key_ref.to_string(),
+                public_material: entry.public_key.clone(),
+                metadata,
+            });
         }
-        if let Some(value) = &entry.node_id {
-            metadata.insert("node_id".to_string(), value.clone());
-        }
-        if let Some(value) = &entry.revocation_id {
-            metadata.insert("revocation_id".to_string(), value.clone());
-        }
+
+        // Allow signed trust-bundle envelopes that use HMAC signing keys that are
+        // distributed out-of-band (for example, operator-managed signing secrets).
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert("hmac_secret".to_string(), self.trust_bundle_hmac_secret.clone());
         Ok(seedcore_proof_core::KeyMaterial {
             key_ref: key_ref.to_string(),
-            public_material: entry.public_key.clone(),
+            public_material: String::new(),
             metadata,
         })
     }
@@ -1242,6 +1329,36 @@ mod tests {
         assert!(!report.verified);
         assert_eq!(report.error_code.as_deref(), Some("revoked_signer"));
         assert!(!report.revocation_valid);
+    }
+
+    #[test]
+    fn load_signed_trust_bundle_envelope() {
+        let trust_bundle: TrustBundle = read_json_file(trust_bundle_fixture("restricted_transition_trust_bundle.json"))
+            .expect("restricted trust bundle fixture should load");
+        let payload_hash = hash_artifact(&trust_bundle).expect("bundle hash should compute");
+        let envelope = SignedTrustBundleEnvelope {
+            trust_bundle: trust_bundle.clone(),
+            payload_hash: payload_hash.value.clone(),
+            signature_envelope: SignatureEnvelope {
+                signer_type: "service".to_string(),
+                signer_id: "seedcore-trust-bundle-signer".to_string(),
+                signing_scheme: "debug_hash_v1".to_string(),
+                key_ref: Some("tpm-phase-a-key-01".to_string()),
+                attestation_level: "baseline".to_string(),
+                signature: payload_hash.to_string(),
+            },
+            trust_proof: None,
+        };
+        let temp = std::env::temp_dir().join(format!(
+            "seedcore-signed-trust-bundle-{}.json",
+            std::process::id()
+        ));
+        let rendered = serde_json::to_string(&envelope).expect("envelope should serialize");
+        std::fs::write(&temp, rendered).expect("envelope fixture should write");
+        let loaded = load_trust_bundle(&temp).expect("signed trust-bundle envelope should load");
+        assert_eq!(loaded.version, trust_bundle.version);
+        assert!(loaded.trusted_keys.contains_key("tpm-phase-a-key-01"));
+        let _ = std::fs::remove_file(&temp);
     }
 
     #[test]

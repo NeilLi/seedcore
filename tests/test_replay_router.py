@@ -186,6 +186,9 @@ def test_publish_trust_bundle_from_env_registry_and_fetch_current() -> None:
             assert publish.status_code == 200
             body = publish.json()
             assert body["bundle_id"].startswith("tb-")
+            assert isinstance(body.get("payload_hash"), str) and body["payload_hash"]
+            assert isinstance(body.get("signature_envelope"), dict)
+            assert body["signature_envelope"]["signature"]
             trusted = body["trust_bundle"]["trusted_keys"]["tpm-phase-a-key-01"]
             assert trusted["trust_anchor_type"] == "tpm2"
             assert trusted["endpoint_id"] == "hal://phase-a-edge-01"
@@ -193,10 +196,18 @@ def test_publish_trust_bundle_from_env_registry_and_fetch_current() -> None:
             current = client.get("/trust/bundles/current")
             assert current.status_code == 200
             assert current.json()["bundle_id"] == body["bundle_id"]
+            assert current.json()["signature_envelope"]["signature"] == body["signature_envelope"]["signature"]
+
+            current_signed = client.get("/trust/bundles/current/signed")
+            assert current_signed.status_code == 200
+            assert current_signed.json()["bundle_id"] == body["bundle_id"]
 
             by_id = client.get(f"/trust/bundles/{body['bundle_id']}")
             assert by_id.status_code == 200
             assert by_id.json()["bundle_id"] == body["bundle_id"]
+            by_id_signed = client.get(f"/trust/bundles/{body['bundle_id']}/signed")
+            assert by_id_signed.status_code == 200
+            assert by_id_signed.json()["bundle_id"] == body["bundle_id"]
         finally:
             if old_dir is None:
                 os.environ.pop("SEEDCORE_TRUST_BUNDLE_DIR", None)
@@ -246,6 +257,8 @@ def test_rotate_trust_bundle_promotes_new_snapshot_and_preserves_prior_snapshot(
             assert current.status_code == 200
             assert current.json()["bundle_id"] == rotated_id
             assert "tpm-phase-a-key-02" in current.json()["trust_bundle"]["revoked_keys"]
+            assert current.json()["payload_hash"]
+            assert current.json()["signature_envelope"]["signature"]
 
             first_snapshot = client.get(f"/trust/bundles/{first_id}")
             assert first_snapshot.status_code == 200
