@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseAssetForensicView, parseTransferStatusView } from "../packages/contracts/src/index.ts";
+import { deriveTransferReadiness, parseAssetForensicView, parseTransferStatusView } from "../packages/contracts/src/index.ts";
 import {
   buildRuntimeScenarioFromReplay,
+  buildAssetScenario,
   buildTransferScenario,
   listTransferCatalog,
 } from "../services/verification-api/src/transferSources.ts";
@@ -86,10 +87,12 @@ test("runtime replay view maps into the same Phase D scenario shape", () => {
       signer_chain: [
         {
           artifact_type: "policy_receipt",
-          signer_type: "service",
-          signer_id: "seedcore-verify",
-          key_ref: "test-key",
-          attestation_level: "baseline",
+          signer_metadata: {
+            signer_type: "service",
+            signer_id: "seedcore-verify",
+            key_ref: "test-key",
+            attestation_level: "baseline",
+          },
         },
       ],
       replay_timeline: [
@@ -155,6 +158,37 @@ test("runtime replay view maps into the same Phase D scenario shape", () => {
   assert.equal(runtimeScenario.status.transfer_readiness, "ready");
   assert.ok(runtimeScenario.asset_forensics.telemetry_refs.includes("telemetry_snapshot"));
   assert.equal(runtimeScenario.asset_forensics.custody_transition.to_zone, "handoff_bay_3");
+  assert.equal(runtimeScenario.asset_forensics.signature_provenance[0]?.signer_id, "seedcore-verify");
+  assert.equal(runtimeScenario.asset_forensics.signature_provenance[0]?.signer_type, "service");
+});
+
+test("fixture workflow requires explicit fixture dir for operator endpoints", async () => {
+  await assert.rejects(
+    () => buildTransferScenario({ source: "fixture" }),
+    /invalid_fixture_lookup:dir/,
+  );
+  await assert.rejects(
+    () => buildAssetScenario({ source: "fixture" }),
+    /invalid_fixture_lookup:dir/,
+  );
+});
+
+test("runtime transfer workflow rejects subject-only lookup keys", async () => {
+  await assert.rejects(
+    () => buildTransferScenario({ source: "runtime", subject_id: "asset:lot-8841" }),
+    /invalid_runtime_lookup:audit_id\|intent_id/,
+  );
+});
+
+test("missing prerequisites always force blocked readiness", () => {
+  assert.equal(
+    deriveTransferReadiness("quarantine", "APPROVED", false, ["missing_dual_approval"]),
+    "blocked",
+  );
+  assert.equal(
+    deriveTransferReadiness("allow", "APPROVED", true, []),
+    "ready",
+  );
 });
 
 test("operator console renders status-first transfer and forensic pages", async () => {

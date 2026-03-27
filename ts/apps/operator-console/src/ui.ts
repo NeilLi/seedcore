@@ -139,6 +139,16 @@ function renderActionLinks(query: string): string {
   `;
 }
 
+function renderApiLinks(entries: Array<[string, string | undefined]>): string {
+  const items = entries
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+    .map(([label, href]) => `<li>${escapeHtml(label)}: <a href="${escapeHtml(href)}"><code>${escapeHtml(href)}</code></a></li>`);
+  if (items.length === 0) {
+    return `<p class="empty">none</p>`;
+  }
+  return `<ul>${items.join("")}</ul>`;
+}
+
 export function renderCatalogPage(catalog: any): string {
   const items = Array.isArray(catalog?.items) ? catalog.items : [];
   const cards = items
@@ -231,6 +241,13 @@ export function renderTransferPage(reviewPayload: any, query: string): string {
           ${renderList(forensics.missing_prerequisites)}
           <h3>Trust Gaps</h3>
           ${renderList(forensics.trust_gaps)}
+          <h3>Transfer Links</h3>
+          ${renderApiLinks([
+            ["Review API", status.links.review],
+            ["Asset Forensics API", status.links.asset_forensics],
+            ["Public Trust", status.links.public_trust],
+            ["Verify", status.links.verify],
+          ])}
         </article>
       </section>
 
@@ -308,6 +325,12 @@ export function renderForensicsPage(forensicsPayload: any, query: string): strin
           <h2>Obligations + Timeline</h2>
           <h3>Obligations</h3>
           ${renderList(forensics.obligations.map((value: unknown) => JSON.stringify(value)))}
+          <h3>Forensic Links</h3>
+          ${renderApiLinks([
+            ["Transfer Review API", forensics.links.transfer_review],
+            ["Public Trust", forensics.links.public_trust],
+            ["Replay Artifacts", forensics.links.replay_artifacts],
+          ])}
           <h3>Governed Timeline</h3>
           ${renderTimeline(forensics.timeline)}
         </article>

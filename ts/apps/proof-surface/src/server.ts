@@ -99,6 +99,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   const query = buildApiQuery(url);
   const fixtureDir = url.searchParams.get("dir") ?? DEFAULT_TRANSFER_DIR;
+  const source = url.searchParams.get("source") ?? "fixture";
   const publicTrustUrl = url.searchParams.get("public_trust");
 
   if (url.pathname === "/health") {
@@ -125,6 +126,15 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/transfer") {
       const proof = await fetchJson("/api/v1/transfers/proof", query);
+      let resolvedPublicTrustUrl = publicTrustUrl;
+      if (!resolvedPublicTrustUrl && source === "runtime") {
+        try {
+          const review = await fetchJson("/api/v1/transfers/review", query);
+          resolvedPublicTrustUrl = review?.status?.links?.public_trust ?? review?.asset_forensics?.links?.public_trust;
+        } catch {
+          resolvedPublicTrustUrl = null;
+        }
+      }
       const cls = stateClass(proof.business_state);
       const checks = Array.isArray(proof.checks) ? proof.checks : [];
       const content = `
@@ -142,7 +152,7 @@ const server = http.createServer(async (req, res) => {
           <h2>Verification</h2>
           <p>Verified: <code>${String(proof.verified)}</code></p>
           <p>Error: <code>${proof.verification_error_code ?? "none"}</code></p>
-          ${publicTrustUrl ? `<p>Public trust: <a href="${publicTrustUrl}">Open trust page</a></p>` : ""}
+          ${resolvedPublicTrustUrl ? `<p>Public trust: <a href="${resolvedPublicTrustUrl}">Open trust page</a></p>` : ""}
           <h2>Checks</h2>
           <ul>${checks.map((check: string) => `<li><code>${check}</code></li>`).join("")}</ul>
           <p style="margin-top:16px;"><a href="/asset?${query}">Open related asset proof</a></p>
@@ -155,6 +165,15 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/asset") {
       const proof = await fetchJson("/api/v1/assets/proof", query);
+      let resolvedPublicTrustUrl = publicTrustUrl;
+      if (!resolvedPublicTrustUrl && source === "runtime") {
+        try {
+          const forensics = await fetchJson("/api/v1/assets/forensics", query);
+          resolvedPublicTrustUrl = forensics?.links?.public_trust;
+        } catch {
+          resolvedPublicTrustUrl = null;
+        }
+      }
       const cls = stateClass(proof.business_state);
       const missing = Array.isArray(proof.missing_prerequisites) ? proof.missing_prerequisites : [];
       const gaps = Array.isArray(proof.trust_gaps) ? proof.trust_gaps : [];
@@ -171,7 +190,7 @@ const server = http.createServer(async (req, res) => {
           <ul>${gaps.length > 0 ? gaps.map((gap: string) => `<li><code>${gap}</code></li>`).join("") : "<li>none</li>"}</ul>
           <h2>Missing Prerequisites</h2>
           <ul>${missing.length > 0 ? missing.map((item: string) => `<li><code>${item}</code></li>`).join("") : "<li>none</li>"}</ul>
-          ${publicTrustUrl ? `<p>Public trust: <a href="${publicTrustUrl}">Open trust page</a></p>` : ""}
+          ${resolvedPublicTrustUrl ? `<p>Public trust: <a href="${resolvedPublicTrustUrl}">Open trust page</a></p>` : ""}
           <p style="margin-top:16px;"><a href="/transfer?${query}">Open related transfer proof</a></p>
         </div>
       `;

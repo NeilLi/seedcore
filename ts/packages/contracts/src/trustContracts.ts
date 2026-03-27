@@ -601,7 +601,7 @@ export function deriveTransferReadiness(
   executionTokenPresent: boolean,
   missingPrerequisites: string[],
 ): TransferReadiness {
-  if (missingPrerequisites.some((value) => value.includes("approval"))) {
+  if (missingPrerequisites.length > 0) {
     return "blocked";
   }
   switch (disposition) {

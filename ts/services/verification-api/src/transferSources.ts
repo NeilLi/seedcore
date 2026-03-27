@@ -69,12 +69,20 @@ export interface TransferScenario {
   asset_forensics: AssetForensicView;
 }
 
+type RuntimeLookupKey = "audit_id" | "intent_id" | "subject_id";
+const TRANSFER_RUNTIME_LOOKUP_KEYS: RuntimeLookupKey[] = ["audit_id", "intent_id"];
+const FORENSIC_RUNTIME_LOOKUP_KEYS: RuntimeLookupKey[] = ["audit_id", "intent_id", "subject_id"];
+
 interface RuntimeReplayView {
   replay_id?: string;
   subject_id?: string;
   subject_type?: string;
   intent_id?: string;
   audit_record_id?: string;
+  public_id?: string;
+  public_ref?: string;
+  trust_ref?: string;
+  verification_ref?: string;
   authz_graph?: Record<string, unknown>;
   policy_receipt?: Record<string, unknown>;
   evidence_bundle?: Record<string, unknown>;
@@ -117,6 +125,14 @@ export function resolveFixtureDir(rawPath?: string | null): string {
     }
   }
   return path.resolve(COMMAND_CWD, input);
+}
+
+function requireFixtureDir(rawPath?: string | null): string {
+  const input = (rawPath ?? "").trim();
+  if (!input) {
+    throw new Error("invalid_fixture_lookup:dir");
+  }
+  return resolveFixtureDir(input);
 }
 
 export function resolveTransferRoot(rawPath?: string | null): string {
@@ -311,7 +327,7 @@ function extractFixtureSignatureProvenance(reportRaw: unknown): SignatureProvena
 }
 
 function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
-  const dir = resolveFixtureDir(query.dir);
+  const dir = requireFixtureDir(query.dir);
   if (!existsSync(dir)) {
     throw new Error(`fixture_not_found:${dir}`);
   }
@@ -401,15 +417,90 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
   };
 }
 
-function assertSingleLookup(query: TransferSourceQuery, keys: Array<keyof TransferSourceQuery>): [string, string] {
+function assertSingleLookup(query: TransferSourceQuery, keys: RuntimeLookupKey[]): [RuntimeLookupKey, string] {
   const provided = keys
     .map((key) => [key, query[key]] as const)
-    .filter((entry): entry is [keyof TransferSourceQuery, string] => typeof entry[1] === "string" && entry[1].trim().length > 0);
+    .filter((entry): entry is [RuntimeLookupKey, string] => typeof entry[1] === "string" && entry[1].trim().length > 0);
   if (provided.length !== 1) {
     throw new Error(`invalid_runtime_lookup:${keys.join("|")}`);
   }
-  const [key, value] = provided[0];
-  return [String(key), value];
+  return provided[0];
+}
+
+function makeRuntimeLookupQuery(key: RuntimeLookupKey, value: string): TransferSourceQuery {
+  if (key === "audit_id") {
+    return { source: "runtime", audit_id: value };
+  }
+  if (key === "intent_id") {
+    return { source: "runtime", intent_id: value };
+  }
+  return { source: "runtime", subject_id: value };
+}
+
+function deriveRuntimeTransferLookup(view: RuntimeReplayView, query: TransferSourceQuery): TransferSourceQuery {
+  if (query.audit_id) {
+    return { source: "runtime", audit_id: query.audit_id };
+  }
+  if (query.intent_id) {
+    return { source: "runtime", intent_id: query.intent_id };
+  }
+  const auditRecord = isRecord(view.audit_record) ? view.audit_record : {};
+  const auditId = optionalString(view.audit_record_id) ?? optionalString(auditRecord.id);
+  if (auditId) {
+    return { source: "runtime", audit_id: auditId };
+  }
+  const intentId = optionalString(view.intent_id) ?? optionalString(auditRecord.intent_id);
+  if (intentId) {
+    return { source: "runtime", intent_id: intentId };
+  }
+  throw new Error("invalid_runtime_lookup:audit_id|intent_id");
+}
+
+function deriveRuntimeForensicLookup(view: RuntimeReplayView, query: TransferSourceQuery): TransferSourceQuery {
+  if (query.audit_id || query.intent_id || query.subject_id) {
+    const [key, value] = assertSingleLookup(query, FORENSIC_RUNTIME_LOOKUP_KEYS);
+    return makeRuntimeLookupQuery(key, value);
+  }
+  const transferLookup = deriveRuntimeTransferLookup(view, query);
+  if (transferLookup.audit_id || transferLookup.intent_id) {
+    return transferLookup;
+  }
+  const subjectId = optionalString(view.subject_id);
+  if (!subjectId) {
+    throw new Error("invalid_runtime_lookup:audit_id|intent_id|subject_id");
+  }
+  return { source: "runtime", subject_id: subjectId };
+}
+
+function replayArtifactsUrl(query: TransferSourceQuery): string {
+  const [key, value] = assertSingleLookup(query, FORENSIC_RUNTIME_LOOKUP_KEYS);
+  const params = new URLSearchParams();
+  params.set("projection", "internal");
+  params.set(key, value);
+  if (key === "subject_id") {
+    params.set("subject_type", "asset");
+  }
+  return `${DEFAULT_RUNTIME_API_BASE}/replay/artifacts?${params.toString()}`;
+}
+
+function extractPublicTrustUrl(view: RuntimeReplayView): string | undefined {
+  const candidates = [
+    optionalString(view.public_id),
+    optionalString(view.public_ref),
+    optionalString(view.trust_ref),
+    optionalString((isRecord(view.audit_record) ? view.audit_record : {}).public_id),
+    optionalString((isRecord(view.audit_record) ? view.audit_record : {}).trust_ref),
+    optionalString(
+      ((isRecord(view.audit_record) ? view.audit_record.policy_decision : undefined) as Record<string, unknown> | undefined)
+        ?.trust_ref,
+    ),
+  ];
+  const trustId = candidates.find((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  if (!trustId) {
+    return undefined;
+  }
+  const normalized = trustId.startsWith("trust:") ? trustId.slice("trust:".length) : trustId;
+  return `${DEFAULT_RUNTIME_API_BASE}/trust/${encodeURIComponent(normalized)}`;
 }
 
 async function fetchRuntimeJson(
@@ -500,13 +591,16 @@ function runtimeTimeline(view: RuntimeReplayView): TransferTimelineEntry[] {
 }
 
 function runtimeSignatureProvenance(view: RuntimeReplayView): SignatureProvenanceEntry[] {
-  return objectArray(view.signer_chain).map((entry) => ({
-    artifact_type: stringValue(entry.artifact_type),
-    signer_type: stringValue(entry.signer_type),
-    signer_id: stringValue(entry.signer_id),
-    key_ref: optionalString(entry.key_ref) ?? "hidden",
-    attestation_level: stringValue(entry.attestation_level),
-  }));
+  return objectArray(view.signer_chain).map((entry) => {
+    const metadata = isRecord(entry.signer_metadata) ? entry.signer_metadata : {};
+    return {
+      artifact_type: stringValue(entry.artifact_type),
+      signer_type: stringValue(entry.signer_type ?? metadata.signer_type),
+      signer_id: stringValue(entry.signer_id ?? metadata.signer_id),
+      key_ref: optionalString(entry.key_ref ?? metadata.key_ref) ?? "hidden",
+      attestation_level: stringValue(entry.attestation_level ?? metadata.attestation_level),
+    };
+  });
 }
 
 function runtimeTelemetryRefs(view: RuntimeReplayView): string[] {
@@ -649,8 +743,13 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
   const assetCustodyState = isRecord(view.asset_custody_state) ? view.asset_custody_state : {};
   const summary = buildRuntimeSummary(view);
   const report = deriveRuntimeReport(view, summary);
-  const links = buildStatusLinks(query);
-  const forensicLinks = buildForensicLinks(query);
+  const transferLookup = deriveRuntimeTransferLookup(view, query);
+  const forensicLookup = deriveRuntimeForensicLookup(view, query);
+  const links = buildStatusLinks(transferLookup);
+  const forensicLinks = buildForensicLinks(transferLookup);
+  const publicTrustUrl = extractPublicTrustUrl(view);
+  const verifyUrl = optionalString(view.verification_ref);
+  const replayArtifacts = replayArtifactsUrl(forensicLookup);
 
   const status = toTransferStatusView(report, summary, {
     approval_envelope_id: optionalString(approvalContext.approval_envelope_id) ?? null,
@@ -688,7 +787,9 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
     },
     telemetry_refs: runtimeTelemetryRefs(view),
     signature_provenance: runtimeSignatureProvenance(view),
-    replay_artifacts_url: `${DEFAULT_RUNTIME_API_BASE}/replay/artifacts?projection=internal&${assertSingleLookup(query, ["audit_id", "intent_id", "subject_id"]).join("=")}`,
+    replay_artifacts_url: replayArtifacts,
+    public_trust_url: publicTrustUrl,
+    verify_url: verifyUrl,
   });
 
   const assetForensics = toAssetForensicView(report, summary, {
@@ -724,7 +825,9 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
     },
     telemetry_refs: runtimeTelemetryRefs(view),
     signature_provenance: runtimeSignatureProvenance(view),
-    replay_artifacts_url: `${DEFAULT_RUNTIME_API_BASE}/replay/artifacts?projection=internal&${assertSingleLookup(query, ["audit_id", "intent_id", "subject_id"]).join("=")}`,
+    replay_artifacts_url: replayArtifacts,
+    public_trust_url: publicTrustUrl,
+    verify_url: verifyUrl,
   });
 
   status.links = { ...status.links, ...links };
@@ -739,8 +842,11 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
   };
 }
 
-async function fetchRuntimeReplayView(query: TransferSourceQuery): Promise<RuntimeReplayView> {
-  const [key, value] = assertSingleLookup(query, ["audit_id", "intent_id", "subject_id"]);
+async function fetchRuntimeReplayView(
+  query: TransferSourceQuery,
+  allowedLookupKeys: RuntimeLookupKey[],
+): Promise<RuntimeReplayView> {
+  const [key, value] = assertSingleLookup(query, allowedLookupKeys);
   const params = new URLSearchParams();
   params.set(key, value);
   if (key === "subject_id") {
@@ -755,7 +861,7 @@ async function fetchRuntimeReplayView(query: TransferSourceQuery): Promise<Runti
 }
 
 async function fetchRuntimeReplayViewForAsset(query: TransferSourceQuery): Promise<RuntimeReplayView> {
-  return fetchRuntimeReplayView(query);
+  return fetchRuntimeReplayView(query, FORENSIC_RUNTIME_LOOKUP_KEYS);
 }
 
 export async function buildTransferScenario(query: TransferSourceQuery): Promise<TransferScenario> {
@@ -763,7 +869,7 @@ export async function buildTransferScenario(query: TransferSourceQuery): Promise
     return buildFixtureScenario(query);
   }
 
-  const view = await fetchRuntimeReplayView(query);
+  const view = await fetchRuntimeReplayView(query, TRANSFER_RUNTIME_LOOKUP_KEYS);
   return buildRuntimeScenarioFromReplay(view, query);
 }
 

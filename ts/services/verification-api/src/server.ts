@@ -16,6 +16,7 @@ function jsonResponse(
 function errorStatus(message: string): number {
   if (
     message.startsWith("invalid_runtime_lookup")
+    || message.startsWith("invalid_fixture_lookup")
     || message.startsWith("fixture_not_found")
     || message.startsWith("invalid_runtime_replay_payload")
     || message.startsWith("invalid_runtime_verify_payload")
