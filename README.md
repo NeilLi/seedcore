@@ -29,14 +29,22 @@ Recent changes reinforced that direction in two concrete areas:
 
 The current baseline now includes:
 
-- HAL transition receipts that prefer Ed25519 signatures and fall back to HMAC only when asymmetric key material is not configured
+- signer-provider abstractions that can route trust-critical receipt signing through TPM 2.0, vTPM, cloud KMS, Ed25519, or legacy HMAC paths depending on policy and environment
+- restricted-custody HAL transition receipts that now use a Phase A trust contract with TPM-oriented `ecdsa_p256_sha256` signing on the hardened path
 - evidence bundles that bind transition receipt hashes into execution receipts for governed closure and replay checks
 - short-lived execution tokens with explicit TTL enforcement at both PDP issuance time and HAL validation time
 - Redis-backed token revocation and an operator-triggered emergency cutoff path at the HAL boundary
 - PKG-first routing where action execution remains behind a policy-produced proto-plan rather than LLM-only actuation
 - a Rust authority kernel workspace under `rust/` with deterministic proof, approval, policy, token, and verifier crates
-- a `seedcore-verify` CLI that supports transfer verification, replay-chain checks, and business-readable transfer summaries
+- a `seedcore-verify` CLI that supports transfer verification, replay-chain checks, trust-bundle inspection, and strict TPM attestation verification paths
 - a TypeScript trust surface workspace under `ts/` including strict verifier-output contracts, a verification API facade, and workflow-specific proof pages
+
+Phase A trust hardening has now crossed an important checkpoint:
+
+- trust-bearing receipts can carry explicit `trust_proof` material for key binding, attestation, replay, revocation, and transparency anchoring
+- offline verification can succeed with artifact plus trust bundle, without consulting the SeedCore database
+- strict TPM attestation fixtures now exercise a positive path with a real AK certificate, endorsement root, and signed quote envelope
+- Rekor-style transparency anchoring is integrated as an optional path for high-value receipts, with stub mode retained for local development
 
 This means the repository is no longer just describing zero-trust ideas. It already contains the runtime seams needed to make authority, policy, and custody inspectable in code.
 
@@ -55,8 +63,8 @@ Current implementation:
 
 Current gap profile:
 
-- Ed25519 private keys are still delivered through environment or Kubernetes secret injection rather than a hardware-backed signer
-- revocation exists, but it is Redis-backed operational control rather than hardware-rooted remote attestation
+- non-Phase-A and development paths still permit software-backed signing modes and should not be confused with the hardened restricted-custody path
+- fleet-scale physical TPM rollout, device provisioning, and production operating drills still need to mature beyond the current fixture and test harness baseline
 - the forensic sealer path still contains mocked signing behavior and should not be treated as production-grade device attestation yet
 
 ### 2. Policy Enforcement Layer
@@ -89,8 +97,8 @@ Current implementation:
 
 Current gap profile:
 
-- the primary custody trail still depends on SeedCore-managed stores; it is not yet anchored into an immutable external transparency log
-- `ExecutionReceipt.previous_receipt_hash` exists in the model, but a full external tamper-evident receipt chain is not yet the default system of record
+- the primary custody trail still depends on SeedCore-managed stores even though optional external transparency anchoring is now supported for selected high-value receipts
+- full public transparency-log verification and always-on anchoring policy are not yet the default operating mode across every custody flow
 - inter-agent and cognitive handoff custody is not yet represented with the same signed transition contract used for HAL actuation
 
 **Execution boundary**
