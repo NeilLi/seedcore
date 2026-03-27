@@ -41,6 +41,7 @@ SeedCore implements a distributed, intelligent organism architecture using Ray S
 The architecture follows a **microservices pattern** where each logical service is deployed as a Ray Serve application, which in turn spawns one or more Ray Actors to handle the actual computation and state management.
 
 For a comprehensive overview of recent architectural changes and migrations, see the [Architecture Migration Summary](../architecture_migration_summary.md).
+For protocol standardization rollout details (MCP now, A2A later when needed), see [Protocol Adoption Plan (2026-03-27)](./protocol_adoption_2026.md).
 
 
 ## Runtime Registry and Actor Lifecycle

@@ -551,7 +551,10 @@ class ToolManager:
             if not self._mcp_client:
                 raise ToolError(name, "tool_not_found")
 
-            response = await self._mcp_client.call_tool_async(name, safe_args)
+            response = await self._mcp_client.call_tool_async(
+                tool_name=name,
+                arguments=safe_args,
+            )
             if response.get("error"):
                 raise ToolError(name, response["error"]["message"])
             return response.get("result")

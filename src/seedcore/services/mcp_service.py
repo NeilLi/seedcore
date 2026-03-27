@@ -4,8 +4,10 @@ import os
 import httpx  # pyright: ignore[reportMissingImports]
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
-from fastapi import FastAPI  # pyright: ignore[reportMissingImports]
+from fastapi import FastAPI, Request  # pyright: ignore[reportMissingImports]
+from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingImports]
 from ray import serve  # type: ignore[reportMissingImports]
 
 # --- MCP Imports ---
@@ -130,6 +132,58 @@ async def file_read(ctx: AppContext, filename: str) -> str:
 # ============================================================
 
 app = FastAPI(title="MCP Dev Service", version="1.0")
+
+# Streamable HTTP security hardening:
+# validate Origin when present to reduce DNS-rebinding risk.
+_origin_validation_enabled = (
+    os.getenv("MCP_VALIDATE_ORIGIN", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+_configured_allowed_origins = {
+    origin.strip()
+    for origin in os.getenv("MCP_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+}
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    try:
+        parsed = urlparse(origin)
+    except Exception:
+        return False
+    host = parsed.hostname
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_origin_allowed(origin: str) -> bool:
+    if not origin:
+        return True
+    if origin in _configured_allowed_origins:
+        return True
+    return _is_loopback_origin(origin)
+
+
+@app.middleware("http")
+async def validate_origin_middleware(request: Request, call_next):
+    if not _origin_validation_enabled:
+        return await call_next(request)
+
+    # Keep health/info unauthenticated and non-browser-friendly.
+    if request.url.path in {"/health", "/info"}:
+        return await call_next(request)
+
+    origin = request.headers.get("origin", "")
+    if origin and not _is_origin_allowed(origin):
+        logger.warning("Rejected MCP request from disallowed Origin: %s", origin)
+        return JSONResponse(
+            status_code=403,
+            content={
+                "jsonrpc": "2.0",
+                "error": {"code": -32001, "message": "Forbidden Origin"},
+            },
+        )
+
+    return await call_next(request)
 
 @app.get("/health")
 async def health():
