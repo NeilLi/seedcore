@@ -71,8 +71,19 @@ function stateClass(state: string): "ok" | "warn" | "bad" {
   return "bad";
 }
 
-async function fetchJson(path: string, dir: string): Promise<any> {
-  const url = `${apiBase}${path}?dir=${encodeURIComponent(dir)}`;
+function buildApiQuery(url: URL): string {
+  const params = new URLSearchParams(url.search);
+  if (!params.has("source")) {
+    params.set("source", "fixture");
+  }
+  if (params.get("source") === "fixture" && !params.has("dir")) {
+    params.set("dir", DEFAULT_TRANSFER_DIR);
+  }
+  return params.toString();
+}
+
+async function fetchJson(path: string, query: string): Promise<any> {
+  const url = `${apiBase}${path}?${query}`;
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`${response.status}:${response.statusText}`);
@@ -86,7 +97,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   const url = new URL(req.url, "http://127.0.0.1");
-  const dir = url.searchParams.get("dir") ?? DEFAULT_TRANSFER_DIR;
+  const query = buildApiQuery(url);
+  const fixtureDir = url.searchParams.get("dir") ?? DEFAULT_TRANSFER_DIR;
+  const publicTrustUrl = url.searchParams.get("public_trust");
 
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -100,9 +113,9 @@ const server = http.createServer(async (req, res) => {
         <h1>SeedCore Proof Surface</h1>
         <div class="card">
           <p class="muted">Narrow trust surface for Restricted Custody Transfer.</p>
-          <p><a href="/transfer?dir=${encodeURIComponent(dir)}">Open transfer proof page</a></p>
-          <p><a href="/asset?dir=${encodeURIComponent(dir)}">Open asset proof page</a></p>
-          <p class="muted">Fixture dir: <code>${dir}</code></p>
+          <p><a href="/transfer?${query}">Open transfer proof page</a></p>
+          <p><a href="/asset?${query}">Open asset proof page</a></p>
+          <p class="muted">Fixture dir: <code>${fixtureDir}</code></p>
         </div>
       `;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -111,7 +124,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/transfer") {
-      const proof = await fetchJson("/api/v1/transfers/proof", dir);
+      const proof = await fetchJson("/api/v1/transfers/proof", query);
       const cls = stateClass(proof.business_state);
       const checks = Array.isArray(proof.checks) ? proof.checks : [];
       const content = `
@@ -129,9 +142,10 @@ const server = http.createServer(async (req, res) => {
           <h2>Verification</h2>
           <p>Verified: <code>${String(proof.verified)}</code></p>
           <p>Error: <code>${proof.verification_error_code ?? "none"}</code></p>
+          ${publicTrustUrl ? `<p>Public trust: <a href="${publicTrustUrl}">Open trust page</a></p>` : ""}
           <h2>Checks</h2>
           <ul>${checks.map((check: string) => `<li><code>${check}</code></li>`).join("")}</ul>
-          <p style="margin-top:16px;"><a href="/asset?dir=${encodeURIComponent(dir)}">Open related asset proof</a></p>
+          <p style="margin-top:16px;"><a href="/asset?${query}">Open related asset proof</a></p>
         </div>
       `;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -140,7 +154,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/asset") {
-      const proof = await fetchJson("/api/v1/assets/proof", dir);
+      const proof = await fetchJson("/api/v1/assets/proof", query);
       const cls = stateClass(proof.business_state);
       const missing = Array.isArray(proof.missing_prerequisites) ? proof.missing_prerequisites : [];
       const gaps = Array.isArray(proof.trust_gaps) ? proof.trust_gaps : [];
@@ -157,7 +171,8 @@ const server = http.createServer(async (req, res) => {
           <ul>${gaps.length > 0 ? gaps.map((gap: string) => `<li><code>${gap}</code></li>`).join("") : "<li>none</li>"}</ul>
           <h2>Missing Prerequisites</h2>
           <ul>${missing.length > 0 ? missing.map((item: string) => `<li><code>${item}</code></li>`).join("") : "<li>none</li>"}</ul>
-          <p style="margin-top:16px;"><a href="/transfer?dir=${encodeURIComponent(dir)}">Open related transfer proof</a></p>
+          ${publicTrustUrl ? `<p>Public trust: <a href="${publicTrustUrl}">Open trust page</a></p>` : ""}
+          <p style="margin-top:16px;"><a href="/transfer?${query}">Open related transfer proof</a></p>
         </div>
       `;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -183,4 +198,3 @@ server.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`proof-surface listening on http://127.0.0.1:${port}`);
 });
-

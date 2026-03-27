@@ -70,6 +70,7 @@ def _build_service(record: Dict[str, Any]) -> ReplayService:
                 "get_by_entry_id": AsyncMock(return_value=record),
                 "get_latest_for_intent": AsyncMock(return_value=record),
                 "get_latest_for_task": AsyncMock(return_value=record),
+                "_mapping_to_dict": staticmethod(lambda row: dict(row)),
             },
         )(),
         digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
@@ -143,6 +144,35 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert verify.status_code == 200
     assert verify.json()["verified"] is True
     assert verify.json()["trust_url"].endswith(f"/trust/{public_id}")
+
+
+def test_replay_lookup_by_subject_id_returns_asset_projection() -> None:
+    record = _build_audit_record(task_id="task-router-subject-1", intent_id="intent-router-subject-1", asset_id="asset-lookup-1")
+    class _AssetLookupResult:
+        def __init__(self, row: Dict[str, Any]) -> None:
+            self._row = row
+
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return self._row
+
+    class _AssetLookupSession(_DummySession):
+        def __init__(self, row: Dict[str, Any]) -> None:
+            self._row = row
+
+        async def execute(self, *args, **kwargs):
+            return _AssetLookupResult(self._row)
+
+    client = _make_client(record, session=_AssetLookupSession(record))
+
+    replay = client.get("/replay", params={"subject_id": "asset-lookup-1", "subject_type": "asset", "projection": "internal"})
+    assert replay.status_code == 200
+    body = replay.json()
+    assert body["lookup_key"] == "subject_id"
+    assert body["lookup_value"] == "asset-lookup-1"
+    assert body["view"]["subject_id"] == "asset-lookup-1"
 
 
 def test_revoke_trust_reference_returns_gone_for_trust_surface() -> None:

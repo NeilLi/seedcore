@@ -145,12 +145,25 @@ class ReplayService:
         task_id: Optional[str] = None,
         intent_id: Optional[str] = None,
         audit_id: Optional[str] = None,
+        subject_id: Optional[str] = None,
+        subject_type: Optional[str] = None,
         audit_record: Optional[Mapping[str, Any]] = None,
     ) -> tuple[str, str, ReplayRecord]:
         if audit_record is not None:
             record = dict(audit_record)
             lookup_key = "audit_id"
             lookup_value = str(record.get("id") or "")
+        elif isinstance(subject_id, str) and subject_id.strip():
+            resolved_record = await self.resolve_subject_record(
+                session,
+                subject_id=subject_id.strip(),
+                subject_type=subject_type,
+            )
+            if resolved_record is None:
+                raise ReplayServiceError("record_not_found", "Governed audit record not found")
+            record = dict(resolved_record)
+            lookup_key = "subject_id"
+            lookup_value = subject_id.strip()
         else:
             lookup_key, lookup_value, record = await self.resolve_lookup_record(
                 session,

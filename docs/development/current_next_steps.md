@@ -175,11 +175,15 @@ The runtime’s trust value has to be visible, not just internally correct.
 
 What to build:
 
-- signed governed receipts for every high-value allow, deny, or quarantine outcome
-- verification pages or APIs that replay receipt chains
-- operator-facing workflow status APIs that expose prerequisite state, approval state, transfer readiness, and governed tracking timeline for Restricted Custody Transfer
+- signed, governed receipts for every high-value allow, deny, or quarantine outcome
+- verification pages or APIs that can replay the full receipt chain from approval through transfer verification
+- operator-facing workflow status APIs for Restricted Custody Transfer that expose:
+  - prerequisite state
+  - approval state
+  - transfer readiness
+  - governed tracking timeline
 - a workflow-specific proof surface for Restricted Custody Transfer, with registration intake treated as an upstream prerequisite rather than the product center
-- business-readable trust states such as verified, quarantined, rejected, and review required rather than raw graph or signer failure details
+- business-readable trust states such as verified, quarantined, rejected, and review required rather than raw graph-routing, signer, or replay failure details
 - asset-centric forensic views tying together:
   - decision hash
   - policy snapshot
@@ -187,7 +191,7 @@ What to build:
   - custody transition
   - telemetry references
   - signature provenance
-- public or partner-visible verification surfaces for approved stakeholders
+- public or partner-visible verification surfaces restricted to approved stakeholders
 
 Why this is feasible:
 
@@ -209,6 +213,29 @@ It should not begin as a generic admin dashboard. It should begin as a governed 
 Strategic result:
 
 SeedCore stops looking like a backend-only control layer and becomes a visible trust product.
+
+Phase D should therefore be executed as one constrained product wedge rather
+than as a broad UX program.
+
+The execution rules for this phase are:
+
+- one asset class
+- one transfer chain
+- one evidence model
+- one replay view
+- one operator status surface
+
+The core deliverables should be framed as product artifacts, not just backend capabilities:
+
+- provable outcomes: governed receipts and replay-verifiable receipt chains
+- business-readable state translation: verified, quarantined, rejected, review required
+- operator workflow visibility: prerequisite-to-transfer lifecycle for Restricted Custody Transfer
+- asset-centric forensic context: a single view that binds policy, identity, custody, telemetry, and signature provenance
+- external verification surface: a partner-visible trust page or API for approved stakeholders only
+
+If Phase D expands beyond that narrow proof surface before the canonical
+workflow is demonstrably credible, it will dilute the product story and slow
+the trust proof.
 
 ## 12-18 Month Execution Program
 
@@ -273,10 +300,21 @@ Focus:
 - asset-centric trust history
 - API and UI proof layer for third-party verification
 - operator-facing status tracking and proof monitoring for Restricted Custody Transfer, with registration intake treated as its prerequisite chain
+- business-readable trust-state translation for workflow outcomes and failure classes
+
+Default build order:
+
+1. freeze the workflow-specific status vocabulary and receipt-chain projection
+2. expose operator-facing status APIs for prerequisite, approval, and transfer readiness
+3. publish the asset-centric forensic view for the canonical transfer chain
+4. expose partner-visible replay or trust-page verification for approved stakeholders
 
 Success condition:
 
-SeedCore can show an externally legible chain of decision, execution, and evidence for a specific high-value asset workflow.
+SeedCore can show an externally legible chain of decision, execution, and
+evidence for one specific high-value asset workflow, with a business-readable
+status surface and replay-verifiable receipts that approved third parties can
+inspect.
 
 ## Phase Done Means
 

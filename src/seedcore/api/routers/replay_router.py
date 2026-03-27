@@ -106,6 +106,8 @@ async def get_replay(
     task_id: str | None = None,
     intent_id: str | None = None,
     audit_id: str | None = None,
+    subject_id: str | None = None,
+    subject_type: str | None = None,
     projection: ReplayProjectionKind = ReplayProjectionKind.INTERNAL,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> Dict[str, Any]:
@@ -115,6 +117,8 @@ async def get_replay(
             task_id=task_id,
             intent_id=intent_id,
             audit_id=audit_id,
+            subject_id=subject_id,
+            subject_type=subject_type,
         )
     except ReplayServiceError as exc:
         _raise_http_from_service_error(exc)
@@ -132,6 +136,8 @@ async def get_replay_timeline(
     task_id: str | None = None,
     intent_id: str | None = None,
     audit_id: str | None = None,
+    subject_id: str | None = None,
+    subject_type: str | None = None,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> Dict[str, Any]:
     try:
@@ -140,6 +146,8 @@ async def get_replay_timeline(
             task_id=task_id,
             intent_id=intent_id,
             audit_id=audit_id,
+            subject_id=subject_id,
+            subject_type=subject_type,
         )
     except ReplayServiceError as exc:
         _raise_http_from_service_error(exc)
@@ -159,6 +167,8 @@ async def get_replay_artifacts(
     task_id: str | None = None,
     intent_id: str | None = None,
     audit_id: str | None = None,
+    subject_id: str | None = None,
+    subject_type: str | None = None,
     projection: ReplayProjectionKind = ReplayProjectionKind.INTERNAL,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> Dict[str, Any]:
@@ -168,6 +178,8 @@ async def get_replay_artifacts(
             task_id=task_id,
             intent_id=intent_id,
             audit_id=audit_id,
+            subject_id=subject_id,
+            subject_type=subject_type,
         )
     except ReplayServiceError as exc:
         _raise_http_from_service_error(exc)
@@ -218,6 +230,8 @@ async def get_replay_jsonld(
     task_id: str | None = None,
     intent_id: str | None = None,
     audit_id: str | None = None,
+    subject_id: str | None = None,
+    subject_type: str | None = None,
     projection: ReplayProjectionKind = ReplayProjectionKind.INTERNAL,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> Dict[str, Any]:
@@ -227,6 +241,8 @@ async def get_replay_jsonld(
             task_id=task_id,
             intent_id=intent_id,
             audit_id=audit_id,
+            subject_id=subject_id,
+            subject_type=subject_type,
         )
     except ReplayServiceError as exc:
         _raise_http_from_service_error(exc)

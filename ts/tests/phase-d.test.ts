@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { parseAssetForensicView, parseTransferStatusView } from "../packages/contracts/src/index.ts";
+import {
+  buildRuntimeScenarioFromReplay,
+  buildTransferScenario,
+  listTransferCatalog,
+} from "../services/verification-api/src/transferSources.ts";
+import { renderForensicsPage, renderTransferPage } from "../apps/operator-console/src/ui.ts";
+
+test("fixture scenarios map into Phase D business states and readiness", async () => {
+  const cases = [
+    {
+      dir: "rust/fixtures/transfers/allow_case",
+      businessState: "verified",
+      readiness: "ready",
+    },
+    {
+      dir: "rust/fixtures/transfers/deny_missing_approval",
+      businessState: "rejected",
+      readiness: "blocked",
+    },
+    {
+      dir: "rust/fixtures/transfers/quarantine_stale_telemetry",
+      businessState: "quarantined",
+      readiness: "quarantined",
+    },
+    {
+      dir: "rust/fixtures/transfers/escalate_break_glass",
+      businessState: "review_required",
+      readiness: "review_required",
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const scenario = await buildTransferScenario({ source: "fixture", dir: item.dir });
+    assert.equal(scenario.summary.business_state, item.businessState);
+    assert.equal(scenario.status.transfer_readiness, item.readiness);
+    assert.equal(scenario.asset_forensics.asset_ref.startsWith("asset:"), true);
+    assert.ok(Array.isArray(scenario.asset_forensics.timeline));
+    assert.ok(scenario.status.links.review.includes("/api/v1/transfers/review"));
+    assert.ok(parseTransferStatusView(scenario.status));
+    assert.ok(parseAssetForensicView(scenario.asset_forensics));
+  }
+});
+
+test("catalog exposes status preview and forensic links", async () => {
+  const items = await listTransferCatalog({ source: "fixture", root: "rust/fixtures/transfers" });
+  assert.ok(items.length >= 4);
+  const allowItem = items.find((item) => item.id === "allow_case");
+  assert.ok(allowItem);
+  assert.equal(allowItem.status_preview.transfer_readiness, "ready");
+  assert.equal(typeof allowItem.status_preview.current_step, "string");
+  assert.ok(allowItem.links.asset_forensics.includes("/api/v1/assets/forensics"));
+});
+
+test("runtime replay view maps into the same Phase D scenario shape", () => {
+  const runtimeScenario = buildRuntimeScenarioFromReplay(
+    {
+      subject_id: "asset:lot-8841",
+      intent_id: "intent-transfer-001",
+      authz_graph: {
+        authority_path_summary: ["facility_manager -> transfer_lot"],
+        minted_artifacts: [{ kind: "governed_decision", ref: "decision:intent-transfer-001" }],
+        obligations: [],
+      },
+      policy_receipt: {
+        policy_receipt_id: "policy-receipt:intent-transfer-001",
+        policy_decision_id: "decision:intent-transfer-001",
+        asset_ref: "asset:lot-8841",
+        evaluated_rules: ["policy:transfer-v1"],
+      },
+      evidence_bundle: {
+        execution_token_id: "token:intent-transfer-001",
+        telemetry_refs: [{ kind: "telemetry_snapshot" }],
+      },
+      verification_status: {
+        verified: true,
+        issues: [],
+        artifact_results: {
+          policy_receipt: { verified: true },
+          evidence_bundle: { verified: true },
+        },
+      },
+      signer_chain: [
+        {
+          artifact_type: "policy_receipt",
+          signer_type: "service",
+          signer_id: "seedcore-verify",
+          key_ref: "test-key",
+          attestation_level: "baseline",
+        },
+      ],
+      replay_timeline: [
+        {
+          event_type: "policy_evaluated",
+          timestamp: "2026-04-02T08:00:15Z",
+          summary: "Disposition allow verified",
+          artifact_ref: "policy-receipt:intent-transfer-001",
+        },
+      ],
+      audit_record: {
+        intent_id: "intent-transfer-001",
+        token_id: "token:intent-transfer-001",
+        policy_snapshot: "snapshot:pkg-prod-2026-04-02",
+        recorded_at: "2026-04-02T08:00:15Z",
+        actor_agent_id: "agent:custody_runtime_01",
+        action_intent: {
+          resource: {
+            asset_id: "asset:lot-8841",
+            category_envelope: {
+              transfer_context: {
+                from_zone: "vault_a",
+                to_zone: "handoff_bay_3",
+                facility_ref: "facility:north_warehouse",
+                custody_point_ref: "custody_point:handoff_bay_3",
+                expected_current_custodian: "principal:facility_mgr_001",
+                next_custodian: "principal:outbound_mgr_002",
+              },
+            },
+          },
+          action: {
+            parameters: {
+              approval_context: {
+                approval_envelope_id: "approval-transfer-001",
+                approved_by: ["principal:facility_mgr_001", "principal:quality_insp_017"],
+              },
+            },
+          },
+        },
+        policy_decision: {
+          disposition: "allow",
+          required_approvals: ["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+          governed_receipt: {
+            principal_ref: "principal:facility_mgr_001",
+          },
+        },
+      },
+      asset_custody_state: {
+        current_custodian_ref: "principal:facility_mgr_001",
+        custody_point_ref: "custody_point:vault_a",
+      },
+      transition_receipts: [
+        {
+          from_zone: "vault_a",
+          to_zone: "handoff_bay_3",
+        },
+      ],
+    },
+    { source: "runtime", audit_id: "audit-allow-001" },
+  );
+
+  assert.equal(runtimeScenario.summary.business_state, "verified");
+  assert.equal(runtimeScenario.status.transfer_readiness, "ready");
+  assert.ok(runtimeScenario.asset_forensics.telemetry_refs.includes("telemetry_snapshot"));
+  assert.equal(runtimeScenario.asset_forensics.custody_transition.to_zone, "handoff_bay_3");
+});
+
+test("operator console renders status-first transfer and forensic pages", async () => {
+  const scenario = await buildTransferScenario({ source: "fixture", dir: "rust/fixtures/transfers/allow_case" });
+  const query = "source=fixture&dir=rust/fixtures/transfers/allow_case";
+  const transferHtml = renderTransferPage(scenario, query);
+  const forensicHtml = renderForensicsPage(scenario.asset_forensics, query);
+
+  assert.match(transferHtml, /Transfer Workflow Review/);
+  assert.match(transferHtml, /current step/i);
+  assert.match(transferHtml, /Governed Timeline/);
+  assert.match(forensicHtml, /Asset Forensic View/);
+  assert.match(forensicHtml, /Telemetry References/);
+  assert.match(forensicHtml, /Signature Provenance/);
+});

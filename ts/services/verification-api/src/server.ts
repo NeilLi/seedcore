@@ -1,110 +1,7 @@
-import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
-import { existsSync } from "node:fs";
 import http from "node:http";
-import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 
-import {
-  parseTransferTrustSummary,
-  parseTransferVerificationReport,
-  toAssetProofView,
-  toTransferProofView,
-} from "@seedcore/contracts";
-
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(SCRIPT_DIR, "../../../..");
-const COMMAND_CWD = process.env.INIT_CWD ?? process.cwd();
-const DEFAULT_TRANSFER_DIR = "rust/fixtures/transfers/allow_case";
-
-function resolveVerifyBinary(): string {
-  const override = process.env.SEEDCORE_VERIFY_BIN?.trim();
-  if (override) {
-    return override;
-  }
-  const candidates = [
-    path.resolve(COMMAND_CWD, "rust/target/release/seedcore-verify"),
-    path.resolve(COMMAND_CWD, "rust/target/debug/seedcore-verify"),
-    path.resolve(REPO_ROOT, "rust/target/release/seedcore-verify"),
-    path.resolve(REPO_ROOT, "rust/target/debug/seedcore-verify"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return "seedcore-verify";
-}
-
-function resolveFixtureDir(rawPath?: string | null): string {
-  const input = (rawPath ?? "").trim() || DEFAULT_TRANSFER_DIR;
-  if (path.isAbsolute(input)) {
-    return input;
-  }
-  const candidates = [path.resolve(COMMAND_CWD, input), path.resolve(REPO_ROOT, input)];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return path.resolve(COMMAND_CWD, input);
-}
-
-function resolveTransferRoot(rawPath?: string | null): string {
-  const input = (rawPath ?? "").trim() || "rust/fixtures/transfers";
-  if (path.isAbsolute(input)) {
-    return input;
-  }
-  const candidates = [path.resolve(COMMAND_CWD, input), path.resolve(REPO_ROOT, input)];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return path.resolve(COMMAND_CWD, input);
-}
-
-function runVerifier(command: "summarize-transfer" | "verify-transfer", dir: string): unknown {
-  const verifyBin = resolveVerifyBinary();
-  const output = execFileSync(verifyBin, [command, "--dir", dir], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return JSON.parse(output);
-}
-
-function buildTransferReview(dir: string): {
-  summary: unknown;
-  transfer_proof: unknown;
-  asset_proof: unknown;
-} {
-  const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
-  const report = parseTransferVerificationReport(runVerifier("verify-transfer", dir));
-  return {
-    summary,
-    transfer_proof: toTransferProofView(report, summary),
-    asset_proof: toAssetProofView(report, summary),
-  };
-}
-
-function listTransferCatalog(root: string): Array<{ id: string; dir: string; summary: unknown }> {
-  if (!existsSync(root)) {
-    return [];
-  }
-  const entries = readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-
-  const items: Array<{ id: string; dir: string; summary: unknown }> = [];
-  for (const id of entries) {
-    const dir = path.join(root, id);
-    const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
-    items.push({ id, dir, summary });
-  }
-  return items;
-}
+import { buildAssetScenario, buildTransferScenario, listTransferCatalog, parseTransferQuery } from "./transferSources.js";
 
 function jsonResponse(
   res: http.ServerResponse,
@@ -116,7 +13,24 @@ function jsonResponse(
   res.end(body);
 }
 
-const server = http.createServer((req, res) => {
+function errorStatus(message: string): number {
+  if (
+    message.startsWith("invalid_runtime_lookup")
+    || message.startsWith("fixture_not_found")
+    || message.startsWith("invalid_runtime_replay_payload")
+    || message.startsWith("invalid_runtime_verify_payload")
+  ) {
+    return 422;
+  }
+  if (message.startsWith("runtime_fetch_failed:")) {
+    const parts = message.split(":");
+    const code = Number.parseInt(parts[1] ?? "", 10);
+    return Number.isNaN(code) ? 502 : code;
+  }
+  return 500;
+}
+
+export const server = http.createServer(async (req, res) => {
   if (!req.url) {
     jsonResponse(res, 400, { error: "missing_url" });
     return;
@@ -134,38 +48,53 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const dir = resolveFixtureDir(url.searchParams.get("dir"));
+    const query = parseTransferQuery(url);
     if (url.pathname === "/api/v1/transfers/summary") {
-      const summary = parseTransferTrustSummary(runVerifier("summarize-transfer", dir));
-      jsonResponse(res, 200, summary);
+      const scenario = await buildTransferScenario(query);
+      jsonResponse(res, 200, scenario.summary);
       return;
     }
 
     if (url.pathname === "/api/v1/transfers/proof") {
-      jsonResponse(res, 200, buildTransferReview(dir).transfer_proof);
+      const scenario = await buildTransferScenario(query);
+      jsonResponse(res, 200, scenario.transfer_proof);
       return;
     }
 
     if (url.pathname === "/api/v1/assets/proof") {
-      jsonResponse(res, 200, buildTransferReview(dir).asset_proof);
+      const scenario = await buildAssetScenario(query);
+      jsonResponse(res, 200, scenario.asset_proof);
+      return;
+    }
+
+    if (url.pathname === "/api/v1/transfers/status") {
+      const scenario = await buildTransferScenario(query);
+      jsonResponse(res, 200, scenario.status);
+      return;
+    }
+
+    if (url.pathname === "/api/v1/assets/forensics") {
+      const scenario = await buildAssetScenario(query);
+      jsonResponse(res, 200, scenario.asset_forensics);
       return;
     }
 
     if (url.pathname === "/api/v1/transfers/review") {
-      jsonResponse(res, 200, buildTransferReview(dir));
+      const scenario = await buildTransferScenario(query);
+      jsonResponse(res, 200, scenario);
       return;
     }
 
     if (url.pathname === "/api/v1/transfers/catalog") {
-      const root = resolveTransferRoot(url.searchParams.get("root"));
-      jsonResponse(res, 200, { root, items: listTransferCatalog(root) });
+      const items = await listTransferCatalog(query);
+      jsonResponse(res, 200, { root: query.root ?? null, source: query.source, items });
       return;
     }
 
     jsonResponse(res, 404, { error: "not_found" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
-    jsonResponse(res, 500, { error: "verification_failed", detail: message });
+    jsonResponse(res, errorStatus(message), { error: "verification_failed", detail: message });
   }
 });
 
