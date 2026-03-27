@@ -1187,10 +1187,7 @@ fn verify_certificate_chain(leaf_pem: &str, chain_pems: &[String]) -> bool {
     let root_pem = match chain_pems.last() {
         Some(value) => value,
         None => return false,
-        };
-    if chain_pems.len() == 1 {
-        return true;
-    }
+    };
     let temp_root = write_temp_file("seedcore-tpm-root", root_pem.as_bytes());
     let temp_leaf = write_temp_file("seedcore-tpm-leaf", leaf_pem.as_bytes());
     let intermediates = &chain_pems[..chain_pems.len().saturating_sub(1)];
@@ -1616,6 +1613,25 @@ mod tests {
         assert!(report.attestation_valid);
         assert!(report.revocation_valid);
         assert_eq!(report.transparency_status, "anchored");
+    }
+
+    #[test]
+    fn verify_restricted_transition_receipt_strict_attestation_with_real_fixture() {
+        let report = verify_receipt_path(
+            &receipt_fixture("restricted_transition_receipt_strict_tpm_artifact.json"),
+            Some(&trust_bundle_fixture(
+                "restricted_transition_trust_bundle_strict_tpm.json",
+            )),
+            None,
+        )
+        .expect("strict TPM transition receipt should verify with strict trust bundle");
+        assert!(report.verified);
+        assert!(report.signature_valid);
+        assert!(report.artifact_hash_valid);
+        assert!(report.trust_anchor_valid);
+        assert!(report.attestation_valid);
+        assert!(report.revocation_valid);
+        assert_eq!(report.error_code, None);
     }
 
     #[test]

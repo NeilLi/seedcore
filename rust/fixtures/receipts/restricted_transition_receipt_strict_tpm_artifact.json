@@ -1,0 +1,94 @@
+{
+  "artifact_id": "transition-receipt-phase-a-strict-001",
+  "artifact_type": "transition_receipt",
+  "artifact": {
+    "transition_receipt_id": "transition-receipt-phase-a-strict-001",
+    "intent_id": "intent-transfer-phase-a-strict-001",
+    "execution_token_id": "token-transfer-phase-a-strict-001",
+    "endpoint_id": "hal://phase-a-edge-strict-01",
+    "workflow_type": "custody_transfer",
+    "hardware_uuid": "hw-phase-a-strict-001",
+    "actuator_result_hash": {
+      "algorithm": "sha256",
+      "value": "9e36f8ab15790b7e3586a5375db83f6d78559f9ecf1f63e5f7c73f1e32578e47"
+    },
+    "from_zone": "vault_a",
+    "to_zone": "handoff_bay_5",
+    "executed_at": "2026-04-02T09:30:10Z",
+    "receipt_nonce": "nonce-phase-a-strict-001",
+    "payload_hash": {
+      "algorithm": "sha256",
+      "value": "fb1389a9b3fa90f80be5e618354b079d1cb9eb58b5ca8a1298c934d23f8a7415"
+    },
+    "signer": {
+      "signer_type": "hal_endpoint",
+      "signer_id": "hal://phase-a-edge-strict-01",
+      "signing_scheme": "ecdsa_p256_sha256",
+      "key_ref": "tpm-phase-a-strict-key-01",
+      "attestation_level": "attested",
+      "signature": "MEUCIE74kzugWF0H5r846guSl9gU+HNOn5GaKsVi1cRZZTXBAiEA2yMRsZ0gFZzaNmqz++/EAGfcC8D9LE4j1Zzynkx6VDA="
+    },
+    "trust_proof": {
+      "signer_profile": "receipt",
+      "trust_anchor_type": "tpm2",
+      "key_algorithm": "ecdsa_p256_sha256",
+      "key_ref": "tpm-phase-a-strict-key-01",
+      "public_key_fingerprint": "sha256:568941b2ed5fcde8cdf193053021d6c3b0172273a54225a5be3137500bf2827b",
+      "key_binding": {
+        "binding_type": "tpm2_ak_binding",
+        "key_handle": "0x81010030",
+        "key_label": "hal://phase-a-edge-strict-01",
+        "certificate_chain": [
+          "-----BEGIN CERTIFICATE-----\nMIIBkzCCATqgAwIBAgIFAKEAAAIwCgYIKoZIzj0EAwIwQzEaMBgGA1UECgwRU2Vl\nZENvcmUgRml4dHVyZXMxJTAjBgNVBAMMHFNlZWRDb3JlIFRQTSBGaXh0dXJlIFJv\nb3QgQ0EwHhcNMjYwMTAxMDAwMDAwWhcNMzAxMjMxMDAwMDAwWjA+MRowGAYDVQQK\nDBFTZWVkQ29yZSBGaXh0dXJlczEgMB4GA1UEAwwXU2VlZENvcmUgVFBNIEZpeHR1\ncmUgQUswWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATK1ZpyWuCXectPgRf74VB2\n+dckY27RoJLaRS++n1ADi0VmLC3ciIpYM93mxYnXreRDixK2lTgUvuOsWYe77MtJ\noyAwHjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAKBggqhkjOPQQDAgNH\nADBEAiAtV6mb5tgNS8nGNC3e9V+qiIAFVfFApSdYi8n6ctfz1gIgc6HPENbPhH6n\nPPDH0QlOOIFTUbc7InbwIEGF94WX8Sw=\n-----END CERTIFICATE-----\n"
+        ],
+        "metadata": {
+          "provider_mode": "fixture_strict_tpm"
+        }
+      },
+      "attestation": {
+        "attestation_type": "tpm2_ak_binding",
+        "ak_key_ref": "ak-phase-a-strict-01",
+        "quote": "{\"format\":\"seedcore_tpm_quote_v1\",\"message_b64\":\"eyJha19rZXlfcmVmIjoiYWstcGhhc2UtYS1zdHJpY3QtMDEiLCJlbmRwb2ludF9pZCI6ImhhbDovL3BoYXNlLWEtZWRnZS1zdHJpY3QtMDEiLCJrZXlfcmVmIjoidHBtLXBoYXNlLWEtc3RyaWN0LWtleS0wMSIsIm5vbmNlIjoibm9uY2UtcGhhc2UtYS1zdHJpY3QtMDAxIiwicGNyX2RpZ2VzdCI6IjJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEyYTJhMmEiLCJwdWJsaWNfa2V5X2ZpbmdlcnByaW50Ijoic2hhMjU2OjU2ODk0MWIyZWQ1ZmNkZThjZGYxOTMwNTMwMjFkNmMzYjAxNzIyNzNhNTQyMjVhNWJlMzEzNzUwMGJmMjgyN2IifQ==\",\"signature_b64\":\"MEQCIHrY/j48O2xGpbej0gHGJZHzsyB7otbjYjG+ZXLeXtriAiAGnq2gHtQoB5OlbRly1x3Rw82dbkNvzKV1zyzHORWQ1w==\",\"nonce\":\"nonce-phase-a-strict-001\",\"pcr_digest\":\"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a\"}",
+        "endorsement_chain": [
+          "-----BEGIN CERTIFICATE-----\nMIIBmzCCAUKgAwIBAgIFAKEAAAEwCgYIKoZIzj0EAwIwQzEaMBgGA1UECgwRU2Vl\nZENvcmUgRml4dHVyZXMxJTAjBgNVBAMMHFNlZWRDb3JlIFRQTSBGaXh0dXJlIFJv\nb3QgQ0EwHhcNMjYwMTAxMDAwMDAwWhcNMzUxMjMwMDAwMDAwWjBDMRowGAYDVQQK\nDBFTZWVkQ29yZSBGaXh0dXJlczElMCMGA1UEAwwcU2VlZENvcmUgVFBNIEZpeHR1\ncmUgUm9vdCBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABEGxj8erpZV8kL4r\nb91sWPE8bPdEm6NIT3zVx6BxmV690ycfkVwlEPc9mCRAzH7tGMfUmJ36krZ8SyAX\nLZmvrlejIzAhMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqG\nSM49BAMCA0cAMEQCICaE2k2pGk9m5aKtY7t9JVqu1QXwqHtvM0p01apSuD0CAiBo\nqoQnfhGptVf+SWBj+3k5LcdaG1tDjpy2dsVUgO+3nQ==\n-----END CERTIFICATE-----\n"
+        ],
+        "summary": {
+          "endpoint_id": "hal://phase-a-edge-strict-01",
+          "node_id": "hal://phase-a-edge-strict-01",
+          "attestation_level": "attested",
+          "workflow_type": "custody_transfer"
+        },
+        "issued_at": "2026-04-02T09:30:10+00:00"
+      },
+      "replay": {
+        "receipt_nonce": "nonce-phase-a-strict-001",
+        "receipt_counter": 7,
+        "previous_receipt_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "revocation_id": "tpm2:tpm-phase-a-strict-key-01",
+      "transparency": {
+        "status": "anchored",
+        "log_url": "https://rekor.sigstore.dev",
+        "entry_id": "rekor-entry-phase-a-strict-001",
+        "integrated_time": "2026-04-02T09:30:11+00:00",
+        "proof_hash": "4cdecb9306b6501ec5bdc1d24aa0db9c56c852e3cd29b1bc85a2cc6e4753906f",
+        "details": {
+          "provider": "fixture_strict_tpm"
+        }
+      }
+    }
+  },
+  "artifact_hash": {
+    "algorithm": "sha256",
+    "value": "2c76de10a93d5174b5b689bfef563b5e55a07975b3b2c0cd4db532013538c5e7"
+  },
+  "signature": {
+    "signer_type": "hal_endpoint",
+    "signer_id": "hal://phase-a-edge-strict-01",
+    "signing_scheme": "ecdsa_p256_sha256",
+    "key_ref": "tpm-phase-a-strict-key-01",
+    "attestation_level": "attested",
+    "signature": "MEQCIDpXF7Z5XXv8YLelKohiCfVv+BAhNV1C25/JbGPxLUlXAiB3omUYdDYFqK8F3SQwi70/j/1ht3SDv065sGtvz42lUA=="
+  },
+  "previous_artifact_hash": null
+}
