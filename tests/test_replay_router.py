@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -16,8 +17,14 @@ import mock_ray_dependencies  # noqa: F401
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 import seedcore.api.routers.replay_router as replay_router_module
+from seedcore.hal.custody.transition_receipts import (
+    build_transition_receipt,
+    verify_transition_receipt_result,
+)
 from seedcore.services.replay_service import ReplayService
 
 sys.modules.pop("seedcore.api.routers.tasks_router", None)
@@ -272,6 +279,107 @@ def test_rotate_trust_bundle_promotes_new_snapshot_and_preserves_prior_snapshot(
                 os.environ.pop("SEEDCORE_TRUST_BUNDLE_KEYS_JSON", None)
             else:
                 os.environ["SEEDCORE_TRUST_BUNDLE_KEYS_JSON"] = old_keys
+
+
+def test_ops_closure_drill_rejects_stolen_node_after_bundle_rotation() -> None:
+    record = _build_audit_record(
+        task_id="task-router-bundle-drill-1",
+        intent_id="intent-router-bundle-drill-1",
+        asset_id="asset-1",
+    )
+    redis_client = _FakeRedis()
+    client = _make_client(record, redis_client=redis_client)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_b64 = base64.b64encode(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+    ).decode("ascii")
+    endpoint_id = "hal://stolen-node-01"
+    key_ref = "tpm-stolen-node-k1"
+
+    old_env = {name: os.getenv(name) for name in (
+        "SEEDCORE_TRUST_BUNDLE_DIR",
+        "SEEDCORE_TRUST_BUNDLE_KEYS_JSON",
+        "SEEDCORE_SIGNER_PROVIDER_RECEIPT",
+        "SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR",
+        "SEEDCORE_TPM2_REQUIRE_HARDWARE",
+        "SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK",
+        "SEEDCORE_TPM2_KEY_ID",
+        "SEEDCORE_TPM2_PUBLIC_KEY_B64",
+        "SEEDCORE_TPM2_SOFTWARE_FALLBACK_PRIVATE_KEY_PEM",
+        "SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON",
+        "SEEDCORE_TRUST_REVOKED_KEY_REFS_JSON",
+        "SEEDCORE_TRUST_REVOKED_NODE_IDS_JSON",
+        "SEEDCORE_TRUST_REVOKED_REVOCATION_IDS_JSON",
+        "SEEDCORE_TRUST_REVOKED_BEFORE_JSON",
+    )}
+    with tempfile.TemporaryDirectory(prefix="seedcore-trust-bundle-drill-") as tmpdir:
+        os.environ["SEEDCORE_TRUST_BUNDLE_DIR"] = tmpdir
+        os.environ["SEEDCORE_TRUST_BUNDLE_KEYS_JSON"] = json.dumps({
+            key_ref: {
+                "key_ref": key_ref,
+                "key_algorithm": "ecdsa_p256_sha256",
+                "public_key": public_b64,
+                "trust_anchor_type": "tpm2",
+                "signer_profile": "receipt",
+                "endpoint_id": endpoint_id,
+                "node_id": endpoint_id,
+                "revocation_id": f"tpm2:{key_ref}",
+                "attestation_root": "ak-drill-01",
+            }
+        })
+        os.environ["SEEDCORE_SIGNER_PROVIDER_RECEIPT"] = "tpm2"
+        os.environ["SEEDCORE_RECEIPT_REQUIRED_TRUST_ANCHOR"] = "tpm2"
+        os.environ["SEEDCORE_TPM2_REQUIRE_HARDWARE"] = "false"
+        os.environ["SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK"] = "true"
+        os.environ["SEEDCORE_TPM2_KEY_ID"] = key_ref
+        os.environ["SEEDCORE_TPM2_PUBLIC_KEY_B64"] = public_b64
+        os.environ["SEEDCORE_TPM2_SOFTWARE_FALLBACK_PRIVATE_KEY_PEM"] = private_pem
+        os.environ["SEEDCORE_HAL_RECEIPT_PUBLIC_KEYS_JSON"] = json.dumps({key_ref: {"public_key": public_b64}})
+
+        try:
+            receipt = build_transition_receipt(
+                intent_id="intent-drill-01",
+                token_id="token-drill-01",
+                actuator_endpoint=endpoint_id,
+                hardware_uuid="edge-drill-01",
+                actuator_result_hash="hash-drill-01",
+                from_zone="vault_a",
+                to_zone="handoff_bay_9",
+                workflow_type="custody_transfer",
+            )
+            pre_result = verify_transition_receipt_result(receipt)
+            assert pre_result["verified"] is True
+
+            publish = client.post("/trust/bundles/publish", json={"bundle_version": "phase_a_v1"})
+            assert publish.status_code == 200
+            rotate = client.post(
+                "/trust/bundles/rotate",
+                json={"bundle_version": "phase_a_v1", "revoked_nodes": [endpoint_id]},
+            )
+            assert rotate.status_code == 200
+            rotated_bundle = rotate.json()["trust_bundle"]
+
+            os.environ["SEEDCORE_TRUST_REVOKED_KEY_REFS_JSON"] = json.dumps(rotated_bundle.get("revoked_keys") or [])
+            os.environ["SEEDCORE_TRUST_REVOKED_NODE_IDS_JSON"] = json.dumps(rotated_bundle.get("revoked_nodes") or [])
+            os.environ["SEEDCORE_TRUST_REVOKED_REVOCATION_IDS_JSON"] = json.dumps([])
+            os.environ["SEEDCORE_TRUST_REVOKED_BEFORE_JSON"] = json.dumps(rotated_bundle.get("revocation_cutoffs") or {})
+            post_result = verify_transition_receipt_result(receipt)
+            assert post_result["verified"] is False
+            assert post_result["error"] == "revoked_signer"
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def test_verify_post_requires_exactly_one_lookup() -> None:

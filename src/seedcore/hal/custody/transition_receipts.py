@@ -18,6 +18,7 @@ from seedcore.ops.evidence.signers import (
     ECDSA_P256_SCHEME,
     RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPES,
 )
+from seedcore.ops.evidence.transparency import verify_transparency_proof
 from seedcore.ops.evidence.verification import build_signed_artifact
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,13 @@ def _verify_restricted_trust_proof(
     transparency = proof.transparency
     if transparency is not None and transparency.status not in {"not_configured", "anchored"}:
         return "invalid_transparency_status"
+    if (
+        transparency is not None
+        and transparency.status == "anchored"
+        and _env_flag("SEEDCORE_TRANSPARENCY_VERIFY_ONLINE", default=False)
+        and not verify_transparency_proof(transparency=transparency, payload_hash=model.payload_hash)
+    ):
+        return "anchor_verification_failed"
     return None
 
 

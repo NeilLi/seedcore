@@ -295,6 +295,7 @@ dependencies = [
 name = "seedcore-verify"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "seedcore-approval-core",
  "seedcore-kernel-testkit",
  "seedcore-kernel-types",

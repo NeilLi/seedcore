@@ -1,3 +1,4 @@
+use base64::Engine;
 use seedcore_approval_core::{
     apply_transition, approval_binding_hash, validate_envelope, ApprovalTransition,
 };
@@ -22,7 +23,9 @@ use seedcore_token_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::process::ExitCode;
 use std::str::FromStr;
 
@@ -908,6 +911,14 @@ fn apply_trust_bundle_checks(
         report.error_code = Some("missing_attestation_binding".to_string());
         return report;
     }
+    if should_enforce_strict_tpm_attestation(trust_bundle, trust_proof) {
+        if let Err(error_code) = verify_tpm_attestation_cryptography(trust_proof) {
+            report.verified = false;
+            report.attestation_valid = false;
+            report.error_code = Some(error_code);
+            return report;
+        }
+    }
 
     report.revocation_valid = !is_trust_proof_revoked(trust_proof, artifact, trust_bundle);
     if !report.revocation_valid {
@@ -929,6 +940,11 @@ fn apply_trust_bundle_checks(
         .as_ref()
         .map(|item| item.status.clone())
         .unwrap_or_else(|| "not_configured".to_string());
+    if let Err(error_code) = verify_transparency_proof_requirements(trust_bundle, trust_proof) {
+        report.verified = false;
+        report.error_code = Some(error_code);
+        return report;
+    }
     if report.transparency_status == "anchor_verification_failed" {
         report.verified = false;
         report.error_code = Some("anchor_verification_failed".to_string());
@@ -1027,6 +1043,251 @@ fn is_trust_proof_revoked(
         }
     }
     false
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TpmQuoteEnvelope {
+    format: String,
+    message_b64: String,
+    signature_b64: String,
+    #[serde(default)]
+    nonce: Option<String>,
+    #[serde(default)]
+    pcr_digest: Option<String>,
+}
+
+fn should_enforce_strict_tpm_attestation(trust_bundle: &TrustBundle, trust_proof: &TrustProof) -> bool {
+    if trust_proof.trust_anchor_type != "tpm2" {
+        return false;
+    }
+    if env_flag("SEEDCORE_REQUIRE_TPM_ATTESTATION_CRYPTO", false) {
+        return true;
+    }
+    matches!(
+        trust_bundle
+            .metadata
+            .get("attestation_validation_mode")
+            .map(|value| value.as_str()),
+        Some("strict_tpm_v1") | Some("strict")
+    )
+}
+
+fn verify_tpm_attestation_cryptography(trust_proof: &TrustProof) -> Result<(), String> {
+    let key_binding = trust_proof
+        .key_binding
+        .as_ref()
+        .ok_or_else(|| "missing_key_binding".to_string())?;
+    let attestation = trust_proof
+        .attestation
+        .as_ref()
+        .ok_or_else(|| "missing_attestation_binding".to_string())?;
+    let quote_raw = attestation
+        .quote
+        .as_deref()
+        .ok_or_else(|| "missing_tpm_quote".to_string())?;
+    let quote: TpmQuoteEnvelope = serde_json::from_str(quote_raw)
+        .map_err(|_| "invalid_tpm_quote_format".to_string())?;
+    if quote.format != "seedcore_tpm_quote_v1" {
+        return Err("invalid_tpm_quote_format".to_string());
+    }
+    let nonce = quote.nonce.as_deref().unwrap_or("").trim();
+    let expected_nonce = trust_proof
+        .replay
+        .as_ref()
+        .and_then(|item| item.receipt_nonce.as_deref())
+        .unwrap_or("")
+        .trim();
+    if !nonce.is_empty() && !expected_nonce.is_empty() && nonce != expected_nonce {
+        return Err("tpm_quote_nonce_mismatch".to_string());
+    }
+
+    let ak_cert_raw = key_binding
+        .certificate_chain
+        .first()
+        .ok_or_else(|| "missing_ak_certificate".to_string())?;
+    let ak_cert_pem = normalize_certificate_pem(ak_cert_raw)
+        .ok_or_else(|| "invalid_ak_certificate".to_string())?;
+    let endorsement_pems = attestation
+        .endorsement_chain
+        .iter()
+        .filter_map(|item| normalize_certificate_pem(item))
+        .collect::<Vec<_>>();
+    if endorsement_pems.is_empty() {
+        return Err("missing_endorsement_chain".to_string());
+    }
+    if !verify_certificate_chain(&ak_cert_pem, &endorsement_pems) {
+        return Err("endorsement_chain_invalid".to_string());
+    }
+
+    let quote_bytes = base64::engine::general_purpose::STANDARD
+        .decode(quote.message_b64.as_bytes())
+        .map_err(|_| "invalid_tpm_quote_message".to_string())?;
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(quote.signature_b64.as_bytes())
+        .map_err(|_| "invalid_tpm_quote_signature".to_string())?;
+    if !verify_quote_signature_with_ak_cert(&ak_cert_pem, &quote_bytes, &signature_bytes) {
+        return Err("tpm_quote_signature_invalid".to_string());
+    }
+    Ok(())
+}
+
+fn verify_transparency_proof_requirements(
+    trust_bundle: &TrustBundle,
+    trust_proof: &TrustProof,
+) -> Result<(), String> {
+    let Some(config) = trust_bundle.transparency.as_ref() else {
+        return Ok(());
+    };
+    if !config.enabled {
+        return Ok(());
+    }
+    let Some(transparency) = trust_proof.transparency.as_ref() else {
+        return Err("missing_transparency_proof".to_string());
+    };
+    if transparency.status != "anchored" {
+        return Err("missing_transparency_anchor".to_string());
+    }
+    if let Some(expected_log_url) = config.log_url.as_deref() {
+        if transparency.log_url.as_deref() != Some(expected_log_url) {
+            return Err("transparency_log_mismatch".to_string());
+        }
+    }
+    if transparency.entry_id.as_deref().unwrap_or("").trim().is_empty() {
+        return Err("missing_transparency_entry".to_string());
+    }
+    if transparency.proof_hash.as_deref().unwrap_or("").trim().is_empty() {
+        return Err("missing_transparency_proof_hash".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_certificate_pem(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.contains("BEGIN CERTIFICATE") {
+        return Some(trimmed.to_string());
+    }
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(trimmed.as_bytes())
+        .ok()?;
+    let body = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for chunk in body.as_bytes().chunks(64) {
+        let line = std::str::from_utf8(chunk).ok()?;
+        pem.push_str(line);
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    Some(pem)
+}
+
+fn verify_certificate_chain(leaf_pem: &str, chain_pems: &[String]) -> bool {
+    let root_pem = match chain_pems.last() {
+        Some(value) => value,
+        None => return false,
+        };
+    if chain_pems.len() == 1 {
+        return true;
+    }
+    let temp_root = write_temp_file("seedcore-tpm-root", root_pem.as_bytes());
+    let temp_leaf = write_temp_file("seedcore-tpm-leaf", leaf_pem.as_bytes());
+    let intermediates = &chain_pems[..chain_pems.len().saturating_sub(1)];
+    let mut result = false;
+    let temp_chain = if intermediates.is_empty() {
+        None
+    } else {
+        let joined = intermediates.join("\n");
+        write_temp_file("seedcore-tpm-chain", joined.as_bytes())
+    };
+    if let (Some(root_path), Some(leaf_path)) = (temp_root.as_ref(), temp_leaf.as_ref()) {
+        let mut command = Command::new("openssl");
+        command
+            .arg("verify")
+            .arg("-CAfile")
+            .arg(root_path.as_path());
+        if let Some(chain_path) = temp_chain.as_ref() {
+            command.arg("-untrusted").arg(chain_path.as_path());
+        }
+        command.arg(leaf_path.as_path());
+        if let Ok(completed) = command.output() {
+            result = completed.status.success();
+        }
+    }
+    cleanup_temp_files(&[temp_root, temp_leaf, temp_chain]);
+    result
+}
+
+fn verify_quote_signature_with_ak_cert(
+    ak_cert_pem: &str,
+    quote_message: &[u8],
+    signature: &[u8],
+) -> bool {
+    let temp_cert = write_temp_file("seedcore-tpm-ak-cert", ak_cert_pem.as_bytes());
+    let temp_pubkey = write_temp_file("seedcore-tpm-ak-pub", b"");
+    let temp_message = write_temp_file("seedcore-tpm-quote-msg", quote_message);
+    let temp_signature = write_temp_file("seedcore-tpm-quote-sig", signature);
+    let mut verified = false;
+    if let (Some(cert_path), Some(pubkey_path), Some(message_path), Some(signature_path)) = (
+        temp_cert.as_ref(),
+        temp_pubkey.as_ref(),
+        temp_message.as_ref(),
+        temp_signature.as_ref(),
+    ) {
+        if let Ok(extract) = Command::new("openssl")
+            .arg("x509")
+            .arg("-in")
+            .arg(cert_path.as_path())
+            .arg("-pubkey")
+            .arg("-noout")
+            .output()
+        {
+            if extract.status.success() && fs::write(pubkey_path, extract.stdout).is_ok() {
+                if let Ok(check) = Command::new("openssl")
+                    .arg("dgst")
+                    .arg("-sha256")
+                    .arg("-verify")
+                    .arg(pubkey_path.as_path())
+                    .arg("-signature")
+                    .arg(signature_path.as_path())
+                    .arg(message_path.as_path())
+                    .output()
+                {
+                    verified = check.status.success();
+                }
+            }
+        }
+    }
+    cleanup_temp_files(&[temp_cert, temp_pubkey, temp_message, temp_signature]);
+    verified
+}
+
+fn write_temp_file(prefix: &str, bytes: &[u8]) -> Option<PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}.bin",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos()
+    ));
+    fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+fn cleanup_temp_files(paths: &[Option<PathBuf>]) {
+    for path in paths {
+        if let Some(item) = path {
+            let _ = fs::remove_file(item);
+        }
+    }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    let fallback = if default { "true" } else { "false" };
+    let value = env::var(name).unwrap_or_else(|_| fallback.to_string());
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1371,6 +1632,25 @@ mod tests {
         assert!(!report.verified);
         assert_eq!(report.error_code.as_deref(), Some("revoked_signer"));
         assert!(!report.revocation_valid);
+    }
+
+    #[test]
+    fn verify_restricted_transition_receipt_strict_attestation_rejects_invalid_quote() {
+        let artifact: ReplayArtifact = read_json_file(receipt_fixture("restricted_transition_receipt_artifact.json"))
+            .expect("restricted transition receipt fixture should load");
+        let mut trust_bundle: TrustBundle =
+            read_json_file(trust_bundle_fixture("restricted_transition_trust_bundle.json"))
+                .expect("restricted trust bundle fixture should load");
+        trust_bundle.metadata.insert(
+            "attestation_validation_mode".to_string(),
+            "strict_tpm_v1".to_string(),
+        );
+        let resolver = TrustBundleResolver::from_bundle(&trust_bundle);
+        let base = verify_receipt_artifact(&artifact, &resolver);
+        let report = apply_trust_bundle_checks(base, &artifact, &trust_bundle, None);
+        assert!(!report.verified);
+        assert_eq!(report.error_code.as_deref(), Some("invalid_tpm_quote_format"));
+        assert!(!report.attestation_valid);
     }
 
     #[test]

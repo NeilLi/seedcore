@@ -24,6 +24,7 @@ from seedcore.models.evidence_bundle import (
     TransparencyProof,
     TrustProof,
 )
+from seedcore.ops.evidence.transparency import anchor_receipt_hash
 
 
 ECDSA_P256_SCHEME = "ecdsa_p256_sha256"
@@ -143,6 +144,7 @@ class LegacyHmacSignerProvider:
                 key_algorithm="hmac_sha256",
                 key_ref=self._key_ref or f"legacy-hmac:{self._signer_id}",
                 public_key_material=None,
+                signature=signature,
                 attestation_level="baseline",
                 revocation_id=f"hmac:{self._key_ref or self._signer_id}",
             ),
@@ -205,8 +207,9 @@ class LegacyEd25519SignerProvider:
     def sign_hash(self, request: SignerRequest) -> SigningResult:
         signature_bytes = self._private_key.sign(request.payload_hash.encode("utf-8"))
         public_key = base64.b64encode(self._public_key_bytes).decode("ascii")
+        signature = base64.b64encode(signature_bytes).decode("ascii")
         return SigningResult(
-            signature=base64.b64encode(signature_bytes).decode("ascii"),
+            signature=signature,
             signing_scheme="ed25519",
             signer_id=self._signer_id,
             signer_type=self._signer_type,
@@ -222,6 +225,7 @@ class LegacyEd25519SignerProvider:
                 key_algorithm="ed25519",
                 key_ref=self._key_ref,
                 public_key_material=public_key,
+                signature=signature,
                 attestation_level="attested",
                 revocation_id=f"ed25519:{self._key_ref}",
             ),
@@ -292,9 +296,10 @@ class KmsP256SignerProvider:
             ec.ECDSA(hashes.SHA256()),
         )
         public_key = base64.b64encode(self._public_key_bytes).decode("ascii")
+        signature = base64.b64encode(signature_bytes).decode("ascii")
         revocation_id = f"{self._trust_anchor_type}:{self._key_ref}"
         return SigningResult(
-            signature=base64.b64encode(signature_bytes).decode("ascii"),
+            signature=signature,
             signing_scheme=ECDSA_P256_SCHEME,
             signer_id=self._signer_id,
             signer_type=self._signer_type,
@@ -310,6 +315,7 @@ class KmsP256SignerProvider:
                 key_algorithm=ECDSA_P256_SCHEME,
                 key_ref=self._key_ref,
                 public_key_material=public_key,
+                signature=signature,
                 attestation_level="attested",
                 revocation_id=revocation_id,
                 attestation_type="kms_binding" if self._trust_anchor_type == "kms" else "vtpm_binding",
@@ -372,8 +378,9 @@ class Tpm2P256SignerProvider:
         if not key_ref:
             raise ValueError("tpm2_key_ref_missing")
         revocation_id = f"tpm2:{key_ref}"
+        signature = base64.b64encode(signature_bytes).decode("ascii")
         return SigningResult(
-            signature=base64.b64encode(signature_bytes).decode("ascii"),
+            signature=signature,
             signing_scheme=ECDSA_P256_SCHEME,
             signer_id=self._signer_id,
             signer_type="hal_endpoint",
@@ -389,6 +396,7 @@ class Tpm2P256SignerProvider:
                 key_algorithm=ECDSA_P256_SCHEME,
                 key_ref=key_ref,
                 public_key_material=public_key_material,
+                signature=signature,
                 attestation_level="attested",
                 revocation_id=revocation_id,
                 attestation_type="tpm2_ak_binding",
@@ -774,6 +782,7 @@ def _build_trust_proof(
     key_algorithm: str,
     key_ref: str,
     public_key_material: Optional[str],
+    signature: Optional[str],
     attestation_level: str,
     revocation_id: str,
     attestation_type: str = "none",
@@ -799,6 +808,9 @@ def _build_trust_proof(
     )
     transparency = _maybe_anchor_transparency(
         payload_hash=request.payload_hash,
+        signature=signature,
+        public_key_material=public_key_material,
+        key_algorithm=key_algorithm,
         enabled=request.transparency_enabled and request.signer_profile == "receipt",
     )
     return TrustProof(
@@ -817,7 +829,7 @@ def _build_trust_proof(
         attestation=AttestationProof(
             attestation_type=attestation_type,
             ak_key_ref=os.getenv("SEEDCORE_TPM2_AK_KEY_REF", "").strip() or None,
-            quote=os.getenv("SEEDCORE_TPM2_ATTESTATION_QUOTE", "").strip() or None,
+            quote=_resolve_tpm_quote_payload(request=request),
             endorsement_chain=_split_env_lines("SEEDCORE_TPM2_ENDORSEMENT_CHAIN"),
             summary=attestation_summary,
             issued_at=datetime.now(timezone.utc).isoformat(),
@@ -828,21 +840,20 @@ def _build_trust_proof(
     )
 
 
-def _maybe_anchor_transparency(*, payload_hash: str, enabled: bool) -> TransparencyProof:
-    if not enabled:
-        return TransparencyProof(status="not_configured")
-    log_url = os.getenv("SEEDCORE_TRANSPARENCY_LOG_URL", "https://rekor.sigstore.dev")
-    integrated_time = datetime.now(timezone.utc).isoformat()
-    entry_material = f"{log_url}:{payload_hash}:{integrated_time}"
-    entry_id = hashlib.sha256(entry_material.encode("utf-8")).hexdigest()
-    proof_hash = hashlib.sha256(f"{entry_id}:{payload_hash}".encode("utf-8")).hexdigest()
-    return TransparencyProof(
-        status="anchored",
-        log_url=log_url,
-        entry_id=entry_id,
-        integrated_time=integrated_time,
-        proof_hash=proof_hash,
-        details={"provider": "local_transparency_stub"},
+def _maybe_anchor_transparency(
+    *,
+    payload_hash: str,
+    signature: Optional[str],
+    public_key_material: Optional[str],
+    key_algorithm: str,
+    enabled: bool,
+) -> TransparencyProof:
+    return anchor_receipt_hash(
+        payload_hash=payload_hash,
+        signature=signature,
+        public_key_material=public_key_material,
+        key_algorithm=key_algorithm,
+        enabled=enabled,
     )
 
 
@@ -858,6 +869,27 @@ def _split_env_lines(name: str) -> list[str]:
         except Exception:
             return []
     return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def _resolve_tpm_quote_payload(*, request: SignerRequest) -> Optional[str]:
+    explicit_quote = os.getenv("SEEDCORE_TPM2_ATTESTATION_QUOTE", "").strip()
+    if explicit_quote:
+        return explicit_quote
+    message_b64 = os.getenv("SEEDCORE_TPM2_QUOTE_MESSAGE_B64", "").strip()
+    signature_b64 = os.getenv("SEEDCORE_TPM2_QUOTE_SIGNATURE_B64", "").strip()
+    if not message_b64 or not signature_b64:
+        return None
+    payload = {
+        "format": "seedcore_tpm_quote_v1",
+        "message_b64": message_b64,
+        "signature_b64": signature_b64,
+        "nonce": (
+            os.getenv("SEEDCORE_TPM2_QUOTE_NONCE", "").strip()
+            or request.receipt_nonce
+        ),
+        "pcr_digest": os.getenv("SEEDCORE_TPM2_QUOTE_PCR_DIGEST", "").strip() or None,
+    }
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
 def _fingerprint_public_key(public_key_material: Optional[str]) -> str:

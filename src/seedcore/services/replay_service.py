@@ -556,6 +556,10 @@ class ReplayService:
             "generated_at": self._utcnow().isoformat(),
             "source": "replay_service.publish_trust_bundle",
             "missing_public_keys": sorted(set(missing_public_keys)),
+            "attestation_validation_mode": (
+                self._optional_str(os.getenv("SEEDCORE_ATTESTATION_VALIDATION_MODE"))
+                or "strict_tpm_v1"
+            ),
         }
         if replay is not None:
             metadata["audit_id"] = replay.audit_record_id
