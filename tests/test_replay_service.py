@@ -48,6 +48,8 @@ def _build_policy_receipt(*, task_id: str, intent_id: str, asset_id: str | None 
         "asset_ref": asset_id,
         "authz_disposition": None,
         "governed_receipt_hash": None,
+        "decision_graph_snapshot_hash": None,
+        "decision_graph_snapshot_version": None,
         "trust_gap_codes": [],
         "timestamp": "2026-03-20T10:00:00+00:00",
     }
@@ -77,6 +79,8 @@ def _build_evidence_bundle(
         "intent_ref": None,
         "execution_token_id": token_id,
         "policy_receipt_id": f"policy-{intent_id}",
+        "decision_graph_snapshot_hash": None,
+        "decision_graph_snapshot_version": None,
         "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
         "asset_fingerprint": {
             "fingerprint_id": f"fingerprint-{intent_id}",
@@ -186,6 +190,10 @@ def _apply_transition_metadata(
             "mode": "transition_evaluation",
             "disposition": disposition,
             "reason": reason,
+            "snapshot_ref": "authz_graph@snapshot:1",
+            "snapshot_id": "snapshot:1",
+            "snapshot_version": "snapshot:1",
+            "snapshot_hash": "snapshot-hash-1",
             "asset_ref": record.get("policy_receipt", {}).get("asset_ref"),
             "resource_ref": f"seedcore://zones/vault-a/assets/{record.get('policy_receipt', {}).get('asset_ref')}",
             "current_custodian": "principal:agent:test",
@@ -205,6 +213,7 @@ def _apply_transition_metadata(
             "snapshot_ref": "authz_graph@snapshot:1",
             "snapshot_id": "snapshot:1",
             "snapshot_version": "snapshot:1",
+            "snapshot_hash": "snapshot-hash-1",
             "principal_ref": "principal:agent:test",
             "operation": "MOVE",
             "asset_ref": record.get("policy_receipt", {}).get("asset_ref"),
@@ -358,6 +367,7 @@ async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified
     assert replay.subject_type == "asset"
     assert replay.subject_id == "asset-1"
     assert replay.verification_status.verified is True
+    assert replay.verification_status.artifact_results["decision_graph_snapshot"]["verified"] is True
     assert replay.verification_status.artifact_results["policy_receipt"]["verified"] is True
     assert replay.verification_status.artifact_results["evidence_bundle"]["verified"] is True
     assert replay.verification_status.artifact_results["rust_replay_chain"]["verified"] is True
@@ -448,6 +458,7 @@ async def test_replay_surfaces_authz_transition_metadata_for_quarantine() -> Non
     assert replay.internal_projection["governed_receipt"]["custody_proof"] == ["custody:handoff-1", "custody:handoff-2"]
     assert replay.internal_projection["authz_graph"]["current_custodian"] == "principal:agent:test"
     assert replay.public_projection["policy_summary"]["governed_receipt_hash"] == "receipt-intent-graph-1"
+    assert replay.public_projection["policy_summary"]["decision_graph_snapshot_hash"] == "snapshot-hash-1"
     assert replay.public_projection["policy_summary"]["trust_gap_codes"] == ["stale_telemetry"]
     assert replay.public_projection["custody_summary"]["quarantined"] is True
     assert replay.public_projection["custody_summary"]["custody_proof_count"] == 2
@@ -722,3 +733,33 @@ async def test_allow_replay_requires_execution_token_in_rust_chain(monkeypatch: 
     assert rust_chain["execution_token_verified"] is False
     assert rust_chain["verified"] is False
     assert any(item == "rust_replay_chain:allow_missing_execution_token" for item in replay.verification_status.issues)
+
+
+@pytest.mark.asyncio
+async def test_replay_verification_fails_on_decision_graph_snapshot_hash_mismatch() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-transfer-snapshot-mismatch-1",
+            intent_id="intent-transfer-snapshot-mismatch-1",
+            asset_id="asset-transfer-snapshot-mismatch-1",
+        )
+    )
+    record["policy_decision"]["authz_graph"]["snapshot_hash"] = "snapshot-hash-authz"
+    record["policy_decision"]["governed_receipt"]["snapshot_hash"] = "snapshot-hash-receipt"
+    record["policy_receipt"]["decision_graph_snapshot_hash"] = "snapshot-hash-receipt"
+    record["policy_receipt"]["decision_graph_snapshot_version"] = "snapshot:1"
+    record["evidence_bundle"]["decision_graph_snapshot_hash"] = "snapshot-hash-receipt"
+    record["evidence_bundle"]["decision_graph_snapshot_version"] = "snapshot:1"
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-snapshot-mismatch-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.verification_status.verified is False
+    assert replay.verification_status.artifact_results["decision_graph_snapshot"]["verified"] is False
+    assert replay.verification_status.artifact_results["decision_graph_snapshot"]["error_code"] == "snapshot_hash_mismatch"
+    assert "decision_graph_snapshot:snapshot_hash_mismatch" in replay.verification_status.issues

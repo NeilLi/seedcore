@@ -33,7 +33,12 @@ def test_attach_evidence_bundle_uses_new_canonical_fields():
                     "resource": {"asset_id": "asset-1", "provenance_hash": "prov-1", "target_zone": "vault_alpha"},
                 },
                 "execution_token": {"token_id": "token-e-1"},
-                "policy_decision": {"allowed": True, "reason": "zone_match"},
+                "policy_decision": {
+                    "allowed": True,
+                    "reason": "zone_match",
+                    "authz_graph": {"snapshot_hash": "hash-e-1", "snapshot_version": "snapshot:1"},
+                    "governed_receipt": {"snapshot_hash": "hash-e-1", "snapshot_version": "snapshot:1"},
+                },
             },
         },
     }
@@ -57,6 +62,7 @@ def test_attach_evidence_bundle_uses_new_canonical_fields():
     assert isinstance(bundle["evidence_inputs"]["execution_summary"], dict)
     assert isinstance(bundle["telemetry_refs"], list)
     assert isinstance(bundle["asset_fingerprint"]["modality_map"], dict)
+    assert bundle["decision_graph_snapshot_hash"] == "hash-e-1"
     assert bundle["signer_metadata"]["signing_scheme"] == "hmac_sha256"
 
 
@@ -88,6 +94,7 @@ def test_policy_receipt_and_bundle_signatures_are_deterministic(monkeypatch):
     payload = dict(bundle)
     signature = payload.pop("signature")
     signer_metadata = payload.pop("signer_metadata")
+    payload.pop("trust_proof", None)
     expected_signature = hmac.new(
         b"test-secret",
         hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest().encode("utf-8"),

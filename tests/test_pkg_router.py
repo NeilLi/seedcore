@@ -35,8 +35,17 @@ async def test_pkg_authz_graph_status_reports_active_graph(monkeypatch):
                 "healthy": True,
                 "active_snapshot_id": 7,
                 "active_snapshot_version": "rules@7.0.0",
+                "snapshot_hash": "hash-7",
+                "compiled_at": "2026-03-27T10:00:00+00:00",
+                "hot_path_workflow": "restricted_custody_transfer",
+                "restricted_transfer_ready": True,
+                "trust_gap_taxonomy": ["stale_telemetry"],
                 "graph_nodes_count": 12,
                 "graph_edges_count": 18,
+                "decision_graph_nodes_count": 8,
+                "decision_graph_edges_count": 12,
+                "enrichment_graph_nodes_count": 4,
+                "enrichment_graph_edges_count": 6,
                 "error": None,
             }
         },
@@ -49,6 +58,8 @@ async def test_pkg_authz_graph_status_reports_active_graph(monkeypatch):
     assert result["available"] is True
     assert result["authz_graph_ready"] is True
     assert result["active_snapshot_version"] == "rules@7.0.0"
+    assert result["snapshot_hash"] == "hash-7"
+    assert result["restricted_transfer_ready"] is True
     assert result["graph_edges_count"] == 18
 
 
@@ -96,8 +107,17 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
                 "healthy": True,
                 "active_snapshot_id": 7,
                 "active_snapshot_version": "rules@7.0.0",
+                "snapshot_hash": "hash-7",
+                "compiled_at": "2026-03-27T10:00:00+00:00",
+                "hot_path_workflow": "restricted_custody_transfer",
+                "restricted_transfer_ready": True,
+                "trust_gap_taxonomy": ["stale_telemetry"],
                 "graph_nodes_count": 12,
                 "graph_edges_count": 18,
+                "decision_graph_nodes_count": 8,
+                "decision_graph_edges_count": 12,
+                "enrichment_graph_nodes_count": 4,
+                "enrichment_graph_edges_count": 6,
                 "error": None,
             },
         },
@@ -114,6 +134,7 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
     assert result["available"] is True
     assert result["authz_graph_ready"] is True
     assert result["authz_graph"]["active_snapshot_version"] == "rules@7.0.0"
+    assert result["authz_graph"]["snapshot_hash"] == "hash-7"
 
 
 @pytest.mark.asyncio

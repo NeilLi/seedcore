@@ -2558,6 +2558,11 @@ def _finalize_policy_decision_contract(
         if isinstance(authz_graph.get("trust_gaps"), list)
         else []
     )
+    authz_graph["snapshot_hash"] = (
+        str(authz_graph.get("snapshot_hash")).strip()
+        if authz_graph.get("snapshot_hash") is not None and str(authz_graph.get("snapshot_hash")).strip()
+        else None
+    )
 
     if _is_restricted_custody_transfer(action_intent):
         authz_graph["workflow_type"] = RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE
@@ -2652,6 +2657,8 @@ def _finalize_policy_decision_contract(
                 "advisory": advisory,
             }
         )
+        if governed_receipt.get("snapshot_hash") is None and authz_graph.get("snapshot_hash") is not None:
+            governed_receipt["snapshot_hash"] = authz_graph.get("snapshot_hash")
         if approval_context.get("approval_envelope_id") is not None and str(approval_context.get("approval_envelope_id")).strip():
             evidence_refs = list(governed_receipt.get("evidence_refs") or [])
             approval_ref = f"approval-envelope:{str(approval_context.get('approval_envelope_id')).strip()}"
@@ -3142,6 +3149,7 @@ def _serialize_governed_receipt(
         "snapshot_ref": receipt.snapshot_ref,
         "snapshot_id": receipt.snapshot_id,
         "snapshot_version": receipt.snapshot_version,
+        "snapshot_hash": receipt.snapshot_hash,
         "principal_ref": receipt.principal_ref,
         "operation": receipt.operation,
         "asset_ref": receipt.asset_ref,
@@ -3186,6 +3194,10 @@ def _authz_graph_decision_metadata(
         "mode": "transition_evaluation",
         "disposition": transition_evaluation.disposition.value,
         "reason": transition_evaluation.reason,
+        "snapshot_ref": transition_evaluation.receipt.snapshot_ref,
+        "snapshot_id": transition_evaluation.receipt.snapshot_id,
+        "snapshot_version": transition_evaluation.receipt.snapshot_version,
+        "snapshot_hash": transition_evaluation.receipt.snapshot_hash,
         "asset_ref": transition_evaluation.asset_ref,
         "resource_ref": transition_evaluation.resource_ref,
         "current_custodian": transition_evaluation.current_custodian,

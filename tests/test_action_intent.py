@@ -952,7 +952,9 @@ def test_evaluate_intent_quarantines_when_transition_has_trust_gap(monkeypatch):
     assert decision.execution_token.constraints["authz_disposition"] == "quarantine"
     assert decision.execution_token.constraints["restricted_state"] is True
     assert decision.governed_receipt["disposition"] == "quarantine"
+    assert decision.governed_receipt["snapshot_hash"] == compiled.snapshot_hash
     assert decision.authz_graph["mode"] == "transition_evaluation"
+    assert decision.authz_graph["snapshot_hash"] == compiled.snapshot_hash
     assert ("principal:agent-1", "role:ROBOT_OPERATOR") in [tuple(path) for path in decision.authz_graph["authority_paths"]]
     assert "fact-allow" in decision.authz_graph["matched_policy_refs"]
     assert any(item["code"] == "stale_telemetry" for item in decision.authz_graph["trust_gaps"])
@@ -1226,6 +1228,8 @@ def test_evaluate_intent_restricted_custody_transfer_allows_with_canonical_expla
     assert decision.governed_receipt["workflow_type"] == "custody_transfer"
     assert decision.governed_receipt["approval_envelope_id"] == "approval-transfer-001"
     assert decision.governed_receipt["co_signed"] is True
+    assert decision.governed_receipt["snapshot_hash"] == compiled.snapshot_hash
+    assert decision.authz_graph["snapshot_hash"] == compiled.snapshot_hash
 
 
 def test_evaluate_intent_restricted_custody_transfer_uses_rust_envelope_when_context_missing(monkeypatch) -> None:

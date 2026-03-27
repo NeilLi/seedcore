@@ -465,7 +465,7 @@ class PKGManager:
                 "version": active_version,
             }
         try:
-            await self.authz_graph.activate_snapshot(
+            compiled = await self.authz_graph.activate_snapshot(
                 snapshot_id=snapshot_id,
                 snapshot_version=active_version,
                 snapshot_ref=f"authz_graph@{active_version}",
@@ -475,6 +475,9 @@ class PKGManager:
                 "message": f"Successfully refreshed authz graph for {active_version}",
                 "version": active_version,
                 "snapshot_id": snapshot_id,
+                "snapshot_hash": compiled.snapshot_hash,
+                "compiled_at": compiled.compiled_at,
+                "restricted_transfer_ready": compiled.restricted_transfer_ready,
             }
         except Exception as e:
             logger.error("Active authz graph refresh failed for %s: %s", active_version, e, exc_info=True)

@@ -72,6 +72,16 @@ def build_policy_receipt_artifact(
             if governed_receipt.get("decision_hash") is not None
             else None
         ),
+        "decision_graph_snapshot_hash": (
+            str(governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash"))
+            if (governed_receipt.get("snapshot_hash") is not None or authz_graph.get("snapshot_hash") is not None)
+            else None
+        ),
+        "decision_graph_snapshot_version": (
+            str(governed_receipt.get("snapshot_version") or authz_graph.get("snapshot_version"))
+            if (governed_receipt.get("snapshot_version") is not None or authz_graph.get("snapshot_version") is not None)
+            else None
+        ),
         "trust_gap_codes": _extract_trust_gap_codes(governed_receipt, authz_graph),
         "timestamp": timestamp,
     }
@@ -107,6 +117,9 @@ def build_evidence_bundle(
     action_intent = governance.get("action_intent", {}) if isinstance(governance.get("action_intent"), dict) else {}
     execution_token = governance.get("execution_token", {}) if isinstance(governance.get("execution_token"), dict) else {}
     existing_policy_receipt = governance.get("policy_receipt") if isinstance(governance.get("policy_receipt"), dict) else {}
+    policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
+    authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+    governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
 
     executed_at = _derive_executed_at(envelope)
     actuator_entries = _extract_actuator_entries(envelope)
@@ -157,6 +170,16 @@ def build_evidence_bundle(
         "policy_receipt_id": (
             policy_receipt.policy_receipt_id
             if policy_receipt is not None
+            else None
+        ),
+        "decision_graph_snapshot_hash": (
+            str(governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash"))
+            if (governed_receipt.get("snapshot_hash") is not None or authz_graph.get("snapshot_hash") is not None)
+            else None
+        ),
+        "decision_graph_snapshot_version": (
+            str(governed_receipt.get("snapshot_version") or authz_graph.get("snapshot_version"))
+            if (governed_receipt.get("snapshot_version") is not None or authz_graph.get("snapshot_version") is not None)
             else None
         ),
         "transition_receipt_ids": [

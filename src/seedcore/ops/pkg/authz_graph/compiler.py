@@ -122,6 +122,61 @@ class AuthzDecisionDisposition(str, Enum):
     QUARANTINE = "quarantine"
 
 
+TRANSFER_TRUST_GAP_TAXONOMY: Tuple[str, ...] = (
+    "missing_current_custodian",
+    "missing_custody_point",
+    "missing_asset_state",
+    "unknown_transfer_state",
+    "missing_telemetry",
+    "stale_telemetry",
+    "missing_inspection",
+    "stale_inspection",
+    "missing_attestation",
+    "missing_seal",
+)
+
+
+@dataclass(frozen=True)
+class CompiledDecisionGraphSnapshot:
+    snapshot_ref: str
+    snapshot_id: Optional[int]
+    snapshot_version: Optional[str]
+    compiled_at: str
+    snapshot_hash: str
+    hot_path_workflow: str = "restricted_custody_transfer"
+    trust_gap_taxonomy: Tuple[str, ...] = TRANSFER_TRUST_GAP_TAXONOMY
+    entity_refs: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    authority_index: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    resource_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    asset_state_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    transition_requirements: Dict[str, Tuple[Dict[str, Any], ...]] = field(default_factory=dict)
+    policy_refs: Tuple[str, ...] = ()
+    provenance_refs: Tuple[str, ...] = ()
+    restricted_transfer_ready: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "snapshot_ref": self.snapshot_ref,
+            "snapshot_id": self.snapshot_id,
+            "snapshot_version": self.snapshot_version,
+            "compiled_at": self.compiled_at,
+            "snapshot_hash": self.snapshot_hash,
+            "hot_path_workflow": self.hot_path_workflow,
+            "trust_gap_taxonomy": list(self.trust_gap_taxonomy),
+            "entity_refs": {key: list(value) for key, value in self.entity_refs.items()},
+            "authority_index": {key: list(value) for key, value in self.authority_index.items()},
+            "resource_index": {key: dict(value) for key, value in self.resource_index.items()},
+            "asset_state_index": {key: dict(value) for key, value in self.asset_state_index.items()},
+            "transition_requirements": {
+                key: [dict(item) for item in value]
+                for key, value in self.transition_requirements.items()
+            },
+            "policy_refs": list(self.policy_refs),
+            "provenance_refs": list(self.provenance_refs),
+            "restricted_transfer_ready": self.restricted_transfer_ready,
+        }
+
+
 @dataclass(frozen=True)
 class CompiledTrustGap:
     code: str
@@ -144,6 +199,7 @@ class GovernedDecisionReceipt:
     snapshot_ref: str
     snapshot_id: Optional[int]
     snapshot_version: Optional[str]
+    snapshot_hash: Optional[str]
     principal_ref: str
     operation: str
     asset_ref: Optional[str]
@@ -291,6 +347,7 @@ class CompiledAuthzIndex:
     snapshot_ref: str
     snapshot_id: Optional[int]
     snapshot_version: Optional[str]
+    compiled_at: Optional[str] = None
     role_memberships: Dict[str, Set[str]] = field(default_factory=dict)
     delegations: Dict[str, Set[str]] = field(default_factory=dict)
     authority_links: Dict[str, Set[str]] = field(default_factory=dict)
@@ -301,6 +358,17 @@ class CompiledAuthzIndex:
     asset_states: Dict[str, CompiledAssetState] = field(default_factory=dict)
     nodes_by_ref: Dict[str, AuthzNode] = field(default_factory=dict)
     registration_decisions_by_registration: Dict[str, Set[str]] = field(default_factory=dict)
+    decision_graph_snapshot: Optional[CompiledDecisionGraphSnapshot] = None
+
+    @property
+    def snapshot_hash(self) -> Optional[str]:
+        if self.decision_graph_snapshot is None:
+            return None
+        return self.decision_graph_snapshot.snapshot_hash
+
+    @property
+    def restricted_transfer_ready(self) -> bool:
+        return bool(self.decision_graph_snapshot and self.decision_graph_snapshot.restricted_transfer_ready)
 
     def resolve_subject_paths(self, principal_ref: str) -> Dict[str, Tuple[str, ...]]:
         paths: Dict[str, Tuple[str, ...]] = {principal_ref: (principal_ref,)}
@@ -1138,6 +1206,7 @@ class CompiledAuthzIndex:
             "snapshot_ref": self.snapshot_ref,
             "snapshot_id": self.snapshot_id,
             "snapshot_version": self.snapshot_version,
+            "snapshot_hash": self.snapshot_hash,
             "disposition": disposition.value,
             "principal_ref": request.principal_ref,
             "operation": request.operation,
@@ -1156,6 +1225,7 @@ class CompiledAuthzIndex:
             snapshot_ref=self.snapshot_ref,
             snapshot_id=self.snapshot_id,
             snapshot_version=self.snapshot_version,
+            snapshot_hash=self.snapshot_hash,
             principal_ref=request.principal_ref,
             operation=request.operation,
             asset_ref=request.asset_ref or (asset_state.asset_ref if asset_state else None),
@@ -1203,11 +1273,13 @@ class AuthzGraphCompiler:
             snapshot_ref=snapshot.snapshot_ref,
             snapshot_id=snapshot.snapshot_id,
             snapshot_version=snapshot.snapshot_version,
+            compiled_at=_utcnow().isoformat(),
         )
         for node in snapshot.nodes:
             self._consume_node(index, node)
         for edge in snapshot.edges:
             self._consume_edge(index, edge)
+        index.decision_graph_snapshot = _build_decision_graph_snapshot(index)
         return index
 
     def _consume_node(self, index: CompiledAuthzIndex, node: AuthzNode) -> None:
@@ -1427,3 +1499,209 @@ def _ensure_asset_state(index: CompiledAuthzIndex, asset_ref: str) -> CompiledAs
 
 def _link_authority(index: CompiledAuthzIndex, src: str, dst: str) -> None:
     index.authority_links.setdefault(src, set()).add(dst)
+
+
+def _sorted_tuple(values: Iterable[str]) -> Tuple[str, ...]:
+    return tuple(sorted({str(value).strip() for value in values if str(value).strip()}))
+
+
+def _entity_refs_by_kind(index: CompiledAuthzIndex) -> Dict[str, Tuple[str, ...]]:
+    refs_by_kind: Dict[str, Set[str]] = {
+        "principals": set(),
+        "devices": set(),
+        "facilities": set(),
+        "zones": set(),
+        "custody_points": set(),
+        "assets": set(),
+        "asset_batches": set(),
+        "twins": set(),
+        "networks": set(),
+        "workflow_stages": set(),
+    }
+    for ref, node in index.nodes_by_ref.items():
+        if node.kind == NodeKind.PRINCIPAL:
+            refs_by_kind["principals"].add(ref)
+        elif node.kind == NodeKind.DEVICE:
+            refs_by_kind["devices"].add(ref)
+        elif node.kind == NodeKind.FACILITY:
+            refs_by_kind["facilities"].add(ref)
+        elif node.kind == NodeKind.ZONE:
+            refs_by_kind["zones"].add(ref)
+        elif node.kind == NodeKind.CUSTODY_POINT:
+            refs_by_kind["custody_points"].add(ref)
+        elif node.kind == NodeKind.ASSET:
+            refs_by_kind["assets"].add(ref)
+        elif node.kind == NodeKind.ASSET_BATCH:
+            refs_by_kind["asset_batches"].add(ref)
+        elif node.kind == NodeKind.TWIN:
+            refs_by_kind["twins"].add(ref)
+        elif node.kind == NodeKind.NETWORK_SEGMENT:
+            refs_by_kind["networks"].add(ref)
+        elif node.kind == NodeKind.WORKFLOW_STAGE:
+            refs_by_kind["workflow_stages"].add(ref)
+    return {key: _sorted_tuple(value) for key, value in refs_by_kind.items()}
+
+
+def _resource_index(index: CompiledAuthzIndex) -> Dict[str, Dict[str, Any]]:
+    payload: Dict[str, Dict[str, Any]] = {}
+    for resource_ref in sorted(set(index.resource_to_asset.keys()) | set(index.resource_zones.keys())):
+        payload[resource_ref] = {
+            "asset_ref": index.resource_to_asset.get(resource_ref),
+            "zone_refs": sorted(index.resource_zones.get(resource_ref, set())),
+        }
+    return payload
+
+
+def _asset_state_index(index: CompiledAuthzIndex) -> Dict[str, Dict[str, Any]]:
+    payload: Dict[str, Dict[str, Any]] = {}
+    for asset_ref in sorted(index.asset_states):
+        state = index.asset_states[asset_ref]
+        payload[asset_ref] = {
+            "twin_ref": state.twin_ref,
+            "batch_ref": state.batch_ref,
+            "product_ref": state.product_ref,
+            "state": state.state,
+            "transferable": state.transferable,
+            "restricted": state.restricted,
+            "current_custodian": state.current_custodian,
+            "previous_custodians": sorted(state.previous_custodians),
+            "zone_refs": sorted(state.zones),
+            "custody_point_refs": sorted(state.custody_points),
+            "attestation_refs": sorted(state.attestation_refs),
+            "inspection_refs": sorted(state.inspection_refs),
+            "seal_refs": sorted(state.seal_refs),
+            "evidence_refs": sorted(state.evidence_refs),
+            "registration_refs": sorted(state.registration_refs),
+            "approved_registration_refs": sorted(state.approved_registration_refs),
+            "registration_decision_refs": sorted(state.registration_decision_refs),
+            "last_telemetry_at": state.last_telemetry_at.isoformat() if state.last_telemetry_at is not None else None,
+            "last_inspection_at": state.last_inspection_at.isoformat() if state.last_inspection_at is not None else None,
+            "evidence_quality_score": state.evidence_quality_score,
+        }
+    return payload
+
+
+def _transition_requirement_payload(permission: CompiledPermission) -> Dict[str, Any]:
+    return {
+        "subject_ref": permission.subject_ref,
+        "resource_ref": permission.resource_ref,
+        "operation": permission.operation,
+        "effect": permission.effect.value,
+        "zone_refs": sorted(permission.zones),
+        "network_refs": sorted(permission.networks),
+        "custody_point_refs": sorted(permission.custody_points),
+        "workflow_stage_refs": sorted(permission.workflow_stages),
+        "resource_state_hash": permission.resource_state_hash,
+        "requires_break_glass": permission.requires_break_glass,
+        "bypass_deny": permission.bypass_deny,
+        "required_current_custodian": permission.required_current_custodian,
+        "required_transferable_state": permission.required_transferable_state,
+        "max_telemetry_age_seconds": permission.max_telemetry_age_seconds,
+        "max_inspection_age_seconds": permission.max_inspection_age_seconds,
+        "require_attestation": permission.require_attestation,
+        "require_seal": permission.require_seal,
+        "require_approved_source_registration": permission.require_approved_source_registration,
+        "allow_quarantine": permission.allow_quarantine,
+        "valid_from": permission.valid_from.isoformat() if permission.valid_from is not None else None,
+        "valid_to": permission.valid_to.isoformat() if permission.valid_to is not None else None,
+        "provenance_source": permission.provenance_source,
+    }
+
+
+def _transition_requirements(index: CompiledAuthzIndex) -> Dict[str, Tuple[Dict[str, Any], ...]]:
+    payload: Dict[str, Tuple[Dict[str, Any], ...]] = {}
+    for subject_ref in sorted(index.permissions_by_subject):
+        entries = sorted(
+            (_transition_requirement_payload(permission) for permission in index.permissions_by_subject[subject_ref]),
+            key=lambda item: (
+                str(item.get("resource_ref") or ""),
+                str(item.get("operation") or ""),
+                str(item.get("effect") or ""),
+                str(item.get("provenance_source") or ""),
+            ),
+        )
+        payload[subject_ref] = tuple(entries)
+    return payload
+
+
+def _restricted_transfer_ready(index: CompiledAuthzIndex) -> bool:
+    for permissions in index.permissions_by_subject.values():
+        for permission in permissions:
+            if permission.effect != PermissionEffect.ALLOW:
+                continue
+            if permission.operation not in {"MOVE", "TRANSFER_CUSTODY", "MUTATE", "ACTION"}:
+                continue
+            if (
+                permission.required_current_custodian
+                or permission.required_transferable_state
+                or permission.max_telemetry_age_seconds is not None
+                or permission.max_inspection_age_seconds is not None
+                or permission.require_attestation
+                or permission.require_seal
+                or permission.require_approved_source_registration
+                or bool(permission.custody_points)
+            ):
+                return True
+    return False
+
+
+def _build_decision_graph_snapshot(index: CompiledAuthzIndex) -> CompiledDecisionGraphSnapshot:
+    entity_refs = _entity_refs_by_kind(index)
+    authority_index = {key: _sorted_tuple(values) for key, values in sorted(index.authority_links.items())}
+    resource_index = _resource_index(index)
+    asset_state_index = _asset_state_index(index)
+    transition_requirements = _transition_requirements(index)
+    policy_refs = _sorted_tuple(
+        permission.provenance_source
+        for permissions in index.permissions_by_subject.values()
+        for permission in permissions
+        if permission.provenance_source
+    )
+    provenance_refs = _sorted_tuple(
+        list(policy_refs)
+        + [
+            ref
+            for state in index.asset_states.values()
+            for ref in (
+                list(state.evidence_refs)
+                + list(state.attestation_refs)
+                + list(state.seal_refs)
+                + list(state.registration_refs)
+                + list(state.registration_decision_refs)
+            )
+        ]
+    )
+    preimage = {
+        "snapshot_ref": index.snapshot_ref,
+        "snapshot_id": index.snapshot_id,
+        "snapshot_version": index.snapshot_version,
+        "hot_path_workflow": "restricted_custody_transfer",
+        "trust_gap_taxonomy": list(TRANSFER_TRUST_GAP_TAXONOMY),
+        "entity_refs": {key: list(value) for key, value in entity_refs.items()},
+        "authority_index": {key: list(value) for key, value in authority_index.items()},
+        "resource_index": resource_index,
+        "asset_state_index": asset_state_index,
+        "transition_requirements": {
+            key: [dict(item) for item in value]
+            for key, value in transition_requirements.items()
+        },
+        "policy_refs": list(policy_refs),
+        "provenance_refs": list(provenance_refs),
+        "restricted_transfer_ready": _restricted_transfer_ready(index),
+    }
+    snapshot_hash = hashlib.sha256(_canonical_json(preimage).encode("utf-8")).hexdigest()
+    return CompiledDecisionGraphSnapshot(
+        snapshot_ref=index.snapshot_ref,
+        snapshot_id=index.snapshot_id,
+        snapshot_version=index.snapshot_version,
+        compiled_at=index.compiled_at or _utcnow().isoformat(),
+        snapshot_hash=snapshot_hash,
+        entity_refs=entity_refs,
+        authority_index=authority_index,
+        resource_index=resource_index,
+        asset_state_index=asset_state_index,
+        transition_requirements=transition_requirements,
+        policy_refs=policy_refs,
+        provenance_refs=provenance_refs,
+        restricted_transfer_ready=preimage["restricted_transfer_ready"],
+    )

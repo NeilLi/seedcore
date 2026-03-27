@@ -215,8 +215,17 @@ async def pkg_authz_graph_status() -> Dict[str, Any]:
         "authz_graph_ready": compiled is not None and bool(authz_status.get("healthy")),
         "active_snapshot_id": authz_status.get("active_snapshot_id"),
         "active_snapshot_version": authz_status.get("active_snapshot_version"),
+        "snapshot_hash": authz_status.get("snapshot_hash"),
+        "compiled_at": authz_status.get("compiled_at"),
+        "hot_path_workflow": authz_status.get("hot_path_workflow"),
+        "restricted_transfer_ready": bool(authz_status.get("restricted_transfer_ready")),
+        "trust_gap_taxonomy": list(authz_status.get("trust_gap_taxonomy") or []),
         "graph_nodes_count": authz_status.get("graph_nodes_count", 0),
         "graph_edges_count": authz_status.get("graph_edges_count", 0),
+        "decision_graph_nodes_count": authz_status.get("decision_graph_nodes_count", 0),
+        "decision_graph_edges_count": authz_status.get("decision_graph_edges_count", 0),
+        "enrichment_graph_nodes_count": authz_status.get("enrichment_graph_nodes_count", 0),
+        "enrichment_graph_edges_count": authz_status.get("enrichment_graph_edges_count", 0),
         "error": authz_status.get("error"),
     }
 

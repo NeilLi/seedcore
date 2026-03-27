@@ -1075,6 +1075,9 @@ class ReplayService:
     ) -> ReplayVerificationStatus:
         issues: List[str] = []
         artifact_results: Dict[str, Any] = {}
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+        governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
         signer_policy: Dict[str, Any] = {
             "policy_receipt": build_policy_summary(artifact_type="policy_receipt"),
             "evidence_bundle": build_policy_summary(
@@ -1092,6 +1095,15 @@ class ReplayService:
                 trust_level="attested" if transition_receipts else None,
             ),
         }
+        snapshot_result = self._verify_decision_graph_snapshot(
+            authz_graph=authz_graph,
+            governed_receipt=governed_receipt,
+            policy_receipt=policy_receipt,
+            evidence_bundle=evidence_bundle,
+        )
+        artifact_results["decision_graph_snapshot"] = snapshot_result
+        if snapshot_result.get("error_code") is not None:
+            issues.append(f"decision_graph_snapshot:{snapshot_result['error_code']}")
         if not policy_receipt:
             issues.append("missing_policy_receipt")
             artifact_results["policy_receipt"] = {
@@ -1234,6 +1246,87 @@ class ReplayService:
             signer_policy=signer_policy,
         )
 
+    def _verify_decision_graph_snapshot(
+        self,
+        *,
+        authz_graph: Mapping[str, Any],
+        governed_receipt: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+        evidence_bundle: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        def _normalized(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            normalized = str(value).strip()
+            return normalized or None
+
+        authz_hash = _normalized(authz_graph.get("snapshot_hash"))
+        receipt_hash = _normalized(governed_receipt.get("snapshot_hash"))
+        policy_hash = _normalized(policy_receipt.get("decision_graph_snapshot_hash"))
+        bundle_hash = _normalized(evidence_bundle.get("decision_graph_snapshot_hash"))
+        authz_version = _normalized(authz_graph.get("snapshot_version"))
+        receipt_version = _normalized(governed_receipt.get("snapshot_version"))
+        policy_version = _normalized(policy_receipt.get("decision_graph_snapshot_version"))
+        bundle_version = _normalized(evidence_bundle.get("decision_graph_snapshot_version"))
+
+        result = {
+            "artifact_type": "decision_graph_snapshot",
+            "verified": True,
+            "available": any(
+                value is not None
+                for value in (
+                    authz_hash,
+                    receipt_hash,
+                    policy_hash,
+                    bundle_hash,
+                    authz_version,
+                    receipt_version,
+                    policy_version,
+                    bundle_version,
+                )
+            ),
+            "error_code": None,
+            "snapshot_hash": receipt_hash or authz_hash or policy_hash or bundle_hash,
+            "snapshot_version": receipt_version or authz_version or policy_version or bundle_version,
+            "sources": {
+                "authz_graph_snapshot_hash": authz_hash,
+                "governed_receipt_snapshot_hash": receipt_hash,
+                "policy_receipt_snapshot_hash": policy_hash,
+                "evidence_bundle_snapshot_hash": bundle_hash,
+                "authz_graph_snapshot_version": authz_version,
+                "governed_receipt_snapshot_version": receipt_version,
+                "policy_receipt_snapshot_version": policy_version,
+                "evidence_bundle_snapshot_version": bundle_version,
+            },
+        }
+        if not result["available"]:
+            return result
+        if authz_hash is not None and receipt_hash is not None and authz_hash != receipt_hash:
+            result["verified"] = False
+            result["error_code"] = "snapshot_hash_mismatch"
+            return result
+        if receipt_hash is not None and policy_hash is not None and receipt_hash != policy_hash:
+            result["verified"] = False
+            result["error_code"] = "policy_receipt_snapshot_hash_mismatch"
+            return result
+        if receipt_hash is not None and bundle_hash is not None and receipt_hash != bundle_hash:
+            result["verified"] = False
+            result["error_code"] = "evidence_bundle_snapshot_hash_mismatch"
+            return result
+        if authz_version is not None and receipt_version is not None and authz_version != receipt_version:
+            result["verified"] = False
+            result["error_code"] = "snapshot_version_mismatch"
+            return result
+        if receipt_version is not None and policy_version is not None and receipt_version != policy_version:
+            result["verified"] = False
+            result["error_code"] = "policy_receipt_snapshot_version_mismatch"
+            return result
+        if receipt_version is not None and bundle_version is not None and receipt_version != bundle_version:
+            result["verified"] = False
+            result["error_code"] = "evidence_bundle_snapshot_version_mismatch"
+            return result
+        return result
+
     def _build_replay_timeline(
         self,
         *,
@@ -1269,6 +1362,7 @@ class ReplayService:
                         "reason": authz_graph.get("reason") or governed_receipt.get("reason"),
                         "asset_ref": governed_receipt.get("asset_ref") or authz_graph.get("asset_ref"),
                         "resource_ref": governed_receipt.get("resource_ref") or authz_graph.get("resource_ref"),
+                        "snapshot_hash": governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash"),
                         "trust_gap_codes": self._trust_gap_codes(replay_authz_graph=authz_graph, replay_governed_receipt=governed_receipt),
                     },
                 )
@@ -1478,6 +1572,7 @@ class ReplayService:
             "lineage_events": len(replay.custody_transition_refs),
             "linked_disputes": len(replay.dispute_refs),
             "current_custodian": replay.authz_graph.get("current_custodian"),
+            "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
             "trust_gap_codes": trust_gap_codes,
         }
@@ -1507,6 +1602,18 @@ class ReplayService:
             "timestamp": receipt.get("timestamp"),
             "authz_reason": replay.authz_graph.get("reason") or replay.governed_receipt.get("reason"),
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
+            "decision_graph_snapshot_hash": (
+                replay.governed_receipt.get("snapshot_hash")
+                or replay.authz_graph.get("snapshot_hash")
+                or receipt.get("decision_graph_snapshot_hash")
+                or replay.evidence_bundle.get("decision_graph_snapshot_hash")
+            ),
+            "decision_graph_snapshot_version": (
+                replay.governed_receipt.get("snapshot_version")
+                or replay.authz_graph.get("snapshot_version")
+                or receipt.get("decision_graph_snapshot_version")
+                or replay.evidence_bundle.get("decision_graph_snapshot_version")
+            ),
             "trust_gap_codes": trust_gap_codes,
             "restricted_token_recommended": bool(replay.authz_graph.get("restricted_token_recommended")),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
@@ -2361,6 +2468,7 @@ class ReplayService:
         return {
             "disposition": replay.authz_graph.get("disposition") or replay.governed_receipt.get("disposition"),
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
+            "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
             "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
             "execution_token_id": (
                 replay.audit_record.get("token_id")
@@ -2409,6 +2517,15 @@ class ReplayService:
                     "claim": "governed_receipt_available",
                     "value": True,
                     "source": governed_receipt_hash,
+                }
+            )
+        decision_graph_snapshot_hash = replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash")
+        if decision_graph_snapshot_hash:
+            claims.append(
+                {
+                    "claim": "decision_graph_snapshot_bound",
+                    "value": True,
+                    "source": decision_graph_snapshot_hash,
                 }
             )
         if replay.subject_type == "asset":

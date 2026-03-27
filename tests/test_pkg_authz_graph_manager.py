@@ -126,6 +126,8 @@ async def test_authz_graph_manager_activates_compiled_snapshot() -> None:
     assert compiled.snapshot_version == "snapshot:1"
     assert status["healthy"] is True
     assert status["active_snapshot_version"] == "snapshot:1"
+    assert status["snapshot_hash"] == compiled.snapshot_hash
+    assert status["restricted_transfer_ready"] is False
     assert status["graph_edges_count"] > 0
     assert "enrichment_graph_nodes_count" in status
 
@@ -157,6 +159,7 @@ async def test_pkg_manager_metadata_exposes_authz_graph_status() -> None:
 
     assert "authz_graph" in metadata
     assert metadata["authz_graph"]["active_snapshot_version"] == "snapshot:1"
+    assert metadata["authz_graph"]["snapshot_hash"] is not None
     assert pkg_manager.get_active_compiled_authz_index() is not None
 
 

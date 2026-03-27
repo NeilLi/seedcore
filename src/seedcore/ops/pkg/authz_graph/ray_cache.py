@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 import os
 from typing import Any, Dict, Iterable, Mapping, Optional
 
@@ -76,6 +78,7 @@ def _serialize_transition_evaluation(evaluation: CompiledTransitionEvaluation) -
             "snapshot_ref": evaluation.receipt.snapshot_ref,
             "snapshot_id": evaluation.receipt.snapshot_id,
             "snapshot_version": evaluation.receipt.snapshot_version,
+            "snapshot_hash": evaluation.receipt.snapshot_hash,
             "principal_ref": evaluation.receipt.principal_ref,
             "operation": evaluation.receipt.operation,
             "asset_ref": evaluation.receipt.asset_ref,
@@ -96,6 +99,9 @@ def _index_status(index: CompiledAuthzIndex, *, source: str) -> Dict[str, Any]:
         "snapshot_ref": index.snapshot_ref,
         "snapshot_id": index.snapshot_id,
         "snapshot_version": index.snapshot_version,
+        "snapshot_hash": index.snapshot_hash,
+        "compiled_at": index.compiled_at,
+        "restricted_transfer_ready": index.restricted_transfer_ready,
         "subject_count": len(index.permissions_by_subject),
         "permission_count": permission_count,
         "resource_zone_count": len(index.resource_zones),
@@ -272,6 +278,7 @@ def _deserialize_transition_evaluation(payload: Mapping[str, Any], *, operation:
         snapshot_ref=str(receipt_payload.get("snapshot_ref") or ""),
         snapshot_id=receipt_payload.get("snapshot_id"),
         snapshot_version=receipt_payload.get("snapshot_version"),
+        snapshot_hash=receipt_payload.get("snapshot_hash"),
         principal_ref=str(receipt_payload.get("principal_ref") or ""),
         operation=str(receipt_payload.get("operation") or operation),
         asset_ref=receipt_payload.get("asset_ref"),
@@ -363,6 +370,7 @@ class AuthzGraphCacheActor:
         self._projector = AuthzGraphProjector()
         self._compiled_index: CompiledAuthzIndex | None = None
         self._status: Dict[str, Any] = {"loaded": False, "source": None}
+        self._transition_cache: Dict[str, Dict[str, Any]] = {}
 
     async def load_snapshot(
         self,
@@ -380,6 +388,7 @@ class AuthzGraphCacheActor:
             include_registration_decisions=True,
         )
         self._compiled_index = compiled
+        self._transition_cache = {}
         self._status = _index_status(compiled, source="snapshot")
         self._status.update(
             {
@@ -416,6 +425,7 @@ class AuthzGraphCacheActor:
         )
         compiled = self._projection_service.compiler.compile(snapshot)
         self._compiled_index = compiled
+        self._transition_cache = {}
         self._status = _index_status(compiled, source="fixture")
         self._status.update(
             {
@@ -447,6 +457,10 @@ class AuthzGraphCacheActor:
     def evaluate_transition(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         if self._compiled_index is None:
             raise RuntimeError("No compiled authz index loaded")
+        cache_key = _transition_cache_key(self._compiled_index, payload)
+        cached = self._transition_cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
         request = AuthzTransitionRequest(
             principal_ref=str(payload["principal_ref"]),
             operation=str(payload["operation"]),
@@ -472,4 +486,46 @@ class AuthzGraphCacheActor:
             at=_parse_optional_datetime(payload.get("at")),
         )
         evaluation = self._compiled_index.evaluate_transition(request)
-        return _serialize_transition_evaluation(evaluation)
+        serialized = _serialize_transition_evaluation(evaluation)
+        self._transition_cache[cache_key] = dict(serialized)
+        self._status["transition_cache_entries"] = len(self._transition_cache)
+        return serialized
+
+
+def _transition_cache_key(index: CompiledAuthzIndex, payload: Mapping[str, Any]) -> str:
+    critical_fields = {
+        key: payload.get(key)
+        for key in (
+            "principal_ref",
+            "operation",
+            "resource_ref",
+            "asset_ref",
+            "source_registration_ref",
+            "registration_decision_ref",
+            "workflow_stage_ref",
+            "zone_ref",
+            "network_ref",
+            "custody_point_ref",
+            "resource_state_hash",
+            "expected_custodian_ref",
+            "require_current_custodian",
+            "require_transferable_state",
+            "max_telemetry_age_seconds",
+            "max_inspection_age_seconds",
+            "require_attestation",
+            "require_seal",
+            "require_approved_source_registration",
+            "allow_quarantine",
+            "break_glass",
+        )
+    }
+    canonical = json.dumps(
+        {
+            "snapshot_hash": index.snapshot_hash,
+            "payload": critical_fields,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

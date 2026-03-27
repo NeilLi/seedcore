@@ -125,6 +125,8 @@ class PolicyReceipt(BaseModel):
     asset_ref: Optional[str] = None
     authz_disposition: Optional[str] = None
     governed_receipt_hash: Optional[str] = None
+    decision_graph_snapshot_hash: Optional[str] = None
+    decision_graph_snapshot_version: Optional[str] = None
     trust_gap_codes: List[str] = Field(default_factory=list)
     timestamp: str
     signer_metadata: SignerMetadata
@@ -166,6 +168,8 @@ class EvidenceBundle(BaseModel):
     intent_ref: Optional[str] = None
     execution_token_id: Optional[str] = None
     policy_receipt_id: Optional[str] = None
+    decision_graph_snapshot_hash: Optional[str] = None
+    decision_graph_snapshot_version: Optional[str] = None
     transition_receipt_ids: List[str] = Field(default_factory=list)
     asset_fingerprint: Optional[AssetFingerprint] = None
     evidence_inputs: Dict[str, Any] = Field(default_factory=dict)

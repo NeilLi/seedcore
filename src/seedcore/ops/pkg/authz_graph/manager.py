@@ -25,6 +25,11 @@ class AuthzGraphManager:
             "healthy": False,
             "active_snapshot_id": None,
             "active_snapshot_version": None,
+            "snapshot_hash": None,
+            "compiled_at": None,
+            "hot_path_workflow": "restricted_custody_transfer",
+            "restricted_transfer_ready": False,
+            "trust_gap_taxonomy": [],
             "graph_nodes_count": 0,
             "graph_edges_count": 0,
             "decision_graph_nodes_count": 0,
@@ -49,12 +54,26 @@ class AuthzGraphManager:
             include_registration_decisions=True,
         )
         with self._lock:
+            decision_graph_snapshot = compiled.decision_graph_snapshot
             self._active_compiled_index = compiled
             self._active_projection = result
             self._status = {
                 "healthy": True,
                 "active_snapshot_id": snapshot_id,
                 "active_snapshot_version": snapshot_version,
+                "snapshot_hash": compiled.snapshot_hash,
+                "compiled_at": compiled.compiled_at,
+                "hot_path_workflow": (
+                    decision_graph_snapshot.hot_path_workflow
+                    if decision_graph_snapshot is not None
+                    else "restricted_custody_transfer"
+                ),
+                "restricted_transfer_ready": compiled.restricted_transfer_ready,
+                "trust_gap_taxonomy": (
+                    list(decision_graph_snapshot.trust_gap_taxonomy)
+                    if decision_graph_snapshot is not None
+                    else []
+                ),
                 "graph_nodes_count": result.stats.get("graph_nodes_count", 0),
                 "graph_edges_count": result.stats.get("graph_edges_count", 0),
                 "decision_graph_nodes_count": result.stats.get("decision_graph_nodes_count", 0),

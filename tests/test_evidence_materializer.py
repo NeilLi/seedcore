@@ -10,11 +10,15 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
         "policy_receipt": {
             "policy_receipt_id": "policy-r-1",
             "policy_decision_id": "policy-decision-hash-1",
+            "decision_graph_snapshot_hash": "snapshot-hash-1",
+            "decision_graph_snapshot_version": "snapshot:1",
         },
         "evidence_bundle": {
             "evidence_bundle_id": "bundle-1",
             "execution_token_id": "token-mat-1",
             "node_id": "robot_sim://reachy/grasp#sim-1",
+            "decision_graph_snapshot_hash": "snapshot-hash-1",
+            "decision_graph_snapshot_version": "snapshot:1",
             "created_at": "2026-03-19T11:59:55+00:00",
             "signer_metadata": {"signer_id": "seedcore-evidence-service", "signing_scheme": "hmac_sha256"},
             "signature": "sig-1",
@@ -47,5 +51,6 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
     assert payload["device_identity"] == "robot_sim://reachy/grasp#sim-1"
     assert payload["platform_state"] == "allow"
     assert payload["policy_verification"]["policy_hash"] == "policy-decision-hash-1"
+    assert payload["policy_verification"]["decision_graph_snapshot_hash"] == "snapshot-hash-1"
     assert payload["custody_transition"]["to"] == "vault-a"
     assert payload["custody_transition"]["from"] == "staging-a"

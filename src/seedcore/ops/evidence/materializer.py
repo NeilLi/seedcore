@@ -70,6 +70,18 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
             "authz_disposition": authz_graph.get("disposition") or governed_receipt.get("disposition"),
             "authz_reason": authz_graph.get("reason") or governed_receipt.get("reason"),
             "governed_receipt_hash": governed_receipt.get("decision_hash"),
+            "decision_graph_snapshot_hash": (
+                governed_receipt.get("snapshot_hash")
+                or authz_graph.get("snapshot_hash")
+                or policy_receipt.get("decision_graph_snapshot_hash")
+                or evidence_bundle.get("decision_graph_snapshot_hash")
+            ),
+            "decision_graph_snapshot_version": (
+                governed_receipt.get("snapshot_version")
+                or authz_graph.get("snapshot_version")
+                or policy_receipt.get("decision_graph_snapshot_version")
+                or evidence_bundle.get("decision_graph_snapshot_version")
+            ),
             "trust_gap_codes": trust_gap_codes,
             "custody_proof_count": len(governed_receipt.get("custody_proof") or []),
             "provenance_sources": list(governed_receipt.get("provenance_sources") or []),

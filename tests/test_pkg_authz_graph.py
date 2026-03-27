@@ -9,7 +9,9 @@ from seedcore.models.source_registration import SourceRegistration, SourceRegist
 from seedcore.ops.pkg.authz_graph import (
     AuthzDecisionDisposition,
     AuthzGraphCompiler,
+    AuthzGraphSnapshot,
     AuthzGraphProjector,
+    AuthzNode,
     AuthzTransitionRequest,
     EdgeKind,
     NodeKind,
@@ -1313,3 +1315,115 @@ def test_transition_evaluation_requires_approved_source_registration_and_workflo
     assert "registration_decision:decision-77" in allowed.receipt.evidence_refs
     assert denied.disposition == AuthzDecisionDisposition.DENY
     assert denied.reason == "no_matching_permission"
+
+
+def test_compiler_builds_deterministic_decision_graph_snapshot_hash() -> None:
+    now = datetime(2099, 3, 20, 12, 0, tzinfo=timezone.utc)
+    projector = AuthzGraphProjector()
+    facts = [
+        Fact(
+            id=uuid4(),
+            text="agent role",
+            snapshot_id=15,
+            namespace="authz",
+            subject="agent-alpha",
+            predicate="hasRole",
+            object_data={"role": "warehouse_operator"},
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="role permission",
+            snapshot_id=15,
+            namespace="authz",
+            subject="role:warehouse_operator",
+            predicate="allowedOperation",
+            object_data={
+                "operation": "MOVE",
+                "resource": "asset-42",
+                "required_current_custodian": True,
+                "required_transferable_state": True,
+                "max_telemetry_age_seconds": 300,
+                "allow_quarantine": True,
+            },
+            valid_from=now - timedelta(minutes=5),
+            valid_to=now + timedelta(minutes=5),
+            created_by="test",
+        ),
+        Fact(
+            id=uuid4(),
+            text="custody",
+            snapshot_id=15,
+            namespace="authz",
+            subject="asset-42",
+            predicate="heldBy",
+            object_data={"custodian": "agent-alpha", "transferable": True},
+            created_by="test",
+        ),
+    ]
+
+    graph_a = projector.project_snapshot(
+        snapshot_ref="pkg-authz@deterministic",
+        snapshot_id=15,
+        snapshot_version="rules@15.0.0",
+        facts=facts,
+    )
+    graph_b = projector.project_snapshot(
+        snapshot_ref="pkg-authz@deterministic",
+        snapshot_id=15,
+        snapshot_version="rules@15.0.0",
+        facts=list(reversed(facts)),
+    )
+
+    compiled_a = AuthzGraphCompiler().compile(graph_a)
+    compiled_b = AuthzGraphCompiler().compile(graph_b)
+
+    assert compiled_a.snapshot_hash is not None
+    assert compiled_a.snapshot_hash == compiled_b.snapshot_hash
+    assert compiled_a.decision_graph_snapshot is not None
+    assert compiled_a.decision_graph_snapshot.restricted_transfer_ready is True
+
+
+def test_compiler_snapshot_hash_ignores_enrichment_only_nodes() -> None:
+    snapshot = AuthzGraphSnapshot(
+        snapshot_ref="pkg-authz@enrichment",
+        snapshot_id=16,
+        snapshot_version="rules@16.0.0",
+        generated_at=_iso(datetime(2099, 3, 20, 12, 0, tzinfo=timezone.utc)),
+        nodes=[
+            AuthzNode(kind=NodeKind.PRINCIPAL, ref="principal:agent-alpha"),
+            AuthzNode(kind=NodeKind.ROLE_PROFILE, ref="role:warehouse_operator"),
+            AuthzNode(kind=NodeKind.ASSET, ref="asset:asset-42", attributes={"transferable": True}),
+        ],
+        edges=[
+            {
+                "kind": EdgeKind.HAS_ROLE,
+                "src": "principal:agent-alpha",
+                "dst": "role:warehouse_operator",
+            },
+            {
+                "kind": EdgeKind.CAN,
+                "src": "role:warehouse_operator",
+                "dst": "asset:asset-42",
+                "operation": "MOVE",
+                "effect": PermissionEffect.ALLOW,
+                "constraints": {"required_transferable_state": True, "allow_quarantine": True},
+            },
+        ],
+    )
+    enriched_snapshot = snapshot.model_copy(
+        update={
+            "nodes": [
+                *snapshot.nodes,
+                AuthzNode(kind=NodeKind.FACT, ref="fact:analytics-only", attributes={"topic": "analytics"}),
+                AuthzNode(kind=NodeKind.DIGITAL_PASSPORT_FRAGMENT, ref="digital_passport_fragment:passport-1"),
+            ]
+        }
+    )
+
+    compiled = AuthzGraphCompiler().compile(snapshot)
+    enriched_compiled = AuthzGraphCompiler().compile(enriched_snapshot)
+
+    assert compiled.snapshot_hash == enriched_compiled.snapshot_hash
