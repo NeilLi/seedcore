@@ -39,7 +39,7 @@ from seedcore.models.replay import (
     VerificationResult,
 )
 from seedcore.ops.evidence.materializer import materialize_seedcore_custody_event_payload
-from seedcore.ops.evidence.policy import build_policy_summary
+from seedcore.ops.evidence.policy import build_policy_summary, canonical_json, sha256_hex
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
     verify_artifact_signature,
@@ -580,27 +580,27 @@ class ReplayService:
         trust_bundle = snapshot.get("trust_bundle")
         if not isinstance(trust_bundle, Mapping):
             raise ReplayServiceError("invalid_trust_bundle", "Trust bundle snapshot payload is missing trust_bundle")
-        try:
-            payload_hash, signer_metadata, signature, trust_proof = build_signed_artifact(
-                artifact_type="trust_certificate",
-                payload=dict(trust_bundle),
-                endpoint_id=None,
-                trust_level="baseline",
-                node_id=None,
-            )
-        except Exception as exc:
-            raise ReplayServiceError("trust_bundle_signing_failed", f"Unable to sign trust bundle: {exc}") from exc
+        payload = dict(trust_bundle)
+        payload_hash = sha256_hex(canonical_json(payload))
+        signing_material = f"sha256:{payload_hash}"
+        secret = self._trust_bundle_signing_secret()
+        signature = hmac.new(
+            secret.encode("utf-8"),
+            signing_material.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        signer_id = os.getenv("SEEDCORE_TRUST_BUNDLE_SIGNER_ID", "seedcore-trust-bundle-signer")
         return {
             "payload_hash": payload_hash,
             "signature_envelope": {
-                "signer_type": signer_metadata.signer_type,
-                "signer_id": signer_metadata.signer_id,
-                "signing_scheme": signer_metadata.signing_scheme,
-                "key_ref": signer_metadata.key_ref,
-                "attestation_level": signer_metadata.attestation_level,
+                "signer_type": "service",
+                "signer_id": signer_id,
+                "signing_scheme": "hmac_sha256",
+                "key_ref": self._trust_bundle_signing_key_ref(),
+                "attestation_level": "baseline",
                 "signature": signature,
             },
-            "trust_proof": trust_proof.model_dump(mode="json") if trust_proof is not None else None,
+            "trust_proof": None,
         }
 
     def build_public_reference(
@@ -2768,6 +2768,20 @@ class ReplayService:
     def _env_flag(self, name: str, *, default: bool = False) -> bool:
         raw = os.getenv(name, "true" if default else "false").strip().lower()
         return raw in {"1", "true", "yes", "on"}
+
+    def _trust_bundle_signing_secret(self) -> str:
+        return (
+            self._optional_str(os.getenv("SEEDCORE_TRUST_BUNDLE_SIGNING_SECRET"))
+            or self._optional_str(os.getenv("SEEDCORE_TRUST_SIGNING_SECRET"))
+            or self._optional_str(os.getenv("SEEDCORE_EVIDENCE_SIGNING_SECRET"))
+            or "seedcore-dev-evidence-secret"
+        )
+
+    def _trust_bundle_signing_key_ref(self) -> str:
+        return (
+            self._optional_str(os.getenv("SEEDCORE_TRUST_BUNDLE_SIGNING_KEY_REF"))
+            or "seedcore-trust-bundle-hmac"
+        )
 
     def _revocation_key(self, jti: str) -> str:
         return f"seedcore:trust:revoked:{jti}"

@@ -235,7 +235,18 @@ fn load_trust_bundle(path: &Path) -> Result<TrustBundle, String> {
             "trust_bundle_payload_hash_mismatch:expected=sha256:{expected_hash_hex}:computed={computed_hash}"
         ));
     }
-    let resolver = TrustBundleResolver::from_bundle(&envelope.trust_bundle);
+    let expected_key_ref = trust_bundle_signing_key_ref();
+    let actual_key_ref = envelope
+        .signature_envelope
+        .key_ref
+        .as_deref()
+        .ok_or_else(|| "missing_trust_bundle_signing_key_ref".to_string())?;
+    if actual_key_ref != expected_key_ref {
+        return Err(format!(
+            "trust_bundle_signing_key_ref_mismatch:expected={expected_key_ref}:actual={actual_key_ref}"
+        ));
+    }
+    let resolver = TrustBundleEnvelopeResolver::new(expected_key_ref.clone());
     let report = verify_detached_signature(
         &envelope.signature_envelope,
         &ArtifactHash::sha256_hex(expected_hash_hex),
@@ -747,29 +758,11 @@ fn mint_token_path(claims_path: &Path) -> Result<ExecutionToken, String> {
 #[derive(Debug, Clone)]
 struct TrustBundleResolver {
     bundle: TrustBundle,
-    trust_bundle_hmac_secret: String,
 }
 
 impl TrustBundleResolver {
     fn from_bundle(bundle: &TrustBundle) -> Self {
-        let trust_bundle_hmac_secret = env::var("SEEDCORE_TRUST_BUNDLE_SIGNING_SECRET")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                env::var("SEEDCORE_TRUST_SIGNING_SECRET")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .or_else(|| {
-                env::var("SEEDCORE_EVIDENCE_SIGNING_SECRET")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .unwrap_or_else(|| "seedcore-dev-evidence-secret".to_string());
-        Self {
-            bundle: bundle.clone(),
-            trust_bundle_hmac_secret,
-        }
+        Self { bundle: bundle.clone() }
     }
 }
 
@@ -794,17 +787,66 @@ impl seedcore_proof_core::KeyResolver for TrustBundleResolver {
                 metadata,
             });
         }
+        Err(seedcore_proof_core::VerificationError::KeyNotFound)
+    }
+}
 
-        // Allow signed trust-bundle envelopes that use HMAC signing keys that are
-        // distributed out-of-band (for example, operator-managed signing secrets).
+#[derive(Debug, Clone)]
+struct TrustBundleEnvelopeResolver {
+    key_ref: String,
+    secret: String,
+}
+
+impl TrustBundleEnvelopeResolver {
+    fn new(key_ref: String) -> Self {
+        Self {
+            key_ref,
+            secret: trust_bundle_signing_secret(),
+        }
+    }
+}
+
+impl seedcore_proof_core::KeyResolver for TrustBundleEnvelopeResolver {
+    fn resolve(
+        &self,
+        key_ref: &str,
+    ) -> Result<seedcore_proof_core::KeyMaterial, seedcore_proof_core::VerificationError> {
+        if key_ref != self.key_ref {
+            return Err(seedcore_proof_core::VerificationError::KeyNotFound);
+        }
         let mut metadata = std::collections::BTreeMap::new();
-        metadata.insert("hmac_secret".to_string(), self.trust_bundle_hmac_secret.clone());
+        metadata.insert("hmac_secret".to_string(), self.secret.clone());
         Ok(seedcore_proof_core::KeyMaterial {
             key_ref: key_ref.to_string(),
             public_material: String::new(),
             metadata,
         })
     }
+}
+
+fn trust_bundle_signing_secret() -> String {
+    env::var("SEEDCORE_TRUST_BUNDLE_SIGNING_SECRET")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var("SEEDCORE_TRUST_SIGNING_SECRET")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| {
+            env::var("SEEDCORE_EVIDENCE_SIGNING_SECRET")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "seedcore-dev-evidence-secret".to_string())
+}
+
+fn trust_bundle_signing_key_ref() -> String {
+    env::var("SEEDCORE_TRUST_BUNDLE_SIGNING_KEY_REF")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "seedcore-trust-bundle-hmac".to_string())
 }
 
 fn apply_trust_bundle_checks(
@@ -1343,7 +1385,7 @@ mod tests {
                 signer_type: "service".to_string(),
                 signer_id: "seedcore-trust-bundle-signer".to_string(),
                 signing_scheme: "debug_hash_v1".to_string(),
-                key_ref: Some("tpm-phase-a-key-01".to_string()),
+                key_ref: Some(trust_bundle_signing_key_ref()),
                 attestation_level: "baseline".to_string(),
                 signature: payload_hash.to_string(),
             },
