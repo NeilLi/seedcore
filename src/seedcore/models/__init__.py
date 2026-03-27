@@ -71,6 +71,15 @@ from .replay import (
     TrustPageProjection,
     VerificationResult,
 )
+from .pdp_hot_path import (
+    HotPathAssetContext,
+    HotPathCheckResult,
+    HotPathDecisionView,
+    HotPathEvaluateRequest,
+    HotPathEvaluateResponse,
+    HotPathSignerProvenance,
+    HotPathTelemetryContext,
+)
 from .task_api import Task
 from .task_payload import TaskPayload
 
@@ -105,6 +114,13 @@ __all__ = [
     "TrustProof",
     "TrustPageProjection",
     "TransitionReceipt",
+    "HotPathAssetContext",
+    "HotPathCheckResult",
+    "HotPathDecisionView",
+    "HotPathEvaluateRequest",
+    "HotPathEvaluateResponse",
+    "HotPathSignerProvenance",
+    "HotPathTelemetryContext",
     "Task",
     "TaskPayload",
     "VerificationResult",

@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query  # pyright: ignore[reportMis
 from fastapi.responses import StreamingResponse  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
+from ...models.pdp_hot_path import HotPathEvaluateRequest, HotPathEvaluateResponse
 from ...database import get_async_pg_session_factory, get_async_redis_client
 from ...ops.pkg import (
     PKGClient,
@@ -22,6 +23,7 @@ from ...ops.pkg import (
 )
 from ...ops.pkg.manager import PKGMode
 from ...ops.pkg.manager import PKG_REDIS_CHANNEL
+from ...ops.pdp_hot_path import evaluate_pdp_hot_path
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,20 @@ class PKGOTAHeartbeatRequest(BaseModel):
     region: str = Field(default="global", description="Region lane for rollout selection.")
     snapshot_id: Optional[int] = Field(default=None, description="Current snapshot ID on the device.")
     version: Optional[str] = Field(default=None, description="Current policy version on the device.")
+
+
+@router.post("/pdp/hot-path/evaluate", response_model=HotPathEvaluateResponse)
+async def pdp_hot_path_evaluate(
+    payload: HotPathEvaluateRequest,
+    debug: bool = Query(default=False, description="Include check-by-check diagnostics."),
+) -> HotPathEvaluateResponse:
+    """
+    Evaluate the asset-centric PDP hot path contract for Restricted Custody Transfer.
+    """
+    result = evaluate_pdp_hot_path(payload)
+    if debug:
+        return result
+    return result
 
 
 async def _resolve_pkg_client() -> PKGClient:
