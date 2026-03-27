@@ -94,6 +94,15 @@ class SignerMetadata(BaseModel):
     config_profile: Optional[str] = None
 
 
+class CoSignature(BaseModel):
+    principal_ref: str
+    signer_role: Optional[str] = None
+    signer_party: Optional[str] = None
+    signer_metadata: SignerMetadata
+    signature: str
+    trust_proof: Optional[TrustProof] = None
+
+
 class TransitionReceipt(BaseModel):
     transition_receipt_id: str
     intent_id: str
@@ -127,6 +136,11 @@ class PolicyReceipt(BaseModel):
     governed_receipt_hash: Optional[str] = None
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
+    co_sign_required: bool = False
+    co_sign_status: Optional[str] = None
+    transfer_outcome: Optional[str] = None
+    co_sign_binding_hash: Optional[str] = None
+    expected_co_signers: List[Dict[str, Any]] = Field(default_factory=list)
     trust_gap_codes: List[str] = Field(default_factory=list)
     timestamp: str
     signer_metadata: SignerMetadata
@@ -170,6 +184,12 @@ class EvidenceBundle(BaseModel):
     policy_receipt_id: Optional[str] = None
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
+    co_sign_required: bool = False
+    co_sign_status: Optional[str] = None
+    transfer_outcome: Optional[str] = None
+    co_sign_binding_hash: Optional[str] = None
+    expected_co_signers: List[Dict[str, Any]] = Field(default_factory=list)
+    co_signatures: List[CoSignature] = Field(default_factory=list)
     transition_receipt_ids: List[str] = Field(default_factory=list)
     asset_fingerprint: Optional[AssetFingerprint] = None
     evidence_inputs: Dict[str, Any] = Field(default_factory=dict)

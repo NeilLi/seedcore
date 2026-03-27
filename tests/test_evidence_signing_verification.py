@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -21,6 +23,7 @@ from seedcore.hal.custody.transition_receipts import (
 from seedcore.ops.evidence.builder import attach_evidence_bundle
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
+    canonical_json,
     verify_evidence_bundle_result,
     verify_policy_receipt_result,
 )
@@ -220,6 +223,118 @@ def test_signed_artifacts_verify_cleanly() -> None:
     )
     assert verify_policy_receipt_result(record["policy_receipt"])["verified"] is True
     assert verify_evidence_bundle_result(record["evidence_bundle"])["verified"] is True
+
+
+def test_evidence_bundle_requires_distinct_counterparty_cosignatures(monkeypatch) -> None:
+    task_dict = _build_task_dict()
+    task_dict["params"]["governance"]["policy_decision"] = {
+        "allowed": True,
+        "reason": "restricted_custody_transfer",
+        "governed_receipt": {
+            "co_sign_required": True,
+            "co_sign_status": "co_signed",
+            "transfer_outcome": "STANDARD_TRANSFER",
+            "expected_co_signers": [
+                {
+                    "principal_ref": "principal:facility_mgr_001",
+                    "signer_role": "SENDER",
+                    "signer_party": "initiator",
+                },
+                {
+                    "principal_ref": "principal:outbound_mgr_002",
+                    "signer_role": "RECEIVER",
+                    "signer_party": "receiver",
+                },
+            ],
+            "approval_envelope_id": "approval-transfer-001",
+            "approval_binding_hash": "sha256:approval-binding-transfer-001",
+        },
+    }
+    envelope = {"payload": {"results": []}, "meta": {"exec": {"finished_at": "2026-03-24T10:12:12+00:00"}}}
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="organ-r",
+        agent_id="agent-r",
+    )["meta"]["evidence_bundle"]
+
+    monkeypatch.setenv(
+        "SEEDCORE_EVIDENCE_CO_SIGNER_SECRETS_JSON",
+        json.dumps(
+            {
+                "co-signer-sender": "sender-secret",
+                "co-signer-receiver": "receiver-secret",
+            }
+        ),
+    )
+    cosign_payload = {"binding_hash": bundle["co_sign_binding_hash"]}
+    payload_hash = hashlib.sha256(canonical_json(cosign_payload).encode("utf-8")).hexdigest()
+    bundle["co_signatures"] = [
+        {
+            "principal_ref": "principal:facility_mgr_001",
+            "signer_role": "SENDER",
+            "signer_party": "initiator",
+            "signer_metadata": {
+                "signer_type": "external_party",
+                "signer_id": "co-signer-sender",
+                "signing_scheme": "hmac_sha256",
+                "key_ref": "co-signer-sender",
+                "attestation_level": "baseline",
+            },
+            "signature": hmac.new(b"sender-secret", payload_hash.encode("utf-8"), hashlib.sha256).hexdigest(),
+        },
+        {
+            "principal_ref": "principal:outbound_mgr_002",
+            "signer_role": "RECEIVER",
+            "signer_party": "receiver",
+            "signer_metadata": {
+                "signer_type": "external_party",
+                "signer_id": "co-signer-receiver",
+                "signing_scheme": "hmac_sha256",
+                "key_ref": "co-signer-receiver",
+                "attestation_level": "baseline",
+            },
+            "signature": hmac.new(b"receiver-secret", payload_hash.encode("utf-8"), hashlib.sha256).hexdigest(),
+        },
+    ]
+    signed_payload = dict(bundle)
+    signed_payload.pop("signature")
+    signed_payload.pop("signer_metadata")
+    signed_payload.pop("trust_proof", None)
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="evidence_bundle",
+        payload=signed_payload,
+        endpoint_id=bundle.get("node_id"),
+        node_id=bundle.get("node_id"),
+    )
+    bundle["signer_metadata"] = signer_metadata.model_dump(mode="json")
+    bundle["signature"] = signature
+    if trust_proof is not None:
+        bundle["trust_proof"] = trust_proof.model_dump(mode="json")
+
+    verified = verify_evidence_bundle_result(bundle)
+    assert verified["verified"] is True
+    assert verified["co_signatures_verified"] is True
+    assert verified["co_signature_count"] == 2
+
+    bundle["co_signatures"] = bundle["co_signatures"][:1]
+    signed_payload = dict(bundle)
+    signed_payload.pop("signature")
+    signed_payload.pop("signer_metadata")
+    signed_payload.pop("trust_proof", None)
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="evidence_bundle",
+        payload=signed_payload,
+        endpoint_id=bundle.get("node_id"),
+        node_id=bundle.get("node_id"),
+    )
+    bundle["signer_metadata"] = signer_metadata.model_dump(mode="json")
+    bundle["signature"] = signature
+    if trust_proof is not None:
+        bundle["trust_proof"] = trust_proof.model_dump(mode="json")
+    failed = verify_evidence_bundle_result(bundle)
+    assert failed["verified"] is False
+    assert failed["error"] == "missing_co_signatures"
 
 
 def _generate_p256_materials() -> tuple[str, str]:

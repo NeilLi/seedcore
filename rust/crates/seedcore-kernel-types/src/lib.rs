@@ -546,6 +546,25 @@ pub struct MediaRef {
     pub hash: ArtifactHash,
 }
 
+/// Expected signer entry for multi-party transfer co-signing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoSignerExpectation {
+    pub principal_ref: String,
+    pub signer_role: String,
+    pub signer_party: String,
+}
+
+/// Detached co-signature over a transfer binding hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoSignature {
+    pub principal_ref: String,
+    pub signer_role: String,
+    pub signer_party: String,
+    pub signature: SignatureEnvelope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_proof: Option<TrustProof>,
+}
+
 /// Canonical evidence bundle artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceBundle {
@@ -559,6 +578,18 @@ pub struct EvidenceBundle {
     pub telemetry_refs: Vec<TelemetryRef>,
     #[serde(default)]
     pub media_refs: Vec<MediaRef>,
+    #[serde(default)]
+    pub co_sign_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub co_sign_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfer_outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub co_sign_binding_hash: Option<ArtifactHash>,
+    #[serde(default)]
+    pub expected_co_signers: Vec<CoSignerExpectation>,
+    #[serde(default)]
+    pub co_signatures: Vec<CoSignature>,
     pub signer: SignatureEnvelope,
     pub created_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]

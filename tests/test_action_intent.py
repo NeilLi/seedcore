@@ -1232,6 +1232,66 @@ def test_evaluate_intent_restricted_custody_transfer_allows_with_canonical_expla
     assert decision.authz_graph["snapshot_hash"] == compiled.snapshot_hash
 
 
+def test_evaluate_intent_restricted_custody_transfer_marks_pending_cosign(monkeypatch) -> None:
+    payload = _transfer_payload()
+    approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
+    approval_context["approved_by"] = ["principal:facility_mgr_001"]
+
+    decision = evaluate_intent(payload)
+
+    assert decision.allowed is False
+    assert decision.disposition == "deny"
+    assert decision.authz_graph["reason"] == "pending_co_sign"
+    assert decision.authz_graph["co_sign_status"] == "pending_co_sign"
+    assert decision.authz_graph["co_sign_required"] is True
+    assert len(decision.authz_graph["expected_co_signers"]) == 2
+
+
+def test_evaluate_intent_restricted_custody_transfer_allows_zone_admin_emergency_override(monkeypatch) -> None:
+    payload = _transfer_payload()
+    payload["params"]["governance"]["action_intent"]["principal"]["agent_id"] = "zone-admin-1"
+    payload["params"]["governance"]["action_intent"]["principal"]["role_profile"] = "ZONE_ADMINISTRATOR"
+    payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]["approved_by"] = [
+        "principal:facility_mgr_001"
+    ]
+    issued_at = datetime(2099, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+    break_glass_secret = "break-glass-secret"
+    payload["params"]["governance"]["action_intent"]["environment"] = {
+        "origin_network": "network:warehouse-core",
+        "break_glass_token": _build_break_glass_token(
+            secret=break_glass_secret,
+            subject="zone-admin-1",
+            issued_at=issued_at,
+            expires_at=datetime(2099, 3, 20, 12, 0, 5, tzinfo=timezone.utc),
+            extra_claims={
+                "procedure_id": "bgp-2026-001",
+                "incident_id": "incident-override-1",
+                "reason_code": "safety_incident",
+            },
+        ),
+        "break_glass_reason": "zone administrator emergency override",
+    }
+    compiled = _compiled_transfer_graph(
+        now=issued_at,
+        telemetry_at=issued_at - timedelta(minutes=1),
+        inspection_at=issued_at - timedelta(minutes=2),
+        current_custodian="facility_mgr_001",
+    )
+
+    monkeypatch.setenv("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
+    monkeypatch.setenv("SEEDCORE_PDP_BREAK_GLASS_SECRET", break_glass_secret)
+
+    decision = evaluate_intent(payload, compiled_authz_index=compiled)
+
+    assert decision.allowed is True
+    assert decision.disposition == "allow"
+    assert decision.break_glass.validated is True
+    assert decision.authz_graph["transfer_outcome"] == "EMERGENCY_OVERRIDE"
+    assert decision.authz_graph["co_sign_status"] == "emergency_override"
+    assert decision.governed_receipt["transfer_outcome"] == "EMERGENCY_OVERRIDE"
+    assert decision.governed_receipt["co_sign_status"] == "emergency_override"
+
+
 def test_evaluate_intent_restricted_custody_transfer_uses_rust_envelope_when_context_missing(monkeypatch) -> None:
     payload = _transfer_payload()
     approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]

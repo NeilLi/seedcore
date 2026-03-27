@@ -48,6 +48,7 @@ from .action_intent import (
 )
 from .evidence_bundle import (
     AttestationProof,
+    CoSignature,
     EvidenceBundle,
     HALCaptureEnvelope,
     KeyBindingProof,
@@ -108,6 +109,7 @@ __all__ = [
     "TaskPayload",
     "VerificationResult",
     "AttestationProof",
+    "CoSignature",
 ]
 try:
     __all__.extend([

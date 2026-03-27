@@ -969,7 +969,7 @@ def evaluate_intent(
     transition_evaluation = None
     compiled_match = None
     authz_evaluator = None
-    if transfer_prerequisite_violation is None:
+    if transfer_prerequisite_violation is None or use_rust_policy_core:
         authz_graph_violation, break_glass_context, transition_evaluation, compiled_match, authz_evaluator = _evaluate_compiled_authz_graph_policy(
             action_intent=action_intent,
             policy_case=policy_case,
@@ -2073,6 +2073,125 @@ def _transfer_required_approvals(action_intent: ActionIntent) -> list[str]:
     return values
 
 
+def _is_zone_administrator(action_intent: ActionIntent) -> bool:
+    role = str(action_intent.principal.role_profile or "").strip().upper()
+    return role in {"ZONE_ADMIN", "ZONE_ADMINISTRATOR"}
+
+
+def _transfer_expected_co_signers(
+    action_intent: ActionIntent,
+    *,
+    approval_context: Mapping[str, Any] | None = None,
+    approval_envelope: Mapping[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    approval_context = approval_context if isinstance(approval_context, Mapping) else {}
+    approval_envelope = approval_envelope if isinstance(approval_envelope, Mapping) else {}
+    expected: list[dict[str, str]] = []
+
+    sender_ref = (
+        _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref")
+        or (
+            str(approval_envelope.get("from_custodian_ref")).strip()
+            if approval_envelope.get("from_custodian_ref") is not None
+            else None
+        )
+    )
+    receiver_ref = (
+        _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref")
+        or (
+            str(approval_envelope.get("to_custodian_ref")).strip()
+            if approval_envelope.get("to_custodian_ref") is not None
+            else None
+        )
+    )
+
+    for principal_ref, signer_role, signer_party in (
+        (sender_ref, "SENDER", "initiator"),
+        (receiver_ref, "RECEIVER", "receiver"),
+    ):
+        if principal_ref is None or not str(principal_ref).strip():
+            continue
+        normalized = str(principal_ref).strip()
+        if any(item["principal_ref"] == normalized for item in expected):
+            continue
+        expected.append(
+            {
+                "principal_ref": normalized,
+                "signer_role": signer_role,
+                "signer_party": signer_party,
+            }
+        )
+
+    override_principal = approval_context.get("emergency_override_principal_ref")
+    if override_principal is not None and str(override_principal).strip():
+        expected.append(
+            {
+                "principal_ref": str(override_principal).strip(),
+                "signer_role": "ZONE_ADMINISTRATOR",
+                "signer_party": "override",
+            }
+        )
+    return expected
+
+
+def _transfer_co_sign_status(
+    *,
+    action_intent: ActionIntent,
+    required_approvals: list[str],
+    approved_by: list[str],
+    break_glass: BreakGlassDecisionContext | None = None,
+) -> str | None:
+    if break_glass is not None and bool(break_glass.validated) and _is_zone_administrator(action_intent):
+        return "emergency_override"
+    if not required_approvals:
+        return None
+    if len(set(approved_by)) >= len(required_approvals):
+        return "co_signed"
+    if approved_by:
+        return "pending_co_sign"
+    return "awaiting_primary_signature"
+
+
+def _transfer_outcome_label(
+    *,
+    action_intent: ActionIntent,
+    break_glass: BreakGlassDecisionContext | None = None,
+    allowed: bool = False,
+) -> str | None:
+    if break_glass is not None and bool(break_glass.validated) and _is_zone_administrator(action_intent):
+        return "EMERGENCY_OVERRIDE"
+    if allowed and _is_restricted_custody_transfer(action_intent):
+        return "STANDARD_TRANSFER"
+    return None
+
+
+def _transfer_co_sign_binding_hash(
+    *,
+    action_intent: ActionIntent,
+    approval_context: Mapping[str, Any],
+    approval_envelope: Mapping[str, Any] | None = None,
+    snapshot_hash: str | None = None,
+    transfer_outcome: str | None = None,
+) -> str | None:
+    expected = _transfer_expected_co_signers(
+        action_intent,
+        approval_context=approval_context,
+        approval_envelope=approval_envelope,
+    )
+    if not expected:
+        return None
+    material = {
+        "intent_id": action_intent.intent_id,
+        "asset_id": action_intent.resource.asset_id,
+        "approval_envelope_id": approval_context.get("approval_envelope_id"),
+        "approval_binding_hash": _approval_binding_hash_string(approval_context.get("approval_binding_hash")),
+        "snapshot_hash": snapshot_hash,
+        "expected_co_signers": expected,
+        "transfer_outcome": transfer_outcome,
+    }
+    return f"sha256:{hashlib.sha256(json.dumps(material, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()}"
+
+
 def _approval_binding_hash_string(value: Any) -> str | None:
     if isinstance(value, Mapping):
         algorithm = str(value.get("algorithm") or "").strip()
@@ -2326,6 +2445,30 @@ def _evaluate_restricted_custody_transfer_prerequisites(
                     if value and value not in approved_by:
                         approved_by.append(value)
 
+    expected_co_signers = _transfer_expected_co_signers(
+        action_intent,
+        approval_context=approval_context,
+        approval_envelope=approval_envelope_payload if isinstance(approval_envelope_payload, Mapping) else None,
+    )
+    if expected_co_signers:
+        approval_context["expected_co_signers"] = [dict(item) for item in expected_co_signers]
+    co_sign_status = _transfer_co_sign_status(
+        action_intent=action_intent,
+        required_approvals=required_approvals,
+        approved_by=approved_by,
+    )
+    if co_sign_status is not None:
+        approval_context["co_sign_status"] = co_sign_status
+    transfer_outcome = _transfer_outcome_label(action_intent=action_intent, allowed=False)
+    co_sign_binding_hash = _transfer_co_sign_binding_hash(
+        action_intent=action_intent,
+        approval_context=approval_context,
+        approval_envelope=approval_envelope_payload if isinstance(approval_envelope_payload, Mapping) else None,
+        transfer_outcome=transfer_outcome,
+    )
+    if co_sign_binding_hash is not None:
+        approval_context["co_sign_binding_hash"] = co_sign_binding_hash
+
     missing_prerequisites: list[dict[str, Any]] = []
     approval_envelope_id = approval_context.get("approval_envelope_id")
     if approval_envelope_id is None or not str(approval_envelope_id).strip():
@@ -2370,6 +2513,19 @@ def _evaluate_restricted_custody_transfer_prerequisites(
     if required_approvals and len(approved_by) < len(required_approvals):
         missing_prerequisites.append(
             {
+                "code": "co_signatures",
+                "outcome": "missing",
+                "message": "Restricted custody transfer is waiting for the distinct counterparty co-signature set.",
+                "details": {
+                    "required_approvals": required_approvals,
+                    "approved_by": approved_by,
+                    "expected_co_signers": expected_co_signers,
+                    "co_sign_status": co_sign_status,
+                },
+            }
+        )
+        missing_prerequisites.append(
+            {
                 "code": "approved_by",
                 "outcome": "missing",
                 "message": "Restricted custody transfer is still waiting for the full approval set.",
@@ -2392,12 +2548,17 @@ def _evaluate_restricted_custody_transfer_prerequisites(
             authz_graph={
                 "mode": "transfer_prerequisite_check",
                 "disposition": "escalate",
-                "reason": "approval_incomplete",
+                "reason": "pending_co_sign" if co_sign_status == "pending_co_sign" else "approval_incomplete",
                 "matched_policy_refs": [],
                 "authority_paths": [],
                 "authority_path_summary": [],
                 "missing_prerequisites": missing_prerequisites,
                 "trust_gaps": [],
+                "co_sign_required": bool(expected_co_signers),
+                "co_sign_status": co_sign_status,
+                "transfer_outcome": transfer_outcome,
+                "expected_co_signers": expected_co_signers,
+                "co_sign_binding_hash": co_sign_binding_hash,
             },
         ).model_copy(update={"required_approvals": required_approvals})
     return None
@@ -2495,6 +2656,11 @@ def _restricted_custody_transfer_execution_constraints(
     approval_context = _approval_context(action_intent)
     approved_by = approval_context.get("approved_by") if isinstance(approval_context.get("approved_by"), list) else []
     required_approvals = _transfer_required_approvals(action_intent)
+    co_sign_status = _transfer_co_sign_status(
+        action_intent=action_intent,
+        required_approvals=required_approvals,
+        approved_by=[str(item).strip() for item in approved_by if str(item).strip()],
+    )
     constraints = {
         "from_zone": _transfer_context_value(action_intent, "from_zone"),
         "target_zone": _transfer_context_value(action_intent, "to_zone") or action_intent.resource.target_zone,
@@ -2509,6 +2675,8 @@ def _restricted_custody_transfer_execution_constraints(
         ),
         "approved_by": list(approved_by),
         "co_signed": bool(required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(required_approvals)),
+        "co_sign_status": co_sign_status,
+        "transfer_outcome": _transfer_outcome_label(action_intent=action_intent, allowed=True),
     }
     return {key: value for key, value in constraints.items() if value is not None}
 
@@ -2520,6 +2688,13 @@ def _workflow_status_for_decision(policy_decision: PolicyDecision) -> str:
         return "quarantined"
     if policy_decision.disposition == "deny":
         return "rejected"
+    co_sign_status = (
+        str(policy_decision.authz_graph.get("co_sign_status")).strip().lower()
+        if isinstance(policy_decision.authz_graph, Mapping) and policy_decision.authz_graph.get("co_sign_status") is not None
+        else None
+    )
+    if co_sign_status in {"pending_co_sign", "awaiting_primary_signature"}:
+        return "pending_approval"
     if policy_decision.required_approvals:
         return "pending_approval"
     return "review_required"
@@ -2568,6 +2743,33 @@ def _finalize_policy_decision_contract(
         authz_graph["workflow_type"] = RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE
         authz_graph["workflow_status"] = _workflow_status_for_decision(policy_decision)
         approval_context = _approval_context(action_intent)
+        if bool(policy_decision.break_glass.validated) and _is_zone_administrator(action_intent):
+            approval_context["emergency_override_principal_ref"] = f"principal:{action_intent.principal.agent_id}"
+        expected_co_signers = _transfer_expected_co_signers(
+            action_intent,
+            approval_context=approval_context,
+            approval_envelope=(
+                approval_context.get("approval_envelope")
+                if isinstance(approval_context.get("approval_envelope"), Mapping)
+                else None
+            ),
+        )
+        approved_by = (
+            list(approval_context.get("approved_by"))
+            if isinstance(approval_context.get("approved_by"), list)
+            else []
+        )
+        co_sign_status = _transfer_co_sign_status(
+            action_intent=action_intent,
+            required_approvals=list(policy_decision.required_approvals or _transfer_required_approvals(action_intent)),
+            approved_by=[str(item).strip() for item in approved_by if str(item).strip()],
+            break_glass=policy_decision.break_glass,
+        )
+        transfer_outcome = _transfer_outcome_label(
+            action_intent=action_intent,
+            break_glass=policy_decision.break_glass,
+            allowed=policy_decision.disposition == "allow",
+        )
         authz_graph["required_approvals"] = list(
             policy_decision.required_approvals or _transfer_required_approvals(action_intent)
         )
@@ -2576,17 +2778,36 @@ def _finalize_policy_decision_contract(
             if approval_context.get("approval_envelope_id") is not None and str(approval_context.get("approval_envelope_id")).strip()
             else None
         )
-        authz_graph["approved_by"] = (
-            list(approval_context.get("approved_by"))
-            if isinstance(approval_context.get("approved_by"), list)
-            else []
-        )
+        authz_graph["approved_by"] = approved_by
         transition_history = (
             list(approval_context.get("approval_transition_history"))
             if isinstance(approval_context.get("approval_transition_history"), list)
             else []
         )
         authz_graph["approval_transition_count"] = len(transition_history)
+        authz_graph["co_sign_required"] = bool(expected_co_signers)
+        authz_graph["co_sign_status"] = co_sign_status
+        authz_graph["transfer_outcome"] = transfer_outcome
+        authz_graph["expected_co_signers"] = [dict(item) for item in expected_co_signers]
+        authz_graph["co_sign_binding_hash"] = (
+            str(approval_context.get("co_sign_binding_hash")).strip()
+            if approval_context.get("co_sign_binding_hash") is not None and str(approval_context.get("co_sign_binding_hash")).strip()
+            else _transfer_co_sign_binding_hash(
+                action_intent=action_intent,
+                approval_context=approval_context,
+                approval_envelope=(
+                    approval_context.get("approval_envelope")
+                    if isinstance(approval_context.get("approval_envelope"), Mapping)
+                    else None
+                ),
+                snapshot_hash=(
+                    str(authz_graph.get("snapshot_hash")).strip()
+                    if authz_graph.get("snapshot_hash") is not None and str(authz_graph.get("snapshot_hash")).strip()
+                    else None
+                ),
+                transfer_outcome=transfer_outcome,
+            )
+        )
         transition_head_raw = approval_context.get("approval_transition_head")
         authz_graph["approval_transition_head"] = (
             str(transition_head_raw).strip()
@@ -2610,7 +2831,29 @@ def _finalize_policy_decision_contract(
     )
     if _is_restricted_custody_transfer(action_intent) and governed_receipt:
         approval_context = _approval_context(action_intent)
+        if bool(policy_decision.break_glass.validated) and _is_zone_administrator(action_intent):
+            approval_context["emergency_override_principal_ref"] = f"principal:{action_intent.principal.agent_id}"
         approved_by = approval_context.get("approved_by") if isinstance(approval_context.get("approved_by"), list) else []
+        expected_co_signers = _transfer_expected_co_signers(
+            action_intent,
+            approval_context=approval_context,
+            approval_envelope=(
+                approval_context.get("approval_envelope")
+                if isinstance(approval_context.get("approval_envelope"), Mapping)
+                else None
+            ),
+        )
+        transfer_outcome = _transfer_outcome_label(
+            action_intent=action_intent,
+            break_glass=policy_decision.break_glass,
+            allowed=policy_decision.disposition == "allow",
+        )
+        co_sign_status = _transfer_co_sign_status(
+            action_intent=action_intent,
+            required_approvals=list(policy_decision.required_approvals),
+            approved_by=[str(item).strip() for item in approved_by if str(item).strip()],
+            break_glass=policy_decision.break_glass,
+        )
         advisory = dict(governed_receipt.get("advisory") or {})
         advisory.update(
             {
@@ -2619,6 +2862,20 @@ def _finalize_policy_decision_contract(
                 "approval_binding_hash": approval_context.get("approval_binding_hash"),
                 "approved_by": list(approved_by),
                 "co_signed": bool(policy_decision.required_approvals and len(set(str(item).strip() for item in approved_by if str(item).strip())) >= len(policy_decision.required_approvals)),
+                "co_sign_required": bool(expected_co_signers),
+                "co_sign_status": co_sign_status,
+                "transfer_outcome": transfer_outcome,
+                "expected_co_signers": [dict(item) for item in expected_co_signers],
+                "co_sign_binding_hash": (
+                    str(approval_context.get("co_sign_binding_hash")).strip()
+                    if approval_context.get("co_sign_binding_hash") is not None and str(approval_context.get("co_sign_binding_hash")).strip()
+                    else authz_graph.get("co_sign_binding_hash")
+                ),
+                "co_signatures": (
+                    [dict(item) for item in approval_context.get("co_signatures") if isinstance(item, Mapping)]
+                    if isinstance(approval_context.get("co_signatures"), list)
+                    else []
+                ),
                 "approval_transition_count": len(
                     approval_context.get("approval_transition_history")
                     if isinstance(approval_context.get("approval_transition_history"), list)
@@ -2647,6 +2904,12 @@ def _finalize_policy_decision_contract(
                 "approval_binding_hash": approval_context.get("approval_binding_hash"),
                 "approved_by": list(approved_by),
                 "co_signed": advisory["co_signed"],
+                "co_sign_required": advisory["co_sign_required"],
+                "co_sign_status": advisory["co_sign_status"],
+                "transfer_outcome": advisory["transfer_outcome"],
+                "expected_co_signers": advisory["expected_co_signers"],
+                "co_sign_binding_hash": advisory["co_sign_binding_hash"],
+                "co_signatures": advisory["co_signatures"],
                 "approval_transition_count": advisory["approval_transition_count"],
                 "approval_transition_head": advisory["approval_transition_head"],
                 "last_approval_transition_event": advisory["last_approval_transition_event"],
@@ -3023,7 +3286,12 @@ def _synthesized_transfer_approval_envelope(
     ]
     from_custodian = _transfer_context_value(action_intent, "expected_current_custodian", "from_custodian_ref") or ""
     to_custodian = _transfer_context_value(action_intent, "next_custodian", "to_custodian_ref") or ""
-    status = "APPROVED" if required_roles and len(approved_by) >= len(required_roles) else "PENDING"
+    if required_roles and len(approved_by) >= len(required_roles):
+        status = "APPROVED"
+    elif approved_by:
+        status = "PARTIALLY_APPROVED"
+    else:
+        status = "PENDING"
     binding_hash = _approval_binding_hash_string(approval_context.get("approval_binding_hash"))
 
     required_approvals: list[dict[str, Any]] = []

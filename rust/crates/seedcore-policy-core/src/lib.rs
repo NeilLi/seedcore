@@ -110,12 +110,40 @@ pub fn evaluate(input: &FrozenDecisionInput) -> Result<PolicyEvaluation, PolicyE
     require_non_empty(&input.policy_snapshot_ref, "policy_snapshot_ref")?;
     require_non_empty(&input.asset_state.asset_ref, "asset_state.asset_ref")?;
 
-    let disposition = if input
+    let break_glass_present = input
         .break_glass
         .as_ref()
         .map(|ctx| ctx.present)
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    let break_glass_validated = input
+        .break_glass
+        .as_ref()
+        .map(|ctx| ctx.validated)
+        .unwrap_or(false);
+    let zone_admin_override = input
+        .action_intent
+        .principal
+        .role_refs
+        .iter()
+        .any(|role| {
+            let normalized = role.trim().to_ascii_uppercase();
+            normalized == "ROLE:ZONE_ADMIN" || normalized == "ROLE:ZONE_ADMINISTRATOR"
+        });
+
+    let emergency_override = break_glass_validated && zone_admin_override;
+
+    let disposition = if emergency_override {
+        if !input.asset_state.transferable {
+            Disposition::Deny
+        } else if input.telemetry_summary.stale
+            || !input.telemetry_summary.attested
+            || matches!(input.telemetry_summary.seal_present, Some(false))
+        {
+            Disposition::Quarantine
+        } else {
+            Disposition::Allow
+        }
+    } else if break_glass_present {
         Disposition::Escalate
     } else if !input
         .authority_graph_summary
@@ -220,6 +248,32 @@ fn build_explanation(input: &FrozenDecisionInput, disposition: Disposition) -> E
                 details: std::collections::BTreeMap::new(),
             });
         }
+    }
+
+    if disposition == Disposition::Allow
+        && input
+            .break_glass
+            .as_ref()
+            .map(|ctx| ctx.validated)
+            .unwrap_or(false)
+        && input
+            .action_intent
+            .principal
+            .role_refs
+            .iter()
+            .any(|role| {
+                let normalized = role.trim().to_ascii_uppercase();
+                normalized == "ROLE:ZONE_ADMIN" || normalized == "ROLE:ZONE_ADMINISTRATOR"
+            })
+    {
+        explanation.obligations.push(Obligation {
+            obligation_type: "emergency_override_review".to_string(),
+            reference: input
+                .break_glass
+                .as_ref()
+                .and_then(|ctx| ctx.reason.clone()),
+            details: std::collections::BTreeMap::new(),
+        });
     }
 
     explanation

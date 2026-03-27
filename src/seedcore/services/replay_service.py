@@ -2268,6 +2268,23 @@ class ReplayService:
                 "transition_receipt_ids": transition_ids,
                 "telemetry_refs": telemetry_refs,
                 "media_refs": media_refs,
+                "co_sign_required": bool(evidence_bundle.get("co_sign_required")),
+                "co_sign_status": evidence_bundle.get("co_sign_status"),
+                "transfer_outcome": evidence_bundle.get("transfer_outcome"),
+                "co_sign_binding_hash": (
+                    self._artifact_hash_object(
+                        evidence_bundle.get("co_sign_binding_hash"),
+                        fallback_seed=f"co-sign:{evidence_bundle_id}",
+                    )
+                    if evidence_bundle.get("co_sign_binding_hash") is not None
+                    else None
+                ),
+                "expected_co_signers": self._co_signer_expectations(
+                    evidence_bundle.get("expected_co_signers")
+                ),
+                "co_signatures": self._co_signature_entries(
+                    evidence_bundle.get("co_signatures")
+                ),
                 "signer": self._signature_envelope(
                     evidence_bundle,
                     artifact_type="evidence_bundle",
@@ -2336,6 +2353,53 @@ class ReplayService:
             "attestation_level": str(metadata.get("attestation_level") or "baseline"),
             "signature": signature_value,
         }
+
+    def _co_signer_expectations(self, value: Any) -> List[Dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        entries: List[Dict[str, str]] = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            principal_ref = str(item.get("principal_ref") or "").strip()
+            if not principal_ref:
+                continue
+            entries.append(
+                {
+                    "principal_ref": principal_ref,
+                    "signer_role": str(item.get("signer_role") or "").strip(),
+                    "signer_party": str(item.get("signer_party") or "").strip(),
+                }
+            )
+        return entries
+
+    def _co_signature_entries(self, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        entries: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            entries.append(
+                {
+                    "principal_ref": str(item.get("principal_ref") or "").strip(),
+                    "signer_role": str(item.get("signer_role") or "").strip(),
+                    "signer_party": str(item.get("signer_party") or "").strip(),
+                    "signature": self._signature_envelope(
+                        {
+                            "signer_metadata": (
+                                dict(item.get("signer_metadata"))
+                                if isinstance(item.get("signer_metadata"), Mapping)
+                                else {}
+                            ),
+                            "signature": item.get("signature"),
+                        },
+                        artifact_type="evidence_bundle",
+                    ),
+                    "trust_proof": self._trust_proof_payload(item),
+                }
+            )
+        return entries
 
     def _minted_artifact_refs(self, value: Any) -> List[str]:
         if not isinstance(value, list):
@@ -2443,6 +2507,33 @@ class ReplayService:
         return {
             "required": list(required),
             "completed_by": list(completed_by),
+            "co_sign_status": (
+                replay.authz_graph.get("co_sign_status")
+                or replay.governed_receipt.get("co_sign_status")
+                or approval_context.get("co_sign_status")
+            ),
+            "transfer_outcome": (
+                replay.governed_receipt.get("transfer_outcome")
+                or replay.authz_graph.get("transfer_outcome")
+            ),
+            "co_sign_required": bool(
+                replay.governed_receipt.get("co_sign_required")
+                or replay.authz_graph.get("co_sign_required")
+            ),
+            "expected_co_signers": (
+                replay.governed_receipt.get("expected_co_signers")
+                if isinstance(replay.governed_receipt.get("expected_co_signers"), list)
+                else replay.authz_graph.get("expected_co_signers")
+                if isinstance(replay.authz_graph.get("expected_co_signers"), list)
+                else []
+            ),
+            "co_signature_count": (
+                len(replay.evidence_bundle.get("co_signatures"))
+                if isinstance(replay.evidence_bundle.get("co_signatures"), list)
+                else len(replay.governed_receipt.get("co_signatures"))
+                if isinstance(replay.governed_receipt.get("co_signatures"), list)
+                else 0
+            ),
             "approval_envelope_id": (
                 replay.authz_graph.get("approval_envelope_id")
                 or replay.governed_receipt.get("approval_envelope_id")
@@ -2470,6 +2561,8 @@ class ReplayService:
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
             "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
             "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
+            "transfer_outcome": replay.governed_receipt.get("transfer_outcome") or replay.authz_graph.get("transfer_outcome"),
+            "co_sign_status": replay.governed_receipt.get("co_sign_status") or replay.authz_graph.get("co_sign_status"),
             "execution_token_id": (
                 replay.audit_record.get("token_id")
                 if isinstance(replay.audit_record, dict)

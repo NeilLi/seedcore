@@ -34,6 +34,17 @@ def build_policy_receipt_artifact(
         if isinstance(policy_decision.get("governed_receipt"), dict)
         else {}
     )
+    approval_context = (
+        ((action_intent.get("action") or {}).get("parameters") or {}).get("approval_context")
+        if isinstance((action_intent.get("action") or {}).get("parameters"), dict)
+        else {}
+    )
+    co_sign_contract = _co_sign_contract(
+        action_intent=action_intent,
+        governed_receipt=governed_receipt,
+        authz_graph=authz_graph,
+        approval_context=approval_context if isinstance(approval_context, dict) else {},
+    )
     resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
     principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
 
@@ -82,6 +93,11 @@ def build_policy_receipt_artifact(
             if (governed_receipt.get("snapshot_version") is not None or authz_graph.get("snapshot_version") is not None)
             else None
         ),
+        "co_sign_required": co_sign_contract["co_sign_required"],
+        "co_sign_status": co_sign_contract["co_sign_status"],
+        "transfer_outcome": co_sign_contract["transfer_outcome"],
+        "co_sign_binding_hash": co_sign_contract["co_sign_binding_hash"],
+        "expected_co_signers": co_sign_contract["expected_co_signers"],
         "trust_gap_codes": _extract_trust_gap_codes(governed_receipt, authz_graph),
         "timestamp": timestamp,
     }
@@ -120,6 +136,14 @@ def build_evidence_bundle(
     policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
     authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
     governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
+    action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+    approval_context = action.get("parameters", {}).get("approval_context") if isinstance(action.get("parameters"), dict) else {}
+    co_sign_contract = _co_sign_contract(
+        action_intent=action_intent,
+        governed_receipt=governed_receipt,
+        authz_graph=authz_graph,
+        approval_context=approval_context if isinstance(approval_context, dict) else {},
+    )
 
     executed_at = _derive_executed_at(envelope)
     actuator_entries = _extract_actuator_entries(envelope)
@@ -182,6 +206,12 @@ def build_evidence_bundle(
             if (governed_receipt.get("snapshot_version") is not None or authz_graph.get("snapshot_version") is not None)
             else None
         ),
+        "co_sign_required": co_sign_contract["co_sign_required"],
+        "co_sign_status": co_sign_contract["co_sign_status"],
+        "transfer_outcome": co_sign_contract["transfer_outcome"],
+        "co_sign_binding_hash": co_sign_contract["co_sign_binding_hash"],
+        "expected_co_signers": co_sign_contract["expected_co_signers"],
+        "co_signatures": co_sign_contract["co_signatures"],
         "transition_receipt_ids": [
             receipt.transition_receipt_id
             for receipt in transition_receipts
@@ -298,6 +328,87 @@ def _extract_trust_gap_codes(
                 codes.append(str(item.get("code")))
         return codes
     return []
+
+
+def _co_sign_contract(
+    *,
+    action_intent: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    authz_graph: Dict[str, Any],
+    approval_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    expected = governed_receipt.get("expected_co_signers")
+    if not isinstance(expected, list):
+        expected = authz_graph.get("expected_co_signers")
+    expected_co_signers = [
+        dict(item)
+        for item in expected
+        if isinstance(item, dict)
+    ] if isinstance(expected, list) else []
+
+    transfer_outcome = (
+        str(governed_receipt.get("transfer_outcome") or authz_graph.get("transfer_outcome")).strip()
+        if governed_receipt.get("transfer_outcome") is not None or authz_graph.get("transfer_outcome") is not None
+        else None
+    )
+    co_sign_status = (
+        str(governed_receipt.get("co_sign_status") or authz_graph.get("co_sign_status")).strip()
+        if governed_receipt.get("co_sign_status") is not None or authz_graph.get("co_sign_status") is not None
+        else None
+    )
+    co_sign_required = bool(governed_receipt.get("co_sign_required") or authz_graph.get("co_sign_required"))
+    co_sign_binding_hash = (
+        str(governed_receipt.get("co_sign_binding_hash") or approval_context.get("co_sign_binding_hash")).strip()
+        if governed_receipt.get("co_sign_binding_hash") is not None or approval_context.get("co_sign_binding_hash") is not None
+        else None
+    )
+    if co_sign_binding_hash is None and (co_sign_required or expected_co_signers):
+        co_sign_binding_hash = _compute_co_sign_binding_hash(
+            action_intent=action_intent,
+            governed_receipt=governed_receipt,
+            authz_graph=authz_graph,
+            expected_co_signers=expected_co_signers,
+            transfer_outcome=transfer_outcome,
+        )
+    co_signatures = approval_context.get("co_signatures")
+    if not isinstance(co_signatures, list):
+        co_signatures = governed_receipt.get("co_signatures")
+    normalized_signatures = [
+        dict(item)
+        for item in co_signatures
+        if isinstance(item, dict)
+    ] if isinstance(co_signatures, list) else []
+    return {
+        "co_sign_required": co_sign_required,
+        "co_sign_status": co_sign_status,
+        "transfer_outcome": transfer_outcome,
+        "co_sign_binding_hash": co_sign_binding_hash,
+        "expected_co_signers": expected_co_signers,
+        "co_signatures": normalized_signatures,
+    }
+
+
+def _compute_co_sign_binding_hash(
+    *,
+    action_intent: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    authz_graph: Dict[str, Any],
+    expected_co_signers: List[Dict[str, Any]],
+    transfer_outcome: Optional[str],
+) -> str:
+    action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+    resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
+    approval_context = action.get("parameters", {}).get("approval_context") if isinstance(action.get("parameters"), dict) else {}
+    material = {
+        "intent_id": action_intent.get("intent_id"),
+        "asset_id": resource.get("asset_id"),
+        "approval_envelope_id": governed_receipt.get("approval_envelope_id") or approval_context.get("approval_envelope_id"),
+        "approval_binding_hash": governed_receipt.get("approval_binding_hash") or approval_context.get("approval_binding_hash"),
+        "decision_graph_snapshot_hash": governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash"),
+        "expected_co_signers": expected_co_signers,
+        "transfer_outcome": transfer_outcome,
+    }
+    return f"sha256:{_sha256_hex(_canonical_json(material))}"
 
 
 def _build_telemetry_snapshot(

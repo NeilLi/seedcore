@@ -8,8 +8,8 @@ use seedcore_kernel_testkit::{
 };
 use seedcore_kernel_types::{
     ApprovalStatus, ApprovalTransitionEvent, ApprovalTransitionHistory, ArtifactHash, Disposition,
-    ReplayArtifactPayload, RevocationRecord, RoleApproval, SignatureEnvelope, Timestamp,
-    TransferApprovalEnvelope, TransitionReceipt, TrustBundle, TrustProof,
+    EvidenceBundle, ReplayArtifactPayload, RevocationRecord, RoleApproval, SignatureEnvelope,
+    Timestamp, TransferApprovalEnvelope, TransitionReceipt, TrustBundle, TrustProof,
 };
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_policy_core::FrozenDecisionInput;
@@ -642,12 +642,13 @@ fn verify_chain_bundle(
         let mut report = verify_replay_chain(&bundle, &resolver);
         for (index, artifact) in bundle.artifacts.iter().enumerate() {
             let previous_transition = previous_transition_receipt(&bundle, index);
-            report.artifact_reports[index] = apply_trust_bundle_checks(
+            let checked = apply_trust_bundle_checks(
                 report.artifact_reports[index].clone(),
                 artifact,
                 &trust_bundle,
                 previous_transition,
             );
+            report.artifact_reports[index] = apply_post_verification_checks(checked, artifact, &resolver);
         }
         report.verified = report.artifact_reports.iter().all(|item| item.verified)
             && report.error_code.is_none()
@@ -661,7 +662,25 @@ fn verify_chain_bundle(
         }
         return Ok(report);
     }
-    Ok(verify_replay_chain(&bundle, &FixtureStaticResolver))
+    let mut report = verify_replay_chain(&bundle, &FixtureStaticResolver);
+    for (index, artifact) in bundle.artifacts.iter().enumerate() {
+        report.artifact_reports[index] = apply_post_verification_checks(
+            report.artifact_reports[index].clone(),
+            artifact,
+            &FixtureStaticResolver,
+        );
+    }
+    report.verified = report.artifact_reports.iter().all(|item| item.verified)
+        && report.error_code.is_none()
+        && report.chain_checks.iter().all(|item| !item.contains("mismatch"));
+    if !report.verified && report.error_code.is_none() {
+        report.error_code = report
+            .artifact_reports
+            .iter()
+            .find_map(|item| item.error_code.clone())
+            .or_else(|| Some("replay_artifact_verification_failed".to_string()));
+    }
+    Ok(report)
 }
 
 fn seal_replay_bundle_path(path: &Path) -> Result<ReplayBundle, String> {
@@ -708,14 +727,20 @@ fn verify_receipt_path(
             Some(path) => Some(read_json_file(path)?),
             None => None,
         };
-        return Ok(apply_trust_bundle_checks(
+        let checked = apply_trust_bundle_checks(
             report,
             &artifact,
             &trust_bundle,
             previous_artifact.as_ref(),
-        ));
+        );
+        return Ok(apply_post_verification_checks(checked, &artifact, &resolver));
     }
-    Ok(verify_receipt_artifact(&artifact, &FixtureStaticResolver))
+    let report = verify_receipt_artifact(&artifact, &FixtureStaticResolver);
+    Ok(apply_post_verification_checks(
+        report,
+        &artifact,
+        &FixtureStaticResolver,
+    ))
 }
 
 fn inspect_trust_path(path: &Path, trust_bundle_path: &Path) -> Result<TrustInspectionReport, String> {
@@ -952,6 +977,96 @@ fn apply_trust_bundle_checks(
     }
 
     report
+}
+
+fn apply_post_verification_checks(
+    mut report: VerificationReport,
+    artifact: &ReplayArtifact,
+    resolver: &dyn seedcore_proof_core::KeyResolver,
+) -> VerificationReport {
+    if !report.verified {
+        return report;
+    }
+    if let ReplayArtifactPayload::EvidenceBundle(bundle) = &artifact.payload {
+        if let Err(error_code) = verify_evidence_bundle_cosignatures(bundle, resolver) {
+            report.verified = false;
+            report.error_code = Some(error_code);
+            return report;
+        }
+    }
+    report
+}
+
+fn verify_evidence_bundle_cosignatures(
+    bundle: &EvidenceBundle,
+    resolver: &dyn seedcore_proof_core::KeyResolver,
+) -> Result<(), String> {
+    if !bundle.co_sign_required && bundle.co_signatures.is_empty() {
+        return Ok(());
+    }
+    let Some(binding_hash) = bundle.co_sign_binding_hash.as_ref() else {
+        return Err("missing_co_sign_binding_hash".to_string());
+    };
+
+    let mut seen_principals = std::collections::BTreeSet::new();
+    for co_signature in &bundle.co_signatures {
+        if !seen_principals.insert(co_signature.principal_ref.clone()) {
+            return Err("duplicate_co_signer".to_string());
+        }
+        let report = verify_detached_signature(
+            &co_signature.signature,
+            binding_hash,
+            "evidence_bundle_co_sign",
+            resolver,
+        );
+        if !report.verified {
+            return Err(
+                report
+                    .error_code
+                    .unwrap_or_else(|| "co_sign_signature_invalid".to_string()),
+            );
+        }
+    }
+
+    let outcome = bundle
+        .transfer_outcome
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let status = bundle
+        .co_sign_status
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if outcome == "EMERGENCY_OVERRIDE" || status == "emergency_override" {
+        if bundle.co_signatures.is_empty() {
+            return Err("missing_emergency_override_signature".to_string());
+        }
+        let has_zone_admin = bundle.co_signatures.iter().any(|item| {
+            let role = item.signer_role.to_ascii_uppercase();
+            role == "ZONE_ADMIN" || role == "ZONE_ADMINISTRATOR"
+        });
+        if !has_zone_admin {
+            return Err("missing_zone_admin_override_signature".to_string());
+        }
+        return Ok(());
+    }
+
+    if bundle.co_sign_required {
+        if bundle.co_signatures.len() < 2 {
+            return Err("missing_co_signatures".to_string());
+        }
+        for expected in &bundle.expected_co_signers {
+            if !bundle
+                .co_signatures
+                .iter()
+                .any(|item| item.principal_ref == expected.principal_ref)
+            {
+                return Err("co_signer_mismatch".to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn trust_proof_from_artifact(artifact: &ReplayArtifact) -> Option<&TrustProof> {

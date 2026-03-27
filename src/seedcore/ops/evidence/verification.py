@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional
 
 from seedcore.models.evidence_bundle import (
+    CoSignature,
     EvidenceBundle,
     HALCaptureEnvelope,
     PolicyReceipt,
@@ -12,6 +13,7 @@ from seedcore.models.evidence_bundle import (
 from seedcore.ops.evidence.policy import (
     canonical_json,
     resolve_public_key_from_registry,
+    resolve_hmac_secret_from_registry,
     sha256_hex,
     verify_payload_signature,
 )
@@ -172,7 +174,11 @@ def verify_policy_receipt_result(receipt: Mapping[str, Any] | PolicyReceipt) -> 
             "error": "invalid_policy_receipt",
             "policy": {},
         }
-    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata", "trust_proof"})
+    payload = model.model_dump(
+        mode="json",
+        exclude={"signature", "signer_metadata", "trust_proof"},
+        exclude_unset=True,
+    )
     return verify_artifact_signature_result(
         artifact_type="policy_receipt",
         payload=payload,
@@ -196,9 +202,13 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
             "error": "invalid_evidence_bundle",
             "policy": {},
         }
-    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata", "trust_proof"})
+    payload = model.model_dump(
+        mode="json",
+        exclude={"signature", "signer_metadata", "trust_proof"},
+        exclude_unset=True,
+    )
     node_id = str(model.node_id) if model.node_id is not None else None
-    return verify_artifact_signature_result(
+    result = verify_artifact_signature_result(
         artifact_type="evidence_bundle",
         payload=payload,
         signer_metadata=model.signer_metadata,
@@ -212,6 +222,29 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
         attested=model.signer_metadata.attestation_level == "attested",
         trust_proof=model.trust_proof,
     )
+    if result.get("error") is not None:
+        return result
+
+    co_signature_result = _verify_evidence_bundle_co_signatures(model)
+    result.update(
+        {
+            "co_sign_required": bool(model.co_sign_required),
+            "co_sign_status": model.co_sign_status,
+            "transfer_outcome": model.transfer_outcome,
+            "co_sign_binding_hash": model.co_sign_binding_hash,
+            "co_signature_count": len(model.co_signatures),
+            "co_signatures_verified": bool(co_signature_result.get("verified")),
+            "expected_co_signer_refs": [
+                str(item.get("principal_ref"))
+                for item in model.expected_co_signers
+                if isinstance(item, dict) and item.get("principal_ref") is not None
+            ],
+        }
+    )
+    if co_signature_result.get("error") is not None:
+        result["verified"] = False
+        result["error"] = str(co_signature_result.get("error"))
+    return result
 
 
 def verify_hal_capture_envelope(envelope: Mapping[str, Any] | HALCaptureEnvelope) -> Optional[str]:
@@ -228,7 +261,11 @@ def verify_hal_capture_envelope_result(envelope: Mapping[str, Any] | HALCaptureE
             "error": "invalid_hal_capture_envelope",
             "policy": {},
         }
-    payload = model.model_dump(mode="json", exclude={"signature", "signer_metadata", "trust_proof"})
+    payload = model.model_dump(
+        mode="json",
+        exclude={"signature", "signer_metadata", "trust_proof"},
+        exclude_unset=True,
+    )
     return verify_artifact_signature_result(
         artifact_type="hal_capture",
         payload=payload,
@@ -246,4 +283,74 @@ def _resolve_ed25519_public_key(metadata: SignerMetadata):
         metadata,
         registry_env="SEEDCORE_EVIDENCE_PUBLIC_KEYS_JSON",
         candidate_fields=("key_ref", "signer_id", "node_id"),
+    )
+
+
+def _verify_evidence_bundle_co_signatures(model: EvidenceBundle) -> dict[str, Any]:
+    if not model.co_sign_required and not model.co_signatures:
+        return {"verified": True, "error": None}
+    if not model.co_sign_binding_hash:
+        return {"verified": False, "error": "missing_co_sign_binding_hash"}
+
+    payload = {"binding_hash": model.co_sign_binding_hash}
+    expected_refs = [
+        str(item.get("principal_ref")).strip()
+        for item in model.expected_co_signers
+        if isinstance(item, dict) and item.get("principal_ref") is not None and str(item.get("principal_ref")).strip()
+    ]
+    expected_set = set(expected_refs)
+    actual_refs: list[str] = []
+    for raw in model.co_signatures:
+        signature = raw if isinstance(raw, CoSignature) else CoSignature(**dict(raw))
+        principal_ref = str(signature.principal_ref).strip()
+        if not principal_ref:
+            return {"verified": False, "error": "invalid_co_signer_ref"}
+        if principal_ref in actual_refs:
+            return {"verified": False, "error": "duplicate_co_signer"}
+        verification = verify_payload_signature(
+            artifact_type="evidence_bundle",
+            payload=payload,
+            signer_metadata=signature.signer_metadata,
+            signature=signature.signature,
+            public_key_resolver=_resolve_ed25519_public_key,
+            secret_resolver=_resolve_cosigner_hmac_secret,
+        )
+        if verification.get("error") is not None:
+            return {
+                "verified": False,
+                "error": f"co_sign_signature_invalid:{principal_ref}:{verification['error']}",
+            }
+        actual_refs.append(principal_ref)
+
+    actual_set = set(actual_refs)
+    outcome = str(model.transfer_outcome or "").strip().upper()
+    status = str(model.co_sign_status or "").strip().lower()
+    if outcome == "EMERGENCY_OVERRIDE" or status == "emergency_override":
+        if not actual_refs:
+            return {"verified": False, "error": "missing_emergency_override_signature"}
+        override_roles = {
+            str(item.signer_role or "").strip().upper()
+            for item in model.co_signatures
+        }
+        if "ZONE_ADMINISTRATOR" not in override_roles and "ZONE_ADMIN" not in override_roles:
+            return {"verified": False, "error": "missing_zone_admin_override_signature"}
+        return {"verified": True, "error": None}
+
+    if model.co_sign_required:
+        if len(actual_set) < 2:
+            return {"verified": False, "error": "missing_co_signatures"}
+        if expected_set and not expected_set.issubset(actual_set):
+            return {"verified": False, "error": "co_signer_mismatch"}
+    return {"verified": True, "error": None}
+
+
+def _resolve_cosigner_hmac_secret(metadata: SignerMetadata) -> Optional[str]:
+    return resolve_hmac_secret_from_registry(
+        metadata,
+        registry_env="SEEDCORE_EVIDENCE_CO_SIGNER_SECRETS_JSON",
+        candidate_fields=("signer_id", "key_ref", "node_id"),
+    ) or resolve_hmac_secret_from_registry(
+        metadata,
+        registry_env="SEEDCORE_EVIDENCE_SIGNER_SECRETS_JSON",
+        candidate_fields=("signer_id", "key_ref", "node_id"),
     )
