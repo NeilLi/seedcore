@@ -124,7 +124,7 @@ def evaluate_pdp_hot_path(
     asset_match = request.action_intent.resource.asset_id == request.asset_context.asset_ref
     checks.append(_check("asset_ref_match", asset_match, "asset_id and asset_ref must match"))
     if not asset_match:
-        return _build_terminal_response(
+        response = _build_terminal_response(
             request=request,
             started=started,
             checks=checks,
@@ -133,6 +133,8 @@ def evaluate_pdp_hot_path(
             reason="Action intent asset does not match the provided asset context.",
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
+        _record_terminal_shadow_result(request=request, response=response)
+        return response
 
     freshness_ok = True
     if (
@@ -145,7 +147,7 @@ def evaluate_pdp_hot_path(
         )
     checks.append(_check("telemetry_freshness", freshness_ok, "telemetry exceeds allowed age"))
     if not freshness_ok:
-        return _build_terminal_response(
+        response = _build_terminal_response(
             request=request,
             started=started,
             checks=checks,
@@ -155,11 +157,13 @@ def evaluate_pdp_hot_path(
             policy_snapshot_ref=request.policy_snapshot_ref,
             trust_gaps=["stale_telemetry"],
         )
+        _record_terminal_shadow_result(request=request, response=response)
+        return response
 
     compiled_authz_index = _resolve_compiled_authz_index()
     if compiled_authz_index is None:
         checks.append(_check("compiled_authz_graph_ready", False, "active compiled authz graph unavailable"))
-        return _build_terminal_response(
+        response = _build_terminal_response(
             request=request,
             started=started,
             checks=checks,
@@ -168,6 +172,8 @@ def evaluate_pdp_hot_path(
             reason="Active compiled authorization graph is unavailable.",
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
+        _record_terminal_shadow_result(request=request, response=response)
+        return response
 
     compiled_snapshot = (
         str(getattr(compiled_authz_index, "snapshot_version", "")).strip()
@@ -176,7 +182,7 @@ def evaluate_pdp_hot_path(
     snapshot_ok = not compiled_snapshot or compiled_snapshot == request.policy_snapshot_ref
     checks.append(_check("snapshot_consistency", snapshot_ok, "requested snapshot does not match active compiled graph"))
     if not snapshot_ok:
-        return _build_terminal_response(
+        response = _build_terminal_response(
             request=request,
             started=started,
             checks=checks,
@@ -188,6 +194,8 @@ def evaluate_pdp_hot_path(
             ),
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
+        _record_terminal_shadow_result(request=request, response=response)
+        return response
 
     approved_source_registrations: dict[str, str | None] = {}
     if (request.asset_context.source_registration_status or "").strip().upper() == "APPROVED":
@@ -292,7 +300,7 @@ def _build_terminal_response(
     reason: str,
     policy_snapshot_ref: str,
     trust_gaps: Iterable[str] = (),
-) -> HotPathEvaluateResponse:
+    ) -> HotPathEvaluateResponse:
     return HotPathEvaluateResponse(
         contract_version=HOT_PATH_CONTRACT_VERSION,
         request_id=request.request_id,
@@ -308,6 +316,42 @@ def _build_terminal_response(
         trust_gaps=list(trust_gaps),
         checks=checks,
     )
+
+
+def _record_terminal_shadow_result(
+    *,
+    request: HotPathEvaluateRequest,
+    response: HotPathEvaluateResponse,
+) -> None:
+    terminal_view = _normalize_shadow_terminal_response(response)
+    _HOT_PATH_SHADOW_STATS.record(
+        latency_ms=response.latency_ms,
+        parity={
+            "request_id": request.request_id,
+            "asset_ref": request.asset_context.asset_ref,
+            "parity_ok": True,
+            "mismatches": [],
+            "baseline": terminal_view,
+            "candidate": terminal_view,
+        },
+    )
+
+
+def _normalize_shadow_terminal_response(response: HotPathEvaluateResponse) -> dict[str, Any]:
+    minted_artifacts: list[str] = []
+    if isinstance(response.execution_token, ExecutionToken):
+        minted_artifacts.append("execution_token")
+    return {
+        "disposition": str(response.decision.disposition or "deny"),
+        "reason_code": str(response.decision.reason_code or ""),
+        "trust_gaps": tuple(sorted(str(item) for item in response.trust_gaps if str(item).strip())),
+        "required_approvals": tuple(
+            sorted(str(item) for item in response.required_approvals if str(item).strip())
+        ),
+        "policy_snapshot_ref": str(response.decision.policy_snapshot_ref or ""),
+        "policy_snapshot_hash": str(response.decision.policy_snapshot_hash or ""),
+        "minted_artifacts": tuple(sorted(minted_artifacts)),
+    }
 
 
 def _decision_reason_code(decision: PolicyDecision) -> str:

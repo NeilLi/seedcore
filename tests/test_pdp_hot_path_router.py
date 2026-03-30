@@ -134,6 +134,34 @@ def test_pdp_hot_path_quarantines_snapshot_mismatch(monkeypatch):
     assert body["decision"]["reason_code"] == "snapshot_not_ready"
 
 
+def test_pdp_hot_path_terminal_quarantine_updates_shadow_stats(monkeypatch):
+    manager = SimpleNamespace(
+        get_active_compiled_authz_index=lambda: SimpleNamespace(snapshot_version="snapshot:pkg-prod-2026-04-02")
+    )
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", pdp_hot_path.HotPathShadowStats())
+    client = _make_client()
+
+    payload = _base_payload()
+    payload["request_id"] = "pdp-req-stale-001"
+    payload["telemetry_context"]["freshness_seconds"] = 301
+    payload["telemetry_context"]["max_allowed_age_seconds"] = 300
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=payload)
+    assert response.status_code == 200
+    assert response.json()["decision"]["disposition"] == "quarantine"
+    assert response.json()["decision"]["reason_code"] == "stale_telemetry"
+
+    status = client.get("/api/v1/pdp/hot-path/status")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["total"] == 1
+    assert body["parity_ok"] == 1
+    assert body["mismatched"] == 0
+    assert body["recent_results"][-1]["request_id"] == "pdp-req-stale-001"
+    assert body["recent_results"][-1]["candidate"]["disposition"] == "quarantine"
+    assert body["recent_results"][-1]["parity_ok"] is True
+
+
 def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monkeypatch):
     manager = SimpleNamespace(
         get_active_compiled_authz_index=lambda: SimpleNamespace(snapshot_version="snapshot:pkg-prod-2026-04-02")

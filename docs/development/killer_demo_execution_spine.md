@@ -10,7 +10,7 @@ Current repo state on 2026-03-30:
 - persisted approval records, not embedded request payloads, are the RCT source of truth
 - hot-path rollout remains intentionally in `shadow`
 - runtime-up verification is now exercised locally across `8002`, `7071`, `7072`, and `7073`
-- full live-demo sign-off is still pending final runtime artifact-matrix capture (allow + siblings on explicit audit chains) and hardened signer allow-path provenance
+- full Slice 1 live-demo sign-off closure is captured with explicit runtime audit chains for `allow`/`deny`/`quarantine`/`escalate`, cross-surface consistency evidence, and allow-path hardened signer provenance
 
 ## Purpose
 

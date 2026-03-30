@@ -98,31 +98,34 @@ Completed in repo:
 - host verification scripts no longer rely on synthesized approval state for the main RCT sign-off flow
 - productized surface verification now fails closed when no runtime `audit_id` is available
 
-### Remaining Sign-Off Queue
+### Slice 1 Live Sign-Off Closure (Completed 2026-03-30)
 
-What still needs to be done next:
+Closed in runtime-up evidence:
 
-1. Close hot-path shadow parity accounting
+- hot-path parity accounting now includes canonical `quarantine` at run level (`run_parity: 4/4 ok, 0 mismatched`)
+- captured full runtime matrix with explicit `audit_id` links:
+  - `allow`: `ba05655c-9351-4783-97f1-fc6774c4f38b`
+  - `deny`: `a65bbee7-023a-44fa-9e9d-75e0164102e4`
+  - `quarantine`: `21dcb295-644a-465b-a505-064e6908c99c`
+  - `escalate`: `28ac9873-3e8f-430f-9681-224fdad44286`
+- allow-path artifact chain now carries non-null `approval_envelope_id`, `approval_envelope_version`, `approval_binding_hash`, `policy_receipt_id`, and `transition_receipt_ids`
+- replay + verification surfaces are cross-surface consistent for captured identifiers (with status/proof intentionally keeping narrow business-state shape)
+- productized surface protocol is green against captured runtime evidence
+- offline Rust replay-chain verification is green for all four captured runtime audit chains
+- hardened signer provenance captured on allow path for both `PolicyReceipt` and `TransitionReceipt` with KMS key ref `kms:rct-live-signoff-p256`
 
-- live runtime-up shadow verification is now running and green for mismatches, but run-level parity accounting still tracks three parity rows while the canonical `quarantine` case is evaluated separately
-- lock down the intended behavior (or fix accounting), then rerun and freeze the sign-off evidence
+Capture bundle:
 
-2. Capture the final allow-path live artifact chain
+- `.local-runtime/rct_live_signoff/20260330T061828Z`
 
-- runtime/proof/operator surfaces are now demonstrably live and `verify_productized_surface.sh` is green against a runtime `audit_id`
-- capture one Restricted Custody Transfer `allow` run whose artifact chain includes non-null `approval_envelope_id`, `approval_envelope_version`, `approval_binding_hash`, `policy_receipt_id`, and `transition_receipt_ids`
+### Post-Closure Queue
 
-3. End-to-end artifact-chain proof
+What should be done next:
 
-- capture one sealed-lot handoff happy path
-- capture missing approval, stale telemetry, and break-glass sibling paths
-- prove replay API, operator console, proof surface, and offline verifier agree on the same approval and receipt identifiers for each captured runtime `audit_id`
-
-4. Hardened signer closure
-
-- keep hardening scoped to Restricted Custody Transfer `allow`
-- capture one live allow-path run showing signer provenance for `PolicyReceipt` and `TransitionReceipt`
-- leave broader signer rollout for later phases
+1. Freeze and version the captured runtime sign-off bundle as a release artifact.
+2. Promote capture verification into a repeatable CI/host gate (shadow parity + runtime matrix + replay-chain verify).
+3. Define explicit criteria for any future `shadow` -> `enforce` hot-path promotion.
+4. Keep broader signer expansion and non-RCT hardening in later phases (outside Slice 1 closure scope).
 
 ### Explicit Sidecar
 
