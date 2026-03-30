@@ -152,6 +152,15 @@ Most AI systems are built to generate text, images, or recommendations. Physical
 
 SeedCore fills that gap by keeping AI advisory and moving execution authority into explicit runtime policy.
 
+The "North Star" for SeedCore is the creation of a **Genuine Environment for Autonomous Trade**—a zero-trust, autonomous runtime where physical actions are instantly converted into irrefutable digital truths. This allows AI agents and robots to transact on behalf of humans with absolute certainty, governed by four technical pillars:
+
+1.  **Persistent Twin & Settlement Track:** Append-only history and strict versioning for digital twins.
+2.  **Physical-to-Digital Delivery (The Evidence Loop):** Cryptographically sealed evidence chains (ActionIntent -> ExecutionToken -> EvidenceBundle).
+3.  **Autonomous Verification:** Machine-to-machine trust using the Rust `seedcore-verify` kernel to validate replay chains without human intervention.
+4.  **Delegated Authority:** DID-style delegation and multi-party governance for high-value trades.
+
+For a detailed breakdown of this vision, see the [North Star: Autonomous Trade Environment](docs/development/north_star_autonomous_trade_environment.md).
+
 ## Target Architecture
 
 The target direction for SeedCore is a zero-trust custody runtime built around one strict principle:

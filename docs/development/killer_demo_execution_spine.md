@@ -31,6 +31,8 @@ workflow:
 
 **Restricted Custody Transfer**
 
+This workflow is the primary vehicle for proving the [North Star: Autonomous Trade Environment](north_star_autonomous_trade_environment.md). 
+
 Definition:
 
 - a high-value asset changes custody

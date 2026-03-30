@@ -55,7 +55,8 @@ and already reflected in the repo layout:
 
 The project is no longer just a cognitive-agent architecture.
 It is actively being refocused into a governed execution and verification
-runtime, with one must-win workflow:
+runtime, anchored to the [North Star: Autonomous Trade Environment](north_star_autonomous_trade_environment.md).
+The current focus is on one must-win workflow:
 
 - `Restricted Custody Transfer`
 

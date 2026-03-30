@@ -44,6 +44,8 @@ The right objective for the next stage is:
 
 That is a better objective than “solve all trusted autonomy problems” because it forces the roadmap to stay wedge-first, operational, and commercially legible.
 
+This objective is anchored to the [North Star: Autonomous Trade Environment](north_star_autonomous_trade_environment.md), which defines the runtime as a "Trust Slice" where human oversight is shifted from monitoring execution to defining policy.
+
 The guiding discipline for this stage is:
 
 - one wedge: high-trust, multi-party supply chain and asset transfer
