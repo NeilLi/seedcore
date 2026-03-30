@@ -1,0 +1,58 @@
+{
+  "approval_binding_hash": "sha256:c0c905a5fc61f7fc463d079d6510862c1a6afb03a1c57f08d11d63d8730ff7fe",
+  "approval_envelope_id": "approval-transfer-003",
+  "approval_transition_count": 0,
+  "approval_transition_head": null,
+  "asset_ref": "asset:lot-8843",
+  "created_at": "2026-04-02T08:20:00+00:00",
+  "envelope": {
+    "approval_binding_hash": {
+      "algorithm": "sha256",
+      "value": "c0c905a5fc61f7fc463d079d6510862c1a6afb03a1c57f08d11d63d8730ff7fe"
+    },
+    "approval_envelope_id": "approval-transfer-003",
+    "asset_ref": "asset:lot-8843",
+    "created_at": "2026-04-02T08:20:00Z",
+    "expires_at": "2026-04-02T08:25:00Z",
+    "from_custodian_ref": "principal:facility_mgr_001",
+    "lot_id": "lot-8843",
+    "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "required_approvals": [
+      {
+        "approval_ref": "approval:facility_mgr_001",
+        "approved_at": "2026-04-02T08:20:05Z",
+        "principal_ref": "principal:facility_mgr_001",
+        "role": "FACILITY_MANAGER",
+        "status": "APPROVED"
+      },
+      {
+        "approval_ref": "approval:quality_insp_017",
+        "approved_at": "2026-04-02T08:20:12Z",
+        "principal_ref": "principal:quality_insp_017",
+        "role": "QUALITY_INSPECTOR",
+        "status": "APPROVED"
+      }
+    ],
+    "status": "APPROVED",
+    "to_custodian_ref": "principal:outbound_mgr_002",
+    "transfer_context": {
+      "custody_point_ref": "custody_point:handoff_bay_3",
+      "facility_ref": "facility:north_warehouse",
+      "from_zone": "vault_a",
+      "to_zone": "handoff_bay_3"
+    },
+    "version": 12,
+    "workflow_type": "custody_transfer"
+  },
+  "expires_at": "2026-04-02T08:25:00+00:00",
+  "id": "98523477-2355-4723-ac15-d5ffdf14bc99",
+  "is_current": true,
+  "lot_id": "lot-8843",
+  "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+  "recorded_at": "2026-03-30T06:18:30.414522+00:00",
+  "status": "APPROVED",
+  "superseded_by_version": null,
+  "transition_history": [],
+  "version": 12,
+  "workflow_type": "custody_transfer"
+}

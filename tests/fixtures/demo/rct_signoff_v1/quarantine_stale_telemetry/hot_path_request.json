@@ -1,0 +1,77 @@
+{
+  "action_intent": {
+    "action": {
+      "parameters": {
+        "approval_context": {
+          "approval_binding_hash": "sha256:c0c905a5fc61f7fc463d079d6510862c1a6afb03a1c57f08d11d63d8730ff7fe",
+          "approval_envelope_id": "approval-transfer-003",
+          "approval_envelope_version": 12,
+          "approved_by": [
+            "principal:facility_mgr_001",
+            "principal:quality_insp_017"
+          ],
+          "observed_version": 12,
+          "required_roles": [
+            "FACILITY_MANAGER",
+            "QUALITY_INSPECTOR"
+          ]
+        },
+        "endpoint_id": "hal://robot_sim/1"
+      },
+      "security_contract": {
+        "hash": "fixture-contract:quarantine_stale_telemetry",
+        "version": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866"
+      },
+      "type": "TRANSFER_CUSTODY"
+    },
+    "environment": {
+      "origin_network": "network:warehouse-core"
+    },
+    "intent_id": "intent-transfer-003",
+    "principal": {
+      "agent_id": "agent:custody_runtime_01",
+      "role_profile": "TRANSFER_COORDINATOR",
+      "session_token": "session:shadow:quarantine_stale_telemetry"
+    },
+    "resource": {
+      "asset_id": "asset:lot-8843",
+      "category_envelope": {
+        "transfer_context": {
+          "custody_point_ref": "custody_point:handoff_bay_3",
+          "expected_current_custodian": "principal:facility_mgr_001",
+          "facility_ref": "facility:north_warehouse",
+          "from_zone": "vault_a",
+          "next_custodian": "principal:outbound_mgr_002",
+          "to_zone": "handoff_bay_3"
+        }
+      },
+      "lot_id": "lot-8843",
+      "provenance_hash": "fixture-provenance:quarantine_stale_telemetry",
+      "registration_decision_id": "decision:registration-001",
+      "resource_uri": "seedcore://zones/handoff_bay_3/assets/asset:lot-8843",
+      "source_registration_id": "registration:approved-001",
+      "target_zone": "handoff_bay_3"
+    },
+    "timestamp": "2026-04-02T08:20:00Z",
+    "valid_until": "2026-04-02T08:25:00Z"
+  },
+  "asset_context": {
+    "asset_ref": "asset:lot-8843",
+    "current_custodian_ref": "principal:facility_mgr_001",
+    "current_zone": "vault_a",
+    "registration_decision_ref": "decision:registration-001",
+    "source_registration_status": "APPROVED"
+  },
+  "contract_version": "pdp.hot_path.asset_transfer.v1",
+  "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+  "request_id": "shadow:quarantine_stale_telemetry",
+  "requested_at": "2026-04-02T08:20:00Z",
+  "telemetry_context": {
+    "evidence_refs": [
+      "evidence:telemetry-003"
+    ],
+    "freshness_seconds": 301,
+    "max_allowed_age_seconds": 300,
+    "observed_at": "2026-04-02T08:20:10Z"
+  }
+}

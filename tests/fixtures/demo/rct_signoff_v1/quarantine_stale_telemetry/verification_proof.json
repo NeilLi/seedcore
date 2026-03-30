@@ -1,0 +1,11 @@
+{
+  "asset_ref": "asset:lot-8843",
+  "business_state": "quarantined",
+  "decision_id": "8b6f44eff979d38026d992b16d3e10034bc7b8be579d77200e0cfaadf73563aa",
+  "disposition": "quarantine",
+  "missing_prerequisites": [],
+  "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+  "trust_gaps": [
+    "stale_telemetry"
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "approval_binding_hash": "sha256:bc637f18f600a8eb561fdbb845ca0587ca3e3fd76b99f25aa55f222baf57e4cf",
+  "approval_envelope_id": "approval-transfer-002",
+  "approval_envelope_version": 12,
+  "asset_custody_state": {
+    "authority_source": "rct_live_signoff_runtime",
+    "current_custodian_ref": null,
+    "current_zone_ref": "vault_a",
+    "custody_point_ref": null
+  },
+  "asset_ref": "asset:lot-8842",
+  "business_state": "rejected",
+  "custody_transition": {
+    "custody_point_ref": "custody_point:handoff_bay_3",
+    "expected_current_custodian": "principal:facility_mgr_001",
+    "facility_ref": "facility:north_warehouse",
+    "from_zone": "vault_a",
+    "next_custodian": "principal:outbound_mgr_002",
+    "to_zone": "handoff_bay_3"
+  },
+  "decision_id": "ea1e477986200c5775b889191d70f3c04ac4ec60181758942feff1c374f4d9b5",
+  "disposition": "deny",
+  "links": {
+    "replay_artifacts": "http://127.0.0.1:8002/api/v1/replay/artifacts?projection=internal&audit_id=a65bbee7-023a-44fa-9e9d-75e0164102e4",
+    "transfer_review": "/api/v1/transfers/review?source=runtime&audit_id=a65bbee7-023a-44fa-9e9d-75e0164102e4"
+  },
+  "minted_artifacts": [
+    "policy_receipt:policy-receipt:intent-transfer-002"
+  ],
+  "missing_prerequisites": [
+    "FACILITY_MANAGER",
+    "QUALITY_INSPECTOR"
+  ],
+  "obligations": [
+    {
+      "code": "update_verification_surface",
+      "severity": "required"
+    }
+  ],
+  "policy_receipt_id": "796566cd-536d-480a-9be4-795bc68c1aec",
+  "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+  "principal_identity": {
+    "approving_principal_refs": [
+      "principal:facility_mgr_001"
+    ],
+    "next_custodian_ref": "principal:outbound_mgr_002",
+    "requesting_principal_ref": "agent:custody_runtime_01"
+  },
+  "signature_provenance": [
+    {
+      "artifact_type": "policy_receipt",
+      "attestation_level": "attested",
+      "key_ref": "kms:rct-live-signoff-p256",
+      "signer_id": "seedcore-rct-kms-signer",
+      "signer_type": "service"
+    },
+    {
+      "artifact_type": "evidence_bundle",
+      "attestation_level": "baseline",
+      "key_ref": "hidden",
+      "signer_id": "seedcore-evidence-service",
+      "signer_type": "service"
+    }
+  ],
+  "telemetry_refs": [
+    "telemetry_snapshot"
+  ],
+  "timeline": [
+    {
+      "artifact_ref": "sha256:a0e0489b8f86f548660300405b801fccf5ab49d732e6dd17d80b6cae5ad2bb99",
+      "event_type": "authz_transition_evaluated",
+      "summary": "Authorization graph denied asset transition",
+      "timestamp": "2026-03-30T06:18:30.031148Z"
+    },
+    {
+      "artifact_ref": "796566cd-536d-480a-9be4-795bc68c1aec",
+      "event_type": "policy_receipt_issued",
+      "summary": "Policy receipt recorded for governed action",
+      "timestamp": "2026-03-30T06:18:30.031148Z"
+    },
+    {
+      "artifact_ref": "01a1f32a-0b7b-422a-8289-a9293af4d1cc",
+      "event_type": "evidence_materialized",
+      "summary": "Evidence bundle sealed for replay",
+      "timestamp": "2026-03-30T06:18:30.031148Z"
+    },
+    {
+      "artifact_ref": "a65bbee7-023a-44fa-9e9d-75e0164102e4",
+      "event_type": "audit_recorded",
+      "summary": "Governed audit record appended",
+      "timestamp": "2026-03-30T06:18:30.054663+00:00"
+    }
+  ],
+  "transition_receipt_ids": [],
+  "trust_gaps": []
+}

@@ -1,0 +1,34 @@
+{
+  "actual_disposition": "deny",
+  "approval_binding_hash": "sha256:bc637f18f600a8eb561fdbb845ca0587ca3e3fd76b99f25aa55f222baf57e4cf",
+  "approval_envelope_id": "approval-transfer-002",
+  "approval_envelope_version": 12,
+  "audit_id": "a65bbee7-023a-44fa-9e9d-75e0164102e4",
+  "business_state": "rejected",
+  "case": "deny_missing_approval",
+  "cross_surface_consistent": true,
+  "cross_surface_errors": [],
+  "expected_disposition": "deny",
+  "policy_receipt_id": "796566cd-536d-480a-9be4-795bc68c1aec",
+  "runtime_verify_issues": null,
+  "runtime_verify_verified": true,
+  "rust_replay_chain_error": null,
+  "rust_replay_chain_verified": true,
+  "signature_provenance": [
+    {
+      "artifact_type": "policy_receipt",
+      "attestation_level": "attested",
+      "key_ref": "kms:rct-live-signoff-p256",
+      "signer_id": "seedcore-rct-kms-signer",
+      "signer_type": "service"
+    },
+    {
+      "artifact_type": "evidence_bundle",
+      "attestation_level": "baseline",
+      "key_ref": "hidden",
+      "signer_id": "seedcore-evidence-service",
+      "signer_type": "service"
+    }
+  ],
+  "transition_receipt_ids": []
+}

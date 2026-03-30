@@ -1,0 +1,9 @@
+{
+  "asset_ref": "asset:lot-8844",
+  "business_state": "review_required",
+  "decision_id": "9d886722cc2d6af449fffe04681273144f62289313d63f4d5ccc2796313aa921",
+  "disposition": "escalate",
+  "missing_prerequisites": [],
+  "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+  "trust_gaps": []
+}

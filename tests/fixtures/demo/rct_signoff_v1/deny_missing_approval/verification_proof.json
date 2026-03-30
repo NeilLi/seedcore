@@ -1,0 +1,12 @@
+{
+  "asset_ref": "asset:lot-8842",
+  "business_state": "rejected",
+  "decision_id": "ea1e477986200c5775b889191d70f3c04ac4ec60181758942feff1c374f4d9b5",
+  "disposition": "deny",
+  "missing_prerequisites": [
+    "FACILITY_MANAGER",
+    "QUALITY_INSPECTOR"
+  ],
+  "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+  "trust_gaps": []
+}

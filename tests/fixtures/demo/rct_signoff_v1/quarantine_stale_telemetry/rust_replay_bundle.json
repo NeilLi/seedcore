@@ -1,0 +1,258 @@
+{
+  "artifacts": [
+    {
+      "artifact": {
+        "action": {
+          "action_type": "TRANSFER_CUSTODY",
+          "endpoint_id": "hal://robot_sim/1",
+          "target_zone": null
+        },
+        "environment": {
+          "attributes": {},
+          "registration_decision_id": null,
+          "source_registration_id": null
+        },
+        "intent_id": "intent-transfer-003",
+        "principal": {
+          "organization_ref": "organism",
+          "principal_ref": "agent:custody_runtime_01",
+          "role_refs": []
+        },
+        "resource": {
+          "asset_ref": "asset:lot-8843",
+          "lot_id": "lot-8843"
+        },
+        "timestamp": "2026-04-02T08:20:00Z",
+        "valid_until": "2026-04-02T08:25:00Z"
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "70d6adee7793045a2076e8ba5aec9ff17ec3ad48b8873d0f2cf73f4c2c603b53"
+      },
+      "artifact_id": "intent-transfer-003",
+      "artifact_type": "action_intent",
+      "previous_artifact_hash": null,
+      "signature": {
+        "attestation_level": "baseline",
+        "key_ref": "test-key",
+        "signature": "sha256:70d6adee7793045a2076e8ba5aec9ff17ec3ad48b8873d0f2cf73f4c2c603b53",
+        "signer_id": "seedcore-verify",
+        "signer_type": "service",
+        "signing_scheme": "debug_hash_v1"
+      }
+    },
+    {
+      "artifact": {
+        "allowed": true,
+        "disposition": "quarantine",
+        "execution_token": null,
+        "explanation": {
+          "authority_path_summary": [
+            "facility_manager -> transfer_lot"
+          ],
+          "disposition": "quarantine",
+          "matched_policy_refs": [
+            "policy:transfer-v1"
+          ],
+          "minted_artifacts": [
+            "policy_receipt:policy-receipt:intent-transfer-003"
+          ],
+          "missing_prerequisites": [],
+          "obligations": [],
+          "trust_gaps": [
+            "stale_telemetry"
+          ]
+        },
+        "governed_decision_artifact": {
+          "action_intent_ref": "intent-transfer-003",
+          "asset_ref": "asset:lot-8843",
+          "decision_id": "8b6f44eff979d38026d992b16d3e10034bc7b8be579d77200e0cfaadf73563aa",
+          "disposition": "quarantine",
+          "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866"
+        },
+        "policy_decision_id": "8b6f44eff979d38026d992b16d3e10034bc7b8be579d77200e0cfaadf73563aa",
+        "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+        "reason": "Telemetry freshness exceeds policy limits."
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "80a61e605fa7521ca456d06530046ccaf9e7cd55253a8349e606f4932575e53e"
+      },
+      "artifact_id": "8b6f44eff979d38026d992b16d3e10034bc7b8be579d77200e0cfaadf73563aa",
+      "artifact_type": "policy_decision",
+      "previous_artifact_hash": {
+        "algorithm": "sha256",
+        "value": "70d6adee7793045a2076e8ba5aec9ff17ec3ad48b8873d0f2cf73f4c2c603b53"
+      },
+      "signature": {
+        "attestation_level": "baseline",
+        "key_ref": "test-key",
+        "signature": "sha256:80a61e605fa7521ca456d06530046ccaf9e7cd55253a8349e606f4932575e53e",
+        "signer_id": "seedcore-verify",
+        "signer_type": "service",
+        "signing_scheme": "debug_hash_v1"
+      }
+    },
+    {
+      "artifact": {
+        "disposition": "quarantine",
+        "explanation": {
+          "authority_path_summary": [
+            "facility_manager -> transfer_lot"
+          ],
+          "disposition": "quarantine",
+          "matched_policy_refs": [
+            "policy:transfer-v1"
+          ],
+          "minted_artifacts": [
+            "policy_receipt:policy-receipt:intent-transfer-003"
+          ],
+          "missing_prerequisites": [],
+          "obligations": [],
+          "trust_gaps": [
+            "stale_telemetry"
+          ]
+        },
+        "governed_receipt_hash": {
+          "algorithm": "sha256",
+          "value": "42613eaa1fb79b93959922fbb7580aec6400f355c72bfe1780e806db493b9165"
+        },
+        "intent_id": "intent-transfer-003",
+        "policy_decision_id": "8b6f44eff979d38026d992b16d3e10034bc7b8be579d77200e0cfaadf73563aa",
+        "policy_receipt_id": "a36e6828-6375-4077-bb69-32ac8580add8",
+        "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+        "signer": {
+          "attestation_level": "attested",
+          "key_ref": "kms:rct-live-signoff-p256",
+          "signature": "MEQCIDbf5+01kUBDytcmgNYBNMR0U7cESIHszGXatzIMwwfXAiBs2Ja8Pd/KTp3OaOCUjy3SicOdBBX5zhKgFk4kP+XUzw==",
+          "signer_id": "seedcore-rct-kms-signer",
+          "signer_type": "service",
+          "signing_scheme": "ecdsa_p256_sha256"
+        },
+        "timestamp": "2026-03-30T06:18:30.452469Z",
+        "trust_proof": {
+          "attestation": {
+            "attestation_type": "kms_binding",
+            "endorsement_chain": [],
+            "issued_at": "2026-03-30T06:18:30.454082+00:00",
+            "summary": {
+              "attestation_level": "attested",
+              "workflow_type": "restricted_custody_transfer"
+            }
+          },
+          "key_algorithm": "ecdsa_p256_sha256",
+          "key_binding": {
+            "binding_type": "kms_binding",
+            "certificate_chain": [],
+            "metadata": {}
+          },
+          "key_ref": "kms:rct-live-signoff-p256",
+          "public_key_fingerprint": "sha256:94a5888676a263566060abe872dbe5cc819ea4599d4c0257a9510c0517f107ed",
+          "revocation_id": "kms:kms:rct-live-signoff-p256",
+          "signer_profile": "pdp",
+          "transparency": {
+            "details": {},
+            "status": "not_configured"
+          },
+          "trust_anchor_type": "kms"
+        }
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "170ccc9be8b498945009f0340ac89c8cfd9aa9799aa27d3154a35608a9a6b861"
+      },
+      "artifact_id": "a36e6828-6375-4077-bb69-32ac8580add8",
+      "artifact_type": "policy_receipt",
+      "previous_artifact_hash": {
+        "algorithm": "sha256",
+        "value": "80a61e605fa7521ca456d06530046ccaf9e7cd55253a8349e606f4932575e53e"
+      },
+      "signature": {
+        "attestation_level": "baseline",
+        "key_ref": "test-key",
+        "signature": "sha256:170ccc9be8b498945009f0340ac89c8cfd9aa9799aa27d3154a35608a9a6b861",
+        "signer_id": "seedcore-verify",
+        "signer_type": "service",
+        "signing_scheme": "debug_hash_v1"
+      }
+    },
+    {
+      "artifact": {
+        "co_sign_required": false,
+        "co_sign_status": "pending",
+        "co_signatures": [],
+        "created_at": "2026-03-30T06:18:30.452469Z",
+        "evidence_bundle_id": "062f9c6e-c561-4051-9f22-0e09647bd6cd",
+        "execution_token_id": null,
+        "expected_co_signers": [],
+        "intent_id": "intent-transfer-003",
+        "media_refs": [],
+        "policy_receipt_id": "a36e6828-6375-4077-bb69-32ac8580add8",
+        "signer": {
+          "attestation_level": "baseline",
+          "key_ref": null,
+          "signature": "eb8d0ae90868e24a72542fbe3cf111da6ce343c94bb51de53831f9c7b80de06d",
+          "signer_id": "seedcore-evidence-service",
+          "signer_type": "service",
+          "signing_scheme": "hmac_sha256"
+        },
+        "telemetry_refs": [
+          {
+            "captured_at": "2026-03-30T06:18:30.452469Z",
+            "hash": {
+              "algorithm": "sha256",
+              "value": "90bdb9041ce931dcf83566e45ecd0f1e0b37151e8d79c123b43e2a122a842c1e"
+            },
+            "telemetry_id": "telemetry_snapshot"
+          }
+        ],
+        "transition_receipt_ids": [],
+        "trust_proof": {
+          "attestation": {
+            "attestation_type": "none",
+            "endorsement_chain": [],
+            "issued_at": "2026-03-30T06:18:30.454709+00:00",
+            "summary": {
+              "attestation_level": "baseline",
+              "node_id": "organ://organism"
+            }
+          },
+          "key_algorithm": "hmac_sha256",
+          "key_binding": {
+            "binding_type": "software_binding",
+            "certificate_chain": [],
+            "key_label": "organ://organism",
+            "metadata": {}
+          },
+          "key_ref": "legacy-hmac:seedcore-evidence-service",
+          "public_key_fingerprint": "sha256:unknown",
+          "revocation_id": "hmac:seedcore-evidence-service",
+          "signer_profile": "execution",
+          "transparency": {
+            "details": {},
+            "status": "not_configured"
+          },
+          "trust_anchor_type": "software"
+        }
+      },
+      "artifact_hash": {
+        "algorithm": "sha256",
+        "value": "5ad69770b446c0ae4a38d7ad976e4b994a6d749be2fd980f6e278ecd5e42a5ea"
+      },
+      "artifact_id": "062f9c6e-c561-4051-9f22-0e09647bd6cd",
+      "artifact_type": "evidence_bundle",
+      "previous_artifact_hash": {
+        "algorithm": "sha256",
+        "value": "170ccc9be8b498945009f0340ac89c8cfd9aa9799aa27d3154a35608a9a6b861"
+      },
+      "signature": {
+        "attestation_level": "baseline",
+        "key_ref": "test-key",
+        "signature": "sha256:5ad69770b446c0ae4a38d7ad976e4b994a6d749be2fd980f6e278ecd5e42a5ea",
+        "signer_id": "seedcore-verify",
+        "signer_type": "service",
+        "signing_scheme": "debug_hash_v1"
+      }
+    }
+  ]
+}

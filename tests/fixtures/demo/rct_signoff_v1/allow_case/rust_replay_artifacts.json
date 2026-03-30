@@ -1,0 +1,381 @@
+{
+  "artifacts": [
+    {
+      "artifact": {
+        "action": {
+          "action_type": "TRANSFER_CUSTODY",
+          "endpoint_id": "hal://robot_sim/1",
+          "target_zone": "handoff_bay_3"
+        },
+        "environment": {
+          "attributes": {},
+          "registration_decision_id": null,
+          "source_registration_id": null
+        },
+        "intent_id": "intent-transfer-001",
+        "principal": {
+          "organization_ref": "organism",
+          "principal_ref": "agent:custody_runtime_01",
+          "role_refs": []
+        },
+        "resource": {
+          "asset_ref": "asset:lot-8841",
+          "lot_id": "lot-8841"
+        },
+        "timestamp": "2026-04-02T08:00:00Z",
+        "valid_until": "2026-04-02T08:05:00Z"
+      },
+      "artifact_id": "intent-transfer-001",
+      "artifact_type": "action_intent"
+    },
+    {
+      "artifact": {
+        "allowed": true,
+        "disposition": "allow",
+        "execution_token": null,
+        "explanation": {
+          "authority_path_summary": [
+            "facility_manager -> transfer_lot"
+          ],
+          "disposition": "allow",
+          "matched_policy_refs": [
+            "policy:transfer-v1"
+          ],
+          "minted_artifacts": [
+            "policy_receipt:policy-receipt:intent-transfer-001",
+            "execution_token:bb8fec62-f000-4fad-a249-36add22ace84"
+          ],
+          "missing_prerequisites": [],
+          "obligations": [
+            {
+              "details": {},
+              "obligation_type": "generate_transition_receipt",
+              "reference": null
+            },
+            {
+              "details": {},
+              "obligation_type": "publish_replay_artifact",
+              "reference": null
+            },
+            {
+              "details": {},
+              "obligation_type": "close_prior_custodian_state",
+              "reference": null
+            },
+            {
+              "details": {},
+              "obligation_type": "update_verification_surface",
+              "reference": null
+            }
+          ],
+          "trust_gaps": []
+        },
+        "governed_decision_artifact": {
+          "action_intent_ref": "intent-transfer-001",
+          "asset_ref": "asset:lot-8841",
+          "decision_id": "8023e7d0e1a23581f37a67f46cd9c1927c98944b011029c5053aea5a9627bfef",
+          "disposition": "allow",
+          "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866"
+        },
+        "policy_decision_id": "8023e7d0e1a23581f37a67f46cd9c1927c98944b011029c5053aea5a9627bfef",
+        "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+        "reason": "restricted_custody_transfer"
+      },
+      "artifact_id": "8023e7d0e1a23581f37a67f46cd9c1927c98944b011029c5053aea5a9627bfef",
+      "artifact_type": "policy_decision"
+    },
+    {
+      "artifact": {
+        "disposition": "allow",
+        "explanation": {
+          "authority_path_summary": [
+            "facility_manager -> transfer_lot"
+          ],
+          "disposition": "allow",
+          "matched_policy_refs": [
+            "policy:transfer-v1"
+          ],
+          "minted_artifacts": [
+            "policy_receipt:policy-receipt:intent-transfer-001",
+            "execution_token:bb8fec62-f000-4fad-a249-36add22ace84"
+          ],
+          "missing_prerequisites": [],
+          "obligations": [
+            {
+              "details": {},
+              "obligation_type": "generate_transition_receipt",
+              "reference": null
+            },
+            {
+              "details": {},
+              "obligation_type": "publish_replay_artifact",
+              "reference": null
+            },
+            {
+              "details": {},
+              "obligation_type": "close_prior_custodian_state",
+              "reference": null
+            },
+            {
+              "details": {},
+              "obligation_type": "update_verification_surface",
+              "reference": null
+            }
+          ],
+          "trust_gaps": []
+        },
+        "governed_receipt_hash": {
+          "algorithm": "sha256",
+          "value": "a3d8348a71696b9e8aa4882642e9f14b4c690a10a18f5f592da91a7d38c78dbb"
+        },
+        "intent_id": "intent-transfer-001",
+        "policy_decision_id": "8023e7d0e1a23581f37a67f46cd9c1927c98944b011029c5053aea5a9627bfef",
+        "policy_receipt_id": "e459beaa-d283-4554-a639-2b8c1cb4d54c",
+        "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+        "signer": {
+          "attestation_level": "attested",
+          "key_ref": "kms:rct-live-signoff-p256",
+          "signature": "MEQCIDIsoUBIkBUVq2VqyPftuDrg4jsl/hgHUXJTisQO22AYAiBwteqGDNi7XGOupUvOtHu4yxqURxqP5Se23jhtwemTEA==",
+          "signer_id": "seedcore-rct-kms-signer",
+          "signer_type": "service",
+          "signing_scheme": "ecdsa_p256_sha256"
+        },
+        "timestamp": "2026-03-30T06:18:28.990086Z",
+        "trust_proof": {
+          "attestation": {
+            "ak_key_ref": null,
+            "attestation_type": "kms_binding",
+            "endorsement_chain": [],
+            "issued_at": "2026-03-30T06:18:29.014664+00:00",
+            "quote": null,
+            "summary": {
+              "attestation_level": "attested",
+              "endpoint_id": "hal://robot_sim/1",
+              "node_id": "hal://robot_sim/1",
+              "workflow_type": "restricted_custody_transfer"
+            }
+          },
+          "key_algorithm": "ecdsa_p256_sha256",
+          "key_binding": {
+            "binding_type": "kms_binding",
+            "certificate_chain": [],
+            "key_handle": null,
+            "key_label": "hal://robot_sim/1",
+            "metadata": {}
+          },
+          "key_ref": "kms:rct-live-signoff-p256",
+          "public_key_fingerprint": "sha256:94a5888676a263566060abe872dbe5cc819ea4599d4c0257a9510c0517f107ed",
+          "replay": null,
+          "revocation_id": "kms:kms:rct-live-signoff-p256",
+          "signer_profile": "pdp",
+          "transparency": {
+            "details": {},
+            "entry_id": null,
+            "integrated_time": null,
+            "log_url": null,
+            "proof_hash": null,
+            "status": "not_configured"
+          },
+          "trust_anchor_type": "kms"
+        }
+      },
+      "artifact_id": "e459beaa-d283-4554-a639-2b8c1cb4d54c",
+      "artifact_type": "policy_receipt"
+    },
+    {
+      "artifact": {
+        "artifact_hash": {
+          "algorithm": "sha256",
+          "value": "132d2a104df0af6cecbccd932e3742ef8f7e35de5d1fc35c3c9bebd410944e6a"
+        },
+        "constraints": {
+          "action_type": "TRANSFER_CUSTODY",
+          "approval_binding_hash": "sha256:e88addfa415a61ba8316ca296300185572f15bc3c1a83427804cf59a0446ce72",
+          "approval_envelope_id": "approval-transfer-001",
+          "approval_envelope_version": 23,
+          "approved_by": [
+            "principal:facility_mgr_001",
+            "principal:quality_insp_017"
+          ],
+          "asset_id": "asset:lot-8841",
+          "co_sign_status": "co_signed",
+          "co_signed": true,
+          "endpoint_id": "hal://robot_sim/1",
+          "expected_current_custodian": "principal:facility_mgr_001",
+          "from_zone": "vault_a",
+          "next_custodian": "principal:outbound_mgr_002",
+          "principal_agent_id": "agent:custody_runtime_01",
+          "registration_decision_id": "decision:registration-001",
+          "source_registration_id": "registration:approved-001",
+          "target_zone": "handoff_bay_3",
+          "transfer_outcome": "STANDARD_TRANSFER"
+        },
+        "contract_version": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+        "intent_id": "intent-transfer-001",
+        "issued_at": "2026-03-30T06:18:28.953421Z",
+        "signature": {
+          "attestation_level": "baseline",
+          "key_ref": "test-key",
+          "signature": "sha256:132d2a104df0af6cecbccd932e3742ef8f7e35de5d1fc35c3c9bebd410944e6a",
+          "signer_id": "seedcore-verify",
+          "signer_type": "service",
+          "signing_scheme": "debug_hash_v1"
+        },
+        "token_id": "bb8fec62-f000-4fad-a249-36add22ace84",
+        "valid_until": "2026-03-30T06:18:33.953421Z"
+      },
+      "artifact_id": "bb8fec62-f000-4fad-a249-36add22ace84",
+      "artifact_type": "execution_token"
+    },
+    {
+      "artifact": {
+        "actuator_result_hash": {
+          "algorithm": "sha256",
+          "value": "cbcf169a178f45e70e1e6d69a03dfa5279512dc26fb8f8cbcfa872c084ee70b6"
+        },
+        "endpoint_id": "hal://robot_sim/1",
+        "executed_at": "2026-03-30T06:18:28.990086Z",
+        "execution_token_id": "bb8fec62-f000-4fad-a249-36add22ace84",
+        "from_zone": "vault_a",
+        "hardware_uuid": "robot-sim-live-signoff-1",
+        "intent_id": "intent-transfer-001",
+        "payload_hash": {
+          "algorithm": "sha256",
+          "value": "604e1d2c92b30ea0a95ba9be4eee2f24931e1281a846284d2add15d01a1a1f29"
+        },
+        "receipt_nonce": "nonce:allow_case:e8fda30b-9fbd-4894-960e-a70058d18f45",
+        "signer": {
+          "attestation_level": "attested",
+          "key_ref": "kms:rct-live-signoff-p256",
+          "signature": "MEQCIHL7swt/JwnOW4RgdU/cworMqvf4EUI0/MeF7pxksRWzAiB4GcDK6Q+deI5QwKJTAmnoqTMuhBRGq4raSc6UDju0rA==",
+          "signer_id": "seedcore-rct-kms-signer",
+          "signer_type": "service",
+          "signing_scheme": "ecdsa_p256_sha256"
+        },
+        "to_zone": "handoff_bay_3",
+        "transition_receipt_id": "92356db8-b39d-40e6-a330-fa7fbe5855e2",
+        "trust_proof": {
+          "attestation": {
+            "ak_key_ref": null,
+            "attestation_type": "kms_binding",
+            "endorsement_chain": [],
+            "issued_at": "2026-03-30T06:18:29.016231+00:00",
+            "quote": null,
+            "summary": {
+              "attestation_level": "attested",
+              "endpoint_id": "hal://robot_sim/1",
+              "node_id": "hal://robot_sim/1",
+              "workflow_type": "restricted_custody_transfer"
+            }
+          },
+          "key_algorithm": "ecdsa_p256_sha256",
+          "key_binding": {
+            "binding_type": "kms_binding",
+            "certificate_chain": [],
+            "key_handle": null,
+            "key_label": "hal://robot_sim/1",
+            "metadata": {}
+          },
+          "key_ref": "kms:rct-live-signoff-p256",
+          "public_key_fingerprint": "sha256:94a5888676a263566060abe872dbe5cc819ea4599d4c0257a9510c0517f107ed",
+          "replay": {
+            "previous_receipt_hash": null,
+            "receipt_counter": 1,
+            "receipt_nonce": "nonce:allow_case:e8fda30b-9fbd-4894-960e-a70058d18f45"
+          },
+          "revocation_id": "kms:kms:rct-live-signoff-p256",
+          "signer_profile": "receipt",
+          "transparency": {
+            "details": {
+              "provider": "local_transparency_stub"
+            },
+            "entry_id": "60fb2f6eed30ceb468a76439f13492bc8c62109944ecc8a5afcea9cb79648ebd",
+            "integrated_time": "2026-03-30T06:18:29.016197+00:00",
+            "log_url": "https://rekor.sigstore.dev",
+            "proof_hash": "22d771c21232e21a4a977ae9ff15c8bb50ebdb479ef889cf5ba8bc0ad07398df",
+            "status": "anchored"
+          },
+          "trust_anchor_type": "kms"
+        },
+        "workflow_type": "restricted_custody_transfer"
+      },
+      "artifact_id": "92356db8-b39d-40e6-a330-fa7fbe5855e2",
+      "artifact_type": "transition_receipt"
+    },
+    {
+      "artifact": {
+        "co_sign_binding_hash": null,
+        "co_sign_required": false,
+        "co_sign_status": "co_signed",
+        "co_signatures": [],
+        "created_at": "2026-03-30T06:18:28.990086Z",
+        "evidence_bundle_id": "4de0b04d-cd07-4282-954a-c5808e3f7389",
+        "execution_token_id": "bb8fec62-f000-4fad-a249-36add22ace84",
+        "expected_co_signers": [],
+        "intent_id": "intent-transfer-001",
+        "media_refs": [],
+        "policy_receipt_id": "e459beaa-d283-4554-a639-2b8c1cb4d54c",
+        "signer": {
+          "attestation_level": "baseline",
+          "key_ref": null,
+          "signature": "69c9c6119a2f4e91288867db2538d230480bfe5c8549f50905c2a7057ccdd3e0",
+          "signer_id": "seedcore-evidence-service",
+          "signer_type": "service",
+          "signing_scheme": "hmac_sha256"
+        },
+        "telemetry_refs": [
+          {
+            "captured_at": "2026-03-30T06:18:28.990086Z",
+            "hash": {
+              "algorithm": "sha256",
+              "value": "2f3ab51cea8f5e3584855192e8ef5f36d46f48384855f450d08a9b8d821dbdf9"
+            },
+            "telemetry_id": "telemetry_snapshot"
+          }
+        ],
+        "transfer_outcome": null,
+        "transition_receipt_ids": [
+          "92356db8-b39d-40e6-a330-fa7fbe5855e2"
+        ],
+        "trust_proof": {
+          "attestation": {
+            "ak_key_ref": null,
+            "attestation_type": "none",
+            "endorsement_chain": [],
+            "issued_at": "2026-03-30T06:18:29.017678+00:00",
+            "quote": null,
+            "summary": {
+              "attestation_level": "baseline",
+              "endpoint_id": "hal://robot_sim/1",
+              "node_id": "hal://robot_sim/1"
+            }
+          },
+          "key_algorithm": "hmac_sha256",
+          "key_binding": {
+            "binding_type": "software_binding",
+            "certificate_chain": [],
+            "key_handle": null,
+            "key_label": "hal://robot_sim/1",
+            "metadata": {}
+          },
+          "key_ref": "legacy-hmac:seedcore-evidence-service",
+          "public_key_fingerprint": "sha256:unknown",
+          "replay": null,
+          "revocation_id": "hmac:seedcore-evidence-service",
+          "signer_profile": "execution",
+          "transparency": {
+            "details": {},
+            "entry_id": null,
+            "integrated_time": null,
+            "log_url": null,
+            "proof_hash": null,
+            "status": "not_configured"
+          },
+          "trust_anchor_type": "software"
+        }
+      },
+      "artifact_id": "4de0b04d-cd07-4282-954a-c5808e3f7389",
+      "artifact_type": "evidence_bundle"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "checks": [
+    {
+      "check_id": "asset_ref_match",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "telemetry_freshness",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "snapshot_consistency",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "principal_present",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "intent_ttl_valid",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "approval_binding_match",
+      "detail": null,
+      "result": "skip"
+    }
+  ],
+  "contract_version": "pdp.hot_path.asset_transfer.v1",
+  "decided_at": "2026-03-30T06:18:30.031148Z",
+  "decision": {
+    "allowed": false,
+    "disposition": "deny",
+    "policy_snapshot_hash": null,
+    "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+    "reason": "approval_incomplete",
+    "reason_code": "approval_incomplete"
+  },
+  "execution_token": null,
+  "governed_receipt": {},
+  "latency_ms": 52,
+  "obligations": [
+    {
+      "code": "update_verification_surface",
+      "severity": "required"
+    }
+  ],
+  "request_id": "shadow:deny_missing_approval",
+  "required_approvals": [
+    "FACILITY_MANAGER",
+    "QUALITY_INSPECTOR"
+  ],
+  "signer_provenance": [],
+  "trust_gaps": []
+}

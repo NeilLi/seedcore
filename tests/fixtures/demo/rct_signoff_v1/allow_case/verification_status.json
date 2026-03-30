@@ -1,0 +1,54 @@
+{
+  "approval_status": "APPROVED",
+  "blocker_codes": [],
+  "business_state": "verified",
+  "checks": [
+    "decision_graph_snapshot_verified",
+    "policy_receipt_verified",
+    "evidence_bundle_verified",
+    "transition_receipts_verified",
+    "rust_replay_chain_verified"
+  ],
+  "current_step": "ready_for_handoff",
+  "disposition": "allow",
+  "links": {
+    "asset_forensics": "/api/v1/assets/forensics?source=runtime&audit_id=ba05655c-9351-4783-97f1-fc6774c4f38b",
+    "review": "/api/v1/transfers/review?source=runtime&audit_id=ba05655c-9351-4783-97f1-fc6774c4f38b"
+  },
+  "pending_roles": [],
+  "timeline": [
+    {
+      "artifact_ref": "sha256:a3d8348a71696b9e8aa4882642e9f14b4c690a10a18f5f592da91a7d38c78dbb",
+      "event_type": "authz_transition_evaluated",
+      "summary": "Authorization graph authorized asset transition",
+      "timestamp": "2026-03-30T06:18:28.990086Z"
+    },
+    {
+      "artifact_ref": "e459beaa-d283-4554-a639-2b8c1cb4d54c",
+      "event_type": "policy_receipt_issued",
+      "summary": "Policy receipt recorded for governed action",
+      "timestamp": "2026-03-30T06:18:28.990086Z"
+    },
+    {
+      "artifact_ref": "92356db8-b39d-40e6-a330-fa7fbe5855e2",
+      "event_type": "transition_executed",
+      "summary": "Controlled transition receipt captured",
+      "timestamp": "2026-03-30T06:18:28.990086Z"
+    },
+    {
+      "artifact_ref": "4de0b04d-cd07-4282-954a-c5808e3f7389",
+      "event_type": "evidence_materialized",
+      "summary": "Evidence bundle sealed for replay",
+      "timestamp": "2026-03-30T06:18:28.990086Z"
+    },
+    {
+      "artifact_ref": "ba05655c-9351-4783-97f1-fc6774c4f38b",
+      "event_type": "audit_recorded",
+      "summary": "Governed audit record appended",
+      "timestamp": "2026-03-30T06:18:29.020166+00:00"
+    }
+  ],
+  "transfer_readiness": "ready",
+  "verification_error_code": null,
+  "verified": true
+}

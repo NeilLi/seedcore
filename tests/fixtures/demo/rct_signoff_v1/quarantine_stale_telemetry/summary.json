@@ -1,0 +1,34 @@
+{
+  "actual_disposition": "quarantine",
+  "approval_binding_hash": "sha256:c0c905a5fc61f7fc463d079d6510862c1a6afb03a1c57f08d11d63d8730ff7fe",
+  "approval_envelope_id": "approval-transfer-003",
+  "approval_envelope_version": 12,
+  "audit_id": "21dcb295-644a-465b-a505-064e6908c99c",
+  "business_state": "quarantined",
+  "case": "quarantine_stale_telemetry",
+  "cross_surface_consistent": true,
+  "cross_surface_errors": [],
+  "expected_disposition": "quarantine",
+  "policy_receipt_id": "a36e6828-6375-4077-bb69-32ac8580add8",
+  "runtime_verify_issues": null,
+  "runtime_verify_verified": true,
+  "rust_replay_chain_error": null,
+  "rust_replay_chain_verified": true,
+  "signature_provenance": [
+    {
+      "artifact_type": "policy_receipt",
+      "attestation_level": "attested",
+      "key_ref": "kms:rct-live-signoff-p256",
+      "signer_id": "seedcore-rct-kms-signer",
+      "signer_type": "service"
+    },
+    {
+      "artifact_type": "evidence_bundle",
+      "attestation_level": "baseline",
+      "key_ref": "hidden",
+      "signer_id": "seedcore-evidence-service",
+      "signer_type": "service"
+    }
+  ],
+  "transition_receipt_ids": []
+}

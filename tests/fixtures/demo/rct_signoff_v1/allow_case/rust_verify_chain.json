@@ -1,0 +1,104 @@
+{
+  "artifact_reports": [
+    {
+      "artifact_hash_valid": true,
+      "artifact_type": "action_intent",
+      "attestation_valid": true,
+      "details": [
+        "signature_verified"
+      ],
+      "error_code": null,
+      "replay_status": "not_proven_offline",
+      "revocation_valid": true,
+      "signature_valid": true,
+      "transparency_status": "not_configured",
+      "trust_anchor_valid": true,
+      "verified": true
+    },
+    {
+      "artifact_hash_valid": true,
+      "artifact_type": "policy_decision",
+      "attestation_valid": true,
+      "details": [
+        "signature_verified"
+      ],
+      "error_code": null,
+      "replay_status": "not_proven_offline",
+      "revocation_valid": true,
+      "signature_valid": true,
+      "transparency_status": "not_configured",
+      "trust_anchor_valid": true,
+      "verified": true
+    },
+    {
+      "artifact_hash_valid": true,
+      "artifact_type": "policy_receipt",
+      "attestation_valid": true,
+      "details": [
+        "signature_verified"
+      ],
+      "error_code": null,
+      "replay_status": "not_proven_offline",
+      "revocation_valid": true,
+      "signature_valid": true,
+      "transparency_status": "not_configured",
+      "trust_anchor_valid": true,
+      "verified": true
+    },
+    {
+      "artifact_hash_valid": true,
+      "artifact_type": "execution_token",
+      "attestation_valid": true,
+      "details": [
+        "signature_verified"
+      ],
+      "error_code": null,
+      "replay_status": "not_proven_offline",
+      "revocation_valid": true,
+      "signature_valid": true,
+      "transparency_status": "not_configured",
+      "trust_anchor_valid": true,
+      "verified": true
+    },
+    {
+      "artifact_hash_valid": true,
+      "artifact_type": "transition_receipt",
+      "attestation_valid": true,
+      "details": [
+        "signature_verified"
+      ],
+      "error_code": null,
+      "replay_status": "not_proven_offline",
+      "revocation_valid": true,
+      "signature_valid": true,
+      "transparency_status": "not_configured",
+      "trust_anchor_valid": true,
+      "verified": true
+    },
+    {
+      "artifact_hash_valid": true,
+      "artifact_type": "evidence_bundle",
+      "attestation_valid": true,
+      "details": [
+        "signature_verified"
+      ],
+      "error_code": null,
+      "replay_status": "not_proven_offline",
+      "revocation_valid": true,
+      "signature_valid": true,
+      "transparency_status": "not_configured",
+      "trust_anchor_valid": true,
+      "verified": true
+    }
+  ],
+  "chain_checks": [
+    "head_previous_hash_ok",
+    "chain_link_ok:1",
+    "chain_link_ok:2",
+    "chain_link_ok:3",
+    "chain_link_ok:4",
+    "chain_link_ok:5"
+  ],
+  "error_code": null,
+  "verified": true
+}

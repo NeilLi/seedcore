@@ -1,0 +1,50 @@
+{
+  "approval_status": "APPROVED",
+  "blocker_codes": [
+    "stale_telemetry"
+  ],
+  "business_state": "quarantined",
+  "checks": [
+    "decision_graph_snapshot_verified",
+    "policy_receipt_verified",
+    "evidence_bundle_verified",
+    "transition_receipts_verified",
+    "rust_replay_chain_verified"
+  ],
+  "current_step": "quarantined_pending_review",
+  "disposition": "quarantine",
+  "links": {
+    "asset_forensics": "/api/v1/assets/forensics?source=runtime&audit_id=21dcb295-644a-465b-a505-064e6908c99c",
+    "review": "/api/v1/transfers/review?source=runtime&audit_id=21dcb295-644a-465b-a505-064e6908c99c"
+  },
+  "pending_roles": [],
+  "timeline": [
+    {
+      "artifact_ref": "sha256:42613eaa1fb79b93959922fbb7580aec6400f355c72bfe1780e806db493b9165",
+      "event_type": "authz_transition_evaluated",
+      "summary": "Authorization graph quarantined asset transition pending trust-gap resolution",
+      "timestamp": "2026-03-30T06:18:30.452469Z"
+    },
+    {
+      "artifact_ref": "a36e6828-6375-4077-bb69-32ac8580add8",
+      "event_type": "policy_receipt_issued",
+      "summary": "Policy receipt recorded for governed action",
+      "timestamp": "2026-03-30T06:18:30.452469Z"
+    },
+    {
+      "artifact_ref": "062f9c6e-c561-4051-9f22-0e09647bd6cd",
+      "event_type": "evidence_materialized",
+      "summary": "Evidence bundle sealed for replay",
+      "timestamp": "2026-03-30T06:18:30.452469Z"
+    },
+    {
+      "artifact_ref": "21dcb295-644a-465b-a505-064e6908c99c",
+      "event_type": "audit_recorded",
+      "summary": "Governed audit record appended",
+      "timestamp": "2026-03-30T06:18:30.457962+00:00"
+    }
+  ],
+  "transfer_readiness": "quarantined",
+  "verification_error_code": null,
+  "verified": true
+}

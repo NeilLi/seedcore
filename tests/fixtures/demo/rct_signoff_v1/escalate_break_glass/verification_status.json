@@ -1,0 +1,48 @@
+{
+  "approval_status": "APPROVED",
+  "blocker_codes": [],
+  "business_state": "review_required",
+  "checks": [
+    "decision_graph_snapshot_verified",
+    "policy_receipt_verified",
+    "evidence_bundle_verified",
+    "transition_receipts_verified",
+    "rust_replay_chain_verified"
+  ],
+  "current_step": "manual_review_required",
+  "disposition": "escalate",
+  "links": {
+    "asset_forensics": "/api/v1/assets/forensics?source=runtime&audit_id=28ac9873-3e8f-430f-9681-224fdad44286",
+    "review": "/api/v1/transfers/review?source=runtime&audit_id=28ac9873-3e8f-430f-9681-224fdad44286"
+  },
+  "pending_roles": [],
+  "timeline": [
+    {
+      "artifact_ref": "sha256:db67cf57cc3357848efcdb4665d3c75f1e26de6fa0fb948d88ed2fd72e4a1593",
+      "event_type": "authz_transition_evaluated",
+      "summary": "Authorization graph evaluated transition for governed action",
+      "timestamp": "2026-03-30T06:18:31.043343Z"
+    },
+    {
+      "artifact_ref": "49e821e7-d679-47ba-803c-98425b364eb7",
+      "event_type": "policy_receipt_issued",
+      "summary": "Policy receipt recorded for governed action",
+      "timestamp": "2026-03-30T06:18:31.043343Z"
+    },
+    {
+      "artifact_ref": "e560d503-b35b-459a-8ede-b697007dbaf7",
+      "event_type": "evidence_materialized",
+      "summary": "Evidence bundle sealed for replay",
+      "timestamp": "2026-03-30T06:18:31.043343Z"
+    },
+    {
+      "artifact_ref": "28ac9873-3e8f-430f-9681-224fdad44286",
+      "event_type": "audit_recorded",
+      "summary": "Governed audit record appended",
+      "timestamp": "2026-03-30T06:18:31.048835+00:00"
+    }
+  ],
+  "transfer_readiness": "review_required",
+  "verification_error_code": null,
+  "verified": true
+}

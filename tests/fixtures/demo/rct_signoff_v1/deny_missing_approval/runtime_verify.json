@@ -1,0 +1,43 @@
+{
+  "evidence_trace_available": true,
+  "policy_trace_available": true,
+  "public_claims": [
+    {
+      "claim": "governed_policy_verified",
+      "source": "796566cd-536d-480a-9be4-795bc68c1aec",
+      "value": false
+    },
+    {
+      "claim": "evidence_bundle_available",
+      "source": "01a1f32a-0b7b-422a-8289-a9293af4d1cc",
+      "value": true
+    },
+    {
+      "claim": "signature_chain_valid",
+      "source": "a65bbee7-023a-44fa-9e9d-75e0164102e4",
+      "value": true
+    },
+    {
+      "claim": "governed_receipt_available",
+      "source": "sha256:a0e0489b8f86f548660300405b801fccf5ab49d732e6dd17d80b6cae5ad2bb99",
+      "value": true
+    },
+    {
+      "claim": "custody_trace_available",
+      "source": "a65bbee7-023a-44fa-9e9d-75e0164102e4",
+      "value": true
+    }
+  ],
+  "public_jsonld_ref": null,
+  "reason": null,
+  "reference_id": "a65bbee7-023a-44fa-9e9d-75e0164102e4",
+  "reference_type": "audit_id",
+  "signature_valid": true,
+  "subject_id": "asset:lot-8842",
+  "subject_type": "asset",
+  "tamper_status": "clear",
+  "trust_url": null,
+  "verification_id": "d63e3784-a603-439c-89e7-a8a035d4b800",
+  "verification_time": "2026-03-30T06:18:30.148478+00:00",
+  "verified": true
+}

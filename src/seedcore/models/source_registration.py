@@ -18,6 +18,8 @@ class SourceRegistrationStatus(str, enum.Enum):
     INGESTING = "ingesting"
     VERIFYING = "verifying"
     APPROVED = "approved"
+    PENDING_SETTLEMENT = "pending_settlement"
+    SETTLED = "settled"
     QUARANTINED = "quarantined"
     REJECTED = "rejected"
 

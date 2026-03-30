@@ -1,0 +1,120 @@
+{
+  "checks": [
+    {
+      "check_id": "asset_ref_match",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "telemetry_freshness",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "snapshot_consistency",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "principal_present",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "intent_ttl_valid",
+      "detail": null,
+      "result": "pass"
+    },
+    {
+      "check_id": "approval_binding_match",
+      "detail": null,
+      "result": "skip"
+    }
+  ],
+  "contract_version": "pdp.hot_path.asset_transfer.v1",
+  "decided_at": "2026-03-30T06:18:28.990086Z",
+  "decision": {
+    "allowed": true,
+    "disposition": "allow",
+    "policy_snapshot_hash": null,
+    "policy_snapshot_ref": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+    "reason": "restricted_custody_transfer",
+    "reason_code": "restricted_custody_transfer"
+  },
+  "execution_token": {
+    "artifact_hash": {
+      "algorithm": "sha256",
+      "value": "132d2a104df0af6cecbccd932e3742ef8f7e35de5d1fc35c3c9bebd410944e6a"
+    },
+    "constraints": {
+      "action_type": "TRANSFER_CUSTODY",
+      "approval_binding_hash": "sha256:e88addfa415a61ba8316ca296300185572f15bc3c1a83427804cf59a0446ce72",
+      "approval_envelope_id": "approval-transfer-001",
+      "approval_envelope_version": 23,
+      "approved_by": [
+        "principal:facility_mgr_001",
+        "principal:quality_insp_017"
+      ],
+      "asset_id": "asset:lot-8841",
+      "co_sign_status": "co_signed",
+      "co_signed": true,
+      "endpoint_id": "hal://robot_sim/1",
+      "expected_current_custodian": "principal:facility_mgr_001",
+      "from_zone": "vault_a",
+      "next_custodian": "principal:outbound_mgr_002",
+      "principal_agent_id": "agent:custody_runtime_01",
+      "registration_decision_id": "decision:registration-001",
+      "source_registration_id": "registration:approved-001",
+      "target_zone": "handoff_bay_3",
+      "transfer_outcome": "STANDARD_TRANSFER"
+    },
+    "contract_version": "runtime-baseline-v1.0.0-1774251324625-local-1774260434866",
+    "intent_id": "intent-transfer-001",
+    "issued_at": "2026-03-30T06:18:28.953421Z",
+    "signature": {
+      "attestation_level": "baseline",
+      "key_ref": "test-key",
+      "signature": "sha256:132d2a104df0af6cecbccd932e3742ef8f7e35de5d1fc35c3c9bebd410944e6a",
+      "signer_id": "seedcore-verify",
+      "signer_type": "service",
+      "signing_scheme": "debug_hash_v1"
+    },
+    "token_id": "bb8fec62-f000-4fad-a249-36add22ace84",
+    "valid_until": "2026-03-30T06:18:33.953421Z"
+  },
+  "governed_receipt": {},
+  "latency_ms": 76,
+  "obligations": [
+    {
+      "code": "generate_transition_receipt",
+      "severity": "required"
+    },
+    {
+      "code": "publish_replay_artifact",
+      "severity": "required"
+    },
+    {
+      "code": "close_prior_custodian_state",
+      "severity": "required"
+    },
+    {
+      "code": "update_verification_surface",
+      "severity": "required"
+    }
+  ],
+  "request_id": "shadow:allow_case",
+  "required_approvals": [
+    "FACILITY_MANAGER",
+    "QUALITY_INSPECTOR"
+  ],
+  "signer_provenance": [
+    {
+      "artifact_type": "execution_token",
+      "attestation_level": "baseline",
+      "key_ref": "test-key",
+      "signer_id": "seedcore-verify",
+      "signer_type": "service"
+    }
+  ],
+  "trust_gaps": []
+}
