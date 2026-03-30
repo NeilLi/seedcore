@@ -2552,6 +2552,17 @@ class ReplayService:
                 or replay.governed_receipt.get("approval_envelope_id")
                 or approval_context.get("approval_envelope_id")
             ),
+            "approval_envelope_version": (
+                replay.authz_graph.get("approval_envelope_version")
+                or replay.governed_receipt.get("approval_envelope_version")
+                or approval_context.get("approval_envelope_version")
+                or approval_context.get("observed_version")
+            ),
+            "approval_binding_hash": (
+                replay.authz_graph.get("approval_binding_hash")
+                or replay.governed_receipt.get("approval_binding_hash")
+                or approval_context.get("approval_binding_hash")
+            ),
             "approval_transition_head": (
                 replay.authz_graph.get("approval_transition_head")
                 or replay.governed_receipt.get("approval_transition_head")
@@ -2574,8 +2585,30 @@ class ReplayService:
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
             "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
             "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
+            "approval_envelope_id": replay.governed_receipt.get("approval_envelope_id") or replay.authz_graph.get("approval_envelope_id"),
+            "approval_envelope_version": replay.governed_receipt.get("approval_envelope_version") or replay.authz_graph.get("approval_envelope_version"),
+            "approval_binding_hash": replay.governed_receipt.get("approval_binding_hash") or replay.authz_graph.get("approval_binding_hash"),
             "transfer_outcome": replay.governed_receipt.get("transfer_outcome") or replay.authz_graph.get("transfer_outcome"),
             "co_sign_status": replay.governed_receipt.get("co_sign_status") or replay.authz_graph.get("co_sign_status"),
+            "transition_receipt_ids": [
+                str(item.get("transition_receipt_id"))
+                for item in replay.transition_receipts
+                if item.get("transition_receipt_id") is not None and str(item.get("transition_receipt_id")).strip()
+            ],
+            "asset_custody_state": {
+                "current_custodian_ref": replay.asset_custody_state.get("current_custodian_ref") if isinstance(replay.asset_custody_state, dict) else None,
+                "current_zone_ref": (
+                    replay.asset_custody_state.get("current_zone_ref")
+                    if isinstance(replay.asset_custody_state, dict)
+                    else None
+                ) or (
+                    replay.asset_custody_state.get("current_zone")
+                    if isinstance(replay.asset_custody_state, dict)
+                    else None
+                ),
+                "custody_point_ref": replay.asset_custody_state.get("custody_point_ref") if isinstance(replay.asset_custody_state, dict) else None,
+                "authority_source": replay.asset_custody_state.get("authority_source") if isinstance(replay.asset_custody_state, dict) else None,
+            },
             "execution_token_id": (
                 replay.audit_record.get("token_id")
                 if isinstance(replay.audit_record, dict)

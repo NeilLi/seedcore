@@ -80,12 +80,48 @@ def _transfer_payload() -> dict:
             "parameters": {
                 "approval_context": {
                     "approval_envelope_id": "approval-transfer-001",
-                    "approval_binding_hash": "sha256:approval-binding-transfer-001",
+                    "approval_envelope_version": 1,
+                    "observed_version": 1,
                     "required_roles": ["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
                     "approved_by": [
                         "principal:facility_mgr_001",
                         "principal:quality_insp_017",
                     ],
+                    "approval_envelope": {
+                        "approval_envelope_id": "approval-transfer-001",
+                        "workflow_type": "custody_transfer",
+                        "status": "APPROVED",
+                        "asset_ref": "asset-1",
+                        "lot_id": "lot-8841",
+                        "from_custodian_ref": "principal:facility_mgr_001",
+                        "to_custodian_ref": "principal:outbound_mgr_002",
+                        "transfer_context": {
+                            "from_zone": "vault-a",
+                            "to_zone": "handoff-bay-3",
+                            "facility_ref": "facility:north-warehouse",
+                            "custody_point_ref": "custody_point:handoff-bay-3",
+                        },
+                        "required_approvals": [
+                            {
+                                "role": "FACILITY_MANAGER",
+                                "principal_ref": "principal:facility_mgr_001",
+                                "status": "APPROVED",
+                                "approved_at": "2099-03-20T11:59:00+00:00",
+                                "approval_ref": "approval:facility_mgr_001",
+                            },
+                            {
+                                "role": "QUALITY_INSPECTOR",
+                                "principal_ref": "principal:quality_insp_017",
+                                "status": "APPROVED",
+                                "approved_at": "2099-03-20T11:59:30+00:00",
+                                "approval_ref": "approval:quality_insp_017",
+                            },
+                        ],
+                        "policy_snapshot_ref": "snapshot:1",
+                        "expires_at": "2099-03-20T12:10:00+00:00",
+                        "created_at": "2099-03-20T11:58:00+00:00",
+                        "version": 1,
+                    },
                 }
             },
             "security_contract": {"hash": "h-transfer-1", "version": "snapshot:1"},
@@ -1178,7 +1214,7 @@ def test_evaluate_intent_restricted_custody_transfer_escalates_when_approval_inc
     payload = _transfer_payload()
     approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
     approval_context["approved_by"] = ["principal:facility_mgr_001"]
-    approval_context.pop("approval_binding_hash")
+    approval_context.pop("approval_binding_hash", None)
 
     decision = evaluate_intent(payload)
 
@@ -1188,7 +1224,7 @@ def test_evaluate_intent_restricted_custody_transfer_escalates_when_approval_inc
     assert decision.required_approvals == ["FACILITY_MANAGER", "QUALITY_INSPECTOR"]
     assert decision.authz_graph["workflow_type"] == "custody_transfer"
     assert decision.authz_graph["workflow_status"] == "rejected"
-    assert any(item["code"] == "approval_binding" for item in decision.authz_graph["missing_prerequisites"])
+    assert any(item["code"] == "co_signatures" for item in decision.authz_graph["missing_prerequisites"])
     assert any(item["code"] == "approved_by" for item in decision.authz_graph["missing_prerequisites"])
     assert decision.authz_graph["minted_artifacts"] == []
     assert decision.obligations == [{"code": "update_verification_surface"}]
@@ -1295,9 +1331,9 @@ def test_evaluate_intent_restricted_custody_transfer_allows_zone_admin_emergency
 def test_evaluate_intent_restricted_custody_transfer_uses_rust_envelope_when_context_missing(monkeypatch) -> None:
     payload = _transfer_payload()
     approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
-    approval_context.pop("approval_binding_hash")
-    approval_context.pop("required_roles")
-    approval_context.pop("approved_by")
+    approval_context.pop("approval_binding_hash", None)
+    approval_context.pop("required_roles", None)
+    approval_context.pop("approved_by", None)
     approval_context["approval_envelope"] = {
         "approval_envelope_id": "approval-transfer-001",
         "workflow_type": "custody_transfer",
@@ -1430,9 +1466,9 @@ def test_evaluate_intent_restricted_custody_transfer_escalates_on_rust_binding_m
 def test_evaluate_intent_restricted_custody_transfer_applies_rust_transition(monkeypatch) -> None:
     payload = _transfer_payload()
     approval_context = payload["params"]["governance"]["action_intent"]["action"]["parameters"]["approval_context"]
-    approval_context.pop("approval_binding_hash")
-    approval_context.pop("required_roles")
-    approval_context.pop("approved_by")
+    approval_context.pop("approval_binding_hash", None)
+    approval_context.pop("required_roles", None)
+    approval_context.pop("approved_by", None)
     approval_context["approval_envelope"] = {
         "approval_envelope_id": "approval-transfer-001",
         "workflow_type": "custody_transfer",

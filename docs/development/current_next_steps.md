@@ -81,6 +81,56 @@ This means:
 The execution spine for that rule now lives in
 [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md).
 
+## Immediate Execution Order
+
+The next implementation order is now locked to Restricted Custody Transfer
+Slice 1.
+
+1. First-class approval runtime object
+
+- persist `TransferApprovalEnvelope` as a versioned runtime record
+- persist append-only approval transition history
+- make approvals replay-addressable and API-visible
+- remove synthesized approval fallback for Restricted Custody Transfer
+
+2. Canonical decision path tightening
+
+- run the asset-centric hot path in `shadow` mode by default
+- compare compiled-path decisions against the baseline evaluator on normalized fields
+- publish parity totals, mismatch totals, and latency percentiles on a runtime status surface
+- do not promote `enforced` mode until parity stays green on the canonical allow, deny, quarantine, and escalate cases
+
+3. Proof-surface tightening
+
+- surface `approval_envelope_version`
+- surface `approval_binding_hash`
+- surface `policy_receipt_id`
+- surface `transition_receipt_ids`
+- surface signer provenance for policy and transition receipts
+- render custody state from runtime artifacts instead of UI-only reconstruction
+
+4. Hardened signer wedge
+
+- require KMS-backed signing for Restricted Custody Transfer `allow` path `PolicyReceipt`
+- keep KMS/TPM-backed `TransitionReceipt` hardening on the same allow path
+- leave deny, quarantine, escalate, and non-RCT flows on the existing signer behavior for now
+
+5. Demo closure
+
+- prove the sealed high-value lot handoff happy path
+- prove missing approval, stale telemetry, and break-glass sibling paths
+- keep the operator console, proof surface, replay API, and offline verifier aligned on the same artifact chain
+
+### Explicit Sidecar
+
+The VLA track in
+[vla_2026_optimizations.md](/Users/ningli/project/seedcore/docs/development/vla_2026_optimizations.md)
+remains sidecar for this phase.
+
+It may continue in parallel as research or future-performance work, but it is
+not on the critical path for the must-win demo or for Slice 1 runtime
+hardening.
+
 ### 1. Irrefutable Trust Anchors
 
 SeedCore already issues bounded execution authority. The next step is to make the trust boundary cryptographically defensible in environments where spoofing, repudiation, or internal tampering are real concerns.

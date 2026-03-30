@@ -147,7 +147,11 @@ const server = http.createServer(async (req, res) => {
           <p>Asset: <code>${proof.asset_ref}</code></p>
           <p>Intent: <code>${proof.intent_ref}</code></p>
           <p>Decision: <code>${proof.decision_id}</code></p>
+          <p>Approval Envelope: <code>${proof.approval_envelope_id ?? "none"}</code></p>
+          <p>Approval Version: <code>${proof.approval_envelope_version ?? "none"}</code></p>
+          <p>Approval Binding: <code>${proof.approval_binding_hash ?? "none"}</code></p>
           <p>Policy Receipt: <code>${proof.policy_receipt_id}</code></p>
+          <p>Transition Receipts: <code>${Array.isArray(proof.transition_receipt_ids) && proof.transition_receipt_ids.length > 0 ? proof.transition_receipt_ids.join(", ") : "none"}</code></p>
           <p>Execution Token: <code>${proof.execution_token_id ?? "none"}</code></p>
           <h2>Verification</h2>
           <p>Verified: <code>${String(proof.verified)}</code></p>

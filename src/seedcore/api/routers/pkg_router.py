@@ -23,7 +23,7 @@ from ...ops.pkg import (
 )
 from ...ops.pkg.manager import PKGMode
 from ...ops.pkg.manager import PKG_REDIS_CHANNEL
-from ...ops.pdp_hot_path import evaluate_pdp_hot_path
+from ...ops.pdp_hot_path import evaluate_pdp_hot_path, hot_path_shadow_status
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,11 @@ async def pdp_hot_path_evaluate(
     if debug:
         return result
     return result
+
+
+@router.get("/pdp/hot-path/status", response_model=Dict[str, Any])
+async def pdp_hot_path_status() -> Dict[str, Any]:
+    return hot_path_shadow_status()
 
 
 async def _resolve_pkg_client() -> PKGClient:

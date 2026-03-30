@@ -93,6 +93,7 @@ from ..coordinator.dao import (
     TaskOutboxDAO,
     TaskProtoPlanDAO,
     TaskRouterTelemetryDAO,
+    TransferApprovalEnvelopeDAO,
 )
 from ..graph.task_metadata_repository import TaskMetadataRepository
 
@@ -354,6 +355,7 @@ class Infrastructure:
     proto_plan_dao: TaskProtoPlanDAO
     governance_audit_dao: GovernedExecutionAuditDAO
     digital_twin_dao: DigitalTwinDAO
+    transfer_approval_dao: TransferApprovalEnvelopeDAO
 
     @classmethod
     def setup(cls) -> "Infrastructure":
@@ -372,6 +374,7 @@ class Infrastructure:
         proto_plan_dao = TaskProtoPlanDAO()
         governance_audit_dao = GovernedExecutionAuditDAO()
         digital_twin_dao = DigitalTwinDAO()
+        transfer_approval_dao = TransferApprovalEnvelopeDAO()
 
         return cls(
             metrics=metrics,
@@ -382,6 +385,7 @@ class Infrastructure:
             proto_plan_dao=proto_plan_dao,
             governance_audit_dao=governance_audit_dao,
             digital_twin_dao=digital_twin_dao,
+            transfer_approval_dao=transfer_approval_dao,
         )
 
 
@@ -1373,6 +1377,57 @@ class Coordinator:
                 return {}
             return {str(reg_uuid): str(latest_decision.id)}
 
+    async def _resolve_authoritative_transfer_approval(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        params = payload.get("params", {}) if isinstance(payload.get("params"), dict) else {}
+        governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
+        action = params.get("action", {}) if isinstance(params.get("action"), dict) else {}
+        action_parameters = action.get("parameters", {}) if isinstance(action.get("parameters"), dict) else {}
+        governance_action_intent = (
+            governance.get("action_intent")
+            if isinstance(governance.get("action_intent"), dict)
+            else {}
+        )
+        governance_action = (
+            governance_action_intent.get("action")
+            if isinstance(governance_action_intent.get("action"), dict)
+            else {}
+        )
+        governance_parameters = (
+            governance_action.get("parameters")
+            if isinstance(governance_action.get("parameters"), dict)
+            else {}
+        )
+        approval_context = (
+            action_parameters.get("approval_context")
+            if isinstance(action_parameters.get("approval_context"), dict)
+            else governance_parameters.get("approval_context")
+            if isinstance(governance_parameters.get("approval_context"), dict)
+            else {}
+        )
+        approval_envelope_id = (
+            approval_context.get("approval_envelope_id")
+            if isinstance(approval_context, dict)
+            else None
+        )
+        if not approval_envelope_id or not self._session_factory:
+            return {}
+
+        async with self._session_factory() as session:
+            envelope_record = await self.infra.transfer_approval_dao.get_current_with_history(
+                session,
+                approval_envelope_id=str(approval_envelope_id),
+            )
+        if envelope_record is None:
+            return {}
+        return {
+            "authoritative_approval_envelope": envelope_record.get("envelope"),
+            "authoritative_approval_transition_history": envelope_record.get("transition_history"),
+            "authoritative_approval_transition_head": envelope_record.get("approval_transition_head"),
+        }
+
     async def _persist_source_registration_decision(
         self,
         task_dict: Dict[str, Any],
@@ -2293,6 +2348,9 @@ class Coordinator:
                 approved_source_registrations = await self._resolve_approved_source_registrations(
                     payload
                 )
+                authoritative_transfer_approval = await self._resolve_authoritative_transfer_approval(
+                    payload
+                )
                 telemetry_summary = (
                     dict(existing_governance.get("telemetry_summary"))
                     if isinstance(existing_governance.get("telemetry_summary"), dict)
@@ -2346,6 +2404,21 @@ class Coordinator:
                     relevant_twin_snapshot=relevant_twin_snapshot,
                     telemetry_summary=telemetry_summary,
                     evidence_summary=evidence_summary,
+                    authoritative_approval_envelope=(
+                        authoritative_transfer_approval.get("authoritative_approval_envelope")
+                        if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
+                        else None
+                    ),
+                    authoritative_approval_transition_history=(
+                        authoritative_transfer_approval.get("authoritative_approval_transition_history")
+                        if isinstance(authoritative_transfer_approval.get("authoritative_approval_transition_history"), list)
+                        else None
+                    ),
+                    authoritative_approval_transition_head=(
+                        str(authoritative_transfer_approval.get("authoritative_approval_transition_head"))
+                        if authoritative_transfer_approval.get("authoritative_approval_transition_head") is not None
+                        else None
+                    ),
                 )
                 cognitive_assessment = None
                 if getattr(self, "cognitive_client", None) and hasattr(self.cognitive_client, "advisory_async"):

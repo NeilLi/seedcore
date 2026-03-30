@@ -115,7 +115,11 @@ export interface TransferProofView {
   asset_ref: string;
   intent_ref: string;
   decision_id: string;
+  approval_envelope_id: string | null;
+  approval_envelope_version: number | null;
+  approval_binding_hash: string | null;
   policy_receipt_id: string;
+  transition_receipt_ids: string[];
   execution_token_id: string | null;
   checks: string[];
 }
@@ -173,6 +177,13 @@ export interface CustodyTransitionView {
   next_custodian: string;
 }
 
+export interface AssetCustodyStateView {
+  current_custodian_ref: string | null;
+  current_zone_ref: string | null;
+  custody_point_ref: string | null;
+  authority_source: string | null;
+}
+
 export interface TransferStatusView {
   business_state: BusinessState;
   disposition: Disposition;
@@ -195,8 +206,13 @@ export interface AssetForensicView {
   decision_id: string;
   policy_snapshot_ref: string;
   approval_envelope_id: string | null;
+  approval_envelope_version: number | null;
+  approval_binding_hash: string | null;
+  policy_receipt_id: string;
+  transition_receipt_ids: string[];
   principal_identity: PrincipalIdentityView;
   custody_transition: CustodyTransitionView;
+  asset_custody_state: AssetCustodyStateView;
   telemetry_refs: string[];
   signature_provenance: SignatureProvenanceEntry[];
   trust_gaps: string[];
@@ -209,10 +225,15 @@ export interface AssetForensicView {
 
 export interface TransferViewContext {
   approval_envelope_id?: string | null;
+  approval_envelope_version?: number | null;
+  approval_binding_hash?: string | null;
+  policy_receipt_id?: string | null;
+  transition_receipt_ids?: string[];
   pending_roles?: string[];
   timeline?: TransferTimelineEntry[];
   principal_identity?: Partial<PrincipalIdentityView>;
   custody_transition?: Partial<CustodyTransitionView>;
+  asset_custody_state?: Partial<AssetCustodyStateView>;
   telemetry_refs?: string[];
   signature_provenance?: SignatureProvenanceEntry[];
   blocker_codes?: string[];
@@ -242,6 +263,16 @@ function assertNullableString(value: unknown, field: string): string | null {
 
 function assertBoolean(value: unknown, field: string): boolean {
   if (typeof value !== "boolean") {
+    throw new Error(`invalid_field:${field}`);
+  }
+  return value;
+}
+
+function assertNullableNumber(value: unknown, field: string): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "number") {
     throw new Error(`invalid_field:${field}`);
   }
   return value;
@@ -372,6 +403,21 @@ function assertCustodyTransition(value: unknown, field: string): CustodyTransiti
       `${field}.expected_current_custodian`,
     ),
     next_custodian: assertString(value.next_custodian, `${field}.next_custodian`),
+  };
+}
+
+function assertAssetCustodyState(value: unknown, field: string): AssetCustodyStateView {
+  if (!isRecord(value)) {
+    throw new Error(`invalid_field:${field}`);
+  }
+  return {
+    current_custodian_ref: assertNullableString(
+      value.current_custodian_ref,
+      `${field}.current_custodian_ref`,
+    ),
+    current_zone_ref: assertNullableString(value.current_zone_ref, `${field}.current_zone_ref`),
+    custody_point_ref: assertNullableString(value.custody_point_ref, `${field}.custody_point_ref`),
+    authority_source: assertNullableString(value.authority_source, `${field}.authority_source`),
   };
 }
 
@@ -551,8 +597,16 @@ export function parseAssetForensicView(value: unknown): AssetForensicView {
       value.approval_envelope_id === null
         ? null
         : assertString(value.approval_envelope_id, "approval_envelope_id"),
+    approval_envelope_version: assertNullableNumber(
+      value.approval_envelope_version,
+      "approval_envelope_version",
+    ),
+    approval_binding_hash: assertNullableString(value.approval_binding_hash, "approval_binding_hash"),
+    policy_receipt_id: assertString(value.policy_receipt_id, "policy_receipt_id"),
+    transition_receipt_ids: assertStringArray(value.transition_receipt_ids, "transition_receipt_ids"),
     principal_identity: assertPrincipalIdentity(value.principal_identity, "principal_identity"),
     custody_transition: assertCustodyTransition(value.custody_transition, "custody_transition"),
+    asset_custody_state: assertAssetCustodyState(value.asset_custody_state, "asset_custody_state"),
     telemetry_refs: assertStringArray(value.telemetry_refs, "telemetry_refs"),
     signature_provenance: assertSignatureProvenanceArray(
       value.signature_provenance,
@@ -688,9 +742,19 @@ function defaultCustodyTransition(context: TransferViewContext): CustodyTransiti
   };
 }
 
+function defaultAssetCustodyState(context: TransferViewContext): AssetCustodyStateView {
+  return {
+    current_custodian_ref: context.asset_custody_state?.current_custodian_ref ?? null,
+    current_zone_ref: context.asset_custody_state?.current_zone_ref ?? null,
+    custody_point_ref: context.asset_custody_state?.custody_point_ref ?? null,
+    authority_source: context.asset_custody_state?.authority_source ?? null,
+  };
+}
+
 export function toTransferProofView(
   report: TransferVerificationReport,
   summary?: TransferTrustSummary,
+  context: TransferViewContext = {},
 ): TransferProofView {
   const decision = report.actual_policy_evaluation.governed_decision_artifact;
   const receipt = report.actual_policy_evaluation.policy_receipt_payload;
@@ -704,7 +768,11 @@ export function toTransferProofView(
     asset_ref: decision.asset_ref,
     intent_ref: decision.action_intent_ref,
     decision_id: decision.decision_id,
-    policy_receipt_id: receipt.policy_receipt_id,
+    approval_envelope_id: context.approval_envelope_id ?? null,
+    approval_envelope_version: context.approval_envelope_version ?? null,
+    approval_binding_hash: context.approval_binding_hash ?? null,
+    policy_receipt_id: context.policy_receipt_id ?? receipt.policy_receipt_id,
+    transition_receipt_ids: context.transition_receipt_ids ?? [],
     execution_token_id: report.actual_execution_token?.token_id ?? null,
     checks: report.checks,
   };
@@ -775,8 +843,14 @@ export function toAssetForensicView(
     decision_id: decision.decision_id,
     policy_snapshot_ref: decision.policy_snapshot_ref,
     approval_envelope_id: context.approval_envelope_id ?? null,
+    approval_envelope_version: context.approval_envelope_version ?? null,
+    approval_binding_hash: context.approval_binding_hash ?? null,
+    policy_receipt_id:
+      context.policy_receipt_id ?? report.actual_policy_evaluation.policy_receipt_payload.policy_receipt_id,
+    transition_receipt_ids: context.transition_receipt_ids ?? [],
     principal_identity: defaultPrincipalIdentity(context),
     custody_transition: defaultCustodyTransition(context),
+    asset_custody_state: defaultAssetCustodyState(context),
     telemetry_refs: context.telemetry_refs ?? [],
     signature_provenance: context.signature_provenance ?? [],
     trust_gaps: explanation.trust_gaps,

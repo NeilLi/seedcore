@@ -34,6 +34,10 @@ def build_policy_receipt_artifact(
         if isinstance(policy_decision.get("governed_receipt"), dict)
         else {}
     )
+    workflow_type = (
+        authz_graph.get("workflow_type")
+        or governed_receipt.get("workflow_type")
+    )
     approval_context = (
         ((action_intent.get("action") or {}).get("parameters") or {}).get("approval_context")
         if isinstance((action_intent.get("action") or {}).get("parameters"), dict)
@@ -112,6 +116,7 @@ def build_policy_receipt_artifact(
         endpoint_id=str(endpoint_id) if endpoint_id is not None else None,
         trust_level="attested" if is_attestable_transition_endpoint(endpoint_id) else "baseline",
         node_id=str(endpoint_id) if endpoint_id is not None else None,
+        workflow_type=str(workflow_type) if workflow_type is not None else None,
     )
     return PolicyReceipt(
         **payload,

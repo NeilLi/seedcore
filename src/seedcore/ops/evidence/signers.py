@@ -77,6 +77,7 @@ class SignerRequest:
     node_id: Optional[str] = None
     trust_level: Optional[str] = None
     workflow_type: Optional[str] = None
+    disposition: Optional[str] = None
     receipt_nonce: Optional[str] = None
     previous_receipt_hash: Optional[str] = None
     previous_receipt_counter: Optional[int] = None
@@ -580,6 +581,7 @@ def resolve_artifact_signer(
     trust_level: Optional[str] = None,
     node_id: Optional[str] = None,
     workflow_type: Optional[str] = None,
+    disposition: Optional[str] = None,
     receipt_nonce: Optional[str] = None,
     previous_receipt_hash: Optional[str] = None,
     previous_receipt_counter: Optional[int] = None,
@@ -593,6 +595,7 @@ def resolve_artifact_signer(
         node_id=node_id,
         trust_level=trust_level,
         workflow_type=workflow_type,
+        disposition=disposition,
         receipt_nonce=receipt_nonce,
         previous_receipt_hash=previous_receipt_hash,
         previous_receipt_counter=previous_receipt_counter,
@@ -600,11 +603,13 @@ def resolve_artifact_signer(
             artifact_type=artifact_type,
             endpoint_id=endpoint_id,
             workflow_type=workflow_type,
+            disposition=disposition,
         ),
         required_key_algorithm=_required_key_algorithm_for_request(
             artifact_type=artifact_type,
             endpoint_id=endpoint_id,
             workflow_type=workflow_type,
+            disposition=disposition,
         ),
         transparency_enabled=transparency_enabled,
     )
@@ -741,7 +746,16 @@ def _required_key_algorithm_for_request(
     artifact_type: str,
     endpoint_id: Optional[str],
     workflow_type: Optional[str],
+    disposition: Optional[str],
 ) -> Optional[str]:
+    if (
+        artifact_type == "policy_receipt"
+        and _requires_restricted_policy_receipt_hardening(
+            workflow_type=workflow_type,
+            disposition=disposition,
+        )
+    ):
+        return ECDSA_P256_SCHEME
     if artifact_type == "transition_receipt" and _requires_restricted_receipt_hardening(
         endpoint_id=endpoint_id,
         workflow_type=workflow_type,
@@ -755,7 +769,16 @@ def _required_trust_anchor_for_request(
     artifact_type: str,
     endpoint_id: Optional[str],
     workflow_type: Optional[str],
+    disposition: Optional[str],
 ) -> Optional[str]:
+    if (
+        artifact_type == "policy_receipt"
+        and _requires_restricted_policy_receipt_hardening(
+            workflow_type=workflow_type,
+            disposition=disposition,
+        )
+    ):
+        return os.getenv("SEEDCORE_POLICY_RECEIPT_REQUIRED_TRUST_ANCHOR", "kms").strip().lower() or "kms"
     if artifact_type != "transition_receipt":
         return None
     if not _requires_restricted_receipt_hardening(endpoint_id=endpoint_id, workflow_type=workflow_type):
@@ -777,6 +800,19 @@ def _requires_restricted_receipt_hardening(
         return False
     endpoint = endpoint_id.strip().lower()
     return endpoint.startswith("hal://") or endpoint.startswith("robot_sim://")
+
+
+def _requires_restricted_policy_receipt_hardening(
+    *,
+    workflow_type: Optional[str],
+    disposition: Optional[str],
+) -> bool:
+    normalized_workflow = str(workflow_type or "").strip().lower()
+    normalized_disposition = str(disposition or "").strip().lower()
+    return (
+        normalized_workflow in RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPES
+        and normalized_disposition == "allow"
+    )
 
 
 def _apply_hardened_signing_requirements(request: SignerRequest) -> SignerRequest:

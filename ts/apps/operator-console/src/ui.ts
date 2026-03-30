@@ -223,12 +223,16 @@ export function renderTransferPage(reviewPayload: any, query: string): string {
       <section class="split">
         <article class="card">
           <h2>Workflow Identity</h2>
-          <div class="row">asset: <code>${escapeHtml(transfer.asset_ref ?? "unknown")}</code></div>
-          <div class="row">intent: <code>${escapeHtml(transfer.intent_ref ?? "unknown")}</code></div>
-          <div class="row">decision: <code>${escapeHtml(transfer.decision_id ?? "unknown")}</code></div>
-          <div class="row">policy receipt: <code>${escapeHtml(transfer.policy_receipt_id ?? "unknown")}</code></div>
-          <h3>Pending Roles</h3>
-          ${renderList(status.pending_roles)}
+        <div class="row">asset: <code>${escapeHtml(transfer.asset_ref ?? "unknown")}</code></div>
+        <div class="row">intent: <code>${escapeHtml(transfer.intent_ref ?? "unknown")}</code></div>
+        <div class="row">decision: <code>${escapeHtml(transfer.decision_id ?? "unknown")}</code></div>
+        <div class="row">approval envelope: <code>${escapeHtml(transfer.approval_envelope_id ?? "none")}</code></div>
+        <div class="row">approval version: <code>${escapeHtml(String(transfer.approval_envelope_version ?? "none"))}</code></div>
+        <div class="row">approval binding: <code>${escapeHtml(transfer.approval_binding_hash ?? "none")}</code></div>
+        <div class="row">policy receipt: <code>${escapeHtml(transfer.policy_receipt_id ?? "unknown")}</code></div>
+        <div class="row">transition receipts: <code>${escapeHtml((transfer.transition_receipt_ids ?? []).join(", ") || "none")}</code></div>
+        <h3>Pending Roles</h3>
+        ${renderList(status.pending_roles)}
           <h3>Blockers</h3>
           ${renderList(status.blocker_codes)}
         </article>
@@ -279,6 +283,10 @@ export function renderForensicsPage(forensicsPayload: any, query: string): strin
         <div class="row">decision: <code>${escapeHtml(forensics.decision_id)}</code></div>
         <div class="row">policy snapshot: <code>${escapeHtml(forensics.policy_snapshot_ref)}</code></div>
         <div class="row">approval envelope: <code>${escapeHtml(forensics.approval_envelope_id ?? "none")}</code></div>
+        <div class="row">approval version: <code>${escapeHtml(String(forensics.approval_envelope_version ?? "none"))}</code></div>
+        <div class="row">approval binding: <code>${escapeHtml(forensics.approval_binding_hash ?? "none")}</code></div>
+        <div class="row">policy receipt: <code>${escapeHtml(forensics.policy_receipt_id)}</code></div>
+        <div class="row">transition receipts: <code>${escapeHtml(forensics.transition_receipt_ids.join(", ") || "none")}</code></div>
       </section>
 
       <section class="split">
@@ -294,6 +302,11 @@ export function renderForensicsPage(forensicsPayload: any, query: string): strin
           <div class="row">custody point: <code>${escapeHtml(forensics.custody_transition.custody_point_ref)}</code></div>
           <div class="row">expected custodian: <code>${escapeHtml(forensics.custody_transition.expected_current_custodian)}</code></div>
           <div class="row">next custodian: <code>${escapeHtml(forensics.custody_transition.next_custodian)}</code></div>
+          <h3>Runtime Custody State</h3>
+          <div class="row">current custodian: <code>${escapeHtml(forensics.asset_custody_state.current_custodian_ref ?? "none")}</code></div>
+          <div class="row">current zone: <code>${escapeHtml(forensics.asset_custody_state.current_zone_ref ?? "none")}</code></div>
+          <div class="row">custody point: <code>${escapeHtml(forensics.asset_custody_state.custody_point_ref ?? "none")}</code></div>
+          <div class="row">authority source: <code>${escapeHtml(forensics.asset_custody_state.authority_source ?? "none")}</code></div>
         </article>
 
         <article class="card">

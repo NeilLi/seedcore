@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any, Dict, Iterable, Mapping
+from threading import Lock
+from typing import Any, Dict, Iterable, Mapping, Sequence
 
 from seedcore.coordinator.core.governance import evaluate_intent, prepare_policy_case
 from seedcore.models.action_intent import ExecutionToken, PolicyDecision
@@ -16,6 +20,7 @@ from seedcore.models.pdp_hot_path import (
 from seedcore.ops.pkg.manager import get_global_pkg_manager
 
 HOT_PATH_CONTRACT_VERSION = "pdp.hot_path.asset_transfer.v1"
+HOT_PATH_MODE = os.getenv("SEEDCORE_RCT_HOT_PATH_MODE", "shadow").strip().lower() or "shadow"
 
 REASON_CODE_DEFAULTS = {
     "allow": "restricted_custody_transfer_allowed",
@@ -23,6 +28,50 @@ REASON_CODE_DEFAULTS = {
     "quarantine": "trust_gap_quarantine",
     "escalate": "manual_review_required",
 }
+
+
+@dataclass
+class HotPathShadowStats:
+    mode: str = HOT_PATH_MODE
+    total: int = 0
+    parity_ok: int = 0
+    mismatched: int = 0
+    last_run_at: str | None = None
+    latencies_ms: deque[int] = field(default_factory=lambda: deque(maxlen=256))
+    recent_results: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
+    lock: Lock = field(default_factory=Lock)
+
+    def record(self, *, latency_ms: int, parity: Mapping[str, Any]) -> None:
+        with self.lock:
+            self.total += 1
+            self.last_run_at = datetime.now(timezone.utc).isoformat()
+            self.latencies_ms.append(int(latency_ms))
+            parity_ok = bool(parity.get("parity_ok"))
+            if parity_ok:
+                self.parity_ok += 1
+            else:
+                self.mismatched += 1
+            self.recent_results.append(dict(parity))
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            samples = sorted(self.latencies_ms)
+            return {
+                "mode": self.mode,
+                "total": self.total,
+                "parity_ok": self.parity_ok,
+                "mismatched": self.mismatched,
+                "last_run_at": self.last_run_at,
+                "latency_ms": {
+                    "p50": _percentile(samples, 50),
+                    "p95": _percentile(samples, 95),
+                    "p99": _percentile(samples, 99),
+                },
+                "recent_results": list(self.recent_results),
+            }
+
+
+_HOT_PATH_SHADOW_STATS = HotPathShadowStats()
 
 
 def evaluate_pdp_hot_path(request: HotPathEvaluateRequest) -> HotPathEvaluateResponse:
@@ -113,6 +162,7 @@ def evaluate_pdp_hot_path(request: HotPathEvaluateRequest) -> HotPathEvaluateRes
         telemetry_summary=telemetry_summary,
         evidence_summary=evidence_summary,
     )
+    baseline_decision = evaluate_intent(policy_case)
     decision = evaluate_intent(policy_case, compiled_authz_index=compiled_authz_index)
 
     checks.extend(_decision_checks(decision))
@@ -128,7 +178,7 @@ def evaluate_pdp_hot_path(request: HotPathEvaluateRequest) -> HotPathEvaluateRes
     )
     policy_snapshot_hash = _snapshot_hash(decision)
 
-    return HotPathEvaluateResponse(
+    response = HotPathEvaluateResponse(
         contract_version=HOT_PATH_CONTRACT_VERSION,
         request_id=request.request_id,
         decided_at=datetime.now(timezone.utc),
@@ -149,6 +199,19 @@ def evaluate_pdp_hot_path(request: HotPathEvaluateRequest) -> HotPathEvaluateRes
         governed_receipt=dict(decision.governed_receipt or {}),
         signer_provenance=signer_provenance,
     )
+    _HOT_PATH_SHADOW_STATS.record(
+        latency_ms=response.latency_ms,
+        parity=_shadow_parity_result(
+            request=request,
+            baseline=baseline_decision,
+            candidate=decision,
+        ),
+    )
+    return response
+
+
+def hot_path_shadow_status() -> dict[str, Any]:
+    return _HOT_PATH_SHADOW_STATS.snapshot()
 
 
 def _resolve_compiled_authz_index() -> Any | None:
@@ -206,6 +269,74 @@ def _decision_reason_code(decision: PolicyDecision) -> str:
     if reason:
         return reason
     return REASON_CODE_DEFAULTS.get(disposition, "policy_decision_resolved")
+
+
+def _shadow_parity_result(
+    *,
+    request: HotPathEvaluateRequest,
+    baseline: PolicyDecision,
+    candidate: PolicyDecision,
+) -> dict[str, Any]:
+    baseline_view = _normalize_shadow_decision(baseline)
+    candidate_view = _normalize_shadow_decision(candidate)
+    mismatches: list[str] = []
+    for key in (
+        "disposition",
+        "reason_code",
+        "trust_gaps",
+        "required_approvals",
+        "policy_snapshot_ref",
+        "policy_snapshot_hash",
+        "minted_artifacts",
+    ):
+        if baseline_view[key] != candidate_view[key]:
+            mismatches.append(key)
+    return {
+        "request_id": request.request_id,
+        "asset_ref": request.asset_context.asset_ref,
+        "parity_ok": not mismatches,
+        "mismatches": mismatches,
+        "baseline": baseline_view,
+        "candidate": candidate_view,
+    }
+
+
+def _normalize_shadow_decision(decision: PolicyDecision) -> dict[str, Any]:
+    authz_graph = decision.authz_graph if isinstance(decision.authz_graph, Mapping) else {}
+    governed_receipt = decision.governed_receipt if isinstance(decision.governed_receipt, Mapping) else {}
+    snapshot_hash = governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash")
+    return {
+        "disposition": str(decision.disposition or "deny"),
+        "reason_code": _decision_reason_code(decision),
+        "trust_gaps": tuple(sorted(_extract_trust_gaps(decision))),
+        "required_approvals": tuple(sorted(str(item) for item in (decision.required_approvals or []) if str(item).strip())),
+        "policy_snapshot_ref": str(decision.policy_snapshot or ""),
+        "policy_snapshot_hash": str(snapshot_hash or ""),
+        "minted_artifacts": tuple(sorted(_minted_artifact_kinds(decision))),
+    }
+
+
+def _minted_artifact_kinds(decision: PolicyDecision) -> Sequence[str]:
+    kinds: list[str] = []
+    if isinstance(decision.execution_token, ExecutionToken):
+        kinds.append("execution_token")
+    authz_graph = decision.authz_graph if isinstance(decision.authz_graph, Mapping) else {}
+    for item in authz_graph.get("minted_artifacts") if isinstance(authz_graph.get("minted_artifacts"), list) else []:
+        if isinstance(item, Mapping):
+            kind = str(item.get("kind") or "").strip()
+            if kind:
+                kinds.append(kind)
+    governed_receipt = decision.governed_receipt if isinstance(decision.governed_receipt, Mapping) else {}
+    if governed_receipt.get("decision_hash") is not None and str(governed_receipt.get("decision_hash")).strip():
+        kinds.append("governed_receipt")
+    return kinds
+
+
+def _percentile(samples: Sequence[int], percentile: int) -> int | None:
+    if not samples:
+        return None
+    index = max(0, min(len(samples) - 1, round((percentile / 100) * (len(samples) - 1))))
+    return int(samples[index])
 
 
 def _extract_trust_gaps(decision: PolicyDecision) -> list[str]:

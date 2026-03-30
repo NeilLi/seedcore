@@ -19,6 +19,10 @@ try:
     )
     from .digital_twin import DigitalTwinEventJournal, DigitalTwinHistory, DigitalTwinState
     from .governance_audit import GovernedExecutionAudit
+    from .transfer_approval import (
+        TransferApprovalEnvelopeRecord,
+        TransferApprovalTransitionEventRecord,
+    )
     from .source_registration import (
         SourceRegistration,
         SourceRegistrationArtifact,
@@ -144,6 +148,8 @@ try:
         "DigitalTwinHistory",
         "DigitalTwinEventJournal",
         "GovernedExecutionAudit",
+        "TransferApprovalEnvelopeRecord",
+        "TransferApprovalTransitionEventRecord",
         "SourceRegistration",
         "SourceRegistrationArtifact",
         "SourceRegistrationMeasurement",

@@ -122,5 +122,22 @@ Manual high-assurance addition:
 - Operator Lookup: invalid lookup contracts hard-fail
 - Forensic View: decision hash, principal identity, and custody transition co-present
 - Surface Split: public proof remains narrow; operator forensic view is rich
+- Approval Runtime Fields: `approval_envelope_id`, `approval_envelope_version`, and `approval_binding_hash` render from runtime artifacts
+- Receipt Chain Fields: `policy_receipt_id` and `transition_receipt_ids` render from runtime artifacts
+- Signer Provenance: operator forensic view shows signer provenance for both policy and transition receipts
+- Runtime Custody State: operator forensic view renders `current_custodian_ref`, `current_zone_ref`, `custody_point_ref`, and `authority_source` from runtime custody state
+
+## Additional Sign-off Checks For Slice 1
+
+Automated assertions:
+
+- `TransferProofView` includes approval envelope id, version, binding hash, policy receipt id, and transition receipt ids
+- `AssetForensicView` includes the same fields plus signer provenance and runtime custody state
+- runtime-backed views prefer replay/runtime artifacts over loose request payload fields when both exist
+- public proof pages stay narrow even when operator/internal replay carries richer fields
+
+Manual high-assurance addition:
+
+- verify the operator forensic view and offline `seedcore-verify` agree on the same policy receipt and transition receipt identifiers for the handoff
 
 If all automated checks pass and manual high-assurance checks pass in your controlled environment, Phase D verification can be considered sign-off ready.

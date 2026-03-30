@@ -32,6 +32,7 @@ def build_signed_artifact(
     trust_level: Optional[str] = None,
     node_id: Optional[str] = None,
     workflow_type: Optional[str] = None,
+    disposition: Optional[str] = None,
     receipt_nonce: Optional[str] = None,
     previous_receipt_hash: Optional[str] = None,
     previous_receipt_counter: Optional[int] = None,
@@ -82,6 +83,17 @@ def build_signed_artifact(
             in {"custody_transfer", "restricted_custody_transfer"}
         )
     )
+    resolved_disposition = (
+        disposition
+        if isinstance(disposition, str)
+        else (
+            payload.get("authz_disposition")
+            if isinstance(payload.get("authz_disposition"), str)
+            else payload.get("disposition")
+            if isinstance(payload.get("disposition"), str)
+            else None
+        )
+    )
     payload_hash = sha256_hex(canonical_json(payload))
     signing_result = sign_artifact_request(
         SignerRequest(
@@ -92,6 +104,7 @@ def build_signed_artifact(
             node_id=node_id,
             trust_level=trust_level,
             workflow_type=resolved_workflow_type,
+            disposition=resolved_disposition,
             receipt_nonce=resolved_receipt_nonce,
             previous_receipt_hash=resolved_previous_receipt_hash,
             previous_receipt_counter=resolved_previous_receipt_counter,

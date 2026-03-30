@@ -84,6 +84,7 @@ interface RuntimeReplayView {
   trust_ref?: string;
   verification_ref?: string;
   authz_graph?: Record<string, unknown>;
+  governed_receipt?: Record<string, unknown>;
   policy_receipt?: Record<string, unknown>;
   evidence_bundle?: Record<string, unknown>;
   verification_status?: Record<string, unknown>;
@@ -181,6 +182,17 @@ function stringValue(value: unknown, fallback = "unknown"): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function arrayOfStrings(value: unknown): string[] {
@@ -334,6 +346,7 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
 
   const rawSummary = runVerifier("summarize-transfer", dir);
   const rawReport = runVerifier("verify-transfer", dir);
+  const rawReportRecord = isRecord(rawReport) ? rawReport : {};
   const summary = parseTransferTrustSummary(rawSummary);
   const report = parseTransferVerificationReport(rawReport);
   const approvalEnvelope = readOptionalJsonFile(dir, "input.approval_envelope.json");
@@ -346,6 +359,12 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
 
   const status = toTransferStatusView(report, summary, {
     approval_envelope_id: optionalString(approvalEnvelope.approval_envelope_id) ?? null,
+    approval_envelope_version: optionalNumber(approvalEnvelope.version) ?? null,
+    approval_binding_hash: optionalString(approvalEnvelope.approval_binding_hash) ?? null,
+    policy_receipt_id:
+      optionalString((rawReportRecord.policy_receipt_payload as Record<string, unknown> | undefined)?.policy_receipt_id) ??
+      null,
+    transition_receipt_ids: [],
     pending_roles: extractFixturePendingRoles(approvalEnvelope),
     timeline,
     principal_identity: {
@@ -369,12 +388,32 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
     },
     telemetry_refs: extractTelemetryRefs(assetState, telemetrySummary),
     signature_provenance: extractFixtureSignatureProvenance(rawReport),
+    asset_custody_state: {
+      current_custodian_ref: optionalString(assetState.current_custodian_ref) ?? null,
+      current_zone_ref: optionalString(assetState.current_zone_ref ?? assetState.current_zone) ?? null,
+      custody_point_ref: optionalString(assetState.custody_point_ref) ?? null,
+      authority_source: optionalString(assetState.authority_source) ?? null,
+    },
   });
 
-  const transferProof = toTransferProofView(report, summary);
+  const transferProof = toTransferProofView(report, summary, {
+    approval_envelope_id: optionalString(approvalEnvelope.approval_envelope_id) ?? null,
+    approval_envelope_version: optionalNumber(approvalEnvelope.version) ?? null,
+    approval_binding_hash: optionalString(approvalEnvelope.approval_binding_hash) ?? null,
+    policy_receipt_id:
+      optionalString((rawReportRecord.policy_receipt_payload as Record<string, unknown> | undefined)?.policy_receipt_id) ??
+      null,
+    transition_receipt_ids: [],
+  });
   const assetProof = toAssetProofView(report, summary);
   const assetForensics = toAssetForensicView(report, summary, {
     approval_envelope_id: optionalString(approvalEnvelope.approval_envelope_id) ?? null,
+    approval_envelope_version: optionalNumber(approvalEnvelope.version) ?? null,
+    approval_binding_hash: optionalString(approvalEnvelope.approval_binding_hash) ?? null,
+    policy_receipt_id:
+      optionalString((rawReportRecord.policy_receipt_payload as Record<string, unknown> | undefined)?.policy_receipt_id) ??
+      null,
+    transition_receipt_ids: [],
     timeline,
     principal_identity: {
       requesting_principal_ref:
@@ -397,6 +436,12 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
     },
     telemetry_refs: extractTelemetryRefs(assetState, telemetrySummary),
     signature_provenance: extractFixtureSignatureProvenance(rawReport),
+    asset_custody_state: {
+      current_custodian_ref: optionalString(assetState.current_custodian_ref) ?? null,
+      current_zone_ref: optionalString(assetState.current_zone_ref ?? assetState.current_zone) ?? null,
+      custody_point_ref: optionalString(assetState.custody_point_ref) ?? null,
+      authority_source: optionalString(assetState.authority_source) ?? null,
+    },
   });
 
   status.links = {
@@ -729,6 +774,10 @@ function buildRuntimeSummary(view: RuntimeReplayView): TransferTrustSummary {
 export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: TransferSourceQuery): TransferScenario {
   const auditRecord = isRecord(view.audit_record) ? view.audit_record : {};
   const policyDecision = isRecord(auditRecord.policy_decision) ? auditRecord.policy_decision : {};
+  const authzGraph = isRecord(view.authz_graph) ? view.authz_graph : {};
+  const governedReceipt = isRecord(view.governed_receipt) ? view.governed_receipt : {};
+  const policyReceipt = isRecord(view.policy_receipt) ? view.policy_receipt : {};
+  const evidenceBundle = isRecord(view.evidence_bundle) ? view.evidence_bundle : {};
   const approvalContext = isRecord(
     (((auditRecord.action_intent as Record<string, unknown> | undefined)?.action as Record<string, unknown> | undefined)
       ?.parameters as Record<string, unknown> | undefined)?.approval_context,
@@ -741,6 +790,30 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
   const categoryEnvelope = isRecord(resource.category_envelope) ? (resource.category_envelope as Record<string, unknown>) : {};
   const transferContext = isRecord(categoryEnvelope.transfer_context) ? (categoryEnvelope.transfer_context as Record<string, unknown>) : {};
   const assetCustodyState = isRecord(view.asset_custody_state) ? view.asset_custody_state : {};
+  const approvalEnvelopeId =
+    optionalString(governedReceipt.approval_envelope_id) ??
+    optionalString(authzGraph.approval_envelope_id) ??
+    optionalString(approvalContext.approval_envelope_id) ??
+    null;
+  const approvalEnvelopeVersion =
+    optionalNumber(governedReceipt.approval_envelope_version) ??
+    optionalNumber(authzGraph.approval_envelope_version) ??
+    optionalNumber(approvalContext.approval_envelope_version ?? approvalContext.observed_version) ??
+    null;
+  const approvalBindingHash =
+    optionalString(governedReceipt.approval_binding_hash) ??
+    optionalString(authzGraph.approval_binding_hash) ??
+    optionalString(approvalContext.approval_binding_hash) ??
+    null;
+  const transitionReceiptIds = (() => {
+    const fromEvidence = arrayOfStrings(evidenceBundle.transition_receipt_ids);
+    if (fromEvidence.length > 0) {
+      return fromEvidence;
+    }
+    return objectArray(view.transition_receipts)
+      .map((entry) => optionalString(entry.transition_receipt_id))
+      .filter((entry): entry is string => Boolean(entry));
+  })();
   const summary = buildRuntimeSummary(view);
   const report = deriveRuntimeReport(view, summary);
   const transferLookup = deriveRuntimeTransferLookup(view, query);
@@ -752,11 +825,16 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
   const replayArtifacts = replayArtifactsUrl(forensicLookup);
 
   const status = toTransferStatusView(report, summary, {
-    approval_envelope_id: optionalString(approvalContext.approval_envelope_id) ?? null,
+    approval_envelope_id: approvalEnvelopeId,
+    approval_envelope_version: approvalEnvelopeVersion,
+    approval_binding_hash: approvalBindingHash,
+    policy_receipt_id:
+      optionalString(policyReceipt.policy_receipt_id) ?? optionalString(evidenceBundle.policy_receipt_id) ?? null,
+    transition_receipt_ids: transitionReceiptIds,
     pending_roles:
       summary.approval_status === "APPROVED" ? [] : arrayOfStrings(policyDecision.required_approvals),
     timeline: runtimeTimeline(view),
-    current_step: optionalString((view.authz_graph as Record<string, unknown> | undefined)?.workflow_status),
+    current_step: optionalString(authzGraph.workflow_status),
     principal_identity: {
       requesting_principal_ref:
         optionalString((policyDecision.governed_receipt as Record<string, unknown> | undefined)?.principal_ref) ??
@@ -787,13 +865,24 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
     },
     telemetry_refs: runtimeTelemetryRefs(view),
     signature_provenance: runtimeSignatureProvenance(view),
+    asset_custody_state: {
+      current_custodian_ref: optionalString(assetCustodyState.current_custodian_ref) ?? null,
+      current_zone_ref: optionalString(assetCustodyState.current_zone_ref ?? assetCustodyState.current_zone) ?? null,
+      custody_point_ref: optionalString(assetCustodyState.custody_point_ref) ?? null,
+      authority_source: optionalString(assetCustodyState.authority_source) ?? null,
+    },
     replay_artifacts_url: replayArtifacts,
     public_trust_url: publicTrustUrl,
     verify_url: verifyUrl,
   });
 
   const assetForensics = toAssetForensicView(report, summary, {
-    approval_envelope_id: optionalString(approvalContext.approval_envelope_id) ?? null,
+    approval_envelope_id: approvalEnvelopeId,
+    approval_envelope_version: approvalEnvelopeVersion,
+    approval_binding_hash: approvalBindingHash,
+    policy_receipt_id:
+      optionalString(policyReceipt.policy_receipt_id) ?? optionalString(evidenceBundle.policy_receipt_id) ?? null,
+    transition_receipt_ids: transitionReceiptIds,
     timeline: runtimeTimeline(view),
     principal_identity: {
       requesting_principal_ref:
@@ -825,6 +914,12 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
     },
     telemetry_refs: runtimeTelemetryRefs(view),
     signature_provenance: runtimeSignatureProvenance(view),
+    asset_custody_state: {
+      current_custodian_ref: optionalString(assetCustodyState.current_custodian_ref) ?? null,
+      current_zone_ref: optionalString(assetCustodyState.current_zone_ref ?? assetCustodyState.current_zone) ?? null,
+      custody_point_ref: optionalString(assetCustodyState.custody_point_ref) ?? null,
+      authority_source: optionalString(assetCustodyState.authority_source) ?? null,
+    },
     replay_artifacts_url: replayArtifacts,
     public_trust_url: publicTrustUrl,
     verify_url: verifyUrl,
@@ -835,7 +930,14 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
 
   return {
     summary,
-    transfer_proof: toTransferProofView(report, summary),
+    transfer_proof: toTransferProofView(report, summary, {
+      approval_envelope_id: approvalEnvelopeId,
+      approval_envelope_version: approvalEnvelopeVersion,
+      approval_binding_hash: approvalBindingHash,
+      policy_receipt_id:
+        optionalString(policyReceipt.policy_receipt_id) ?? optionalString(evidenceBundle.policy_receipt_id) ?? null,
+      transition_receipt_ids: transitionReceiptIds,
+    }),
     asset_proof: toAssetProofView(report, summary),
     status,
     asset_forensics: assetForensics,

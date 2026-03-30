@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 import inspect
 import json
 import logging
@@ -8,6 +8,12 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import select, text, tuple_  # pyright: ignore[reportMissingImports]
 
+from ..integrations.rust_kernel import (
+    approval_binding_hash_with_rust,
+    apply_transfer_approval_transition_with_rust,
+    validate_transfer_approval_with_rust,
+    verify_approval_transition_history_with_rust,
+)
 from ..models.asset_custody import AssetCustodyState
 from ..models.custody_graph import (
     CustodyDisputeCase,
@@ -844,6 +850,522 @@ class GovernedExecutionAuditDAO:
         import hashlib
 
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class TransferApprovalEnvelopeDAO:
+    """Persistence helper for versioned transfer approval envelopes."""
+
+    _ENVELOPES_TABLE = "transfer_approval_envelopes"
+    _TRANSITIONS_TABLE = "transfer_approval_transition_events"
+
+    async def create_envelope(
+        self,
+        session,
+        *,
+        envelope: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        normalized = self._normalize_envelope(self._validated_envelope(envelope))
+        await self._clear_current_marker(session, approval_envelope_id=normalized["approval_envelope_id"])
+        stmt = text(
+            f"""
+            INSERT INTO {self._ENVELOPES_TABLE}
+            (
+                approval_envelope_id,
+                version,
+                is_current,
+                workflow_type,
+                status,
+                asset_ref,
+                lot_id,
+                policy_snapshot_ref,
+                approval_binding_hash,
+                envelope_payload,
+                created_at,
+                expires_at,
+                superseded_by_version
+            )
+            VALUES
+            (
+                :approval_envelope_id,
+                :version,
+                :is_current,
+                :workflow_type,
+                :status,
+                :asset_ref,
+                :lot_id,
+                :policy_snapshot_ref,
+                :approval_binding_hash,
+                CAST(:envelope_payload AS jsonb),
+                :created_at,
+                :expires_at,
+                :superseded_by_version
+            )
+            RETURNING id, recorded_at
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {
+                **normalized,
+                "envelope_payload": _canonical_json(normalized["envelope_payload"]),
+            },
+        )
+        row = result.mappings().one()
+        return {
+            **self._mapping_to_envelope_dict(
+                {
+                    **normalized,
+                    "id": row["id"],
+                    "recorded_at": row["recorded_at"],
+                }
+            ),
+        }
+
+    async def create_or_update_envelope(
+        self,
+        session,
+        *,
+        envelope: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        normalized = self._validated_envelope(envelope)
+        version = int(normalized.get("version") or 1)
+        current = await self.get_current(
+            session,
+            approval_envelope_id=str(normalized.get("approval_envelope_id") or ""),
+        )
+        if current is not None and int(current.get("version") or 0) >= version:
+            version = int(current.get("version") or 0) + 1
+            normalized["version"] = version
+        return await self.create_envelope(session, envelope=normalized)
+
+    async def get_current(self, session, *, approval_envelope_id: str) -> Optional[Dict[str, Any]]:
+        stmt = text(
+            f"""
+            SELECT *
+            FROM {self._ENVELOPES_TABLE}
+            WHERE approval_envelope_id = :approval_envelope_id
+              AND is_current = TRUE
+            LIMIT 1
+            """
+        )
+        result = await session.execute(stmt, {"approval_envelope_id": str(approval_envelope_id)})
+        row = result.mappings().one_or_none()
+        return self._mapping_to_envelope_dict(row) if row is not None else None
+
+    async def get_version(
+        self,
+        session,
+        *,
+        approval_envelope_id: str,
+        version: int,
+    ) -> Optional[Dict[str, Any]]:
+        stmt = text(
+            f"""
+            SELECT *
+            FROM {self._ENVELOPES_TABLE}
+            WHERE approval_envelope_id = :approval_envelope_id
+              AND version = :version
+            LIMIT 1
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {"approval_envelope_id": str(approval_envelope_id), "version": int(version)},
+        )
+        row = result.mappings().one_or_none()
+        return self._mapping_to_envelope_dict(row) if row is not None else None
+
+    async def list_transition_events(
+        self,
+        session,
+        *,
+        approval_envelope_id: str,
+    ) -> List[Dict[str, Any]]:
+        stmt = text(
+            f"""
+            SELECT *
+            FROM {self._TRANSITIONS_TABLE}
+            WHERE approval_envelope_id = :approval_envelope_id
+            ORDER BY occurred_at ASC, recorded_at ASC
+            """
+        )
+        result = await session.execute(stmt, {"approval_envelope_id": str(approval_envelope_id)})
+        return [self._mapping_to_transition_dict(row) for row in result.mappings().all()]
+
+    async def get_current_with_history(
+        self,
+        session,
+        *,
+        approval_envelope_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        envelope = await self.get_current(session, approval_envelope_id=approval_envelope_id)
+        if envelope is None:
+            return None
+        events = await self.list_transition_events(session, approval_envelope_id=approval_envelope_id)
+        history = self._history_payload(events)
+        return {
+            **envelope,
+            "transition_history": events,
+            "approval_transition_head": history["chain_head"],
+            "approval_transition_count": len(events),
+        }
+
+    async def apply_transition(
+        self,
+        session,
+        *,
+        approval_envelope_id: str,
+        transition: Dict[str, Any],
+        actor_ref: Optional[str] = None,
+        occurred_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        current = await self.get_current(session, approval_envelope_id=approval_envelope_id)
+        if current is None:
+            raise ValueError(f"approval envelope '{approval_envelope_id}' not found")
+
+        history_events = await self.list_transition_events(session, approval_envelope_id=approval_envelope_id)
+        history_payload = self._history_payload(history_events)
+        history_check = verify_approval_transition_history_with_rust(history_payload)
+        if not bool(history_check.get("valid", False)):
+            raise ValueError("stored approval transition history failed Rust verification")
+
+        transition_payload = dict(transition or {})
+        if actor_ref and transition_payload.get("actor_ref") is None:
+            transition_payload["actor_ref"] = actor_ref
+        if occurred_at and transition_payload.get("occurred_at") is None:
+            transition_payload["occurred_at"] = occurred_at
+
+        rust_result = apply_transfer_approval_transition_with_rust(
+            dict(current.get("envelope") or {}),
+            transition_payload,
+            history=history_payload,
+            now=self._coerce_datetime(transition_payload.get("occurred_at") or occurred_at),
+        )
+        if not bool(rust_result.get("valid", False)):
+            raise ValueError(
+                rust_result.get("error_code")
+                or "approval_transition_invalid"
+            )
+
+        updated_envelope = rust_result.get("approval_envelope")
+        transition_event = rust_result.get("transition_event")
+        updated_history = rust_result.get("history")
+        binding_hash = self._coerce_binding_hash(rust_result.get("binding_hash"))
+        if not isinstance(updated_envelope, Mapping):
+            raise ValueError("Rust approval transition did not return an approval envelope")
+        if not isinstance(transition_event, Mapping):
+            raise ValueError("Rust approval transition did not return a transition event")
+        if not isinstance(updated_history, Mapping):
+            raise ValueError("Rust approval transition did not return transition history")
+
+        next_version = int(current.get("version") or 0) + 1
+        envelope_payload = dict(updated_envelope)
+        envelope_payload["approval_envelope_id"] = approval_envelope_id
+        envelope_payload["version"] = next_version
+        if binding_hash is not None:
+            envelope_payload["approval_binding_hash"] = binding_hash
+
+        await self.supersede_current_version(
+            session,
+            approval_envelope_id=approval_envelope_id,
+            superseded_by_version=next_version,
+        )
+        stored_envelope = await self.create_envelope(session, envelope=envelope_payload)
+        stored_event = await self.append_transition_event(
+            session,
+            approval_envelope_id=approval_envelope_id,
+            envelope_version=next_version,
+            event_id=str(transition_event.get("event_id") or transition_event.get("approval_transition_id") or f"{approval_envelope_id}:{next_version}"),
+            event_hash=str(transition_event.get("event_hash") or updated_history.get("chain_head") or ""),
+            previous_event_hash=self._coerce_optional_string(transition_event.get("previous_event_hash")),
+            previous_status=self._coerce_optional_string(current.get("status")),
+            next_status=self._coerce_optional_string(envelope_payload.get("status")),
+            actor_ref=self._coerce_optional_string(actor_ref or transition_event.get("actor_ref")),
+            transition_payload=transition_payload,
+            transition_event=dict(transition_event),
+            occurred_at=self._isoformat(
+                self._coerce_datetime(
+                    transition_event.get("occurred_at")
+                    or transition_payload.get("occurred_at")
+                    or occurred_at
+                )
+            ),
+        )
+        return {
+            **stored_envelope,
+            "transition_history": [*history_events, stored_event],
+            "approval_transition_head": self._coerce_optional_string(updated_history.get("chain_head")),
+            "approval_transition_count": len(history_events) + 1,
+            "last_transition_event": stored_event,
+        }
+
+    async def append_transition_event(
+        self,
+        session,
+        *,
+        approval_envelope_id: str,
+        envelope_version: int,
+        event_id: str,
+        event_hash: str,
+        previous_event_hash: Optional[str],
+        previous_status: Optional[str],
+        next_status: Optional[str],
+        actor_ref: Optional[str],
+        transition_payload: Dict[str, Any],
+        transition_event: Dict[str, Any],
+        occurred_at: Optional[str],
+    ) -> Dict[str, Any]:
+        occurred_at_value = self._coerce_datetime(occurred_at) or datetime.now(timezone.utc)
+        stmt = text(
+            f"""
+            INSERT INTO {self._TRANSITIONS_TABLE}
+            (
+                approval_envelope_id,
+                envelope_version,
+                event_id,
+                event_hash,
+                previous_event_hash,
+                previous_status,
+                next_status,
+                actor_ref,
+                transition_payload,
+                transition_event,
+                occurred_at
+            )
+            VALUES
+            (
+                :approval_envelope_id,
+                :envelope_version,
+                :event_id,
+                :event_hash,
+                :previous_event_hash,
+                :previous_status,
+                :next_status,
+                :actor_ref,
+                CAST(:transition_payload AS jsonb),
+                CAST(:transition_event AS jsonb),
+                :occurred_at
+            )
+            RETURNING id, recorded_at
+            """
+        )
+        result = await session.execute(
+            stmt,
+            {
+                "approval_envelope_id": str(approval_envelope_id),
+                "envelope_version": int(envelope_version),
+                "event_id": str(event_id),
+                "event_hash": str(event_hash),
+                "previous_event_hash": str(previous_event_hash) if previous_event_hash is not None else None,
+                "previous_status": str(previous_status) if previous_status is not None else None,
+                "next_status": str(next_status) if next_status is not None else None,
+                "actor_ref": str(actor_ref) if actor_ref is not None else None,
+                "transition_payload": _canonical_json(dict(transition_payload or {})),
+                "transition_event": _canonical_json(dict(transition_event or {})),
+                "occurred_at": occurred_at_value,
+            },
+        )
+        row = result.mappings().one()
+        return self._mapping_to_transition_dict(
+            {
+                "id": row["id"],
+                "approval_envelope_id": approval_envelope_id,
+                "envelope_version": envelope_version,
+                "event_id": event_id,
+                "event_hash": event_hash,
+                "previous_event_hash": previous_event_hash,
+                "previous_status": previous_status,
+                "next_status": next_status,
+                "actor_ref": actor_ref,
+                "transition_payload": dict(transition_payload or {}),
+                "transition_event": dict(transition_event or {}),
+                "occurred_at": occurred_at_value,
+                "recorded_at": row["recorded_at"],
+            }
+        )
+
+    async def supersede_current_version(
+        self,
+        session,
+        *,
+        approval_envelope_id: str,
+        superseded_by_version: int,
+    ) -> None:
+        stmt = text(
+            f"""
+            UPDATE {self._ENVELOPES_TABLE}
+            SET is_current = FALSE,
+                superseded_by_version = :superseded_by_version
+            WHERE approval_envelope_id = :approval_envelope_id
+              AND is_current = TRUE
+            """
+        )
+        await session.execute(
+            stmt,
+            {
+                "approval_envelope_id": str(approval_envelope_id),
+                "superseded_by_version": int(superseded_by_version),
+            },
+        )
+
+    async def _clear_current_marker(self, session, *, approval_envelope_id: str) -> None:
+        stmt = text(
+            f"""
+            UPDATE {self._ENVELOPES_TABLE}
+            SET is_current = FALSE
+            WHERE approval_envelope_id = :approval_envelope_id
+              AND is_current = TRUE
+            """
+        )
+        await session.execute(stmt, {"approval_envelope_id": str(approval_envelope_id)})
+
+    def _normalize_envelope(self, envelope: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(envelope or {})
+        approval_envelope_id = str(payload.get("approval_envelope_id") or "").strip()
+        if not approval_envelope_id:
+            raise ValueError("approval_envelope_id is required")
+        version = int(payload.get("version") or 1)
+        created_at = self._coerce_datetime(payload.get("created_at")) or datetime.now(timezone.utc)
+        expires_at = self._coerce_datetime(payload.get("expires_at"))
+        binding_hash = self._coerce_binding_hash(payload.get("approval_binding_hash"))
+        if binding_hash is not None:
+            payload["approval_binding_hash"] = binding_hash
+        payload["version"] = version
+        return {
+            "approval_envelope_id": approval_envelope_id,
+            "version": version,
+            "is_current": True,
+            "workflow_type": str(payload.get("workflow_type") or "").strip() or "custody_transfer",
+            "status": str(payload.get("status") or "").strip() or "PENDING",
+            "asset_ref": str(payload.get("asset_ref") or "").strip(),
+            "lot_id": str(payload.get("lot_id")).strip() if payload.get("lot_id") is not None else None,
+            "policy_snapshot_ref": (
+                str(payload.get("policy_snapshot_ref") or payload.get("policy_snapshot") or "").strip()
+                or None
+            ),
+            "approval_binding_hash": binding_hash,
+            "envelope_payload": payload,
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "superseded_by_version": None,
+        }
+
+    def _mapping_to_envelope_dict(self, row: Any) -> Dict[str, Any]:
+        payload = dict(row.get("envelope_payload") or {}) if isinstance(row, dict) else dict(row["envelope_payload"] or {})
+        payload["approval_envelope_id"] = str(
+            (row.get("approval_envelope_id") if isinstance(row, dict) else row["approval_envelope_id"]) or payload.get("approval_envelope_id") or ""
+        )
+        payload["version"] = int(
+            (row.get("version") if isinstance(row, dict) else row["version"]) or payload.get("version") or 1
+        )
+        binding_hash = self._coerce_binding_hash(
+            row.get("approval_binding_hash") if isinstance(row, dict) else row["approval_binding_hash"]
+        )
+        if binding_hash is not None:
+            payload["approval_binding_hash"] = binding_hash
+        return {
+            "id": str(row.get("id") if isinstance(row, dict) else row["id"]) if (row.get("id") if isinstance(row, dict) else row["id"]) is not None else None,
+            "approval_envelope_id": payload["approval_envelope_id"],
+            "version": payload["version"],
+            "is_current": bool(row.get("is_current") if isinstance(row, dict) else row["is_current"]),
+            "status": str(row.get("status") if isinstance(row, dict) else row["status"]),
+            "workflow_type": str(row.get("workflow_type") if isinstance(row, dict) else row["workflow_type"]),
+            "asset_ref": str(row.get("asset_ref") if isinstance(row, dict) else row["asset_ref"]),
+            "lot_id": row.get("lot_id") if isinstance(row, dict) else row["lot_id"],
+            "policy_snapshot_ref": row.get("policy_snapshot_ref") if isinstance(row, dict) else row["policy_snapshot_ref"],
+            "approval_binding_hash": binding_hash,
+            "created_at": self._isoformat(row.get("created_at") if isinstance(row, dict) else row["created_at"]),
+            "expires_at": self._isoformat(row.get("expires_at") if isinstance(row, dict) else row["expires_at"]),
+            "recorded_at": self._isoformat(row.get("recorded_at") if isinstance(row, dict) else row["recorded_at"]),
+            "superseded_by_version": row.get("superseded_by_version") if isinstance(row, dict) else row["superseded_by_version"],
+            "envelope": payload,
+        }
+
+    def _validated_envelope(self, envelope: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(envelope or {})
+        asset_ref = str(payload.get("asset_ref") or "").strip()
+        if not asset_ref:
+            raise ValueError("asset_ref is required")
+        validation = validate_transfer_approval_with_rust(payload)
+        if not bool(validation.get("valid", False)):
+            raise ValueError(validation.get("error_code") or "approval_envelope_invalid")
+        rust_binding = approval_binding_hash_with_rust(payload)
+        binding_hash = self._coerce_binding_hash(rust_binding.get("binding_hash"))
+        if binding_hash is None:
+            raise ValueError(rust_binding.get("error_code") or "approval_binding_hash_invalid")
+        provided_binding = self._coerce_binding_hash(payload.get("approval_binding_hash"))
+        if provided_binding is not None and provided_binding != binding_hash:
+            raise ValueError("approval_binding_hash_mismatch")
+        payload["approval_binding_hash"] = binding_hash
+        return payload
+
+    def _history_payload(self, events: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        raw_events = [
+            dict(item.get("transition_event") or {})
+            for item in events
+            if isinstance(item.get("transition_event"), dict)
+        ]
+        chain_head = None
+        if events:
+            last_event = events[-1]
+            chain_head = self._coerce_optional_string(last_event.get("event_hash"))
+        return {
+            "events": raw_events,
+            "chain_head": chain_head,
+        }
+
+    def _mapping_to_transition_dict(self, row: Any) -> Dict[str, Any]:
+        return {
+            "id": str(row.get("id") if isinstance(row, dict) else row["id"]),
+            "approval_envelope_id": str(row.get("approval_envelope_id") if isinstance(row, dict) else row["approval_envelope_id"]),
+            "envelope_version": int(row.get("envelope_version") if isinstance(row, dict) else row["envelope_version"]),
+            "event_id": str(row.get("event_id") if isinstance(row, dict) else row["event_id"]),
+            "event_hash": str(row.get("event_hash") if isinstance(row, dict) else row["event_hash"]),
+            "previous_event_hash": row.get("previous_event_hash") if isinstance(row, dict) else row["previous_event_hash"],
+            "previous_status": row.get("previous_status") if isinstance(row, dict) else row["previous_status"],
+            "next_status": row.get("next_status") if isinstance(row, dict) else row["next_status"],
+            "actor_ref": row.get("actor_ref") if isinstance(row, dict) else row["actor_ref"],
+            "transition_payload": dict(row.get("transition_payload") or {}) if isinstance(row, dict) else dict(row["transition_payload"] or {}),
+            "transition_event": dict(row.get("transition_event") or {}) if isinstance(row, dict) else dict(row["transition_event"] or {}),
+            "occurred_at": self._isoformat(row.get("occurred_at") if isinstance(row, dict) else row["occurred_at"]),
+            "recorded_at": self._isoformat(row.get("recorded_at") if isinstance(row, dict) else row["recorded_at"]),
+        }
+
+    def _coerce_optional_string(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    def _coerce_binding_hash(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            algorithm = str(value.get("algorithm") or "").strip()
+            raw_value = str(value.get("value") or "").strip()
+            if algorithm and raw_value:
+                return f"{algorithm}:{raw_value}"
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    def _coerce_datetime(self, value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    def _isoformat(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
 
 
 class DigitalTwinDAO:

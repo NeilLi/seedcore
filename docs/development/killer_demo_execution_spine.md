@@ -103,6 +103,43 @@ Mandatory fields:
 
 The goal is not maximal detail. The goal is minimum cross-document consistency.
 
+## Canonical Demo Script
+
+The best near-term demo is not generic robotics. It is one sealed, high-value
+lot handoff that makes the physical-to-digital custody boundary undeniable.
+
+Demo happy path:
+
+- a packer cell seals a high-value lot into a smart container
+- the runtime submits the `ActionIntent` for `Restricted Custody Transfer`
+- an inspector agent co-approves the persisted `TransferApprovalEnvelope`
+- the PDP hot path evaluates against the canonical snapshot
+- the runtime mints a `PolicyReceipt`, `TransitionReceipt`, and governed proof chain
+- the courier verifies the handoff before accepting custody through the proof surface or `seedcore-verify`
+
+Mandatory sibling failure modes:
+
+- missing approval envelope or incomplete dual approval
+- stale telemetry or broken-seal quarantine
+- break-glass review path
+
+Demo rule:
+
+- keep packing as upstream context
+- keep the handoff decision point as the center of gravity
+- show the same asset story across operator status, forensic view, public proof, and offline verification
+
+## Slice 1 Runtime Rule
+
+For the current delivery slice, the demo must run against these runtime truths:
+
+- `TransferApprovalEnvelope` is a first-class runtime object with versioned persistence
+- `approval_context` is reference-and-observation only, not the source of truth
+- Restricted Custody Transfer fails closed when no authoritative approval envelope is present
+- proof surfaces render approval version, approval binding hash, policy receipt id, transition receipt ids, signer provenance, and runtime custody state from runtime artifacts
+- hot-path rollout stays in `shadow` mode until parity evidence is green
+- VLA optimization work remains explicitly sidecar to this demo
+
 ## Product-First Rule
 
 SeedCore’s first product surface in this phase is:
