@@ -102,24 +102,21 @@ Completed in repo:
 
 What still needs to be done next:
 
-1. Live hot-path shadow run
+1. Close hot-path shadow parity accounting
 
-- start the runtime API on `8002`
-- run `python scripts/host/verify_rct_hot_path_shadow.py`
-- capture green parity totals, mismatch totals, and latency percentiles for canonical `allow`, `deny`, `quarantine`, and `escalate`
+- live runtime-up shadow verification is now running and green for mismatches, but run-level parity accounting still tracks three parity rows while the canonical `quarantine` case is evaluated separately
+- lock down the intended behavior (or fix accounting), then rerun and freeze the sign-off evidence
 
-2. Live proof-surface walkthrough
+2. Capture the final allow-path live artifact chain
 
-- start verification API on `7071`
-- start proof surface on `7072`
-- start operator console on `7073`
-- run `bash scripts/host/verify_productized_surface.sh` against the same runtime `audit_id`
+- runtime/proof/operator surfaces are now demonstrably live and `verify_productized_surface.sh` is green against a runtime `audit_id`
+- capture one Restricted Custody Transfer `allow` run whose artifact chain includes non-null `approval_envelope_id`, `approval_envelope_version`, `approval_binding_hash`, `policy_receipt_id`, and `transition_receipt_ids`
 
 3. End-to-end artifact-chain proof
 
 - capture one sealed-lot handoff happy path
 - capture missing approval, stale telemetry, and break-glass sibling paths
-- prove replay API, operator console, proof surface, and offline verifier agree on the same approval and receipt identifiers
+- prove replay API, operator console, proof surface, and offline verifier agree on the same approval and receipt identifiers for each captured runtime `audit_id`
 
 4. Hardened signer closure
 

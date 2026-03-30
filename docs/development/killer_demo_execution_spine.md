@@ -9,7 +9,8 @@ Current repo state on 2026-03-30:
 - the Restricted Custody Transfer Slice 1 authority boundary is implemented
 - persisted approval records, not embedded request payloads, are the RCT source of truth
 - hot-path rollout remains intentionally in `shadow`
-- full live-demo sign-off is still pending runtime-up verification
+- runtime-up verification is now exercised locally across `8002`, `7071`, `7072`, and `7073`
+- full live-demo sign-off is still pending final runtime artifact-matrix capture (allow + siblings on explicit audit chains) and hardened signer allow-path provenance
 
 ## Purpose
 

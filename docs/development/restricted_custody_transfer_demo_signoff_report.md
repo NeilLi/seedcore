@@ -145,24 +145,29 @@ readout.
 
 ### 1. Live Hot-Path Shadow Evidence
 
-Command attempted:
+Command executed:
 
 ```bash
 python scripts/host/verify_rct_hot_path_shadow.py
 ```
 
-Observed result on 2026-03-30:
+Observed result on 2026-03-30 (runtime-up closure pass):
 
-- `FAIL`
-- runtime API at `http://127.0.0.1:8002/api/v1` was not running
-- failure mode: `Connection refused`
+- `PASS`
+- mode: `shadow`
+- active snapshot: `runtime-baseline-v1.0.0-1774251324625-local-1774260434866`
+- run parity: `3/3 ok`, `0 mismatched`
+- aggregate parity: `9/9 ok`, `0 mismatched`
+- latency: `p50=34ms`, `p95=73ms`, `p99=73ms`
+- canonical dispositions returned: `allow`, `deny`, `quarantine`, `escalate`
 
 Meaning:
 
 - hot-path shadow parity and latency are implemented in the repo
 - the shadow harness now uses persisted approval records rather than synthesized approval payloads
-- they were not demonstrated live in this environment
-- do not claim full hot-path sign-off yet
+- they were demonstrated live in this environment
+- there is still one closure gap: status parity counters currently advance for three parity-tracked cases per run while `quarantine_stale_telemetry` is evaluated but not counted in `run_parity`
+- do not claim full hot-path sign-off until that accounting gap is resolved (or explicitly frozen as intended behavior)
 
 ### 2. Live Verification Surface Walkthrough
 
@@ -174,13 +179,17 @@ requires:
 - verification API on `7071`
 - a real lookup id or audit id
 
-This report does not claim those live surfaces were exercised end to end in the
-current environment.
+Observed result on 2026-03-30 (runtime-up closure pass):
 
-Also:
+- runtime API (`8002`), verification API (`7071`), proof surface (`7072`), and operator console (`7073`) were all running and healthy
+- `bash scripts/host/verify_productized_surface.sh` passed with `13` checks and `0` failures
+- run was pinned to runtime `audit_id` `c1b98df3-ca42-438b-bbce-4ce5ed463bfe`
+- replay API, verification API, proof surface page, and operator console page all resolved that same runtime `audit_id`
 
-- `scripts/host/verify_productized_surface.sh` now requires a real runtime `audit_id`
-- fixture-only fallback is no longer acceptable for live sign-off wording
+Current limitation:
+
+- this runtime audit chain is a `quarantine` trust-gap case
+- `approval_envelope_id`, `approval_envelope_version`, and `approval_binding_hash` are null on that chain, so it cannot serve as the final Restricted Custody Transfer allow-path sign-off artifact
 
 ### 3. High-Assurance Signer Proof
 
@@ -198,14 +207,19 @@ cloud-KMS-backed receipt provenance rather than code-path readiness.
 
 The next concrete demands are:
 
-1. Start the runtime API and verification API in a controlled environment.
-2. Seed one authoritative transfer approval and run `python scripts/host/verify_rct_hot_path_shadow.py` so green parity totals, mismatch totals, and latency percentiles are captured for the canonical `allow`, `deny`, `quarantine`, and `escalate` cases.
-3. Run `bash scripts/host/verify_productized_surface.sh` against the same runtime `audit_id` so the operator view, proof surface, and replay API are proven on one artifact chain.
-4. Capture one full handoff walkthrough across:
+1. Resolve or explicitly freeze the hot-path shadow parity accounting behavior so the canonical `quarantine` case is reflected consistently in run-level parity totals.
+2. Capture one live Restricted Custody Transfer `allow` runtime chain with non-null:
+   - `approval_envelope_id`
+   - `approval_envelope_version`
+   - `approval_binding_hash`
+   - `policy_receipt_id`
+   - `transition_receipt_ids`
+3. Capture one full handoff walkthrough across:
    - operator status
    - asset forensics
    - public or partner proof
-   - offline `seedcore-verify`
+   - offline `seedcore-verify` using the same runtime artifact chain
+4. Capture the sibling runtime paths (`deny`, `quarantine`, `escalate`) with explicit runtime `audit_id` links and business-state closure.
 5. If the demo claim includes hardened signer proof, capture one real allow-path run with signer provenance for both `PolicyReceipt` and `TransitionReceipt`.
 
 Until those steps are complete:
@@ -214,14 +228,117 @@ Until those steps are complete:
 - do not claim full live-runtime sign-off
 - do claim controlled demo readiness backed by repo evidence
 
+## Execution Checklist
+
+Use this checklist to close the remaining live-demo sign-off gap.
+
+### Phase 1. Bring The Live Stack Up
+
+- [x] Start runtime API on `8002`
+
+```bash
+uvicorn seedcore.main:app --host 127.0.0.1 --port 8002
+```
+
+- [x] Start verification API on `7071`
+
+```bash
+npm --prefix ts run serve:verification-api
+```
+
+- [x] Start proof surface on `7072`
+
+```bash
+npm --prefix ts run serve:proof-surface
+```
+
+- [x] Start operator console on `7073`
+
+```bash
+npm --prefix ts run serve:operator-console
+```
+
+- [x] Confirm the runtime can produce and replay one real `audit_id`
+
+Current runtime closure-pass id: `c1b98df3-ca42-438b-bbce-4ce5ed463bfe`
+
+### Phase 2. Prove Hot-Path Shadow
+
+- [x] Run the canonical shadow verifier
+
+```bash
+python scripts/host/verify_rct_hot_path_shadow.py
+```
+
+- [x] Capture `mode`, parity ok count, mismatch count, and latency `p50`, `p95`, `p99`
+- [ ] Verify `allow_case`, `deny_missing_approval`, `quarantine_stale_telemetry`, and `escalate_break_glass` all complete with zero parity mismatches
+Observed nuance: all four dispositions are returned, but run-level parity counters currently increment for three tracked cases per run.
+- [x] Keep hot-path mode in `shadow` until the parity evidence stays green
+
+### Phase 3. Prove Productized Surface On One Artifact Chain
+
+- [x] Identify the runtime `audit_id` to use for live sign-off
+- [x] Run the productized surface verifier against that runtime artifact chain
+
+```bash
+bash scripts/host/verify_productized_surface.sh
+```
+
+- [x] Confirm replay API, verification API, proof surface, and operator console all resolve the same runtime `audit_id`
+- [x] Confirm the verification run did not fall back to fixture-only evidence
+
+### Phase 4. Capture The Demo Matrix
+
+- [ ] Capture one sealed-lot handoff happy path
+- [ ] Capture one missing-approval path
+- [ ] Capture one stale-telemetry quarantine path
+- [ ] Capture one break-glass escalate path
+
+For each captured case, record:
+
+- [ ] `audit_id`
+- [ ] `approval_envelope_id`
+- [ ] `approval_envelope_version`
+- [ ] `approval_binding_hash`
+- [ ] `policy_receipt_id`
+- [ ] `transition_receipt_ids`
+- [ ] final business state: `verified`, `rejected`, `quarantined`, or `review_required`
+
+### Phase 5. Cross-Surface Consistency Check
+
+- [ ] Confirm the same identifiers appear across runtime replay, verification API, proof surface, operator console, and offline verification
+- [ ] Run offline verification for the final captured transfer artifact chain
+
+```bash
+cd rust
+cargo run -q -p seedcore-verify -- verify-transfer --dir fixtures/transfers/allow_case
+```
+
+- [ ] Replace fixture-only evidence with the captured runtime artifact chain anywhere the live-demo claim depends on it
+
+### Phase 6. Hardened Signer Closure
+
+- [ ] Capture one real `allow`-path run with KMS-backed `PolicyReceipt`
+- [ ] Capture one real `allow`-path run with KMS- or TPM-backed `TransitionReceipt`
+- [ ] Confirm signer provenance is visible in replay and operator forensics
+
+### Exit Criteria
+
+- [ ] `verify_rct_hot_path_shadow.py` is green with zero mismatches
+- [x] `verify_productized_surface.sh` is green against a real runtime `audit_id`
+- [ ] one happy path and three sibling failure paths are captured
+- [ ] all surfaces agree on the same approval and receipt identifiers
+- [ ] one live `allow` path shows hardened signer provenance
+
 ## Final Recommendation
 
 Recommended wording for the current state:
 
 **SeedCore is ready for a controlled Restricted Custody Transfer demo and has
 passed offline sign-off for the canonical artifact chain. Full live-demo
-sign-off is still pending runtime-up verification of hot-path shadow evidence,
-proof-surface walkthrough, and hardened signer provenance.**
+sign-off is still pending closure of the hot-path parity accounting gap,
+runtime capture of a full allow-plus-siblings artifact matrix with non-null
+approval identifiers, and hardened signer provenance.**
 
 ## Related Documents
 
