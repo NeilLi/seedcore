@@ -83,43 +83,49 @@ The execution spine for that rule now lives in
 
 ## Immediate Execution Order
 
-The next implementation order is now locked to Restricted Custody Transfer
-Slice 1.
+The next implementation order remains locked to Restricted Custody Transfer
+Slice 1, but the repository is no longer at the planning-only stage.
 
-1. First-class approval runtime object
+### Slice 1 Implementation Status
 
-- persist `TransferApprovalEnvelope` as a versioned runtime record
-- persist append-only approval transition history
-- make approvals replay-addressable and API-visible
-- remove synthesized approval fallback for Restricted Custody Transfer
+Completed in repo:
 
-2. Canonical decision path tightening
+- `TransferApprovalEnvelope` is now a first-class runtime object with versioned persistence and append-only transition history
+- Restricted Custody Transfer no longer trusts embedded approval payloads in `approval_context` as authoritative truth
+- `/api/v1/pdp/hot-path/evaluate` resolves persisted approval state before policy evaluation
+- hot-path shadow status and parity plumbing remain in `shadow` mode and are covered by the targeted RCT pytest slice
+- replay and proof projections now recover approval metadata from persisted policy-case authority data
+- host verification scripts no longer rely on synthesized approval state for the main RCT sign-off flow
+- productized surface verification now fails closed when no runtime `audit_id` is available
 
-- run the asset-centric hot path in `shadow` mode by default
-- compare compiled-path decisions against the baseline evaluator on normalized fields
-- publish parity totals, mismatch totals, and latency percentiles on a runtime status surface
-- do not promote `enforced` mode until parity stays green on the canonical allow, deny, quarantine, and escalate cases
+### Remaining Sign-Off Queue
 
-3. Proof-surface tightening
+What still needs to be done next:
 
-- surface `approval_envelope_version`
-- surface `approval_binding_hash`
-- surface `policy_receipt_id`
-- surface `transition_receipt_ids`
-- surface signer provenance for policy and transition receipts
-- render custody state from runtime artifacts instead of UI-only reconstruction
+1. Live hot-path shadow run
 
-4. Hardened signer wedge
+- start the runtime API on `8002`
+- run `python scripts/host/verify_rct_hot_path_shadow.py`
+- capture green parity totals, mismatch totals, and latency percentiles for canonical `allow`, `deny`, `quarantine`, and `escalate`
 
-- require KMS-backed signing for Restricted Custody Transfer `allow` path `PolicyReceipt`
-- keep KMS/TPM-backed `TransitionReceipt` hardening on the same allow path
-- leave deny, quarantine, escalate, and non-RCT flows on the existing signer behavior for now
+2. Live proof-surface walkthrough
 
-5. Demo closure
+- start verification API on `7071`
+- start proof surface on `7072`
+- start operator console on `7073`
+- run `bash scripts/host/verify_productized_surface.sh` against the same runtime `audit_id`
 
-- prove the sealed high-value lot handoff happy path
-- prove missing approval, stale telemetry, and break-glass sibling paths
-- keep the operator console, proof surface, replay API, and offline verifier aligned on the same artifact chain
+3. End-to-end artifact-chain proof
+
+- capture one sealed-lot handoff happy path
+- capture missing approval, stale telemetry, and break-glass sibling paths
+- prove replay API, operator console, proof surface, and offline verifier agree on the same approval and receipt identifiers
+
+4. Hardened signer closure
+
+- keep hardening scoped to Restricted Custody Transfer `allow`
+- capture one live allow-path run showing signer provenance for `PolicyReceipt` and `TransitionReceipt`
+- leave broader signer rollout for later phases
 
 ### Explicit Sidecar
 
@@ -394,6 +400,10 @@ Phase 0 closure is now machine-checkable through
 [phase0_contract_freeze_manifest.json](/Users/ningli/project/seedcore/docs/development/phase0_contract_freeze_manifest.json)
 with the validation gate
 `python scripts/tools/verify_phase0_contract_freeze.py`.
+
+The current engineering sign-off state for that demo, including what is passed
+offline and what still genuinely demands a live runtime proof, now lives in
+[restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md).
 
 The recommended multi-language boundary plan for that work now lives in
 [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).

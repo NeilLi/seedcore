@@ -4,6 +4,13 @@
 
 Working execution spine for the next 90-day contract-and-proof phase.
 
+Current repo state on 2026-03-30:
+
+- the Restricted Custody Transfer Slice 1 authority boundary is implemented
+- persisted approval records, not embedded request payloads, are the RCT source of truth
+- hot-path rollout remains intentionally in `shadow`
+- full live-demo sign-off is still pending runtime-up verification
+
 ## Purpose
 
 This document is the execution center of gravity above the roadmap, contract
@@ -68,7 +75,7 @@ Artifact rules:
 
 - `TaskPayload` is proposal only.
 - `ActionIntent` is the accountable authorization request.
-- `TransferApprovalEnvelope` is governed approval state.
+- `TransferApprovalEnvelope` is governed approval state and must come from persisted runtime records for Restricted Custody Transfer.
 - `ExecutionToken` is the only authorization artifact that may unlock execution.
 - `governed_receipt`, `PolicyReceipt`, and `TransitionReceipt` are proof-bearing artifacts with different roles.
 - `EvidenceBundle` records what happened after execution.
@@ -112,7 +119,8 @@ Demo happy path:
 
 - a packer cell seals a high-value lot into a smart container
 - the runtime submits the `ActionIntent` for `Restricted Custody Transfer`
-- an inspector agent co-approves the persisted `TransferApprovalEnvelope`
+- dedicated transfer-approval endpoints persist the versioned `TransferApprovalEnvelope`
+- an inspector agent co-approves that persisted approval record
 - the PDP hot path evaluates against the canonical snapshot
 - the runtime mints a `PolicyReceipt`, `TransitionReceipt`, and governed proof chain
 - the courier verifies the handoff before accepting custody through the proof surface or `seedcore-verify`
@@ -122,6 +130,10 @@ Mandatory sibling failure modes:
 - missing approval envelope or incomplete dual approval
 - stale telemetry or broken-seal quarantine
 - break-glass review path
+
+Sign-off rule:
+
+- the same runtime `audit_id` must tie together replay, verification API, proof surface, operator console, and offline verification for the live demo claim
 
 Demo rule:
 
@@ -180,6 +192,7 @@ Do not let the phase drift into:
 ## Related Documents
 
 - [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+- [restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
 - [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
 - [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md)
 - [rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md)
