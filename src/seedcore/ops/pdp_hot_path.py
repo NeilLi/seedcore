@@ -8,7 +8,9 @@ from time import perf_counter
 from threading import Lock
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
+from seedcore.coordinator.dao import TransferApprovalEnvelopeDAO
 from seedcore.coordinator.core.governance import evaluate_intent, prepare_policy_case
+from seedcore.database import get_async_pg_session_factory
 from seedcore.models.action_intent import ExecutionToken, PolicyDecision
 from seedcore.models.pdp_hot_path import (
     HotPathCheckResult,
@@ -72,9 +74,50 @@ class HotPathShadowStats:
 
 
 _HOT_PATH_SHADOW_STATS = HotPathShadowStats()
+_TRANSFER_APPROVAL_DAO = TransferApprovalEnvelopeDAO()
 
 
-def evaluate_pdp_hot_path(request: HotPathEvaluateRequest) -> HotPathEvaluateResponse:
+async def resolve_authoritative_transfer_approval(
+    request: HotPathEvaluateRequest,
+) -> dict[str, Any]:
+    parameters = (
+        request.action_intent.action.parameters
+        if isinstance(request.action_intent.action.parameters, Mapping)
+        else {}
+    )
+    approval_context = (
+        parameters.get("approval_context")
+        if isinstance(parameters.get("approval_context"), Mapping)
+        else {}
+    )
+    approval_envelope_id = str(approval_context.get("approval_envelope_id") or "").strip()
+    if not approval_envelope_id:
+        return {}
+    session_factory = get_async_pg_session_factory()
+    try:
+        async with session_factory() as session:
+            envelope_record = await _TRANSFER_APPROVAL_DAO.get_current_with_history(
+                session,
+                approval_envelope_id=approval_envelope_id,
+            )
+    except Exception:
+        return {}
+    if envelope_record is None:
+        return {}
+    return {
+        "authoritative_approval_envelope": envelope_record.get("envelope"),
+        "authoritative_approval_transition_history": envelope_record.get("transition_history"),
+        "authoritative_approval_transition_head": envelope_record.get("approval_transition_head"),
+    }
+
+
+def evaluate_pdp_hot_path(
+    request: HotPathEvaluateRequest,
+    *,
+    authoritative_approval_envelope: Mapping[str, Any] | None = None,
+    authoritative_approval_transition_history: Sequence[Mapping[str, Any]] | None = None,
+    authoritative_approval_transition_head: str | None = None,
+) -> HotPathEvaluateResponse:
     started = perf_counter()
     checks: list[HotPathCheckResult] = []
 
@@ -161,9 +204,15 @@ def evaluate_pdp_hot_path(request: HotPathEvaluateRequest) -> HotPathEvaluateRes
         approved_source_registrations=approved_source_registrations,
         telemetry_summary=telemetry_summary,
         evidence_summary=evidence_summary,
+        authoritative_approval_envelope=authoritative_approval_envelope,
+        authoritative_approval_transition_history=authoritative_approval_transition_history,
+        authoritative_approval_transition_head=authoritative_approval_transition_head,
     )
-    baseline_decision = evaluate_intent(policy_case)
-    decision = evaluate_intent(policy_case, compiled_authz_index=compiled_authz_index)
+    baseline_decision = evaluate_intent(policy_case.model_copy(deep=True))
+    decision = evaluate_intent(
+        policy_case.model_copy(deep=True),
+        compiled_authz_index=compiled_authz_index,
+    )
 
     checks.extend(_decision_checks(decision))
     trust_gaps = _extract_trust_gaps(decision)

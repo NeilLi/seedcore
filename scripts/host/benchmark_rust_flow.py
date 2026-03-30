@@ -22,7 +22,7 @@ if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 
 from seedcore.coordinator.core import governance as governance_mod  # noqa: E402
-from seedcore.coordinator.core.governance import ActionIntent, build_governance_context, evaluate_intent  # noqa: E402
+from seedcore.coordinator.core.governance import build_governance_context, evaluate_intent  # noqa: E402
 from seedcore.hal.custody.transition_receipts import build_transition_receipt  # noqa: E402
 from seedcore.integrations.rust_kernel import (  # noqa: E402
     apply_transfer_approval_transition_with_rust,
@@ -35,7 +35,7 @@ from seedcore.integrations.rust_kernel import (  # noqa: E402
 )
 from seedcore.ops.evidence.builder import build_evidence_bundle  # noqa: E402
 from seedcore.services.replay_service import ReplayService  # noqa: E402
-from test_action_intent import _compiled_transfer_graph, _transfer_payload  # noqa: E402
+from test_action_intent import _compiled_transfer_graph, _transfer_approval_envelope, _transfer_payload  # noqa: E402
 
 
 @dataclass
@@ -88,11 +88,10 @@ def _build_transfer_case() -> tuple[dict[str, Any], Any]:
 
 
 def _make_transition_envelope(action_intent: Mapping[str, Any], policy_snapshot: str) -> dict[str, Any]:
-    intent = ActionIntent(**dict(action_intent))
-    return governance_mod._synthesized_transfer_approval_envelope(  # noqa: SLF001 - benchmarking the current baseline equivalent
-        action_intent=intent,
-        policy_snapshot=policy_snapshot,
-    )
+    envelope = _transfer_approval_envelope()
+    envelope["policy_snapshot_ref"] = policy_snapshot
+    envelope["asset_ref"] = str(action_intent.get("resource", {}).get("asset_id") or envelope["asset_ref"])
+    return envelope
 
 
 def _make_transition_apply_inputs(envelope: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -171,16 +170,25 @@ def main() -> int:
     os.environ.setdefault("SEEDCORE_PDP_USE_AUTHZ_GRAPH_TRANSITIONS", "true")
 
     payload, compiled = _build_transfer_case()
+    authoritative_approval_envelope = _transfer_approval_envelope()
 
     rust_original = os.getenv("SEEDCORE_PDP_USE_RUST_POLICY_CORE_TRANSFER")
 
     def run_rust_policy_core() -> Any:
         os.environ["SEEDCORE_PDP_USE_RUST_POLICY_CORE_TRANSFER"] = "true"
-        return evaluate_intent(payload, compiled_authz_index=compiled)
+        policy_case = governance_mod.prepare_policy_case(
+            payload,
+            authoritative_approval_envelope=authoritative_approval_envelope,
+        )
+        return evaluate_intent(policy_case, compiled_authz_index=compiled)
 
     def run_compiled_only() -> Any:
         os.environ["SEEDCORE_PDP_USE_RUST_POLICY_CORE_TRANSFER"] = "false"
-        return evaluate_intent(payload, compiled_authz_index=compiled)
+        policy_case = governance_mod.prepare_policy_case(
+            payload,
+            authoritative_approval_envelope=authoritative_approval_envelope,
+        )
+        return evaluate_intent(policy_case, compiled_authz_index=compiled)
 
     rust_stat, rust_decision = _bench("pdp.restricted_transfer_rust_policy_core", run_rust_policy_core, iterations=iterations)
     compiled_stat, compiled_decision = _bench("pdp.restricted_transfer_compiled_graph", run_compiled_only, iterations=iterations)
@@ -210,7 +218,11 @@ def main() -> int:
         "governed_receipt_hash": compiled_decision.governed_receipt.get("decision_hash"),
     }
 
-    governance_ctx = build_governance_context(payload, compiled_authz_index=compiled)
+    governance_ctx = build_governance_context(
+        payload,
+        compiled_authz_index=compiled,
+        authoritative_approval_envelope=authoritative_approval_envelope,
+    )
     approval_envelope = _make_transition_envelope(
         governance_ctx["action_intent"],
         governance_ctx["policy_decision"]["policy_snapshot"],

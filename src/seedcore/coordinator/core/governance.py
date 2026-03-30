@@ -11,7 +11,6 @@ from typing import Any, Dict, Mapping, Sequence
 from urllib.parse import quote
 
 from seedcore.integrations.rust_kernel import (
-    apply_transfer_approval_transition_with_rust,
     approval_binding_hash_with_rust,
     evaluate_policy_with_rust,
     mint_execution_token_with_rust,
@@ -391,6 +390,7 @@ def prepare_policy_case(
     )
     resolved_twins = dict(relevant_twin_snapshot or {}) or build_twin_snapshot(task)
     action_intent = apply_twin_overrides_to_action_intent(action_intent, resolved_twins)
+    _sanitize_transfer_approval_context(action_intent)
     _apply_authoritative_transfer_approval(
         action_intent,
         approval_envelope=authoritative_approval_envelope,
@@ -409,6 +409,21 @@ def prepare_policy_case(
         telemetry_summary=dict(telemetry_summary or {}),
         cognitive_assessment=resolved_cognitive,
         evidence_summary=dict(evidence_summary or {}),
+        authoritative_approval_envelope=(
+            dict(authoritative_approval_envelope)
+            if isinstance(authoritative_approval_envelope, Mapping)
+            else {}
+        ),
+        authoritative_approval_transition_history=[
+            dict(item)
+            for item in (authoritative_approval_transition_history or [])
+            if isinstance(item, Mapping)
+        ],
+        authoritative_approval_transition_head=(
+            str(authoritative_approval_transition_head).strip()
+            if authoritative_approval_transition_head is not None and str(authoritative_approval_transition_head).strip()
+            else None
+        ),
     )
 
 
@@ -450,6 +465,35 @@ def merge_authoritative_twins(
                     baseline_twins["edge"].telemetry["target_zone"] = auth_zone
                     
     return baseline_twins
+
+
+def _authoritative_approval_envelope(policy_case: PolicyCase) -> Dict[str, Any] | None:
+    payload = (
+        policy_case.authoritative_approval_envelope
+        if isinstance(policy_case.authoritative_approval_envelope, Mapping)
+        else {}
+    )
+    return dict(payload) if payload else None
+
+
+def _authoritative_approval_transition_history(policy_case: PolicyCase) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in (
+            policy_case.authoritative_approval_transition_history
+            if isinstance(policy_case.authoritative_approval_transition_history, list)
+            else []
+        )
+        if isinstance(item, Mapping)
+    ]
+
+
+def _authoritative_approval_transition_head(policy_case: PolicyCase) -> str | None:
+    raw = policy_case.authoritative_approval_transition_head
+    if raw is None:
+        return None
+    normalized = str(raw).strip()
+    return normalized or None
 
 
 def normalize_authoritative_state(authoritative_state: Dict[str, Any]) -> Dict[str, Any]:
@@ -814,6 +858,9 @@ def evaluate_intent(
     telemetry_summary: Mapping[str, Any] | None = None,
     cognitive_assessment: Mapping[str, Any] | PolicyCaseAssessment | None = None,
     evidence_summary: Mapping[str, Any] | None = None,
+    authoritative_approval_envelope: Mapping[str, Any] | None = None,
+    authoritative_approval_transition_history: Sequence[Mapping[str, Any]] | None = None,
+    authoritative_approval_transition_head: str | None = None,
 ) -> PolicyDecision:
     policy_case = (
         action_intent
@@ -826,6 +873,9 @@ def evaluate_intent(
             telemetry_summary=telemetry_summary,
             cognitive_assessment=cognitive_assessment,
             evidence_summary=evidence_summary,
+            authoritative_approval_envelope=authoritative_approval_envelope,
+            authoritative_approval_transition_history=authoritative_approval_transition_history,
+            authoritative_approval_transition_head=authoritative_approval_transition_head,
         )
     )
     action_intent = policy_case.action_intent
@@ -967,7 +1017,14 @@ def evaluate_intent(
         _is_restricted_custody_transfer(action_intent)
         and _pdp_use_rust_policy_core_for_restricted_transfer()
     )
-    if transfer_prerequisite_violation is not None and not use_rust_policy_core:
+    if transfer_prerequisite_violation is not None:
+        transfer_prereq_disposition = str(transfer_prerequisite_violation.disposition or "deny").strip().lower()
+    else:
+        transfer_prereq_disposition = None
+    if transfer_prerequisite_violation is not None and (
+        not use_rust_policy_core
+        or transfer_prereq_disposition in {"escalate", "quarantine"}
+    ):
         return _finalize_policy_decision_contract(
             policy_case=policy_case,
             policy_decision=transfer_prerequisite_violation,
@@ -1022,11 +1079,7 @@ def evaluate_intent(
                 authority_graph = dict(authz_graph_violation.authz_graph)
 
         approval_context = _approval_context(action_intent)
-        approval_envelope = (
-            dict(approval_context.get("approval_envelope"))
-            if isinstance(approval_context.get("approval_envelope"), Mapping)
-            else None
-        )
+        approval_envelope = _authoritative_approval_envelope(policy_case)
         telemetry_summary = policy_case.telemetry_summary if isinstance(policy_case.telemetry_summary, Mapping) else {}
         rust_input = {
             "action_intent": {
@@ -2046,6 +2099,57 @@ def _set_approval_context(action_intent: ActionIntent, approval_context: Mapping
     action_intent.action.parameters = parameters
 
 
+def _sanitize_transfer_approval_context(action_intent: ActionIntent) -> None:
+    if not _is_restricted_custody_transfer(action_intent):
+        return
+    approval_context = _approval_context(action_intent)
+    if not approval_context:
+        return
+    for key in (
+        "approval_envelope",
+        "approval_transition",
+        "approval_transition_history",
+        "approval_transition_count",
+        "approval_transition_head",
+        "last_approval_transition_event",
+        "expected_co_signers",
+        "co_sign_binding_hash",
+        "co_sign_status",
+        "co_signatures",
+    ):
+        approval_context.pop(key, None)
+    _set_approval_context(action_intent, approval_context)
+
+
+def _approval_roles_from_envelope(approval_envelope: Mapping[str, Any]) -> list[str]:
+    roles: list[str] = []
+    raw = approval_envelope.get("required_approvals")
+    if not isinstance(raw, list):
+        return roles
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        role = str(item.get("role") or "").strip()
+        if role and role not in roles:
+            roles.append(role)
+    return roles
+
+
+def _approved_principals_from_envelope(approval_envelope: Mapping[str, Any]) -> list[str]:
+    principals: list[str] = []
+    raw = approval_envelope.get("required_approvals")
+    if not isinstance(raw, list):
+        return principals
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        status = str(item.get("status") or "").strip().upper()
+        principal_ref = str(item.get("principal_ref") or "").strip()
+        if status == "APPROVED" and principal_ref and principal_ref not in principals:
+            principals.append(principal_ref)
+    return principals
+
+
 def _apply_authoritative_transfer_approval(
     action_intent: ActionIntent,
     *,
@@ -2053,12 +2157,13 @@ def _apply_authoritative_transfer_approval(
     transition_history: Sequence[Mapping[str, Any]] | None = None,
     transition_head: str | None = None,
 ) -> None:
-    if not isinstance(approval_envelope, Mapping) and not transition_history and transition_head is None:
-        return
     approval_context = _approval_context(action_intent)
+    if not isinstance(approval_envelope, Mapping) and not transition_history and transition_head is None:
+        if approval_context:
+            _set_approval_context(action_intent, approval_context)
+        return
     if isinstance(approval_envelope, Mapping):
         envelope_payload = dict(approval_envelope)
-        approval_context["approval_envelope"] = envelope_payload
         envelope_id = str(envelope_payload.get("approval_envelope_id") or "").strip()
         if envelope_id:
             approval_context["approval_envelope_id"] = envelope_id
@@ -2069,6 +2174,14 @@ def _apply_authoritative_transfer_approval(
         if version is not None:
             approval_context["approval_envelope_version"] = int(version)
             approval_context["observed_version"] = int(version)
+        derived_roles = _approval_roles_from_envelope(envelope_payload)
+        if derived_roles:
+            approval_context["required_roles"] = derived_roles
+        derived_approved_by = _approved_principals_from_envelope(envelope_payload)
+        if derived_approved_by:
+            approval_context["approved_by"] = derived_approved_by
+        else:
+            approval_context.pop("approved_by", None)
     if transition_history:
         normalized_history: list[dict[str, Any]] = []
         derived_head: str | None = None
@@ -2086,9 +2199,11 @@ def _apply_authoritative_transfer_approval(
             if event_hash is not None and str(event_hash).strip():
                 derived_head = str(event_hash).strip()
         if normalized_history:
-            approval_context["approval_transition_history"] = normalized_history
             approval_context["approval_transition_count"] = len(normalized_history)
+        if normalized_history:
             approval_context["last_approval_transition_event"] = dict(normalized_history[-1])
+        else:
+            approval_context.pop("last_approval_transition_event", None)
         if derived_head and transition_head is None:
             transition_head = derived_head
     normalized_head = (
@@ -2098,6 +2213,8 @@ def _apply_authoritative_transfer_approval(
     )
     if normalized_head is not None:
         approval_context["approval_transition_head"] = normalized_head
+    else:
+        approval_context.pop("approval_transition_head", None)
     _set_approval_context(action_intent, approval_context)
 
 
@@ -2292,93 +2409,7 @@ def _evaluate_restricted_custody_transfer_prerequisites(
             if value and value not in approved_by:
                 approved_by.append(value)
 
-    approval_envelope_payload = approval_context.get("approval_envelope")
-    approval_transition_payload = approval_context.get("approval_transition")
-    if isinstance(approval_envelope_payload, Mapping) and isinstance(approval_transition_payload, Mapping):
-        history_events = (
-            list(approval_context.get("approval_transition_history"))
-            if isinstance(approval_context.get("approval_transition_history"), list)
-            else []
-        )
-        history_head = approval_context.get("approval_transition_head")
-        history_payload = {
-            "events": history_events,
-            "chain_head": (
-                str(history_head).strip()
-                if history_head is not None and str(history_head).strip()
-                else None
-            ),
-        }
-        transition_now = _utcnow()
-        action_timestamp = str(action_intent.timestamp or "").strip()
-        if action_timestamp:
-            try:
-                transition_now = _parse_iso8601(action_timestamp)
-            except Exception:
-                transition_now = _utcnow()
-        rust_transition = apply_transfer_approval_transition_with_rust(
-            dict(approval_envelope_payload),
-            dict(approval_transition_payload),
-            history=history_payload,
-            now=transition_now,
-        )
-        if not bool(rust_transition.get("valid")):
-            missing_prerequisites = [
-                {
-                    "code": "approval_transition",
-                    "outcome": "invalid",
-                    "message": "Restricted custody transfer approval transition failed Rust validation.",
-                    "details": {
-                        "rust_error_code": rust_transition.get("error_code"),
-                        "rust_details": list(rust_transition.get("details") or []),
-                    },
-                }
-            ]
-            return _escalate_decision(
-                "Restricted custody transfer approval transition is invalid.",
-                policy_case.policy_snapshot,
-                cognitive_assessment=policy_case.cognitive_assessment,
-                explanations=_policy_case_explanations(
-                    policy_case,
-                    "restricted_custody_transfer_approval_transition_invalid",
-                ),
-                authz_graph={
-                    "mode": "transfer_prerequisite_check",
-                    "disposition": "escalate",
-                    "reason": "approval_transition_invalid",
-                    "matched_policy_refs": [],
-                    "authority_paths": [],
-                    "authority_path_summary": [],
-                    "missing_prerequisites": missing_prerequisites,
-                    "trust_gaps": [],
-                },
-            ).model_copy(update={"required_approvals": required_approvals})
-        updated_envelope = rust_transition.get("approval_envelope")
-        if isinstance(updated_envelope, Mapping):
-            approval_envelope_payload = dict(updated_envelope)
-            approval_context["approval_envelope"] = dict(updated_envelope)
-        transition_binding_hash = _approval_binding_hash_string(rust_transition.get("binding_hash"))
-        if transition_binding_hash is not None:
-            approval_context["approval_binding_hash"] = transition_binding_hash
-        transition_history = rust_transition.get("history")
-        if isinstance(transition_history, Mapping):
-            raw_events = transition_history.get("events")
-            if isinstance(raw_events, list):
-                approval_context["approval_transition_history"] = list(raw_events)
-            chain_head_raw = transition_history.get("chain_head")
-            chain_head = (
-                str(chain_head_raw).strip()
-                if chain_head_raw is not None and str(chain_head_raw).strip()
-                else None
-            )
-            if chain_head is not None:
-                approval_context["approval_transition_head"] = chain_head
-            else:
-                approval_context.pop("approval_transition_head", None)
-        transition_event = rust_transition.get("transition_event")
-        if isinstance(transition_event, Mapping):
-            approval_context["last_approval_transition_event"] = dict(transition_event)
-        approval_context.pop("approval_transition", None)
+    approval_envelope_payload = _authoritative_approval_envelope(policy_case)
 
     if not isinstance(approval_envelope_payload, Mapping):
         return _deny_decision(
@@ -2530,20 +2561,23 @@ def _evaluate_restricted_custody_transfer_prerequisites(
         if envelope_version is not None:
             approval_context["approval_envelope_version"] = int(envelope_version)
             approval_context["observed_version"] = int(envelope_version)
-        if not required_approvals:
-            required_roles_raw = rust_summary.get("required_roles")
-            if isinstance(required_roles_raw, list):
-                for item in required_roles_raw:
-                    value = str(item).strip()
-                    if value and value not in required_approvals:
-                        required_approvals.append(value)
-        if not approved_by:
-            approved_by_raw = rust_summary.get("approved_by")
-            if isinstance(approved_by_raw, list):
-                for item in approved_by_raw:
-                    value = str(item).strip()
-                    if value and value not in approved_by:
-                        approved_by.append(value)
+        authoritative_required_approvals: list[str] = []
+        required_roles_raw = rust_summary.get("required_roles")
+        if isinstance(required_roles_raw, list):
+            for item in required_roles_raw:
+                value = str(item).strip()
+                if value and value not in authoritative_required_approvals:
+                    authoritative_required_approvals.append(value)
+        if authoritative_required_approvals:
+            required_approvals = authoritative_required_approvals
+        authoritative_approved_by: list[str] = []
+        approved_by_raw = rust_summary.get("approved_by")
+        if isinstance(approved_by_raw, list):
+            for item in approved_by_raw:
+                value = str(item).strip()
+                if value and value not in authoritative_approved_by:
+                    authoritative_approved_by.append(value)
+        approved_by = authoritative_approved_by
 
     expected_co_signers = _transfer_expected_co_signers(
         action_intent,
@@ -2845,16 +2879,15 @@ def _finalize_policy_decision_contract(
         authz_graph["workflow_type"] = RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE
         authz_graph["workflow_status"] = _workflow_status_for_decision(policy_decision)
         approval_context = _approval_context(action_intent)
+        authoritative_approval_envelope = _authoritative_approval_envelope(policy_case)
+        authoritative_transition_history = _authoritative_approval_transition_history(policy_case)
+        authoritative_transition_head = _authoritative_approval_transition_head(policy_case)
         if bool(policy_decision.break_glass.validated) and _is_zone_administrator(action_intent):
             approval_context["emergency_override_principal_ref"] = f"principal:{action_intent.principal.agent_id}"
         expected_co_signers = _transfer_expected_co_signers(
             action_intent,
             approval_context=approval_context,
-            approval_envelope=(
-                approval_context.get("approval_envelope")
-                if isinstance(approval_context.get("approval_envelope"), Mapping)
-                else None
-            ),
+            approval_envelope=authoritative_approval_envelope,
         )
         approved_by = (
             list(approval_context.get("approved_by"))
@@ -2887,12 +2920,7 @@ def _finalize_policy_decision_contract(
         )
         authz_graph["approval_binding_hash"] = _approval_binding_hash_string(approval_context.get("approval_binding_hash"))
         authz_graph["approved_by"] = approved_by
-        transition_history = (
-            list(approval_context.get("approval_transition_history"))
-            if isinstance(approval_context.get("approval_transition_history"), list)
-            else []
-        )
-        authz_graph["approval_transition_count"] = len(transition_history)
+        authz_graph["approval_transition_count"] = len(authoritative_transition_history)
         authz_graph["co_sign_required"] = bool(expected_co_signers)
         authz_graph["co_sign_status"] = co_sign_status
         authz_graph["transfer_outcome"] = transfer_outcome
@@ -2900,26 +2928,21 @@ def _finalize_policy_decision_contract(
         authz_graph["co_sign_binding_hash"] = (
             str(approval_context.get("co_sign_binding_hash")).strip()
             if approval_context.get("co_sign_binding_hash") is not None and str(approval_context.get("co_sign_binding_hash")).strip()
-            else _transfer_co_sign_binding_hash(
-                action_intent=action_intent,
-                approval_context=approval_context,
-                approval_envelope=(
-                    approval_context.get("approval_envelope")
-                    if isinstance(approval_context.get("approval_envelope"), Mapping)
-                    else None
-                ),
-                snapshot_hash=(
-                    str(authz_graph.get("snapshot_hash")).strip()
-                    if authz_graph.get("snapshot_hash") is not None and str(authz_graph.get("snapshot_hash")).strip()
-                    else None
-                ),
-                transfer_outcome=transfer_outcome,
-            )
+                else _transfer_co_sign_binding_hash(
+                    action_intent=action_intent,
+                    approval_context=approval_context,
+                    approval_envelope=authoritative_approval_envelope,
+                    snapshot_hash=(
+                        str(authz_graph.get("snapshot_hash")).strip()
+                        if authz_graph.get("snapshot_hash") is not None and str(authz_graph.get("snapshot_hash")).strip()
+                        else None
+                    ),
+                    transfer_outcome=transfer_outcome,
+                )
         )
-        transition_head_raw = approval_context.get("approval_transition_head")
         authz_graph["approval_transition_head"] = (
-            str(transition_head_raw).strip()
-            if transition_head_raw is not None and str(transition_head_raw).strip()
+            str(authoritative_transition_head).strip()
+            if authoritative_transition_head is not None and str(authoritative_transition_head).strip()
             else None
         )
 
@@ -2939,17 +2962,16 @@ def _finalize_policy_decision_contract(
     )
     if _is_restricted_custody_transfer(action_intent) and governed_receipt:
         approval_context = _approval_context(action_intent)
+        authoritative_approval_envelope = _authoritative_approval_envelope(policy_case)
+        authoritative_transition_history = _authoritative_approval_transition_history(policy_case)
+        authoritative_transition_head = _authoritative_approval_transition_head(policy_case)
         if bool(policy_decision.break_glass.validated) and _is_zone_administrator(action_intent):
             approval_context["emergency_override_principal_ref"] = f"principal:{action_intent.principal.agent_id}"
         approved_by = approval_context.get("approved_by") if isinstance(approval_context.get("approved_by"), list) else []
         expected_co_signers = _transfer_expected_co_signers(
             action_intent,
             approval_context=approval_context,
-            approval_envelope=(
-                approval_context.get("approval_envelope")
-                if isinstance(approval_context.get("approval_envelope"), Mapping)
-                else None
-            ),
+            approval_envelope=authoritative_approval_envelope,
         )
         transfer_outcome = _transfer_outcome_label(
             action_intent=action_intent,
@@ -2985,19 +3007,20 @@ def _finalize_policy_decision_contract(
                     if isinstance(approval_context.get("co_signatures"), list)
                     else []
                 ),
-                "approval_transition_count": len(
-                    approval_context.get("approval_transition_history")
-                    if isinstance(approval_context.get("approval_transition_history"), list)
-                    else []
-                ),
+                "approval_transition_count": len(authoritative_transition_history),
                 "approval_transition_head": (
-                    str(approval_context.get("approval_transition_head")).strip()
-                    if approval_context.get("approval_transition_head") is not None and str(approval_context.get("approval_transition_head")).strip()
+                    str(authoritative_transition_head).strip()
+                    if authoritative_transition_head is not None and str(authoritative_transition_head).strip()
                     else None
                 ),
                 "last_approval_transition_event": (
-                    dict(approval_context.get("last_approval_transition_event"))
-                    if isinstance(approval_context.get("last_approval_transition_event"), Mapping)
+                    dict(authoritative_transition_history[-1].get("transition_event"))
+                    if authoritative_transition_history
+                    and isinstance(authoritative_transition_history[-1], Mapping)
+                    and isinstance(authoritative_transition_history[-1].get("transition_event"), Mapping)
+                    else dict(authoritative_transition_history[-1])
+                    if authoritative_transition_history
+                    and isinstance(authoritative_transition_history[-1], Mapping)
                     else {}
                 ),
                 "from_zone": _transfer_context_value(action_intent, "from_zone"),

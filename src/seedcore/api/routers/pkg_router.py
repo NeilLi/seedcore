@@ -23,7 +23,11 @@ from ...ops.pkg import (
 )
 from ...ops.pkg.manager import PKGMode
 from ...ops.pkg.manager import PKG_REDIS_CHANNEL
-from ...ops.pdp_hot_path import evaluate_pdp_hot_path, hot_path_shadow_status
+from ...ops.pdp_hot_path import (
+    evaluate_pdp_hot_path,
+    hot_path_shadow_status,
+    resolve_authoritative_transfer_approval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +63,25 @@ async def pdp_hot_path_evaluate(
     """
     Evaluate the asset-centric PDP hot path contract for Restricted Custody Transfer.
     """
-    result = evaluate_pdp_hot_path(payload)
+    authoritative_transfer_approval = await resolve_authoritative_transfer_approval(payload)
+    result = evaluate_pdp_hot_path(
+        payload,
+        authoritative_approval_envelope=(
+            authoritative_transfer_approval.get("authoritative_approval_envelope")
+            if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
+            else None
+        ),
+        authoritative_approval_transition_history=(
+            authoritative_transfer_approval.get("authoritative_approval_transition_history")
+            if isinstance(authoritative_transfer_approval.get("authoritative_approval_transition_history"), list)
+            else None
+        ),
+        authoritative_approval_transition_head=(
+            str(authoritative_transfer_approval.get("authoritative_approval_transition_head"))
+            if authoritative_transfer_approval.get("authoritative_approval_transition_head") is not None
+            else None
+        ),
+    )
     if debug:
         return result
     return result

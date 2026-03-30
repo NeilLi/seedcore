@@ -289,6 +289,9 @@ class PolicyCase(BaseModel):
     telemetry_summary: Dict[str, Any] = Field(default_factory=dict)
     cognitive_assessment: Optional[PolicyCaseAssessment] = None
     evidence_summary: Dict[str, Any] = Field(default_factory=dict)
+    authoritative_approval_envelope: Dict[str, Any] = Field(default_factory=dict)
+    authoritative_approval_transition_history: List[Dict[str, Any]] = Field(default_factory=list)
+    authoritative_approval_transition_head: Optional[str] = None
 
 
 class ExecutionToken(BaseModel):

@@ -71,48 +71,45 @@ echo "Runtime API:      ${RUNTIME_API_BASE}"
 
 AUDIT_ID="$(find_runtime_audit_id || true)"
 if [[ -z "${AUDIT_ID}" ]]; then
-  echo "[WARN] No runtime audit_id discovered. Runtime checks will be skipped."
+  echo "[FAIL] No runtime audit_id discovered. Set SEEDCORE_AUDIT_ID or populate governed_execution_audit before running live sign-off." >&2
+  exit 1
 fi
 
 # Phase 1.1 - Receipt integrity checks (runtime)
-if [[ -n "${AUDIT_ID}" ]]; then
-  replay_payload="$(json_get "${RUNTIME_API_BASE}/replay?audit_id=${AUDIT_ID}&projection=internal")"
+replay_payload="$(json_get "${RUNTIME_API_BASE}/replay?audit_id=${AUDIT_ID}&projection=internal")"
 
-  check "phase1.1 receipt includes governed decision hash" \
-    jq -e '.view.audit_record.policy_decision.governed_receipt.decision_hash | type == "string"' <<<"${replay_payload}" >/dev/null
+check "phase1.1 receipt includes governed decision hash" \
+  jq -e '.view.audit_record.policy_decision.governed_receipt.decision_hash | type == "string"' <<<"${replay_payload}" >/dev/null
 
-  check "phase1.1 receipt includes policy snapshot id" \
-    jq -e '.view.audit_record.policy_snapshot | type == "string"' <<<"${replay_payload}" >/dev/null
+check "phase1.1 receipt includes policy snapshot id" \
+  jq -e '.view.audit_record.policy_snapshot | type == "string"' <<<"${replay_payload}" >/dev/null
 
-  check "phase1.1 signer provenance available in forensic view" \
-    jq -e '.signature_provenance | length > 0' \
-      <<<"$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")" >/dev/null
+check "phase1.1 signer provenance available in forensic view" \
+  jq -e '.signature_provenance | length > 0' \
+    <<<"$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")" >/dev/null
 
-  verify_payload="$(json_post "${RUNTIME_API_BASE}/verify" "{\"audit_id\":\"${AUDIT_ID}\"}")"
-  check "phase1.1 runtime verify endpoint executes for receipt id" \
-    jq -e '.verified == true or .verified == false' <<<"${verify_payload}" >/dev/null
+verify_payload="$(json_post "${RUNTIME_API_BASE}/verify" "{\"audit_id\":\"${AUDIT_ID}\"}")"
+check "phase1.1 runtime verify endpoint executes for receipt id" \
+  jq -e '.verified == true or .verified == false' <<<"${verify_payload}" >/dev/null
 
-  # Phase 1.2 - Replay accuracy and business-state rendering
-  status_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/transfers/status?source=runtime&audit_id=${AUDIT_ID}")"
-  check "phase1.2 replay status has business-readable state vocabulary" \
-    jq -e '.business_state | IN("verified","quarantined","rejected","review_required","verification_failed")' <<<"${status_payload}" >/dev/null
-  check "phase1.2 replay status renders non-empty timeline" \
-    jq -e '.timeline | length > 0' <<<"${status_payload}" >/dev/null
-fi
+# Phase 1.2 - Replay accuracy and business-state rendering
+status_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/transfers/status?source=runtime&audit_id=${AUDIT_ID}")"
+check "phase1.2 replay status has business-readable state vocabulary" \
+  jq -e '.business_state | IN("verified","quarantined","rejected","review_required","verification_failed")' <<<"${status_payload}" >/dev/null
+check "phase1.2 replay status renders non-empty timeline" \
+  jq -e '.timeline | length > 0' <<<"${status_payload}" >/dev/null
 
 # Phase 2.1 - Lookup contract enforcement (BFF gate behavior)
 check "phase2.1 transfer status rejects subject-only runtime lookup" \
   test "$(status_code "${VERIFICATION_API_BASE}/api/v1/transfers/status?source=runtime&subject_id=asset:demo")" = "422"
 
 # Phase 2.2 - Policy snapshot fidelity
-if [[ -n "${AUDIT_ID}" ]]; then
-  forensic_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")"
-  replay_payload="$(json_get "${RUNTIME_API_BASE}/replay?audit_id=${AUDIT_ID}&projection=internal")"
-  forensic_snapshot="$(jq -r '.policy_snapshot_ref' <<<"${forensic_payload}")"
-  replay_snapshot="$(jq -r '.view.audit_record.policy_snapshot' <<<"${replay_payload}")"
-  check "phase2.2 forensic policy snapshot matches runtime audit snapshot" \
-    test "${forensic_snapshot}" = "${replay_snapshot}"
-fi
+forensic_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")"
+replay_payload="$(json_get "${RUNTIME_API_BASE}/replay?audit_id=${AUDIT_ID}&projection=internal")"
+forensic_snapshot="$(jq -r '.policy_snapshot_ref' <<<"${forensic_payload}")"
+replay_snapshot="$(jq -r '.view.audit_record.policy_snapshot' <<<"${replay_payload}")"
+check "phase2.2 forensic policy snapshot matches runtime audit snapshot" \
+  test "${forensic_snapshot}" = "${replay_snapshot}"
 
 # Phase 3.1 - Prerequisite chain verification (fixture deny)
 deny_fixture="rust/fixtures/transfers/deny_missing_approval"

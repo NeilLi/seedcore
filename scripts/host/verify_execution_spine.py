@@ -21,7 +21,6 @@ if str(SRC_ROOT) not in sys.path:
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 
-from seedcore.coordinator.core import governance as governance_mod
 from seedcore.coordinator.core.governance import (  # noqa: E402
     ActionIntent,
     build_governance_context,
@@ -31,7 +30,7 @@ from seedcore.integrations.rust_kernel import verify_execution_token_with_rust  
 from seedcore.models.evidence_bundle import EvidenceBundle, PolicyReceipt, TransitionReceipt  # noqa: E402
 from seedcore.models.task_payload import TaskPayload  # noqa: E402
 from seedcore.ops.evidence.builder import build_evidence_bundle  # noqa: E402
-from test_action_intent import _compiled_transfer_graph, _transfer_payload  # noqa: E402
+from test_action_intent import _compiled_transfer_graph, _transfer_approval_envelope, _transfer_payload  # noqa: E402
 from test_replay_router import _make_client  # noqa: E402
 from test_replay_service import _build_audit_record  # noqa: E402
 
@@ -202,7 +201,12 @@ def main() -> int:
         inspection_at=now - timedelta(minutes=2),
         current_custodian="facility_mgr_001",
     )
-    governance_ctx = build_governance_context(task_payload_dict, compiled_authz_index=compiled)
+    authoritative_approval_envelope = _transfer_approval_envelope()
+    governance_ctx = build_governance_context(
+        task_payload_dict,
+        compiled_authz_index=compiled,
+        authoritative_approval_envelope=authoritative_approval_envelope,
+    )
     action_intent = ActionIntent(**governance_ctx["action_intent"])
     results.append(
         CheckResult(
@@ -218,10 +222,8 @@ def main() -> int:
         )
     )
 
-    transfer_envelope = governance_mod._synthesized_transfer_approval_envelope(  # noqa: SLF001 - verification of current baseline equivalent
-        action_intent=action_intent,
-        policy_snapshot=governance_ctx["policy_decision"]["policy_snapshot"],
-    )
+    transfer_envelope = dict(authoritative_approval_envelope)
+    transfer_envelope["policy_snapshot_ref"] = governance_ctx["policy_decision"]["policy_snapshot"]
     results.append(
         CheckResult(
             "spine.transfer_approval_envelope_current_equivalent",
@@ -229,7 +231,7 @@ def main() -> int:
             and transfer_envelope["status"] == "APPROVED"
             and len(transfer_envelope["required_approvals"]) == 2,
             {
-                "implemented_as": "synthesized_transfer_approval_envelope",
+                "implemented_as": "authoritative_transfer_approval_fixture",
                 "approval_envelope_id": transfer_envelope["approval_envelope_id"],
                 "status": transfer_envelope["status"],
                 "required_roles": [item["role"] for item in transfer_envelope["required_approvals"]],

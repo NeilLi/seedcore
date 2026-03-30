@@ -1656,18 +1656,57 @@ class ReplayService:
         return dict(payload) if isinstance(payload, dict) else {}
 
     def _approval_context(self, replay: ReplayRecord) -> Dict[str, Any]:
-        action_intent = self._action_intent_payload(replay)
-        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
-        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
-        approval_context = parameters.get("approval_context")
-        return dict(approval_context) if isinstance(approval_context, dict) else {}
+        record = replay.audit_record if isinstance(replay.audit_record, dict) else {}
+        return self._approval_context_from_record(record)
 
     def _approval_context_from_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
         action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
         action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
         parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
         approval_context = parameters.get("approval_context")
-        return dict(approval_context) if isinstance(approval_context, dict) else {}
+        merged = dict(approval_context) if isinstance(approval_context, dict) else {}
+
+        policy_case = record.get("policy_case") if isinstance(record.get("policy_case"), dict) else {}
+        authoritative_envelope = (
+            dict(policy_case.get("authoritative_approval_envelope"))
+            if isinstance(policy_case.get("authoritative_approval_envelope"), dict)
+            else {}
+        )
+        if authoritative_envelope:
+            envelope_id = authoritative_envelope.get("approval_envelope_id")
+            if envelope_id is not None and str(envelope_id).strip():
+                merged.setdefault("approval_envelope_id", str(envelope_id).strip())
+            envelope_version = authoritative_envelope.get("version")
+            if envelope_version is not None:
+                merged.setdefault("approval_envelope_version", int(envelope_version))
+                merged.setdefault("observed_version", int(envelope_version))
+            binding_hash = authoritative_envelope.get("approval_binding_hash")
+            if binding_hash is not None:
+                if isinstance(binding_hash, dict):
+                    algorithm = str(binding_hash.get("algorithm") or "").strip()
+                    digest = str(binding_hash.get("value") or "").strip()
+                    if algorithm and digest:
+                        merged.setdefault("approval_binding_hash", f"{algorithm}:{digest}")
+                elif str(binding_hash).strip():
+                    merged.setdefault("approval_binding_hash", str(binding_hash).strip())
+
+        authoritative_history = (
+            list(policy_case.get("authoritative_approval_transition_history"))
+            if isinstance(policy_case.get("authoritative_approval_transition_history"), list)
+            else []
+        )
+        if authoritative_history and not isinstance(merged.get("approval_transition_history"), list):
+            merged["approval_transition_history"] = [
+                dict(item.get("transition_event"))
+                if isinstance(item, dict) and isinstance(item.get("transition_event"), dict)
+                else dict(item)
+                for item in authoritative_history
+                if isinstance(item, dict)
+            ]
+        authoritative_head = policy_case.get("authoritative_approval_transition_head")
+        if authoritative_head is not None and str(authoritative_head).strip():
+            merged.setdefault("approval_transition_head", str(authoritative_head).strip())
+        return merged
 
     def _build_rust_replay_artifacts(
         self,

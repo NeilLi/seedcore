@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -15,6 +16,7 @@ import mock_eventizer_dependencies  # noqa: F401
 import seedcore.api.routers.pkg_router as pkg_router
 import seedcore.ops.pdp_hot_path as pdp_hot_path
 from seedcore.models.action_intent import ExecutionToken, PolicyDecision
+from seedcore.models.pdp_hot_path import HotPathDecisionView, HotPathEvaluateResponse
 
 
 def _make_client() -> TestClient:
@@ -174,3 +176,58 @@ def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monke
     assert body["execution_token"]["token_id"] == "token-transfer-001"
     assert body["signer_provenance"][0]["artifact_type"] == "execution_token"
     assert body["signer_provenance"][0]["signer_id"] == "seedcore-verify"
+
+
+def test_pdp_hot_path_route_resolves_and_forwards_authoritative_approval(monkeypatch):
+    async def fake_resolve(request):
+        assert request.action_intent.action.parameters["approval_context"]["approval_envelope_id"] == "approval-transfer-001"
+        return {
+            "authoritative_approval_envelope": {
+                "approval_envelope_id": "approval-transfer-001",
+                "status": "APPROVED",
+            },
+            "authoritative_approval_transition_history": [
+                {"event_id": "approval-transition-event:001"}
+            ],
+            "authoritative_approval_transition_head": "sha256:transition-head-001",
+        }
+
+    def fake_evaluate(
+        request,
+        *,
+        authoritative_approval_envelope=None,
+        authoritative_approval_transition_history=None,
+        authoritative_approval_transition_head=None,
+    ):
+        assert authoritative_approval_envelope == {
+            "approval_envelope_id": "approval-transfer-001",
+            "status": "APPROVED",
+        }
+        assert authoritative_approval_transition_history == [
+            {"event_id": "approval-transition-event:001"}
+        ]
+        assert authoritative_approval_transition_head == "sha256:transition-head-001"
+        return HotPathEvaluateResponse(
+            request_id=request.request_id,
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=4,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="restricted_custody_transfer_allowed",
+                reason="restricted_custody_transfer_allowed",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            ),
+            required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+        )
+
+    monkeypatch.setattr(pkg_router, "resolve_authoritative_transfer_approval", fake_resolve)
+    monkeypatch.setattr(pkg_router, "evaluate_pdp_hot_path", fake_evaluate)
+
+    client = _make_client()
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=_base_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "allow"
+    assert body["required_approvals"] == ["FACILITY_MANAGER", "QUALITY_INSPECTOR"]
