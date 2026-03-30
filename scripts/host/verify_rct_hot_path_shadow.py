@@ -21,6 +21,12 @@ CANONICAL_CASES = (
     "quarantine_stale_telemetry",
     "escalate_break_glass",
 )
+EXPECTED_DISPOSITIONS = {
+    "allow_case": "allow",
+    "deny_missing_approval": "deny",
+    "quarantine_stale_telemetry": "quarantine",
+    "escalate_break_glass": "escalate",
+}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -42,6 +48,18 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
 def _get_json(url: str) -> dict[str, Any]:
     with request.urlopen(url) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _resolve_active_snapshot(base_url: str) -> str | None:
+    try:
+        status = _get_json(f"{base_url.rstrip('/')}/pkg/status")
+    except Exception:
+        return None
+    active_version = str(status.get("active_version") or "").strip()
+    if active_version:
+        return active_version
+    version = str(status.get("version") or "").strip()
+    return version or None
 
 
 def _build_break_glass_token(
@@ -268,15 +286,21 @@ def main() -> int:
 
     evaluate_url = f"{args.base_url.rstrip('/')}/pdp/hot-path/evaluate?debug=true"
     status_url = f"{args.base_url.rstrip('/')}/pdp/hot-path/status"
+    active_snapshot = _resolve_active_snapshot(args.base_url)
+    status_before = _get_json(status_url)
+    before_total = int(status_before.get("total") or 0)
+    before_parity_ok = int(status_before.get("parity_ok") or 0)
+    before_mismatched = int(status_before.get("mismatched") or 0)
 
     rows: list[dict[str, Any]] = []
     for case_name in CANONICAL_CASES:
         case_dir = FIXTURE_ROOT / case_name
         persisted_approval = _persist_authoritative_approval(args.base_url, case_dir)
-        response = _post_json(
-            evaluate_url,
-            _build_request(case_dir, persisted_approval=persisted_approval),
-        )
+        payload = _build_request(case_dir, persisted_approval=persisted_approval)
+        if active_snapshot:
+            payload["policy_snapshot_ref"] = active_snapshot
+            payload["action_intent"]["action"]["security_contract"]["version"] = active_snapshot
+        response = _post_json(evaluate_url, payload)
         rows.append(
             {
                 "case": case_name,
@@ -287,9 +311,18 @@ def main() -> int:
         )
 
     status = _get_json(status_url)
+    delta_total = max(0, int(status.get("total") or 0) - before_total)
+    delta_parity_ok = max(0, int(status.get("parity_ok") or 0) - before_parity_ok)
+    delta_mismatched = max(0, int(status.get("mismatched") or 0) - before_mismatched)
 
     print("Restricted Custody Transfer Hot-Path Shadow")
     print(f"mode: {status.get('mode')}")
+    print(f"active_snapshot: {active_snapshot or 'unresolved'}")
+    print(
+        "run_parity: "
+        f"{delta_parity_ok}/{delta_total} ok, "
+        f"{delta_mismatched} mismatched"
+    )
     print(
         "parity: "
         f"{status.get('parity_ok', 0)}/{status.get('total', 0)} ok, "
@@ -309,6 +342,14 @@ def main() -> int:
             f"reason={row['reason_code']} latency_ms={row['latency_ms']}"
         )
 
+    disposition_mismatches = [
+        row["case"]
+        for row in rows
+        if row.get("disposition") != EXPECTED_DISPOSITIONS.get(row.get("case"))
+    ]
+    if disposition_mismatches:
+        print(f"disposition_mismatches: {','.join(disposition_mismatches)}")
+
     recent = status.get("recent_results") or []
     mismatches = [item for item in recent if not item.get("parity_ok")]
     if mismatches:
@@ -317,6 +358,12 @@ def main() -> int:
             print(
                 f"  - {item.get('request_id')}: mismatches={','.join(item.get('mismatches') or [])}"
             )
+    if status.get("mode") != "shadow":
+        return 1
+    if delta_mismatched > 0:
+        return 1
+    if disposition_mismatches:
+        return 1
     return 0
 
 

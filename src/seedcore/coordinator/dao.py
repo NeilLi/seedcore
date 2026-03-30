@@ -927,16 +927,26 @@ class TransferApprovalEnvelopeDAO:
         *,
         envelope: Dict[str, Any],
     ) -> Dict[str, Any]:
-        normalized = self._validated_envelope(envelope)
-        version = int(normalized.get("version") or 1)
+        approval_envelope_id = str(envelope.get("approval_envelope_id") or "").strip()
+        if not approval_envelope_id:
+            raise ValueError("approval_envelope_id is required")
+        version = int(envelope.get("version") or 1)
         current = await self.get_current(
             session,
-            approval_envelope_id=str(normalized.get("approval_envelope_id") or ""),
+            approval_envelope_id=approval_envelope_id,
         )
+        version_bumped = False
         if current is not None and int(current.get("version") or 0) >= version:
             version = int(current.get("version") or 0) + 1
-            normalized["version"] = version
-        return await self.create_envelope(session, envelope=normalized)
+            version_bumped = True
+        candidate = dict(envelope)
+        candidate["version"] = version
+        if version_bumped:
+            # The hash binds the envelope payload; once we bump the version we
+            # must recompute from the updated payload rather than trust a
+            # caller-provided hash for an earlier version.
+            candidate.pop("approval_binding_hash", None)
+        return await self.create_envelope(session, envelope=candidate)
 
     async def get_current(self, session, *, approval_envelope_id: str) -> Optional[Dict[str, Any]]:
         stmt = text(
@@ -1262,7 +1272,9 @@ class TransferApprovalEnvelopeDAO:
             row.get("approval_binding_hash") if isinstance(row, dict) else row["approval_binding_hash"]
         )
         if binding_hash is not None:
-            payload["approval_binding_hash"] = binding_hash
+            binding_hash_object = self._binding_hash_object(binding_hash)
+            if binding_hash_object is not None:
+                payload["approval_binding_hash"] = binding_hash_object
         return {
             "id": str(row.get("id") if isinstance(row, dict) else row["id"]) if (row.get("id") if isinstance(row, dict) else row["id"]) is not None else None,
             "approval_envelope_id": payload["approval_envelope_id"],
@@ -1296,7 +1308,11 @@ class TransferApprovalEnvelopeDAO:
         provided_binding = self._coerce_binding_hash(payload.get("approval_binding_hash"))
         if provided_binding is not None and provided_binding != binding_hash:
             raise ValueError("approval_binding_hash_mismatch")
-        payload["approval_binding_hash"] = binding_hash
+        binding_hash_object = self._binding_hash_object(binding_hash)
+        if binding_hash_object is not None:
+            payload["approval_binding_hash"] = binding_hash_object
+        else:
+            payload.pop("approval_binding_hash", None)
         return payload
 
     def _history_payload(self, events: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1348,6 +1364,19 @@ class TransferApprovalEnvelopeDAO:
             return None
         normalized = str(value).strip()
         return normalized or None
+
+    def _binding_hash_object(self, value: Any) -> Optional[Dict[str, str]]:
+        normalized = self._coerce_binding_hash(value)
+        if normalized is None:
+            return None
+        if ":" not in normalized:
+            return None
+        algorithm, digest = normalized.split(":", 1)
+        algorithm = algorithm.strip()
+        digest = digest.strip()
+        if not algorithm or not digest:
+            return None
+        return {"algorithm": algorithm, "value": digest}
 
     def _coerce_datetime(self, value: Any) -> Optional[datetime]:
         if value is None:

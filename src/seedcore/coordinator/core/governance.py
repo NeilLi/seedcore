@@ -1737,8 +1737,17 @@ def _evaluate_compiled_authz_graph_policy(
     CompiledPermissionMatch | None,
     str,
 ]:
+    break_glass_violation, break_glass_context = _evaluate_break_glass_context(
+        action_intent=action_intent,
+        now=_parse_iso8601(action_intent.timestamp),
+        policy_snapshot=policy_case.policy_snapshot,
+        policy_case=policy_case,
+    )
+    if break_glass_violation is not None:
+        return break_glass_violation, break_glass_context, None, None, "compiled_index"
+
     if compiled_authz_index is None:
-        return None, BreakGlassDecisionContext(), None, None, "disabled"
+        return None, break_glass_context, None, None, "disabled"
 
     expected_snapshot = (policy_case.policy_snapshot or "").strip()
     compiled_snapshot = (compiled_authz_index.snapshot_version or "").strip()
@@ -1760,15 +1769,6 @@ def _evaluate_compiled_authz_graph_policy(
             None,
             "compiled_index",
         )
-
-    break_glass_violation, break_glass_context = _evaluate_break_glass_context(
-        action_intent=action_intent,
-        now=_parse_iso8601(action_intent.timestamp),
-        policy_snapshot=policy_case.policy_snapshot,
-        policy_case=policy_case,
-    )
-    if break_glass_violation is not None:
-        return break_glass_violation, break_glass_context, None, None, "compiled_index"
 
     transition_evaluation: CompiledTransitionEvaluation | None = None
     authz_evaluator = "compiled_index"
