@@ -68,8 +68,10 @@ from ..coordinator.core.execute import (
     ExecutionConfig,
 )
 from ..coordinator.core.governance import (
+    build_governance_context_from_policy_case,
     build_governance_context,
     build_twin_snapshot,
+    evaluate_intent,
     merge_authoritative_twins,
     prepare_policy_case,
     requires_action_intent,
@@ -105,6 +107,14 @@ from ..ops.pkg.manager import PKGMode, get_global_pkg_manager
 from ..ops.pkg.capability_monitor import CapabilityMonitor
 from ..ops.pkg.capability_registry import CapabilityRegistry
 from ..ops.pkg.client import PKGClient
+from ..ops.pdp_hot_path import (
+    build_governance_context_from_hot_path_response,
+    build_hot_path_failure_response,
+    build_hot_path_request,
+    evaluate_pdp_hot_path,
+    record_false_positive_hot_path_signal,
+    resolve_hot_path_mode,
+)
 
 # Clients
 from ..serve.cognitive_client import CognitiveServiceClient
@@ -1428,6 +1438,175 @@ class Coordinator:
             "authoritative_approval_transition_head": envelope_record.get("approval_transition_head"),
         }
 
+    async def _resolve_policy_case_assessment(
+        self,
+        *,
+        payload: Dict[str, Any],
+        existing_governance: Dict[str, Any],
+        policy_case,
+    ) -> Dict[str, Any] | None:
+        if not getattr(self, "cognitive_client", None) or not hasattr(self.cognitive_client, "advisory_async"):
+            return None
+
+        advisory_payload = payload.copy()
+        advisory_params = dict(advisory_payload.get("params") or {})
+        advisory_governance = dict(existing_governance)
+        advisory_governance["policy_case"] = policy_case.model_dump(mode="json")
+        advisory_params["governance"] = advisory_governance
+        advisory_payload["params"] = advisory_params
+        try:
+            advisory_response = await self.cognitive_client.advisory_async(
+                task=advisory_payload,
+                timeout=min(float(getattr(self.cognitive_client, "timeout", 15.0)), 8.0),
+            )
+        except Exception as exc:
+            advisory_response = {
+                "success": False,
+                "error": str(exc),
+            }
+
+        advisory = (
+            advisory_response.get("advisory")
+            if isinstance(advisory_response, dict) and isinstance(advisory_response.get("advisory"), dict)
+            else {}
+        )
+        if advisory.get("kind") == "policy_case_assessment":
+            return advisory
+        if advisory_response.get("success") is False:
+            return {
+                "recommended_disposition": "escalate",
+                "risk_score": 0.85,
+                "risk_factors": ["cognitive_policy_assessment_failed"],
+                "missing_evidence": [],
+                "policy_conflicts": [],
+                "required_approvals": ["human_policy_review"],
+                "explanation": advisory_response.get("error")
+                or "Cognitive policy assessment failed.",
+                "trace_ref": "cognitive_policy_assessment_failed",
+            }
+        return None
+
+    async def _build_action_intent_governance_context(
+        self,
+        *,
+        payload: Dict[str, Any],
+        existing_governance: Dict[str, Any],
+        approved_source_registrations: Dict[str, str | None],
+        authoritative_transfer_approval: Dict[str, Any],
+        relevant_twin_snapshot: Dict[str, Any],
+        telemetry_summary: Dict[str, Any],
+        evidence_summary: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        authoritative_approval_envelope = (
+            authoritative_transfer_approval.get("authoritative_approval_envelope")
+            if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
+            else None
+        )
+        authoritative_approval_transition_history = (
+            authoritative_transfer_approval.get("authoritative_approval_transition_history")
+            if isinstance(authoritative_transfer_approval.get("authoritative_approval_transition_history"), list)
+            else None
+        )
+        authoritative_approval_transition_head = (
+            str(authoritative_transfer_approval.get("authoritative_approval_transition_head"))
+            if authoritative_transfer_approval.get("authoritative_approval_transition_head") is not None
+            else None
+        )
+
+        policy_case = prepare_policy_case(
+            payload,
+            approved_source_registrations=approved_source_registrations,
+            relevant_twin_snapshot=relevant_twin_snapshot,
+            telemetry_summary=telemetry_summary,
+            evidence_summary=evidence_summary,
+            authoritative_approval_envelope=authoritative_approval_envelope,
+            authoritative_approval_transition_history=authoritative_approval_transition_history,
+            authoritative_approval_transition_head=authoritative_approval_transition_head,
+        )
+        cognitive_assessment = await self._resolve_policy_case_assessment(
+            payload=payload,
+            existing_governance=existing_governance,
+            policy_case=policy_case,
+        )
+        if cognitive_assessment is not None:
+            policy_case = prepare_policy_case(
+                payload,
+                approved_source_registrations=approved_source_registrations,
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                telemetry_summary=telemetry_summary,
+                cognitive_assessment=cognitive_assessment,
+                evidence_summary=evidence_summary,
+                authoritative_approval_envelope=authoritative_approval_envelope,
+                authoritative_approval_transition_history=authoritative_approval_transition_history,
+                authoritative_approval_transition_head=authoritative_approval_transition_head,
+            )
+
+        baseline_decision = evaluate_intent(policy_case)
+        baseline_governance = build_governance_context_from_policy_case(
+            policy_case,
+            policy_decision=baseline_decision,
+        )
+
+        action_type = str(policy_case.action_intent.action.type or "").strip().upper()
+        if action_type != "TRANSFER_CUSTODY":
+            return baseline_governance
+
+        hot_path_request = build_hot_path_request(
+            policy_case,
+            request_id=str(payload.get("task_id") or policy_case.action_intent.intent_id),
+        )
+        hot_path_mode = resolve_hot_path_mode()
+        if hot_path_mode == "shadow":
+            try:
+                evaluate_pdp_hot_path(
+                    hot_path_request,
+                    authoritative_approval_envelope=authoritative_approval_envelope,
+                    authoritative_approval_transition_history=authoritative_approval_transition_history,
+                    authoritative_approval_transition_head=authoritative_approval_transition_head,
+                )
+            except Exception:
+                logger.warning(
+                    "Hot-path shadow evaluation failed; keeping baseline-authoritative decision.",
+                    exc_info=True,
+                )
+            return baseline_governance
+
+        try:
+            hot_path_response = evaluate_pdp_hot_path(
+                hot_path_request,
+                authoritative_approval_envelope=authoritative_approval_envelope,
+                authoritative_approval_transition_history=authoritative_approval_transition_history,
+                authoritative_approval_transition_head=authoritative_approval_transition_head,
+            )
+        except Exception:
+            logger.warning(
+                "Hot-path enforce evaluation failed; returning fail-closed quarantine.",
+                exc_info=True,
+            )
+            hot_path_response = build_hot_path_failure_response(
+                hot_path_request,
+                reason_code="hot_path_evaluation_failed",
+                reason="Hot-path evaluation failed while running in enforce mode.",
+            )
+
+        if (
+            str(baseline_decision.disposition or "deny").strip().lower() != "allow"
+            and str(hot_path_response.decision.disposition or "deny").strip().lower() == "allow"
+        ):
+            record_false_positive_hot_path_signal(
+                request_id=hot_path_request.request_id,
+                asset_ref=policy_case.action_intent.resource.asset_id,
+                baseline_disposition=str(baseline_decision.disposition or "deny").strip().lower(),
+                candidate_disposition=str(hot_path_response.decision.disposition or "deny").strip().lower(),
+                baseline_reason_code=str(baseline_decision.deny_code or baseline_decision.reason or ""),
+                candidate_reason_code=str(hot_path_response.decision.reason_code or ""),
+            )
+
+        return build_governance_context_from_hot_path_response(
+            policy_case,
+            hot_path_response,
+        )
+
     async def _persist_source_registration_decision(
         self,
         task_dict: Dict[str, Any],
@@ -2398,72 +2577,13 @@ class Coordinator:
                         for k, v in merged_twins.items()
                     }
 
-                policy_case = prepare_policy_case(
-                    payload,
+                governance = await self._build_action_intent_governance_context(
+                    payload=payload,
+                    existing_governance=existing_governance,
                     approved_source_registrations=approved_source_registrations,
+                    authoritative_transfer_approval=authoritative_transfer_approval,
                     relevant_twin_snapshot=relevant_twin_snapshot,
                     telemetry_summary=telemetry_summary,
-                    evidence_summary=evidence_summary,
-                    authoritative_approval_envelope=(
-                        authoritative_transfer_approval.get("authoritative_approval_envelope")
-                        if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
-                        else None
-                    ),
-                    authoritative_approval_transition_history=(
-                        authoritative_transfer_approval.get("authoritative_approval_transition_history")
-                        if isinstance(authoritative_transfer_approval.get("authoritative_approval_transition_history"), list)
-                        else None
-                    ),
-                    authoritative_approval_transition_head=(
-                        str(authoritative_transfer_approval.get("authoritative_approval_transition_head"))
-                        if authoritative_transfer_approval.get("authoritative_approval_transition_head") is not None
-                        else None
-                    ),
-                )
-                cognitive_assessment = None
-                if getattr(self, "cognitive_client", None) and hasattr(self.cognitive_client, "advisory_async"):
-                    advisory_payload = payload.copy()
-                    advisory_params = dict(advisory_payload.get("params") or {})
-                    advisory_governance = dict(existing_governance)
-                    advisory_governance["policy_case"] = policy_case.model_dump(mode="json")
-                    advisory_params["governance"] = advisory_governance
-                    advisory_payload["params"] = advisory_params
-                    try:
-                        advisory_response = await self.cognitive_client.advisory_async(
-                            task=advisory_payload,
-                            timeout=min(float(getattr(self.cognitive_client, "timeout", 15.0)), 8.0),
-                        )
-                    except Exception as exc:
-                        advisory_response = {
-                            "success": False,
-                            "error": str(exc),
-                        }
-
-                    advisory = (
-                        advisory_response.get("advisory")
-                        if isinstance(advisory_response, dict) and isinstance(advisory_response.get("advisory"), dict)
-                        else {}
-                    )
-                    if advisory.get("kind") == "policy_case_assessment":
-                        cognitive_assessment = advisory
-                    elif advisory_response.get("success") is False:
-                        cognitive_assessment = {
-                            "recommended_disposition": "escalate",
-                            "risk_score": 0.85,
-                            "risk_factors": ["cognitive_policy_assessment_failed"],
-                            "missing_evidence": [],
-                            "policy_conflicts": [],
-                            "required_approvals": ["human_policy_review"],
-                            "explanation": advisory_response.get("error")
-                            or "Cognitive policy assessment failed.",
-                            "trace_ref": "cognitive_policy_assessment_failed",
-                        }
-                governance = build_governance_context(
-                    payload,
-                    approved_source_registrations=approved_source_registrations,
-                    relevant_twin_snapshot=relevant_twin_snapshot,
-                    telemetry_summary=telemetry_summary,
-                    cognitive_assessment=cognitive_assessment,
                     evidence_summary=evidence_summary,
                 )
                 params["governance"] = {**existing_governance, **governance}

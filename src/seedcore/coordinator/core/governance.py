@@ -1352,20 +1352,31 @@ def build_governance_context(
         authoritative_approval_transition_history=authoritative_approval_transition_history,
         authoritative_approval_transition_head=authoritative_approval_transition_head,
     )
-    intent = policy_case.action_intent
     decision = evaluate_intent(policy_case, compiled_authz_index=compiled_authz_index)
+    return build_governance_context_from_policy_case(
+        policy_case,
+        policy_decision=decision,
+    )
+
+
+def build_governance_context_from_policy_case(
+    policy_case: PolicyCase,
+    *,
+    policy_decision: PolicyDecision,
+) -> Dict[str, Any]:
+    intent = policy_case.action_intent
     policy_receipt = build_policy_receipt(
         policy_case=policy_case,
-        policy_decision=decision,
+        policy_decision=policy_decision,
     )
     context = {
         "action_intent": intent.model_dump(mode="json"),
         "policy_case": policy_case.model_dump(mode="json"),
-        "policy_decision": decision.model_dump(mode="json"),
+        "policy_decision": policy_decision.model_dump(mode="json"),
         "policy_receipt": policy_receipt,
     }
-    if decision.execution_token is not None:
-        context["execution_token"] = decision.execution_token.model_dump(mode="json")
+    if policy_decision.execution_token is not None:
+        context["execution_token"] = policy_decision.execution_token.model_dump(mode="json")
     return context
 
 

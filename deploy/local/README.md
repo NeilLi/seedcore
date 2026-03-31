@@ -66,6 +66,13 @@ curl http://127.0.0.1:8002/health
 curl http://127.0.0.1:8003/status
 ```
 
+Hot-path checks:
+
+```bash
+python scripts/host/verify_rct_hot_path_shadow.py
+python scripts/host/benchmark_rct_hot_path.py --requests 40 --warmup 4 --concurrency 4
+```
+
 ### Experimental host-Ray mode
 
 Use this only when you need local Ray/Serve/bootstrap behavior.

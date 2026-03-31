@@ -7,6 +7,7 @@ import mock_ray_dependencies
 
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace, ModuleType
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -14,8 +15,10 @@ import pytest
 
 # Adjust this import path if your repository structure differs:
 import seedcore.services.coordinator_service as cs
+from seedcore.models.action_intent import PolicyDecision
 from seedcore.models.cognitive import DecisionKind
 from seedcore.models.eventizer import EventizerRequest
+from seedcore.models.pdp_hot_path import HotPathDecisionView, HotPathEvaluateResponse
 from seedcore.models.source_registration import SourceRegistration, SourceRegistrationStatus
 
 
@@ -164,6 +167,181 @@ class AsyncGraphRepo:
 
     async def add_dependency(self, parent, child):
         self.edges_async.append((str(parent), str(child)))
+
+
+def _fake_policy_case(action_type: str = "TRANSFER_CUSTODY"):
+    return SimpleNamespace(
+        action_intent=SimpleNamespace(
+            action=SimpleNamespace(type=action_type),
+            intent_id="intent-rct-001",
+            resource=SimpleNamespace(asset_id="asset-1"),
+        )
+    )
+
+
+def _hot_path_response(disposition: str = "allow") -> HotPathEvaluateResponse:
+    allowed = disposition == "allow"
+    return HotPathEvaluateResponse(
+        request_id="req-rct-001",
+        decided_at=datetime.now(timezone.utc),
+        latency_ms=4,
+        decision=HotPathDecisionView(
+            allowed=allowed,
+            disposition=disposition,
+            reason_code=(
+                "restricted_custody_transfer_allowed"
+                if allowed
+                else "policy_denied"
+            ),
+            reason=(
+                "restricted_custody_transfer_allowed"
+                if allowed
+                else "policy_denied"
+            ),
+            policy_snapshot_ref="snapshot:1",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_action_intent_governance_context_keeps_baseline_authority_in_shadow():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+    coordinator.cognitive_client = None
+
+    baseline_governance = {"policy_decision": {"allowed": True, "disposition": "allow"}}
+    policy_case = _fake_policy_case()
+    payload = {"task_id": "task-rct-001", "params": {"governance": {}}}
+
+    with patch.object(cs, "prepare_policy_case", return_value=policy_case), \
+        patch.object(
+            cs,
+            "evaluate_intent",
+            return_value=PolicyDecision(allowed=True, disposition="allow", reason="baseline_allow"),
+        ), \
+        patch.object(cs, "build_governance_context_from_policy_case", return_value=baseline_governance), \
+        patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-rct-001")), \
+        patch.object(cs, "evaluate_pdp_hot_path", return_value=_hot_path_response()) as hot_path_eval, \
+        patch.object(cs, "resolve_hot_path_mode", return_value="shadow"), \
+        patch.object(cs, "build_governance_context_from_hot_path_response") as hot_path_governance:
+        result = await coordinator._build_action_intent_governance_context(
+            payload=payload,
+            existing_governance={},
+            approved_source_registrations={},
+            authoritative_transfer_approval={},
+            relevant_twin_snapshot={},
+            telemetry_summary={},
+            evidence_summary={},
+        )
+
+    assert result == baseline_governance
+    hot_path_eval.assert_called_once()
+    hot_path_governance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_action_intent_governance_context_uses_hot_path_authority_in_enforce():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+    coordinator.cognitive_client = None
+
+    policy_case = _fake_policy_case()
+    baseline_governance = {"policy_decision": {"allowed": False, "disposition": "deny"}}
+    hot_path_governance = {"policy_decision": {"allowed": True, "disposition": "allow"}}
+    payload = {"task_id": "task-rct-001", "params": {"governance": {}}}
+
+    with patch.object(cs, "prepare_policy_case", return_value=policy_case), \
+        patch.object(
+            cs,
+            "evaluate_intent",
+            return_value=PolicyDecision(allowed=False, disposition="deny", reason="baseline_deny", deny_code="policy_denied"),
+        ), \
+        patch.object(cs, "build_governance_context_from_policy_case", return_value=baseline_governance), \
+        patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-rct-001")), \
+        patch.object(cs, "evaluate_pdp_hot_path", return_value=_hot_path_response("allow")) as hot_path_eval, \
+        patch.object(cs, "resolve_hot_path_mode", return_value="enforce"), \
+        patch.object(cs, "record_false_positive_hot_path_signal") as false_positive_signal, \
+        patch.object(cs, "build_governance_context_from_hot_path_response", return_value=hot_path_governance):
+        result = await coordinator._build_action_intent_governance_context(
+            payload=payload,
+            existing_governance={},
+            approved_source_registrations={},
+            authoritative_transfer_approval={},
+            relevant_twin_snapshot={},
+            telemetry_summary={},
+            evidence_summary={},
+        )
+
+    assert result == hot_path_governance
+    hot_path_eval.assert_called_once()
+    false_positive_signal.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_build_action_intent_governance_context_skips_hot_path_for_non_rct():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+    coordinator.cognitive_client = None
+
+    policy_case = _fake_policy_case(action_type="MOVE")
+    baseline_governance = {"policy_decision": {"allowed": True, "disposition": "allow"}}
+
+    with patch.object(cs, "prepare_policy_case", return_value=policy_case), \
+        patch.object(
+            cs,
+            "evaluate_intent",
+            return_value=PolicyDecision(allowed=True, disposition="allow", reason="baseline_allow"),
+        ), \
+        patch.object(cs, "build_governance_context_from_policy_case", return_value=baseline_governance), \
+        patch.object(cs, "evaluate_pdp_hot_path") as hot_path_eval:
+        result = await coordinator._build_action_intent_governance_context(
+            payload={"task_id": "task-non-rct", "params": {"governance": {}}},
+            existing_governance={},
+            approved_source_registrations={},
+            authoritative_transfer_approval={},
+            relevant_twin_snapshot={},
+            telemetry_summary={},
+            evidence_summary={},
+        )
+
+    assert result == baseline_governance
+    hot_path_eval.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_action_intent_governance_context_fails_closed_when_hot_path_raises():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+    coordinator.cognitive_client = None
+
+    policy_case = _fake_policy_case()
+    failure_response = _hot_path_response("quarantine")
+    failure_governance = {"policy_decision": {"allowed": False, "disposition": "quarantine"}}
+
+    with patch.object(cs, "prepare_policy_case", return_value=policy_case), \
+        patch.object(
+            cs,
+            "evaluate_intent",
+            return_value=PolicyDecision(allowed=True, disposition="allow", reason="baseline_allow"),
+        ), \
+        patch.object(cs, "build_governance_context_from_policy_case", return_value={"policy_decision": {"allowed": True}}), \
+        patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-rct-001")), \
+        patch.object(cs, "evaluate_pdp_hot_path", side_effect=RuntimeError("boom")), \
+        patch.object(cs, "resolve_hot_path_mode", return_value="enforce"), \
+        patch.object(cs, "build_hot_path_failure_response", return_value=failure_response) as failure_builder, \
+        patch.object(cs, "build_governance_context_from_hot_path_response", return_value=failure_governance):
+        result = await coordinator._build_action_intent_governance_context(
+            payload={"task_id": "task-rct-001", "params": {"governance": {}}},
+            existing_governance={},
+            approved_source_registrations={},
+            authoritative_transfer_approval={},
+            relevant_twin_snapshot={},
+            telemetry_summary={},
+            evidence_summary={},
+        )
+
+    assert result == failure_governance
+    failure_builder.assert_called_once()
 
 
 @pytest.mark.asyncio

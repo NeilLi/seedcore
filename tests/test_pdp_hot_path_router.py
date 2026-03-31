@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -90,6 +90,23 @@ def _base_payload() -> dict:
     }
 
 
+def _manager(*, snapshot_version: str = "snapshot:pkg-prod-2026-04-02", compiled_at: str | None = None):
+    authz_status = {
+        "healthy": True,
+        "active_snapshot_version": snapshot_version,
+        "compiled_at": compiled_at,
+        "restricted_transfer_ready": True,
+    }
+    return SimpleNamespace(
+        get_active_compiled_authz_index=lambda: SimpleNamespace(
+            snapshot_version=snapshot_version,
+            compiled_at=compiled_at,
+            restricted_transfer_ready=True,
+        ),
+        get_metadata=lambda: {"authz_graph": authz_status},
+    )
+
+
 def test_pdp_hot_path_quarantines_when_compiled_graph_unavailable(monkeypatch):
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: None)
     client = _make_client()
@@ -103,9 +120,7 @@ def test_pdp_hot_path_quarantines_when_compiled_graph_unavailable(monkeypatch):
 
 
 def test_pdp_hot_path_denies_asset_ref_mismatch(monkeypatch):
-    manager = SimpleNamespace(
-        get_active_compiled_authz_index=lambda: SimpleNamespace(snapshot_version="snapshot:pkg-prod-2026-04-02")
-    )
+    manager = _manager()
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
     client = _make_client()
 
@@ -120,9 +135,7 @@ def test_pdp_hot_path_denies_asset_ref_mismatch(monkeypatch):
 
 
 def test_pdp_hot_path_quarantines_snapshot_mismatch(monkeypatch):
-    manager = SimpleNamespace(
-        get_active_compiled_authz_index=lambda: SimpleNamespace(snapshot_version="snapshot:pkg-other-2026-04-02")
-    )
+    manager = _manager(snapshot_version="snapshot:pkg-other-2026-04-02")
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
     client = _make_client()
 
@@ -135,9 +148,7 @@ def test_pdp_hot_path_quarantines_snapshot_mismatch(monkeypatch):
 
 
 def test_pdp_hot_path_terminal_quarantine_updates_shadow_stats(monkeypatch):
-    manager = SimpleNamespace(
-        get_active_compiled_authz_index=lambda: SimpleNamespace(snapshot_version="snapshot:pkg-prod-2026-04-02")
-    )
+    manager = _manager()
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
     monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", pdp_hot_path.HotPathShadowStats())
     client = _make_client()
@@ -163,9 +174,7 @@ def test_pdp_hot_path_terminal_quarantine_updates_shadow_stats(monkeypatch):
 
 
 def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monkeypatch):
-    manager = SimpleNamespace(
-        get_active_compiled_authz_index=lambda: SimpleNamespace(snapshot_version="snapshot:pkg-prod-2026-04-02")
-    )
+    manager = _manager()
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
 
     fake_decision = PolicyDecision(
@@ -204,6 +213,53 @@ def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monke
     assert body["execution_token"]["token_id"] == "token-transfer-001"
     assert body["signer_provenance"][0]["artifact_type"] == "execution_token"
     assert body["signer_provenance"][0]["signer_id"] == "seedcore-verify"
+
+
+def test_pdp_hot_path_quarantines_when_compiled_graph_is_stale(monkeypatch):
+    stale_compiled_at = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()
+    manager = _manager(compiled_at=stale_compiled_at)
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    client = _make_client()
+
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=_base_payload())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "quarantine"
+    assert body["decision"]["reason_code"] == "compiled_authz_graph_stale"
+
+
+def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):
+    compiled_at = datetime.now(timezone.utc).isoformat()
+    manager = _manager(compiled_at=compiled_at)
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", pdp_hot_path.HotPathShadowStats())
+    monkeypatch.setenv("SEEDCORE_RCT_HOT_PATH_MODE", "enforce")
+    pdp_hot_path.record_false_positive_hot_path_signal(
+        request_id="req-false-positive",
+        asset_ref="asset:lot-8841",
+        baseline_disposition="deny",
+        candidate_disposition="allow",
+        baseline_reason_code="policy_denied",
+        candidate_reason_code="restricted_custody_transfer_allowed",
+    )
+    client = _make_client()
+
+    response = client.get("/api/v1/pdp/hot-path/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "enforce"
+    assert body["resolved_mode"] == "enforce"
+    assert body["authz_graph_ready"] is True
+    assert body["graph_freshness_ok"] is True
+    assert body["enforce_ready"] is True
+    assert body["active_snapshot_version"] == "snapshot:pkg-prod-2026-04-02"
+    assert body["compiled_at"] == compiled_at
+    assert body["graph_age_seconds"] is not None
+    assert body["false_positive_allow_count"] == 1
+    assert body["last_false_positive_allow_at"] is not None
+    assert body["recent_mismatch_count"] >= 1
 
 
 def test_pdp_hot_path_route_resolves_and_forwards_authoritative_approval(monkeypatch):

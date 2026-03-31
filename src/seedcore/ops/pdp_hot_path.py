@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections import deque
 from dataclasses import dataclass, field
@@ -9,20 +10,30 @@ from threading import Lock
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
 from seedcore.coordinator.dao import TransferApprovalEnvelopeDAO
-from seedcore.coordinator.core.governance import evaluate_intent, prepare_policy_case
+from seedcore.coordinator.core.governance import (
+    build_governance_context_from_policy_case,
+    evaluate_intent,
+    prepare_policy_case,
+)
 from seedcore.database import get_async_pg_session_factory
-from seedcore.models.action_intent import ExecutionToken, PolicyDecision
+from seedcore.models.action_intent import ExecutionToken, PolicyCase, PolicyDecision
 from seedcore.models.pdp_hot_path import (
+    HotPathAssetContext,
     HotPathCheckResult,
     HotPathDecisionView,
     HotPathEvaluateRequest,
     HotPathEvaluateResponse,
     HotPathSignerProvenance,
+    HotPathTelemetryContext,
 )
 from seedcore.ops.pkg.manager import get_global_pkg_manager
 
 HOT_PATH_CONTRACT_VERSION = "pdp.hot_path.asset_transfer.v1"
-HOT_PATH_MODE = os.getenv("SEEDCORE_RCT_HOT_PATH_MODE", "shadow").strip().lower() or "shadow"
+HOT_PATH_MODE_ENV = "SEEDCORE_RCT_HOT_PATH_MODE"
+HOT_PATH_STALE_GRAPH_MAX_AGE_SECONDS = int(
+    os.getenv("SEEDCORE_RCT_HOT_PATH_GRAPH_MAX_AGE_SECONDS", "600")
+)
+HOT_PATH_SUPPORTED_MODES = {"shadow", "enforce"}
 
 REASON_CODE_DEFAULTS = {
     "allow": "restricted_custody_transfer_allowed",
@@ -31,50 +42,270 @@ REASON_CODE_DEFAULTS = {
     "escalate": "manual_review_required",
 }
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class HotPathShadowStats:
-    mode: str = HOT_PATH_MODE
     total: int = 0
     parity_ok: int = 0
     mismatched: int = 0
     last_run_at: str | None = None
-    latencies_ms: deque[int] = field(default_factory=lambda: deque(maxlen=256))
-    recent_results: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
+    last_mismatch_at: str | None = None
+    false_positive_allow_count: int = 0
+    last_false_positive_allow_at: str | None = None
+    latencies_ms: deque[int] = field(default_factory=lambda: deque(maxlen=2048))
+    recent_results: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200))
     lock: Lock = field(default_factory=Lock)
 
     def record(self, *, latency_ms: int, parity: Mapping[str, Any]) -> None:
         with self.lock:
             self.total += 1
-            self.last_run_at = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc).isoformat()
+            self.last_run_at = now
             self.latencies_ms.append(int(latency_ms))
             parity_ok = bool(parity.get("parity_ok"))
             if parity_ok:
                 self.parity_ok += 1
             else:
                 self.mismatched += 1
+                self.last_mismatch_at = now
             self.recent_results.append(dict(parity))
+
+    def record_false_positive_allow(
+        self,
+        *,
+        request_id: str,
+        asset_ref: str | None,
+        baseline_disposition: str,
+        candidate_disposition: str,
+        baseline_reason_code: str | None = None,
+        candidate_reason_code: str | None = None,
+    ) -> None:
+        with self.lock:
+            now = datetime.now(timezone.utc).isoformat()
+            self.false_positive_allow_count += 1
+            self.last_false_positive_allow_at = now
+            self.recent_results.append(
+                {
+                    "request_id": request_id,
+                    "asset_ref": asset_ref,
+                    "parity_ok": False,
+                    "mismatches": ["false_positive_allow"],
+                    "baseline": {
+                        "disposition": baseline_disposition,
+                        "reason_code": baseline_reason_code or "",
+                    },
+                    "candidate": {
+                        "disposition": candidate_disposition,
+                        "reason_code": candidate_reason_code or "",
+                    },
+                    "signal": "false_positive_allow",
+                    "signaled_at": now,
+                }
+            )
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             samples = sorted(self.latencies_ms)
+            current_mode = resolve_hot_path_mode()
+            recent_results = list(self.recent_results)
+            recent_mismatch_count = sum(1 for item in recent_results if not item.get("parity_ok", True))
             return {
-                "mode": self.mode,
+                "mode": current_mode,
+                "resolved_mode": current_mode,
                 "total": self.total,
                 "parity_ok": self.parity_ok,
                 "mismatched": self.mismatched,
                 "last_run_at": self.last_run_at,
+                "last_mismatch_at": self.last_mismatch_at,
+                "recent_mismatch_count": recent_mismatch_count,
+                "false_positive_allow_count": self.false_positive_allow_count,
+                "last_false_positive_allow_at": self.last_false_positive_allow_at,
                 "latency_ms": {
                     "p50": _percentile(samples, 50),
                     "p95": _percentile(samples, 95),
                     "p99": _percentile(samples, 99),
                 },
-                "recent_results": list(self.recent_results),
+                "recent_results": recent_results,
             }
 
 
 _HOT_PATH_SHADOW_STATS = HotPathShadowStats()
 _TRANSFER_APPROVAL_DAO = TransferApprovalEnvelopeDAO()
+
+
+def resolve_hot_path_mode() -> str:
+    raw_mode = str(os.getenv(HOT_PATH_MODE_ENV, "shadow")).strip().lower()
+    if raw_mode in HOT_PATH_SUPPORTED_MODES:
+        return raw_mode
+    return "shadow"
+
+
+def build_hot_path_request(
+    policy_case: PolicyCase,
+    *,
+    request_id: str | None = None,
+) -> HotPathEvaluateRequest:
+    action_intent = policy_case.action_intent
+    asset_twin = policy_case.relevant_twin_snapshot.get("asset")
+    asset_custody = asset_twin.custody if asset_twin is not None else {}
+    telemetry_summary = policy_case.telemetry_summary if isinstance(policy_case.telemetry_summary, Mapping) else {}
+    evidence_summary = policy_case.evidence_summary if isinstance(policy_case.evidence_summary, Mapping) else {}
+    approved_regs = policy_case.approved_source_registrations
+
+    freshness_seconds = _coerce_optional_int(telemetry_summary.get("freshness_seconds"))
+    max_allowed_age_seconds = _coerce_optional_int(
+        telemetry_summary.get("max_allowed_age_seconds")
+    )
+    if freshness_seconds is None and bool(telemetry_summary.get("stale")):
+        freshness_seconds = 301
+    if max_allowed_age_seconds is None and (
+        freshness_seconds is not None or bool(telemetry_summary.get("stale"))
+    ):
+        max_allowed_age_seconds = 300
+
+    evidence_refs = []
+    available_evidence = evidence_summary.get("available")
+    if isinstance(available_evidence, list):
+        evidence_refs.extend(str(item) for item in available_evidence if str(item).strip())
+    telemetry_evidence = telemetry_summary.get("evidence_refs")
+    if isinstance(telemetry_evidence, list):
+        evidence_refs.extend(str(item) for item in telemetry_evidence if str(item).strip())
+
+    registration_id = action_intent.resource.source_registration_id
+    registration_decision_id = action_intent.resource.registration_decision_id
+    source_registration_status = None
+    if registration_id and registration_id in approved_regs:
+        source_registration_status = "APPROVED"
+        if registration_decision_id is None:
+            registration_decision_id = approved_regs.get(registration_id)
+    elif registration_decision_id and registration_decision_id in approved_regs.values():
+        source_registration_status = "APPROVED"
+
+    request_timestamp = _coerce_datetime(action_intent.timestamp) or datetime.now(timezone.utc)
+    resolved_request_id = (
+        str(request_id).strip()
+        if request_id is not None and str(request_id).strip()
+        else str(action_intent.intent_id).strip()
+    )
+    return HotPathEvaluateRequest(
+        contract_version=HOT_PATH_CONTRACT_VERSION,
+        request_id=resolved_request_id,
+        requested_at=request_timestamp,
+        policy_snapshot_ref=str(policy_case.policy_snapshot or action_intent.action.security_contract.version),
+        action_intent=action_intent,
+        asset_context=HotPathAssetContext(
+            asset_ref=action_intent.resource.asset_id,
+            current_custodian_ref=_coerce_optional_str(
+                asset_custody.get("current_custodian_id")
+                or asset_custody.get("current_custodian_ref")
+                or asset_custody.get("owner_id")
+            ),
+            current_zone=_coerce_optional_str(
+                asset_custody.get("current_zone")
+                or asset_custody.get("zone")
+            ),
+            source_registration_status=source_registration_status,
+            registration_decision_ref=_coerce_optional_str(registration_decision_id),
+        ),
+        telemetry_context=HotPathTelemetryContext(
+            observed_at=(
+                _coerce_optional_str(telemetry_summary.get("observed_at"))
+                or action_intent.timestamp
+            ),
+            freshness_seconds=freshness_seconds,
+            max_allowed_age_seconds=max_allowed_age_seconds,
+            evidence_refs=evidence_refs,
+        ),
+    )
+
+
+def hot_path_response_to_policy_decision(
+    response: HotPathEvaluateResponse,
+) -> PolicyDecision:
+    disposition = str(response.decision.disposition or "deny").strip().lower()
+    allowed = disposition == "allow"
+    governed_receipt = dict(response.governed_receipt or {})
+    if response.trust_gaps and not isinstance(governed_receipt.get("trust_gap_codes"), list):
+        governed_receipt["trust_gap_codes"] = list(response.trust_gaps)
+    if response.decision.policy_snapshot_hash and not governed_receipt.get("snapshot_hash"):
+        governed_receipt["snapshot_hash"] = response.decision.policy_snapshot_hash
+    if response.decision.policy_snapshot_ref and not governed_receipt.get("snapshot_version"):
+        governed_receipt["snapshot_version"] = response.decision.policy_snapshot_ref
+    if response.decision.reason and not governed_receipt.get("reason"):
+        governed_receipt["reason"] = response.decision.reason
+    if disposition and not governed_receipt.get("disposition"):
+        governed_receipt["disposition"] = disposition
+
+    authz_graph = {
+        "disposition": disposition,
+        "reason": response.decision.reason,
+        "trust_gap_codes": list(response.trust_gaps),
+        "snapshot_hash": response.decision.policy_snapshot_hash,
+        "snapshot_version": response.decision.policy_snapshot_ref,
+        "minted_artifacts": [
+            {"kind": kind}
+            for kind in _response_minted_artifact_kinds(response)
+        ],
+        "signer_provenance": [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+            for item in response.signer_provenance
+        ],
+    }
+    return PolicyDecision(
+        allowed=allowed,
+        execution_token=response.execution_token,
+        reason=response.decision.reason,
+        policy_snapshot=response.decision.policy_snapshot_ref,
+        deny_code=None if allowed else response.decision.reason_code,
+        disposition=disposition,  # type: ignore[arg-type]
+        required_approvals=list(response.required_approvals),
+        obligations=[dict(item) for item in response.obligations],
+        explanations=[
+            f"{check.check_id}:{check.result}"
+            for check in response.checks
+        ],
+        authz_graph=authz_graph,
+        governed_receipt=governed_receipt,
+    )
+
+
+def build_governance_context_from_hot_path_response(
+    policy_case: PolicyCase,
+    response: HotPathEvaluateResponse,
+) -> dict[str, Any]:
+    policy_decision = hot_path_response_to_policy_decision(response)
+    return build_governance_context_from_policy_case(
+        policy_case,
+        policy_decision=policy_decision,
+    )
+
+
+def record_false_positive_hot_path_signal(
+    *,
+    request_id: str,
+    asset_ref: str | None,
+    baseline_disposition: str,
+    candidate_disposition: str,
+    baseline_reason_code: str | None = None,
+    candidate_reason_code: str | None = None,
+) -> None:
+    logger.warning(
+        "RCT hot-path false-positive allow signal request_id=%s asset_ref=%s baseline=%s candidate=%s",
+        request_id,
+        asset_ref or "",
+        baseline_disposition,
+        candidate_disposition,
+    )
+    _HOT_PATH_SHADOW_STATS.record_false_positive_allow(
+        request_id=request_id,
+        asset_ref=asset_ref,
+        baseline_disposition=baseline_disposition,
+        candidate_disposition=candidate_disposition,
+        baseline_reason_code=baseline_reason_code,
+        candidate_reason_code=candidate_reason_code,
+    )
 
 
 async def resolve_authoritative_transfer_approval(
@@ -160,7 +391,8 @@ def evaluate_pdp_hot_path(
         _record_terminal_shadow_result(request=request, response=response)
         return response
 
-    compiled_authz_index = _resolve_compiled_authz_index()
+    runtime_status = _resolve_hot_path_runtime_status()
+    compiled_authz_index = runtime_status.get("compiled_authz_index")
     if compiled_authz_index is None:
         checks.append(_check("compiled_authz_graph_ready", False, "active compiled authz graph unavailable"))
         response = _build_terminal_response(
@@ -175,7 +407,28 @@ def evaluate_pdp_hot_path(
         _record_terminal_shadow_result(request=request, response=response)
         return response
 
-    compiled_snapshot = (
+    graph_freshness_ok = bool(runtime_status.get("graph_freshness_ok", True))
+    checks.append(
+        _check(
+            "compiled_authz_graph_fresh",
+            graph_freshness_ok,
+            "active compiled authz graph is stale",
+        )
+    )
+    if not graph_freshness_ok:
+        response = _build_terminal_response(
+            request=request,
+            started=started,
+            checks=checks,
+            disposition="quarantine",
+            reason_code="compiled_authz_graph_stale",
+            reason="Active compiled authorization graph is older than the allowed freshness window.",
+            policy_snapshot_ref=request.policy_snapshot_ref,
+        )
+        _record_terminal_shadow_result(request=request, response=response)
+        return response
+
+    compiled_snapshot = str(runtime_status.get("active_snapshot_version") or "").strip() or (
         str(getattr(compiled_authz_index, "snapshot_version", "")).strip()
         or str(getattr(compiled_authz_index, "snapshot_ref", "")).strip()
     )
@@ -268,20 +521,87 @@ def evaluate_pdp_hot_path(
 
 
 def hot_path_shadow_status() -> dict[str, Any]:
-    return _HOT_PATH_SHADOW_STATS.snapshot()
+    status = _HOT_PATH_SHADOW_STATS.snapshot()
+    runtime_status = _resolve_hot_path_runtime_status()
+    status.update(
+        {
+            "active_snapshot_version": runtime_status.get("active_snapshot_version"),
+            "compiled_at": runtime_status.get("compiled_at"),
+            "graph_age_seconds": runtime_status.get("graph_age_seconds"),
+            "graph_freshness_ok": runtime_status.get("graph_freshness_ok"),
+            "authz_graph_ready": runtime_status.get("authz_graph_ready"),
+            "restricted_transfer_ready": runtime_status.get("restricted_transfer_ready"),
+            "enforce_ready": bool(
+                runtime_status.get("authz_graph_ready")
+                and runtime_status.get("graph_freshness_ok")
+                and runtime_status.get("restricted_transfer_ready")
+            ),
+        }
+    )
+    return status
 
 
 def _resolve_compiled_authz_index() -> Any | None:
+    return _resolve_hot_path_runtime_status().get("compiled_authz_index")
+
+
+def _resolve_hot_path_runtime_status() -> dict[str, Any]:
     manager = get_global_pkg_manager()
+    current_mode = resolve_hot_path_mode()
     if manager is None:
-        return None
+        return {
+            "mode": current_mode,
+            "resolved_mode": current_mode,
+            "compiled_authz_index": None,
+            "active_snapshot_version": None,
+            "compiled_at": None,
+            "graph_age_seconds": None,
+            "graph_freshness_ok": False,
+            "authz_graph_ready": False,
+            "restricted_transfer_ready": False,
+        }
+    metadata_getter = getattr(manager, "get_metadata", None)
+    metadata = metadata_getter() if callable(metadata_getter) else {}
+    authz_status = (
+        metadata.get("authz_graph", {})
+        if isinstance(metadata, Mapping) and isinstance(metadata.get("authz_graph"), Mapping)
+        else {}
+    )
     getter = getattr(manager, "get_active_compiled_authz_index", None)
-    if getter is None:
-        return None
     try:
-        return getter()
+        compiled_authz_index = getter() if callable(getter) else None
     except Exception:
-        return None
+        compiled_authz_index = None
+
+    compiled_at = _coerce_optional_str(
+        authz_status.get("compiled_at")
+        or getattr(compiled_authz_index, "compiled_at", None)
+    )
+    graph_age_seconds = _compiled_graph_age_seconds(compiled_at)
+    graph_freshness_ok = (
+        graph_age_seconds is None or graph_age_seconds <= HOT_PATH_STALE_GRAPH_MAX_AGE_SECONDS
+    )
+    authz_graph_ready = bool(compiled_authz_index) and bool(authz_status.get("healthy", True))
+    return {
+        "mode": current_mode,
+        "resolved_mode": current_mode,
+        "compiled_authz_index": compiled_authz_index,
+        "active_snapshot_version": _coerce_optional_str(
+            authz_status.get("active_snapshot_version")
+            or getattr(compiled_authz_index, "snapshot_version", None)
+            or getattr(compiled_authz_index, "snapshot_ref", None)
+        ),
+        "compiled_at": compiled_at,
+        "graph_age_seconds": graph_age_seconds,
+        "graph_freshness_ok": bool(authz_graph_ready) and graph_freshness_ok,
+        "authz_graph_ready": authz_graph_ready,
+        "restricted_transfer_ready": bool(
+            authz_status.get(
+                "restricted_transfer_ready",
+                getattr(compiled_authz_index, "restricted_transfer_ready", False),
+            )
+        ),
+    }
 
 
 def _check(check_id: str, ok: bool, failure_detail: str | None = None) -> HotPathCheckResult:
@@ -307,7 +627,7 @@ def _build_terminal_response(
         decided_at=datetime.now(timezone.utc),
         latency_ms=max(0, round((perf_counter() - started) * 1000)),
         decision=HotPathDecisionView(
-            allowed=False if disposition in {"deny", "escalate"} else True,
+            allowed=disposition == "allow",
             disposition=disposition,  # type: ignore[arg-type]
             reason_code=reason_code,
             reason=reason,
@@ -315,6 +635,27 @@ def _build_terminal_response(
         ),
         trust_gaps=list(trust_gaps),
         checks=checks,
+    )
+
+
+def build_hot_path_failure_response(
+    request: HotPathEvaluateRequest,
+    *,
+    reason_code: str,
+    reason: str,
+    trust_gaps: Iterable[str] = (),
+) -> HotPathEvaluateResponse:
+    return _build_terminal_response(
+        request=request,
+        started=perf_counter(),
+        checks=[
+            _check("compiled_authz_graph_ready", False, reason),
+        ],
+        disposition="quarantine",
+        reason_code=reason_code,
+        reason=reason,
+        policy_snapshot_ref=request.policy_snapshot_ref,
+        trust_gaps=trust_gaps,
     )
 
 
@@ -423,6 +764,57 @@ def _minted_artifact_kinds(decision: PolicyDecision) -> Sequence[str]:
     if governed_receipt.get("decision_hash") is not None and str(governed_receipt.get("decision_hash")).strip():
         kinds.append("governed_receipt")
     return kinds
+
+
+def _response_minted_artifact_kinds(response: HotPathEvaluateResponse) -> Sequence[str]:
+    kinds: list[str] = []
+    if isinstance(response.execution_token, ExecutionToken):
+        kinds.append("execution_token")
+    if response.governed_receipt.get("decision_hash") is not None and str(
+        response.governed_receipt.get("decision_hash")
+    ).strip():
+        kinds.append("governed_receipt")
+    return kinds
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    normalized = _coerce_optional_str(value)
+    if normalized is None:
+        return None
+    parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _compiled_graph_age_seconds(compiled_at: str | None) -> int | None:
+    compiled_at_dt = _coerce_datetime(compiled_at)
+    if compiled_at_dt is None:
+        return None
+    age = datetime.now(timezone.utc) - compiled_at_dt
+    return max(0, int(age.total_seconds()))
 
 
 def _percentile(samples: Sequence[int], percentile: int) -> int | None:
