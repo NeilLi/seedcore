@@ -124,6 +124,7 @@ Owner/creator tools now available:
 - `seedcore.delegation.revoke`
 - `seedcore.trust_preferences.upsert`
 - `seedcore.trust_preferences.get`
+- `seedcore.owner_context.get`
 - `seedcore.agent_action.preflight`
 
 Notes:

@@ -349,6 +349,7 @@ class ReplayService:
         payload["seedcore:subject_id"] = replay.subject_id
         authority_consistency = self._authority_consistency_summary(replay)
         owner_context = self._owner_context_summary(replay)
+        owner_context_hash = self._owner_context_hash(owner_context)
         trust_gap_codes = self._trust_gap_codes(
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
@@ -365,6 +366,7 @@ class ReplayService:
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
             "authority_consistency": authority_consistency,
             "authority_consistency_hash": authority_consistency.get("hash"),
+            "owner_context_hash": owner_context_hash,
             "operator_actions": self._operator_actions_for_authority_issues(
                 authority_consistency.get("issues") or []
             ),
@@ -808,6 +810,7 @@ class ReplayService:
             replay_governed_receipt=replay.governed_receipt,
         )
         owner_context = self._owner_context_summary(replay)
+        owner_context_hash = self._owner_context_hash(owner_context)
         certificate_payload = {
             "certificate_id": str(uuid.uuid4()),
             "public_id": public_id,
@@ -818,6 +821,7 @@ class ReplayService:
             "public_claims": projection.verifiable_claims,
             "authority_consistency": authority_consistency,
             "authority_consistency_hash": authority_consistency.get("hash"),
+            "owner_context_hash": owner_context_hash,
             "operator_actions": list(projection.operator_actions),
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
@@ -843,6 +847,7 @@ class ReplayService:
             public_claims=certificate_payload["public_claims"],
             authority_consistency=certificate_payload["authority_consistency"],
             authority_consistency_hash=certificate_payload["authority_consistency_hash"],
+            owner_context_hash=certificate_payload["owner_context_hash"],
             operator_actions=certificate_payload["operator_actions"],
             trust_gap_codes=certificate_payload["trust_gap_codes"],
             trust_gap_details=certificate_payload["trust_gap_details"],
@@ -1636,6 +1641,8 @@ class ReplayService:
         authorization = self._build_authorization_summary(replay)
         authority_consistency = self._authority_consistency_summary(replay)
         operator_actions = self._operator_actions_for_authority_issues(authority_consistency.get("issues") or [])
+        owner_context = self._owner_context_summary(replay)
+        owner_context_hash = self._owner_context_hash(owner_context)
         dispute_summary = self._build_dispute_summary(replay)
         timeline_summary = [
             {
@@ -1671,6 +1678,7 @@ class ReplayService:
             subject_summary=subject_summary,
             authority_consistency=authority_consistency,
             authority_consistency_hash=authority_consistency.get("hash"),
+            owner_context_hash=owner_context_hash,
             verification_status=verification_status,
             approvals=approvals,
             authorization=authorization,
@@ -1751,6 +1759,7 @@ class ReplayService:
             "minted_artifacts": list(replay.authz_graph.get("minted_artifacts") or []),
             "obligations": list(replay.authz_graph.get("obligations") or []),
             "owner_context": self._owner_context_summary(replay),
+            "owner_context_hash": self._owner_context_hash(self._owner_context_summary(replay)),
             "authority_consistency": self._authority_consistency_summary(replay),
         }
 
@@ -2778,6 +2787,7 @@ class ReplayService:
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
             "owner_context": self._owner_context_summary(replay),
+            "owner_context_hash": self._owner_context_hash(self._owner_context_summary(replay)),
             "authority_consistency": self._authority_consistency_summary(replay),
         }
 
@@ -3007,6 +3017,7 @@ class ReplayService:
     ) -> VerificationResult:
         projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
         authority_consistency = self._authority_consistency_summary(replay)
+        owner_context_hash = self._owner_context_hash(self._owner_context_summary(replay))
         consistency_issues = self._owner_delegation_consistency_issues(replay)
         verified = replay.verification_status.verified and not consistency_issues
         return VerificationResult(
@@ -3029,6 +3040,7 @@ class ReplayService:
             operator_actions=list(projection.operator_actions),
             authority_consistency=authority_consistency,
             authority_consistency_hash=authority_consistency.get("hash"),
+            owner_context_hash=owner_context_hash,
             reason=(
                 consistency_issues[0]
                 if consistency_issues
@@ -3067,8 +3079,14 @@ class ReplayService:
             operator_actions=[],
             authority_consistency={},
             authority_consistency_hash=None,
+            owner_context_hash=None,
             reason=reason,
         )
+
+    def _owner_context_hash(self, owner_context: Mapping[str, Any]) -> Optional[str]:
+        if not owner_context:
+            return None
+        return f"sha256:{sha256_hex(canonical_json(dict(owner_context)))}"
 
     async def _cache_trust_bundle_snapshot(
         self,

@@ -97,6 +97,7 @@ def _proof_surface_summary(
         },
         "key_hashes": {
             "authority_consistency_hash": authority_consistency.get("hash"),
+            "owner_context_hash": policy_summary.get("owner_context_hash"),
             "governed_receipt_hash": policy_summary.get("governed_receipt_hash"),
             "fingerprint_hash": fingerprint_summary.get("fingerprint_hash"),
         },
@@ -322,6 +323,7 @@ async def publish_trust_reference(
                 "issues": authority_issues,
                 "authority_consistency": authority_consistency,
                 "authority_consistency_hash": authority_consistency.get("hash"),
+                "owner_context_hash": projection.get("owner_context_hash"),
                 "operator_actions": operator_actions,
             },
         )
@@ -352,6 +354,7 @@ async def publish_trust_reference(
         "subject_id": replay.subject_id,
         "authority_consistency": authority_consistency,
         "authority_consistency_hash": authority_consistency.get("hash"),
+        "owner_context_hash": projection.get("owner_context_hash"),
         "operator_actions": operator_actions,
         "proof_surface": _proof_surface_summary(
             projection=projection,

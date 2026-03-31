@@ -20,6 +20,7 @@ from seedcore.plugin.mcp_server import (
     handle_health,
     handle_hotpath_benchmark,
     handle_hotpath_verify_shadow,
+    handle_owner_context_get,
     handle_pkg_authz_graph_status,
     handle_pkg_status,
     handle_readyz,
@@ -46,6 +47,9 @@ class _RuntimeStub:
         self.trust_page = AsyncMock()
         self.trust_jsonld = AsyncMock()
         self.trust_certificate = AsyncMock()
+        self.get_did = AsyncMock()
+        self.get_creator_profile = AsyncMock()
+        self.get_trust_preferences = AsyncMock()
 
     def root_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -320,3 +324,32 @@ async def test_handle_forensic_replay_fetch_returns_public_trust_page():
     assert result["mode"] == "public_trust_page"
     assert result["public_id"] == "pub-1"
     assert result["certificate"]["certificate_id"] == "cert-1"
+
+
+@pytest.mark.asyncio
+async def test_handle_owner_context_get_returns_compact_refs_and_hash():
+    runtime = _RuntimeStub()
+    runtime.get_did.return_value = {
+        "did": "did:seedcore:owner:acme-001",
+        "verification_method": {"key_ref": "owner-k1"},
+    }
+    runtime.get_creator_profile.return_value = {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "version": "v2",
+        "updated_at": "2026-03-31T10:00:00Z",
+        "updated_by": "identity_router",
+    }
+    runtime.get_trust_preferences.return_value = {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "trust_version": "v3",
+        "updated_at": "2026-03-31T10:00:01Z",
+        "updated_by": "identity_router",
+    }
+
+    result = await handle_owner_context_get(runtime, owner_id="did:seedcore:owner:acme-001")
+
+    assert result["owner_context_ref"]["creator_profile_ref"]["source_namespace"] == "identity"
+    assert result["owner_context_ref"]["creator_profile_ref"]["signer_key_ref"] == "owner-k1"
+    assert result["owner_context_ref"]["trust_preferences_ref"]["source_predicate"] == "trust_preferences"
+    assert result["owner_context_hash"].startswith("sha256:")
+    assert result["warnings"] == []

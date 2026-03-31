@@ -122,12 +122,13 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Verification of signed trust tokens now fails with `reference_subject_mismatch` when token subject bindings diverge from replay-resolved subject identity.
 - Trust publish/refresh now return `409` with `authority_binding_mismatch` when replay authority bindings are inconsistent before token minting.
 - Successful trust publish/refresh responses now include `authority_consistency`, `authority_consistency_hash`, and `operator_actions`.
-- Successful trust publish/refresh responses now also include `proof_surface` with compact artifact refs and key hashes (`authority_consistency_hash`, `governed_receipt_hash`, `fingerprint_hash`) for lightweight client triage before fetching full artifacts.
+- Successful trust publish/refresh responses now include `owner_context_hash` and `proof_surface` with compact artifact refs and key hashes (`authority_consistency_hash`, `owner_context_hash`, `governed_receipt_hash`, `fingerprint_hash`) for lightweight client triage before fetching full artifacts.
 - `409 authority_binding_mismatch` responses now also include `authority_consistency`, `authority_consistency_hash`, and `operator_actions` for immediate triage.
 - Trust-page projections now include `authority_consistency` in `verification_status`, `authorization`, and `policy_summary` for operator triage.
 - Trust-page projections now also expose top-level `authority_consistency_hash` for direct cross-artifact comparison.
 - Trust-page projections now also expose top-level `authority_consistency` for direct API consumers.
 - Trust-page projections now include `operator_actions` with remediation hints when authority consistency issues are present.
+- Trust-page, trust-certificate, JSON-LD proof, and verification responses now include `owner_context_hash` for cross-artifact owner-reference consistency checks.
 - Public replay-artifact payloads now include `authority_consistency_hash` and `operator_actions` for lightweight triage parity.
 - Public replay-artifact payloads now also include `authority_consistency` for direct `ok/issues/hash` inspection.
 - Trust-page/certificate/verifier claim sets now include authority-binding claims (`authority_binding_consistent`, `authority_binding_mismatch_detected`).
@@ -140,6 +141,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Verification responses now include `authority_consistency` and `authority_consistency_hash` when replay context is available.
 - Verification responses now include `operator_actions` for direct remediation guidance on authority mismatch cases.
 - `reference_subject_mismatch` verification responses now include replay-derived claims and authority consistency fields for triage.
+- Owner trust policy outcomes now include explicit `reason_code` markers in policy outputs (`authz_graph` / governed receipt trust-gap context) while keeping existing deny/escalation codes stable.
 
 ## 6. Source Registration API
 

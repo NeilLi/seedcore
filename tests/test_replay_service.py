@@ -515,6 +515,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     authorization = replay.public_projection["authorization"]
     assert replay.public_projection["authority_consistency"]["ok"] is True
     assert replay.public_projection["authority_consistency_hash"].startswith("sha256:")
+    assert replay.public_projection["owner_context_hash"].startswith("sha256:")
     assert authorization["trust_gap_codes"] == ["owner_trust_merchant_violation"]
     assert authorization["trust_gap_details"][0]["category"] == "owner_trust"
     assert authorization["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
@@ -538,6 +539,8 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert isinstance(proof["authority_consistency_hash"], str)
     assert proof["authority_consistency_hash"].startswith("sha256:")
     assert proof["authority_consistency_hash"] == proof["authority_consistency"]["hash"]
+    assert isinstance(proof["owner_context_hash"], str)
+    assert proof["owner_context_hash"].startswith("sha256:")
     assert proof["operator_actions"] == []
     assert proof["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert proof["owner_context"]["creator_profile_ref"]["version"] == "v2"
@@ -554,6 +557,9 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert certificate.authority_consistency_hash.startswith("sha256:")
     assert certificate.authority_consistency_hash == certificate.authority_consistency["hash"]
     assert certificate.authority_consistency_hash == proof["authority_consistency_hash"]
+    assert isinstance(certificate.owner_context_hash, str)
+    assert certificate.owner_context_hash.startswith("sha256:")
+    assert certificate.owner_context_hash == proof["owner_context_hash"]
     assert certificate.operator_actions == []
     assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
     assert certificate.trust_gap_details[0]["category"] == "owner_trust"
@@ -686,6 +692,7 @@ async def test_verify_reference_fails_on_subject_mismatch_for_signed_token() -> 
     assert verification.tamper_status == "authority_mismatch"
     assert verification.authority_consistency["ok"] is True
     assert verification.authority_consistency_hash == verification.authority_consistency["hash"]
+    assert verification.owner_context_hash is None
     assert verification.operator_actions == []
 
 
@@ -734,6 +741,8 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert verification.authority_consistency["ok"] is False
     assert "owner_identity_mismatch" in verification.authority_consistency["issues"]
     assert verification.authority_consistency_hash == verification.authority_consistency["hash"]
+    assert verification.owner_context_hash is not None
+    assert verification.owner_context_hash.startswith("sha256:")
 
     _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
     authority_policy = replay.public_projection["policy_summary"]["authority_consistency"]
@@ -752,6 +761,7 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert "owner_identity_mismatch" in replay.public_projection["authority_consistency"]["issues"]
     assert replay.public_projection["authority_consistency_hash"] == authority_policy["hash"]
     assert replay.public_projection["authority_consistency_hash"] == replay.public_projection["authority_consistency"]["hash"]
+    assert replay.public_projection["owner_context_hash"].startswith("sha256:")
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
     assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
     claims = replay.public_projection["verifiable_claims"]
@@ -764,6 +774,7 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert "owner_identity_mismatch" in public_jsonld["proof"]["authority_consistency"]["issues"]
     assert public_jsonld["proof"]["authority_consistency_hash"] == authority_policy["hash"]
     assert public_jsonld["proof"]["authority_consistency_hash"] == public_jsonld["proof"]["authority_consistency"]["hash"]
+    assert public_jsonld["proof"]["owner_context_hash"].startswith("sha256:")
     assert public_jsonld["proof"]["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
     certificate = await service.build_trust_certificate(
@@ -775,6 +786,7 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert "owner_identity_mismatch" in certificate.authority_consistency["issues"]
     assert certificate.authority_consistency_hash == authority_policy["hash"]
     assert certificate.authority_consistency_hash == certificate.authority_consistency["hash"]
+    assert certificate.owner_context_hash is not None
     assert certificate.operator_actions[0]["code"] == "reconcile_owner_identity"
 
 

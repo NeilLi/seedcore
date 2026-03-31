@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -40,6 +42,7 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.delegation.revoke",
     "seedcore.trust_preferences.upsert",
     "seedcore.trust_preferences.get",
+    "seedcore.owner_context.get",
     "seedcore.agent_action.preflight",
     "seedcore.digital_twin.capture_link",
     "seedcore.forensic_replay.fetch",
@@ -442,6 +445,104 @@ async def handle_trust_preferences_get(
     result = await runtime.get_trust_preferences(owner_id)
     result["source_url"] = runtime.api_url(f"/trust-preferences/{owner_id}")
     return result
+
+
+async def handle_owner_context_get(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+    include_identity: bool = True,
+    include_creator_profile: bool = True,
+    include_trust_preferences: bool = True,
+) -> dict[str, Any]:
+    owner_identity: dict[str, Any] | None = None
+    creator_profile: dict[str, Any] | None = None
+    trust_preferences: dict[str, Any] | None = None
+    warnings: list[str] = []
+
+    if include_identity:
+        try:
+            owner_identity = await runtime.get_did(owner_id)
+        except SeedcorePluginError:
+            warnings.append("owner_identity_unavailable")
+    if include_creator_profile:
+        try:
+            creator_profile = await runtime.get_creator_profile(owner_id)
+        except SeedcorePluginError:
+            warnings.append("creator_profile_unavailable")
+    if include_trust_preferences:
+        try:
+            trust_preferences = await runtime.get_trust_preferences(owner_id)
+        except SeedcorePluginError:
+            warnings.append("trust_preferences_unavailable")
+
+    signer_did = (
+        str(owner_identity.get("did")).strip()
+        if isinstance(owner_identity, dict) and owner_identity.get("did")
+        else owner_id
+    )
+    verification_method = (
+        owner_identity.get("verification_method")
+        if isinstance(owner_identity, dict) and isinstance(owner_identity.get("verification_method"), dict)
+        else {}
+    )
+    signer_key_ref = (
+        str(verification_method.get("key_ref")).strip()
+        if isinstance(verification_method, dict) and verification_method.get("key_ref")
+        else None
+    )
+
+    creator_profile_ref = (
+        {
+            "owner_id": owner_id,
+            "version": creator_profile.get("version"),
+            "updated_at": creator_profile.get("updated_at"),
+            "updated_by": creator_profile.get("updated_by"),
+            "source_namespace": "identity",
+            "source_predicate": "creator_profile",
+            "signer_did": signer_did,
+            "signer_key_ref": signer_key_ref,
+        }
+        if isinstance(creator_profile, dict)
+        else None
+    )
+    trust_preferences_ref = (
+        {
+            "owner_id": owner_id,
+            "trust_version": trust_preferences.get("trust_version"),
+            "updated_at": trust_preferences.get("updated_at"),
+            "updated_by": trust_preferences.get("updated_by"),
+            "source_namespace": "identity",
+            "source_predicate": "trust_preferences",
+            "signer_did": signer_did,
+            "signer_key_ref": signer_key_ref,
+        }
+        if isinstance(trust_preferences, dict)
+        else None
+    )
+    owner_context_ref = {
+        "owner_id": owner_id,
+        "creator_profile_ref": creator_profile_ref,
+        "trust_preferences_ref": trust_preferences_ref,
+    }
+    owner_context_hash = "sha256:" + hashlib.sha256(
+        json.dumps(owner_context_ref, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "owner_id": owner_id,
+        "owner_identity": owner_identity,
+        "creator_profile": creator_profile,
+        "trust_preferences": trust_preferences,
+        "owner_context_ref": owner_context_ref,
+        "owner_context_hash": owner_context_hash,
+        "warnings": warnings,
+        "source_urls": {
+            "identity_url": runtime.api_url(f"/identities/dids/{owner_id}") if include_identity else None,
+            "creator_profile_url": runtime.api_url(f"/creator-profiles/{owner_id}") if include_creator_profile else None,
+            "trust_preferences_url": runtime.api_url(f"/trust-preferences/{owner_id}") if include_trust_preferences else None,
+        },
+    }
 
 
 async def handle_agent_action_preflight(
@@ -853,6 +954,23 @@ if FastMCP is not None:
         owner_id: str,
     ) -> dict[str, Any]:
         return await handle_trust_preferences_get(_runtime(ctx), owner_id=owner_id)
+
+
+    @mcp.tool(name="seedcore.owner_context.get")
+    async def seedcore_owner_context_get(
+        ctx: AppContext,
+        owner_id: str,
+        include_identity: bool = True,
+        include_creator_profile: bool = True,
+        include_trust_preferences: bool = True,
+    ) -> dict[str, Any]:
+        return await handle_owner_context_get(
+            _runtime(ctx),
+            owner_id=owner_id,
+            include_identity=include_identity,
+            include_creator_profile=include_creator_profile,
+            include_trust_preferences=include_trust_preferences,
+        )
 
 
     @mcp.tool(name="seedcore.agent_action.preflight")

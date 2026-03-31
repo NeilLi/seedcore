@@ -1569,6 +1569,8 @@ def test_evaluate_intent_escalates_when_owner_trust_max_risk_exceeded() -> None:
     assert decision.allowed is False
     assert decision.disposition == "escalate"
     assert decision.authz_graph.get("reason") == "owner_trust_risk_escalation"
+    assert decision.authz_graph.get("reason_code") == "owner_trust_risk_threshold_exceeded"
+    assert decision.governed_receipt.get("reason_code") == "owner_trust_risk_threshold_exceeded"
     assert "owner_trust_risk_escalation" in list(decision.governed_receipt.get("trust_gap_codes") or [])
 
 
@@ -1599,6 +1601,8 @@ def test_evaluate_intent_denies_when_owner_trust_merchant_not_allowlisted() -> N
     assert decision.disposition == "deny"
     assert decision.deny_code == "owner_trust_merchant_violation"
     assert decision.authz_graph.get("reason") == "owner_trust_merchant_violation"
+    assert decision.authz_graph.get("reason_code") == "owner_trust_merchant_not_allowlisted"
+    assert decision.governed_receipt.get("reason_code") == "owner_trust_merchant_not_allowlisted"
     assert "owner_trust_merchant_violation" in list(decision.governed_receipt.get("trust_gap_codes") or [])
 
 
@@ -1624,6 +1628,8 @@ def test_evaluate_intent_denies_when_owner_trust_provenance_is_missing() -> None
     assert decision.disposition == "deny"
     assert decision.deny_code == "owner_trust_provenance_violation"
     assert decision.authz_graph.get("reason") == "owner_trust_provenance_violation"
+    assert decision.authz_graph.get("reason_code") == "owner_trust_provenance_missing"
+    assert decision.governed_receipt.get("reason_code") == "owner_trust_provenance_missing"
     assert "owner_trust_provenance_violation" in list(decision.governed_receipt.get("trust_gap_codes") or [])
 
 
@@ -1649,7 +1655,39 @@ def test_evaluate_intent_denies_when_owner_trust_modalities_missing() -> None:
     assert decision.disposition == "deny"
     assert decision.deny_code == "owner_trust_modality_violation"
     assert decision.authz_graph.get("reason") == "owner_trust_modality_violation"
+    assert decision.authz_graph.get("reason_code") == "owner_trust_modalities_missing"
+    assert decision.governed_receipt.get("reason_code") == "owner_trust_modalities_missing"
     assert "owner_trust_modality_violation" in list(decision.governed_receipt.get("trust_gap_codes") or [])
+
+
+def test_evaluate_intent_denies_when_owner_trust_provenance_level_below_required() -> None:
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["resource"]["category_envelope"] = {
+        "provenance_level": "basic",
+    }
+    owner_twin = build_twin_snapshot(payload)["owner"].model_dump(mode="json")
+    owner_twin["telemetry"] = {
+        "owner_context": {
+            "trust_preferences": {
+                "status": "ACTIVE",
+                "trust_version": "v1",
+                "required_provenance_level": "verified",
+            }
+        }
+    }
+
+    decision = evaluate_intent(
+        payload,
+        relevant_twin_snapshot={"owner": owner_twin},
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "deny"
+    assert decision.deny_code == "owner_trust_provenance_violation"
+    assert decision.authz_graph.get("reason") == "owner_trust_provenance_violation"
+    assert decision.authz_graph.get("reason_code") == "owner_trust_provenance_insufficient_level"
+    assert decision.governed_receipt.get("reason_code") == "owner_trust_provenance_insufficient_level"
+    assert "owner_trust_provenance_violation" in list(decision.governed_receipt.get("trust_gap_codes") or [])
 
 
 def test_evaluate_intent_escalates_when_owner_trust_high_value_threshold_exceeded() -> None:
@@ -1676,6 +1714,8 @@ def test_evaluate_intent_escalates_when_owner_trust_high_value_threshold_exceede
     assert decision.allowed is False
     assert decision.disposition == "escalate"
     assert decision.authz_graph.get("reason") == "owner_trust_high_value_step_up"
+    assert decision.authz_graph.get("reason_code") == "owner_trust_high_value_threshold_exceeded"
+    assert decision.governed_receipt.get("reason_code") == "owner_trust_high_value_threshold_exceeded"
     assert "owner_trust_high_value_step_up" in list(decision.governed_receipt.get("trust_gap_codes") or [])
 
 

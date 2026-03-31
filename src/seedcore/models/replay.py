@@ -69,6 +69,7 @@ class TrustPageProjection(BaseModel):
     subject_summary: str
     authority_consistency: Dict[str, Any] = Field(default_factory=dict)
     authority_consistency_hash: Optional[str] = None
+    owner_context_hash: Optional[str] = None
     verification_status: Dict[str, Any] = Field(default_factory=dict)
     approvals: Dict[str, Any] = Field(default_factory=dict)
     authorization: Dict[str, Any] = Field(default_factory=dict)
@@ -100,6 +101,7 @@ class VerificationResult(BaseModel):
     operator_actions: List[Dict[str, Any]] = Field(default_factory=list)
     authority_consistency: Dict[str, Any] = Field(default_factory=dict)
     authority_consistency_hash: Optional[str] = None
+    owner_context_hash: Optional[str] = None
     reason: Optional[str] = None
     trust_url: Optional[str] = None
     public_jsonld_ref: Optional[str] = None
@@ -115,6 +117,7 @@ class TrustCertificate(BaseModel):
     public_claims: List[Dict[str, Any]] = Field(default_factory=list)
     authority_consistency: Dict[str, Any] = Field(default_factory=dict)
     authority_consistency_hash: Optional[str] = None
+    owner_context_hash: Optional[str] = None
     operator_actions: List[Dict[str, Any]] = Field(default_factory=list)
     trust_gap_codes: List[str] = Field(default_factory=list)
     trust_gap_details: List[Dict[str, Any]] = Field(default_factory=list)

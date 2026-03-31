@@ -86,6 +86,12 @@ OWNER_TRUST_PROVENANCE_DENY_CODE = "owner_trust_provenance_violation"
 OWNER_TRUST_MODALITY_DENY_CODE = "owner_trust_modality_violation"
 OWNER_TRUST_RISK_ESCALATION_CODE = "owner_trust_risk_escalation"
 OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE = "owner_trust_high_value_step_up"
+OWNER_TRUST_PROVENANCE_MISSING_REASON_CODE = "owner_trust_provenance_missing"
+OWNER_TRUST_PROVENANCE_LEVEL_REASON_CODE = "owner_trust_provenance_insufficient_level"
+OWNER_TRUST_MODALITY_MISSING_REASON_CODE = "owner_trust_modalities_missing"
+OWNER_TRUST_MERCHANT_ALLOWLIST_REASON_CODE = "owner_trust_merchant_not_allowlisted"
+OWNER_TRUST_RISK_THRESHOLD_REASON_CODE = "owner_trust_risk_threshold_exceeded"
+OWNER_TRUST_HIGH_VALUE_REASON_CODE = "owner_trust_high_value_threshold_exceeded"
 MISSING_MANDATORY_EVIDENCE_DENY_CODE = "missing_mandatory_evidence"
 COGNITIVE_DENY_CODE = "cognitive_policy_denied"
 POLICY_ESCALATION_CODE = "policy_escalation_required"
@@ -1767,9 +1773,26 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
     if trust_preferences is None:
         return None
 
+    def _owner_trust_artifact_fields(code: str, reason_code: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        return (
+            {
+                "reason": code,
+                "reason_code": reason_code,
+                "trust_gaps": [{"code": code, "reason_code": reason_code}],
+            },
+            {
+                "trust_gap_codes": [code],
+                "reason_code": reason_code,
+            },
+        )
+
     risk_score = _policy_case_risk_score(policy_case)
     max_risk_score = trust_preferences.get("max_risk_score")
     if isinstance(max_risk_score, (int, float)) and risk_score is not None and risk_score > float(max_risk_score):
+        authz_graph, governed_receipt = _owner_trust_artifact_fields(
+            OWNER_TRUST_RISK_ESCALATION_CODE,
+            OWNER_TRUST_RISK_THRESHOLD_REASON_CODE,
+        )
         return _escalate_decision(
             "Owner trust preference risk threshold exceeded.",
             policy_case.policy_snapshot,
@@ -1778,17 +1801,18 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                 f"risk_score={risk_score}",
                 f"max_risk_score={float(max_risk_score)}",
             ],
-            authz_graph={
-                "reason": OWNER_TRUST_RISK_ESCALATION_CODE,
-                "trust_gaps": [{"code": OWNER_TRUST_RISK_ESCALATION_CODE}],
-            },
-                governed_receipt={"trust_gap_codes": [OWNER_TRUST_RISK_ESCALATION_CODE]},
-            )
+            authz_graph=authz_graph,
+            governed_receipt=governed_receipt,
+        )
 
     high_value_step_up_threshold_usd = trust_preferences.get("high_value_step_up_threshold_usd")
     if isinstance(high_value_step_up_threshold_usd, (int, float)):
         value_usd = _action_value_usd(policy_case.action_intent)
         if value_usd is not None and value_usd >= float(high_value_step_up_threshold_usd):
+            authz_graph, governed_receipt = _owner_trust_artifact_fields(
+                OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE,
+                OWNER_TRUST_HIGH_VALUE_REASON_CODE,
+            )
             return _escalate_decision(
                 "Owner trust preference high-value threshold requires step-up approval.",
                 policy_case.policy_snapshot,
@@ -1797,11 +1821,8 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                     f"value_usd={round(value_usd, 2)}",
                     f"high_value_step_up_threshold_usd={float(high_value_step_up_threshold_usd)}",
                 ],
-                authz_graph={
-                    "reason": OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE,
-                    "trust_gaps": [{"code": OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE}],
-                },
-                governed_receipt={"trust_gap_codes": [OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE]},
+                authz_graph=authz_graph,
+                governed_receipt=governed_receipt,
             )
 
     merchant_allowlist = [
@@ -1822,6 +1843,10 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
         gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
         merchant_ref = str(gateway.get("organization_ref") or "").strip()
         if merchant_ref and merchant_ref not in set(merchant_allowlist):
+            authz_graph, governed_receipt = _owner_trust_artifact_fields(
+                OWNER_TRUST_MERCHANT_DENY_CODE,
+                OWNER_TRUST_MERCHANT_ALLOWLIST_REASON_CODE,
+            )
             return _deny_decision(
                 "Owner trust preference merchant allowlist does not permit this request.",
                 OWNER_TRUST_MERCHANT_DENY_CODE,
@@ -1829,11 +1854,8 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                 risk_score=_policy_case_risk_score(policy_case, floor=0.7),
                 cognitive_assessment=policy_case.cognitive_assessment,
                 explanations=[f"merchant_ref={merchant_ref}", f"allowlist={','.join(merchant_allowlist)}"],
-                authz_graph={
-                    "reason": OWNER_TRUST_MERCHANT_DENY_CODE,
-                    "trust_gaps": [{"code": OWNER_TRUST_MERCHANT_DENY_CODE}],
-                },
-                governed_receipt={"trust_gap_codes": [OWNER_TRUST_MERCHANT_DENY_CODE]},
+                authz_graph=authz_graph,
+                governed_receipt=governed_receipt,
             )
 
     required_provenance_level = str(trust_preferences.get("required_provenance_level") or "").strip().lower()
@@ -1848,6 +1870,10 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
         evidence_level = str(evidence_summary.get("provenance_level") or "").strip().lower()
         observed_level = resource_level or evidence_level
         if not observed_level:
+            authz_graph, governed_receipt = _owner_trust_artifact_fields(
+                OWNER_TRUST_PROVENANCE_DENY_CODE,
+                OWNER_TRUST_PROVENANCE_MISSING_REASON_CODE,
+            )
             return _deny_decision(
                 "Owner trust preference requires provenance level evidence.",
                 OWNER_TRUST_PROVENANCE_DENY_CODE,
@@ -1856,16 +1882,17 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                 cognitive_assessment=policy_case.cognitive_assessment,
                 evidence_gaps=["provenance_level"],
                 explanations=[f"required_provenance_level={required_provenance_level}"],
-                authz_graph={
-                    "reason": OWNER_TRUST_PROVENANCE_DENY_CODE,
-                    "trust_gaps": [{"code": OWNER_TRUST_PROVENANCE_DENY_CODE}],
-                },
-                governed_receipt={"trust_gap_codes": [OWNER_TRUST_PROVENANCE_DENY_CODE]},
+                authz_graph=authz_graph,
+                governed_receipt=governed_receipt,
             )
         order = {"none": 0, "basic": 1, "verified": 2, "certified": 3}
         required_rank = order.get(required_provenance_level, 0)
         observed_rank = order.get(observed_level, 0)
         if observed_rank < required_rank:
+            authz_graph, governed_receipt = _owner_trust_artifact_fields(
+                OWNER_TRUST_PROVENANCE_DENY_CODE,
+                OWNER_TRUST_PROVENANCE_LEVEL_REASON_CODE,
+            )
             return _deny_decision(
                 "Owner trust preference provenance level is not sufficient.",
                 OWNER_TRUST_PROVENANCE_DENY_CODE,
@@ -1877,11 +1904,8 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                     f"required_provenance_level={required_provenance_level}",
                     f"observed_provenance_level={observed_level}",
                 ],
-                authz_graph={
-                    "reason": OWNER_TRUST_PROVENANCE_DENY_CODE,
-                    "trust_gaps": [{"code": OWNER_TRUST_PROVENANCE_DENY_CODE}],
-                },
-                governed_receipt={"trust_gap_codes": [OWNER_TRUST_PROVENANCE_DENY_CODE]},
+                authz_graph=authz_graph,
+                governed_receipt=governed_receipt,
             )
 
     required_modalities = [
@@ -1896,6 +1920,10 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
     available_modalities = _available_modalities(policy_case)
     if required_modalities and not set(required_modalities).issubset(available_modalities):
         missing = sorted(set(required_modalities) - available_modalities)
+        authz_graph, governed_receipt = _owner_trust_artifact_fields(
+            OWNER_TRUST_MODALITY_DENY_CODE,
+            OWNER_TRUST_MODALITY_MISSING_REASON_CODE,
+        )
         return _deny_decision(
             "Owner trust preference required modalities are missing.",
             OWNER_TRUST_MODALITY_DENY_CODE,
@@ -1904,11 +1932,8 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
             cognitive_assessment=policy_case.cognitive_assessment,
             evidence_gaps=missing,
             explanations=[f"required_evidence_modalities={','.join(required_modalities)}"],
-            authz_graph={
-                "reason": OWNER_TRUST_MODALITY_DENY_CODE,
-                "trust_gaps": [{"code": OWNER_TRUST_MODALITY_DENY_CODE}],
-            },
-            governed_receipt={"trust_gap_codes": [OWNER_TRUST_MODALITY_DENY_CODE]},
+            authz_graph=authz_graph,
+            governed_receipt=governed_receipt,
         )
 
     return None

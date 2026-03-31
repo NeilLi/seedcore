@@ -25,6 +25,7 @@ This quickstart shows how to use the Gemini extension tools for:
 - `seedcore.delegation.revoke`
 - `seedcore.trust_preferences.upsert`
 - `seedcore.trust_preferences.get`
+- `seedcore.owner_context.get`
 - `seedcore.agent_action.preflight`
 
 ## 1) Register Owner Identity
@@ -62,6 +63,23 @@ Validate:
   }
 }
 ```
+
+Optional consolidated owner-context read (provenance-first):
+
+```json
+{
+  "tool": "seedcore.owner_context.get",
+  "arguments": {
+    "owner_id": "did:seedcore:owner:acme-001"
+  }
+}
+```
+
+The response includes:
+
+- `owner_context_ref.creator_profile_ref` and `owner_context_ref.trust_preferences_ref`
+- provenance metadata (`updated_by`, `source_namespace`, `source_predicate`, `signer_did`, `signer_key_ref`)
+- `owner_context_hash` for quick cross-artifact comparison
 
 ## 2) Upsert Creator Profile
 
