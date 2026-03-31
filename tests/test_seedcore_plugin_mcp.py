@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from seedcore.plugin.mcp_server import (
     PLUGIN_TOOL_NAMES,
     app,
+    handle_digital_twin_capture_link,
     handle_evidence_verify,
     handle_health,
     handle_hotpath_benchmark,
@@ -231,3 +232,23 @@ async def test_handle_hotpath_benchmark_uses_host_tool(monkeypatch: pytest.Monke
     assert result["ok"] is True
     assert result["latency_ms"]["p99"] == 88
     assert result["artifact_path"] == "/tmp/bench.json"
+
+
+@pytest.mark.asyncio
+async def test_handle_digital_twin_capture_link_returns_draft_candidate(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "seedcore.plugin.mcp_server.capture_digital_twin_from_link",
+        lambda **kwargs: {
+            "ok": True,
+            "source_url": kwargs["source_url"],
+            "authority": {"status": "external_claim_only", "verified": False},
+            "digital_twin_candidate": {"twin_id": "external:youtube:test"},
+            "intent_candidate": {"intent_type": "capture_external_production_basics"},
+        },
+    )
+
+    result = await handle_digital_twin_capture_link(source_url="https://www.youtube.com/shorts/test")
+
+    assert result["ok"] is True
+    assert result["authority"]["verified"] is False
+    assert result["digital_twin_candidate"]["twin_id"] == "external:youtube:test"

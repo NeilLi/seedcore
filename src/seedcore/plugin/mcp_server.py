@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised implicitly in local 
     ServerSession = Any  # type: ignore[assignment]
 
 from . import host_tools
+from .capture_tools import capture_digital_twin_from_link
 from .runtime_client import SeedcorePluginError, SeedcoreRuntimeClient
 
 
@@ -30,6 +31,7 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.hotpath.verify_shadow",
     "seedcore.hotpath.benchmark",
     "seedcore.evidence.verify",
+    "seedcore.digital_twin.capture_link",
 ]
 
 
@@ -255,6 +257,20 @@ async def handle_evidence_verify(
     return result
 
 
+async def handle_digital_twin_capture_link(
+    *,
+    source_url: str,
+    twin_kind: str = "product",
+    subject_name: str | None = None,
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        capture_digital_twin_from_link,
+        source_url=source_url,
+        twin_kind=twin_kind,
+        subject_name=subject_name,
+    )
+
+
 if FastMCP is not None:
     @asynccontextmanager
     async def app_lifespan(server: FastMCP):
@@ -345,6 +361,21 @@ if FastMCP is not None:
             audit_id=audit_id,
             subject_id=subject_id,
             subject_type=subject_type,
+        )
+
+
+    @mcp.tool(name="seedcore.digital_twin.capture_link")
+    async def seedcore_digital_twin_capture_link(
+        ctx: AppContext,
+        source_url: str,
+        twin_kind: str = "product",
+        subject_name: str | None = None,
+    ) -> dict[str, Any]:
+        del ctx
+        return await handle_digital_twin_capture_link(
+            source_url=source_url,
+            twin_kind=twin_kind,
+            subject_name=subject_name,
         )
 else:  # pragma: no cover - only used in envs missing the optional dependency
     mcp = None
