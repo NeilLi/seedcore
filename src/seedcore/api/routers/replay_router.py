@@ -266,11 +266,21 @@ async def publish_trust_reference(
         _raise_http_from_service_error(exc)
     authority_issues = replay_service.authority_consistency_issues(replay)
     if authority_issues:
+        authority_consistency = replay_service.authority_consistency_summary(replay)
+        projection = replay_service.project_record(replay, ReplayProjectionKind.PUBLIC)
+        operator_actions = (
+            list(projection.get("operator_actions") or [])
+            if isinstance(projection, dict)
+            else []
+        )
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "authority_binding_mismatch",
                 "issues": authority_issues,
+                "authority_consistency": authority_consistency,
+                "authority_consistency_hash": authority_consistency.get("hash"),
+                "operator_actions": operator_actions,
             },
         )
     authority_consistency = replay_service.authority_consistency_summary(replay)

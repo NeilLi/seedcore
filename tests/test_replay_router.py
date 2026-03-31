@@ -564,12 +564,20 @@ def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:
     publish_body = publish.json()["detail"]
     assert publish_body["code"] == "authority_binding_mismatch"
     assert "owner_identity_mismatch" in publish_body["issues"]
+    assert publish_body["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in publish_body["authority_consistency"]["issues"]
+    assert publish_body["authority_consistency_hash"] == publish_body["authority_consistency"]["hash"]
+    assert publish_body["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
     refresh = client.post("/trust/refresh", json={"audit_id": record["id"], "ttl_hours": 4})
     assert refresh.status_code == 409
     refresh_body = refresh.json()["detail"]
     assert refresh_body["code"] == "authority_binding_mismatch"
     assert "owner_identity_mismatch" in refresh_body["issues"]
+    assert refresh_body["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in refresh_body["authority_consistency"]["issues"]
+    assert refresh_body["authority_consistency_hash"] == refresh_body["authority_consistency"]["hash"]
+    assert refresh_body["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
 
 def test_verify_token_surfaces_reference_subject_mismatch() -> None:
