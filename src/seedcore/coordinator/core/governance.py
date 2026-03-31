@@ -1782,8 +1782,8 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                 "reason": OWNER_TRUST_RISK_ESCALATION_CODE,
                 "trust_gaps": [{"code": OWNER_TRUST_RISK_ESCALATION_CODE}],
             },
-            governed_receipt={"trust_gap_codes": [OWNER_TRUST_RISK_ESCALATION_CODE]},
-        )
+                governed_receipt={"trust_gap_codes": [OWNER_TRUST_RISK_ESCALATION_CODE]},
+            )
 
     high_value_step_up_threshold_usd = trust_preferences.get("high_value_step_up_threshold_usd")
     if isinstance(high_value_step_up_threshold_usd, (int, float)):
@@ -1829,6 +1829,11 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                 risk_score=_policy_case_risk_score(policy_case, floor=0.7),
                 cognitive_assessment=policy_case.cognitive_assessment,
                 explanations=[f"merchant_ref={merchant_ref}", f"allowlist={','.join(merchant_allowlist)}"],
+                authz_graph={
+                    "reason": OWNER_TRUST_MERCHANT_DENY_CODE,
+                    "trust_gaps": [{"code": OWNER_TRUST_MERCHANT_DENY_CODE}],
+                },
+                governed_receipt={"trust_gap_codes": [OWNER_TRUST_MERCHANT_DENY_CODE]},
             )
 
     required_provenance_level = str(trust_preferences.get("required_provenance_level") or "").strip().lower()
@@ -1851,6 +1856,11 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                 cognitive_assessment=policy_case.cognitive_assessment,
                 evidence_gaps=["provenance_level"],
                 explanations=[f"required_provenance_level={required_provenance_level}"],
+                authz_graph={
+                    "reason": OWNER_TRUST_PROVENANCE_DENY_CODE,
+                    "trust_gaps": [{"code": OWNER_TRUST_PROVENANCE_DENY_CODE}],
+                },
+                governed_receipt={"trust_gap_codes": [OWNER_TRUST_PROVENANCE_DENY_CODE]},
             )
         order = {"none": 0, "basic": 1, "verified": 2, "certified": 3}
         required_rank = order.get(required_provenance_level, 0)
@@ -1867,6 +1877,11 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
                     f"required_provenance_level={required_provenance_level}",
                     f"observed_provenance_level={observed_level}",
                 ],
+                authz_graph={
+                    "reason": OWNER_TRUST_PROVENANCE_DENY_CODE,
+                    "trust_gaps": [{"code": OWNER_TRUST_PROVENANCE_DENY_CODE}],
+                },
+                governed_receipt={"trust_gap_codes": [OWNER_TRUST_PROVENANCE_DENY_CODE]},
             )
 
     required_modalities = [
@@ -1889,6 +1904,11 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
             cognitive_assessment=policy_case.cognitive_assessment,
             evidence_gaps=missing,
             explanations=[f"required_evidence_modalities={','.join(required_modalities)}"],
+            authz_graph={
+                "reason": OWNER_TRUST_MODALITY_DENY_CODE,
+                "trust_gaps": [{"code": OWNER_TRUST_MODALITY_DENY_CODE}],
+            },
+            governed_receipt={"trust_gap_codes": [OWNER_TRUST_MODALITY_DENY_CODE]},
         )
 
     return None
