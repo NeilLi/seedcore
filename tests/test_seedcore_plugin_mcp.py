@@ -25,6 +25,7 @@ from seedcore.plugin.mcp_server import (
     handle_pkg_status,
     handle_readyz,
 )
+from seedcore.ops.evidence.owner_context import owner_context_hash
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,24 @@ def test_plugin_info_lists_seedcore_tools():
     body = response.json()
     assert body["service"] == "seedcore-plugin-mcp"
     assert body["tools"] == PLUGIN_TOOL_NAMES
+
+
+def test_plugin_tool_surface_includes_owner_creator_parity_set():
+    expected_tools = {
+        "seedcore.identity.owner.upsert",
+        "seedcore.identity.owner.get",
+        "seedcore.creator_profile.upsert",
+        "seedcore.creator_profile.get",
+        "seedcore.delegation.grant",
+        "seedcore.delegation.get",
+        "seedcore.delegation.revoke",
+        "seedcore.trust_preferences.upsert",
+        "seedcore.trust_preferences.get",
+        "seedcore.owner_context.get",
+        "seedcore.agent_action.preflight",
+    }
+    assert expected_tools.issubset(set(PLUGIN_TOOL_NAMES))
+    assert len(PLUGIN_TOOL_NAMES) == len(set(PLUGIN_TOOL_NAMES))
 
 
 def test_packaging_files_point_to_seedcore_skill_bootstrap():
@@ -351,5 +370,5 @@ async def test_handle_owner_context_get_returns_compact_refs_and_hash():
     assert result["owner_context_ref"]["creator_profile_ref"]["source_namespace"] == "identity"
     assert result["owner_context_ref"]["creator_profile_ref"]["signer_key_ref"] == "owner-k1"
     assert result["owner_context_ref"]["trust_preferences_ref"]["source_predicate"] == "trust_preferences"
-    assert result["owner_context_hash"].startswith("sha256:")
+    assert result["owner_context_hash"] == owner_context_hash(result["owner_context_ref"])
     assert result["warnings"] == []

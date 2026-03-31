@@ -130,6 +130,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-page projections now also expose top-level `authority_consistency` for direct API consumers.
 - Trust-page projections now include `operator_actions` with remediation hints when authority consistency issues are present.
 - Trust-page, trust-certificate, JSON-LD proof, and verification responses now include `owner_context_hash` for cross-artifact owner-reference consistency checks.
+- `owner_context_hash` canonicalization is defined in [owner_context_hash_contract.md](/Users/ningli/project/seedcore/docs/references/contracts/owner_context_hash_contract.md), with shared runtime implementation and golden-vector tests.
 - Public replay-artifact payloads now include `authority_consistency_hash` and `operator_actions` for lightweight triage parity.
 - Public replay-artifact payloads now also include `authority_consistency` for direct `ok/issues/hash` inspection.
 - Trust-page/certificate/verifier claim sets now include authority-binding claims (`authority_binding_consistent`, `authority_binding_mismatch_detected`).

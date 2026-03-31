@@ -43,6 +43,7 @@ from seedcore.ops.evidence.authority_consistency import (
     authority_consistency_summary,
     operator_actions_for_authority_issues,
 )
+from seedcore.ops.evidence.owner_context import owner_context_hash as _owner_context_hash_value
 from seedcore.ops.evidence.policy import build_policy_summary, canonical_json, sha256_hex
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
@@ -3155,9 +3156,7 @@ class ReplayService:
         )
 
     def _owner_context_hash(self, owner_context: Mapping[str, Any]) -> Optional[str]:
-        if not owner_context:
-            return None
-        return f"sha256:{sha256_hex(canonical_json(dict(owner_context)))}"
+        return _owner_context_hash_value(owner_context)
 
     async def _cache_trust_bundle_snapshot(
         self,

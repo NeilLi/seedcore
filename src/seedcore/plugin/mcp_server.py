@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -22,6 +20,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised implicitly in local 
 from . import host_tools
 from .capture_tools import capture_digital_twin_from_link
 from .runtime_client import SeedcorePluginError, SeedcoreRuntimeClient
+from seedcore.ops.evidence.owner_context import owner_context_hash as build_owner_context_hash
 
 
 PLUGIN_TOOL_NAMES = [
@@ -525,9 +524,7 @@ async def handle_owner_context_get(
         "creator_profile_ref": creator_profile_ref,
         "trust_preferences_ref": trust_preferences_ref,
     }
-    owner_context_hash = "sha256:" + hashlib.sha256(
-        json.dumps(owner_context_ref, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    owner_context_hash = build_owner_context_hash(owner_context_ref)
 
     return {
         "owner_id": owner_id,

@@ -1,0 +1,41 @@
+{
+  "schema_version": "owner_context_hash.v1",
+  "cases": [
+    {
+      "name": "full_owner_context_ref",
+      "owner_context_ref": {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "creator_profile_ref": {
+          "owner_id": "did:seedcore:owner:acme-001",
+          "version": "v2",
+          "updated_at": "2026-03-31T10:00:00Z",
+          "updated_by": "identity_router",
+          "source_namespace": "identity",
+          "source_predicate": "creator_profile",
+          "signer_did": "did:seedcore:owner:acme-001",
+          "signer_key_ref": "owner-k1"
+        },
+        "trust_preferences_ref": {
+          "owner_id": "did:seedcore:owner:acme-001",
+          "trust_version": "v3",
+          "updated_at": "2026-03-31T10:00:01Z",
+          "updated_by": "identity_router",
+          "source_namespace": "identity",
+          "source_predicate": "trust_preferences",
+          "signer_did": "did:seedcore:owner:acme-001",
+          "signer_key_ref": "owner-k1"
+        }
+      },
+      "expected_hash": "sha256:e18af2532c1473da8cb6ff9caceade10abb47ab87a8780946121e2ba73af6327"
+    },
+    {
+      "name": "minimal_owner_context_ref",
+      "owner_context_ref": {
+        "owner_id": "did:seedcore:owner:minimal-001",
+        "creator_profile_ref": null,
+        "trust_preferences_ref": null
+      },
+      "expected_hash": "sha256:b0eb34fea7505a4a62f06f7c90d1e2ebccf4a483bed2680ea962260580f85acf"
+    }
+  ]
+}
