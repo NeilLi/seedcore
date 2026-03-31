@@ -518,6 +518,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert replay.public_projection["owner_context_hash"].startswith("sha256:")
     assert authorization["trust_gap_codes"] == ["owner_trust_merchant_violation"]
     assert authorization["trust_gap_details"][0]["category"] == "owner_trust"
+    assert authorization["trust_gap_details"][0]["reason_code"] == "owner_trust_merchant_not_allowlisted"
     assert authorization["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert authorization["owner_context"]["trust_preferences_ref"]["trust_version"] == "v3"
     assert authorization["owner_context"]["creator_profile_ref"]["source_namespace"] == "identity"
@@ -535,6 +536,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     proof = public_jsonld["proof"]
     assert proof["trust_gap_codes"] == ["owner_trust_merchant_violation"]
     assert proof["trust_gap_details"][0]["category"] == "owner_trust"
+    assert proof["trust_gap_details"][0]["reason_code"] == "owner_trust_merchant_not_allowlisted"
     assert proof["authority_consistency"]["ok"] is True
     assert isinstance(proof["authority_consistency_hash"], str)
     assert proof["authority_consistency_hash"].startswith("sha256:")
@@ -563,6 +565,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert certificate.operator_actions == []
     assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
     assert certificate.trust_gap_details[0]["category"] == "owner_trust"
+    assert certificate.trust_gap_details[0]["reason_code"] == "owner_trust_merchant_not_allowlisted"
     assert certificate.owner_context["owner_id"] == "did:seedcore:owner:acme-001"
     assert certificate.owner_context["trust_preferences_ref"]["trust_version"] == "v3"
     assert certificate.owner_context["creator_profile_ref"]["updated_by"] == "identity_router"

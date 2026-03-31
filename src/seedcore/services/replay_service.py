@@ -84,6 +84,13 @@ TRUST_GAP_TAXONOMY: Dict[str, Dict[str, str]] = {
         "message": "Required owner evidence modalities missing.",
     },
 }
+TRUST_GAP_REASON_CODE_DEFAULTS: Dict[str, str] = {
+    "owner_trust_risk_escalation": "owner_trust_risk_threshold_exceeded",
+    "owner_trust_high_value_step_up": "owner_trust_high_value_threshold_exceeded",
+    "owner_trust_merchant_violation": "owner_trust_merchant_not_allowlisted",
+    "owner_trust_provenance_violation": "owner_trust_provenance_violation",
+    "owner_trust_modality_violation": "owner_trust_modalities_missing",
+}
 
 
 class ReplayServiceError(ValueError):
@@ -354,6 +361,11 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_reason_codes = self._trust_gap_reason_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+            trust_gap_codes=trust_gap_codes,
+        )
         proof_payload = {
             "type": "SeedCoreReplayProof",
             "verification_status": replay.verification_status.model_dump(mode="json"),
@@ -363,7 +375,7 @@ class ReplayService:
                 for item in replay.signer_chain
             ],
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
             "authority_consistency": authority_consistency,
             "authority_consistency_hash": authority_consistency.get("hash"),
             "owner_context_hash": owner_context_hash,
@@ -809,6 +821,11 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_reason_codes = self._trust_gap_reason_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+            trust_gap_codes=trust_gap_codes,
+        )
         owner_context = self._owner_context_summary(replay)
         owner_context_hash = self._owner_context_hash(owner_context)
         certificate_payload = {
@@ -824,7 +841,7 @@ class ReplayService:
             "owner_context_hash": owner_context_hash,
             "operator_actions": list(projection.operator_actions),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
             "owner_context": owner_context,
             "issued_at": issued_at,
             "expires_at": expires_at,
@@ -1699,6 +1716,11 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_reason_codes = self._trust_gap_reason_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+            trust_gap_codes=trust_gap_codes,
+        )
         return {
             "current_zone": asset_state.get("current_zone") or transition.get("to_zone") or transition.get("target_zone"),
             "previous_zone": transition.get("from_zone"),
@@ -1729,6 +1751,11 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_reason_codes = self._trust_gap_reason_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+            trust_gap_codes=trust_gap_codes,
+        )
         return {
             "policy_receipt_id": receipt.get("policy_receipt_id"),
             "policy_decision_id": receipt.get("policy_decision_id"),
@@ -1751,7 +1778,7 @@ class ReplayService:
                 or replay.evidence_bundle.get("decision_graph_snapshot_version")
             ),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
             "restricted_token_recommended": bool(replay.authz_graph.get("restricted_token_recommended")),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
             "workflow_status": self._workflow_status(replay),
@@ -2750,6 +2777,11 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_reason_codes = self._trust_gap_reason_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+            trust_gap_codes=trust_gap_codes,
+        )
         return {
             "disposition": replay.authz_graph.get("disposition") or replay.governed_receipt.get("disposition"),
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
@@ -2785,7 +2817,7 @@ class ReplayService:
                 else None
             ) or replay.evidence_bundle.get("execution_token_id"),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
             "owner_context": self._owner_context_summary(replay),
             "owner_context_hash": self._owner_context_hash(self._owner_context_summary(replay)),
             "authority_consistency": self._authority_consistency_summary(replay),
@@ -2915,22 +2947,61 @@ class ReplayService:
                 )
         return claims
 
-    def _trust_gap_details(self, trust_gap_codes: Sequence[str]) -> List[Dict[str, Any]]:
+    def _trust_gap_details(
+        self,
+        trust_gap_codes: Sequence[str],
+        *,
+        reason_codes: Mapping[str, str] | None = None,
+    ) -> List[Dict[str, Any]]:
         details: List[Dict[str, Any]] = []
+        reason_codes = reason_codes or {}
         for code in trust_gap_codes:
             normalized = str(code).strip()
             if not normalized:
                 continue
             entry = dict(TRUST_GAP_TAXONOMY.get(normalized) or {})
-            details.append(
-                {
-                    "code": normalized,
-                    "category": entry.get("category", "general"),
-                    "severity": entry.get("severity", "medium"),
-                    "message": entry.get("message", normalized.replace("_", " ")),
-                }
-            )
+            item = {
+                "code": normalized,
+                "category": entry.get("category", "general"),
+                "severity": entry.get("severity", "medium"),
+                "message": entry.get("message", normalized.replace("_", " ")),
+            }
+            reason_code = str(reason_codes.get(normalized) or "").strip()
+            if reason_code:
+                item["reason_code"] = reason_code
+            details.append(item)
         return details
+
+    def _trust_gap_reason_codes(
+        self,
+        *,
+        replay_authz_graph: Mapping[str, Any],
+        replay_governed_receipt: Mapping[str, Any],
+        trust_gap_codes: Sequence[str],
+    ) -> Dict[str, str]:
+        reason_codes: Dict[str, str] = {}
+        trust_gaps = replay_authz_graph.get("trust_gaps")
+        if isinstance(trust_gaps, list):
+            for item in trust_gaps:
+                if not isinstance(item, Mapping):
+                    continue
+                code = str(item.get("code") or "").strip()
+                reason_code = str(item.get("reason_code") or "").strip()
+                if code and reason_code and code not in reason_codes:
+                    reason_codes[code] = reason_code
+        governed_reason_code = str(replay_governed_receipt.get("reason_code") or "").strip()
+        if governed_reason_code:
+            for code in trust_gap_codes:
+                normalized = str(code).strip()
+                if normalized and normalized not in reason_codes:
+                    reason_codes[normalized] = governed_reason_code
+        for code in trust_gap_codes:
+            normalized = str(code).strip()
+            if normalized and normalized not in reason_codes:
+                fallback_reason_code = str(TRUST_GAP_REASON_CODE_DEFAULTS.get(normalized) or "").strip()
+                if fallback_reason_code:
+                    reason_codes[normalized] = fallback_reason_code
+        return reason_codes
 
     def _owner_context_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
         owner_context = (

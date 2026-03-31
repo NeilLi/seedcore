@@ -609,6 +609,10 @@ def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:
     assert isinstance(publish_body.get("owner_context_hash"), str)
     assert publish_body["owner_context_hash"].startswith("sha256:")
     assert publish_body["operator_actions"][0]["code"] == "reconcile_owner_identity"
+    assert publish_body["proof_surface"]["artifact_refs"]["trust_url"] is None
+    assert publish_body["proof_surface"]["key_hashes"]["authority_consistency_hash"] == publish_body["authority_consistency_hash"]
+    assert publish_body["proof_surface"]["key_hashes"]["owner_context_hash"] == publish_body["owner_context_hash"]
+    assert publish_body["proof_surface"]["operator_action_codes"][0] == "reconcile_owner_identity"
 
     refresh = client.post("/trust/refresh", json={"audit_id": record["id"], "ttl_hours": 4})
     assert refresh.status_code == 409
@@ -621,6 +625,10 @@ def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:
     assert isinstance(refresh_body.get("owner_context_hash"), str)
     assert refresh_body["owner_context_hash"].startswith("sha256:")
     assert refresh_body["operator_actions"][0]["code"] == "reconcile_owner_identity"
+    assert refresh_body["proof_surface"]["artifact_refs"]["trust_url"] is None
+    assert refresh_body["proof_surface"]["key_hashes"]["authority_consistency_hash"] == refresh_body["authority_consistency_hash"]
+    assert refresh_body["proof_surface"]["key_hashes"]["owner_context_hash"] == refresh_body["owner_context_hash"]
+    assert refresh_body["proof_surface"]["operator_action_codes"][0] == "reconcile_owner_identity"
 
 
 def test_verify_token_surfaces_reference_subject_mismatch() -> None:

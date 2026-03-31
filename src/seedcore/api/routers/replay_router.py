@@ -78,7 +78,7 @@ def _public_urls(request: Request, public_id: str) -> Dict[str, str]:
 def _proof_surface_summary(
     *,
     projection: Dict[str, Any],
-    urls: Dict[str, str],
+    urls: Dict[str, Any],
     authority_consistency: Dict[str, Any],
     operator_actions: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -316,6 +316,12 @@ async def publish_trust_reference(
             if isinstance(projection, dict)
             else []
         )
+        urls: Dict[str, Any] = {
+            "trust_url": None,
+            "verify_url": None,
+            "jsonld_url": None,
+            "certificate_url": None,
+        }
         raise HTTPException(
             status_code=409,
             detail={
@@ -325,6 +331,12 @@ async def publish_trust_reference(
                 "authority_consistency_hash": authority_consistency.get("hash"),
                 "owner_context_hash": projection.get("owner_context_hash"),
                 "operator_actions": operator_actions,
+                "proof_surface": _proof_surface_summary(
+                    projection=projection if isinstance(projection, dict) else {},
+                    urls=urls,
+                    authority_consistency=authority_consistency,
+                    operator_actions=operator_actions,
+                ),
             },
         )
     authority_consistency = replay_service.authority_consistency_summary(replay)
