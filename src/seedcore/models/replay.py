@@ -95,6 +95,7 @@ class VerificationResult(BaseModel):
     tamper_status: str
     verification_time: str
     public_claims: List[Dict[str, Any]] = Field(default_factory=list)
+    operator_actions: List[Dict[str, Any]] = Field(default_factory=list)
     authority_consistency: Dict[str, Any] = Field(default_factory=dict)
     authority_consistency_hash: Optional[str] = None
     reason: Optional[str] = None

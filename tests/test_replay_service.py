@@ -623,6 +623,7 @@ async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_veri
     assert await service.reference_is_revoked(reference=reference, redis_client=redis_client) is True
     assert verification.verified is False
     assert verification.reason == "revoked_reference"
+    assert verification.operator_actions == []
     assert verification.authority_consistency == {}
     assert verification.authority_consistency_hash is None
 
@@ -699,6 +700,7 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert verification.verified is False
     assert verification.reason == "owner_identity_mismatch"
     assert verification.tamper_status == "authority_mismatch"
+    assert verification.operator_actions[0]["code"] == "reconcile_owner_identity"
     assert verification.authority_consistency["ok"] is False
     assert "owner_identity_mismatch" in verification.authority_consistency["issues"]
     assert verification.authority_consistency_hash == verification.authority_consistency["hash"]
@@ -772,6 +774,7 @@ async def test_verify_reference_fails_on_delegation_ref_mismatch() -> None:
     assert verification.verified is False
     assert verification.reason == "delegation_ref_mismatch"
     assert verification.tamper_status == "authority_mismatch"
+    assert verification.operator_actions[0]["code"] == "reconcile_delegation_ref"
     assert verification.authority_consistency["ok"] is False
     assert "delegation_ref_mismatch" in verification.authority_consistency["issues"]
     assert verification.authority_consistency_hash == verification.authority_consistency["hash"]

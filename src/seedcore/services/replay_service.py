@@ -3004,6 +3004,7 @@ class ReplayService:
             ),
             verification_time=verification_time,
             public_claims=projection.verifiable_claims,
+            operator_actions=list(projection.operator_actions),
             authority_consistency=authority_consistency,
             authority_consistency_hash=authority_consistency.get("hash"),
             reason=(
@@ -3099,6 +3100,7 @@ class ReplayService:
             tamper_status=tamper_status,
             verification_time=verification_time,
             public_claims=[],
+            operator_actions=[],
             authority_consistency={},
             authority_consistency_hash=None,
             reason=reason,
