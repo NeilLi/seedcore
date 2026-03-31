@@ -144,6 +144,8 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert certificate.status_code == 200
     certificate_body = certificate.json()
     assert certificate_body["public_id"] == public_id
+    assert isinstance(certificate_body.get("authority_consistency_hash"), str)
+    assert certificate_body["authority_consistency_hash"].startswith("sha256:")
     assert isinstance(certificate_body.get("trust_gap_codes"), list)
     assert isinstance(certificate_body.get("trust_gap_details"), list)
     assert isinstance(certificate_body.get("owner_context"), dict)
@@ -479,10 +481,19 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     view = replay.json()["view"]
     assert view["policy_summary"]["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in view["policy_summary"]["authority_consistency"]["issues"]
+    assert view["policy_summary"]["authority_consistency"]["hash"].startswith("sha256:")
     assert view["authorization"]["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in view["authorization"]["authority_consistency"]["issues"]
+    assert (
+        view["authorization"]["authority_consistency"]["hash"]
+        == view["policy_summary"]["authority_consistency"]["hash"]
+    )
     assert view["verification_status"]["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in view["verification_status"]["authority_consistency"]["issues"]
+    assert (
+        view["verification_status"]["authority_consistency"]["hash"]
+        == view["policy_summary"]["authority_consistency"]["hash"]
+    )
     assert view["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
 

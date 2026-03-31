@@ -524,6 +524,8 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
         public_id="public-owner-trust-1",
         expires_at="2026-04-30T10:00:00Z",
     )
+    assert isinstance(certificate.authority_consistency_hash, str)
+    assert certificate.authority_consistency_hash.startswith("sha256:")
     assert certificate.operator_actions == []
     assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
     assert certificate.trust_gap_details[0]["category"] == "owner_trust"
@@ -699,10 +701,13 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     authority_verification = replay.public_projection["verification_status"]["authority_consistency"]
     assert authority_policy["ok"] is False
     assert "owner_identity_mismatch" in authority_policy["issues"]
+    assert authority_policy["hash"].startswith("sha256:")
     assert authority_authz["ok"] is False
     assert "owner_identity_mismatch" in authority_authz["issues"]
+    assert authority_authz["hash"] == authority_policy["hash"]
     assert authority_verification["ok"] is False
     assert "owner_identity_mismatch" in authority_verification["issues"]
+    assert authority_verification["hash"] == authority_policy["hash"]
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
     assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
@@ -711,6 +716,7 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
         public_id="public-owner-mismatch-1",
         expires_at="2026-04-30T10:00:00Z",
     )
+    assert certificate.authority_consistency_hash == authority_policy["hash"]
     assert certificate.operator_actions[0]["code"] == "reconcile_owner_identity"
 
 

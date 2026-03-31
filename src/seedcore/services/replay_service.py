@@ -685,7 +685,9 @@ class ReplayService:
 
     def _authority_consistency_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
         issues = self._owner_delegation_consistency_issues(replay)
-        return {"ok": not issues, "issues": issues}
+        summary = {"ok": not issues, "issues": issues}
+        summary["hash"] = f"sha256:{sha256_hex(canonical_json(summary))}"
+        return summary
 
     def _operator_actions_for_authority_issues(self, issues: Sequence[str]) -> List[Dict[str, Any]]:
         actions: List[Dict[str, Any]] = []
@@ -813,6 +815,7 @@ class ReplayService:
     ) -> TrustCertificate:
         issued_at = self._utcnow().isoformat()
         projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
+        authority_consistency = self._authority_consistency_summary(replay)
         trust_gap_codes = self._trust_gap_codes(
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
@@ -826,6 +829,7 @@ class ReplayService:
             "verification_status": replay.verification_status.model_dump(mode="json"),
             "trust_assertions": projection.verifiable_claims,
             "public_claims": projection.verifiable_claims,
+            "authority_consistency_hash": authority_consistency.get("hash"),
             "operator_actions": list(projection.operator_actions),
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
@@ -849,6 +853,7 @@ class ReplayService:
             verification_status=certificate_payload["verification_status"],
             trust_assertions=certificate_payload["trust_assertions"],
             public_claims=certificate_payload["public_claims"],
+            authority_consistency_hash=certificate_payload["authority_consistency_hash"],
             operator_actions=certificate_payload["operator_actions"],
             trust_gap_codes=certificate_payload["trust_gap_codes"],
             trust_gap_details=certificate_payload["trust_gap_details"],
