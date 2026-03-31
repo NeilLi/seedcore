@@ -161,7 +161,7 @@ SeedCore separates orchestration from authorization:
 
 - **Evaluators / Reviewers**: read *Why SeedCore Exists*, *Target Architecture*, and *Runtime Surfaces*
 - **System Builders / Contributors**: read *Repository Upgrade Path*, *Quick Start*, and *Architecture Overview*
-- **Researchers / Architects**: read *Target Architecture*, *Design Notes*, and *Advanced Architecture*
+- **Researchers / Architects**: read *Target Architecture*, [Design Notes](docs/design-notes.md), and [Architecture Overview](docs/architecture/overview/architecture.md)
 
 ## Why SeedCore Exists
 
@@ -373,9 +373,8 @@ The current repository already contains many of the primitives needed for that t
 
 For deep technical details see:
 
-- *Advanced Architecture*
-- *Design Notes*
-- *Architecture Migration Summary*
+- [Architecture Overview](docs/architecture/overview/architecture.md)
+- [Design Notes](docs/design-notes.md)
 - [Zero-Trust Custody and Digital-Twin Runtime](docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md)
 - [Source Registration Architecture](docs/development/source_registration_architecture.md)
 - [End-to-End Governance Demo Contract](docs/development/end_to_end_governance_demo_contract.md)
