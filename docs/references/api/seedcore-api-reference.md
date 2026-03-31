@@ -131,6 +131,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-page `authority_consistency` and trust certificates now include `authority_consistency_hash` for quick cross-artifact consistency comparison.
 - JSON-LD proof exports now include `proof.authority_consistency_hash` for cross-artifact consistency comparison.
 - JSON-LD proof exports now include `proof.operator_actions` for remediation guidance parity with trust page/certificate/verify surfaces.
+- JSON-LD proof exports now include full `proof.authority_consistency` (`ok`, `issues`, `hash`) for direct verifier inspection.
 - Verification responses now include `authority_consistency` and `authority_consistency_hash` when replay context is available.
 - Verification responses now include `operator_actions` for direct remediation guidance on authority mismatch cases.
 

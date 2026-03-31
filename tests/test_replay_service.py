@@ -519,8 +519,10 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     proof = public_jsonld["proof"]
     assert proof["trust_gap_codes"] == ["owner_trust_merchant_violation"]
     assert proof["trust_gap_details"][0]["category"] == "owner_trust"
+    assert proof["authority_consistency"]["ok"] is True
     assert isinstance(proof["authority_consistency_hash"], str)
     assert proof["authority_consistency_hash"].startswith("sha256:")
+    assert proof["authority_consistency_hash"] == proof["authority_consistency"]["hash"]
     assert proof["operator_actions"] == []
     assert proof["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert proof["owner_context"]["creator_profile_ref"]["version"] == "v2"
@@ -731,7 +733,10 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert "owner_identity_mismatch" in list(mismatch_claim.get("details", {}).get("issues") or [])
 
     public_jsonld = service.build_jsonld_export(replay, projection=ReplayProjectionKind.PUBLIC)
+    assert public_jsonld["proof"]["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in public_jsonld["proof"]["authority_consistency"]["issues"]
     assert public_jsonld["proof"]["authority_consistency_hash"] == authority_policy["hash"]
+    assert public_jsonld["proof"]["authority_consistency_hash"] == public_jsonld["proof"]["authority_consistency"]["hash"]
     assert public_jsonld["proof"]["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
     certificate = await service.build_trust_certificate(

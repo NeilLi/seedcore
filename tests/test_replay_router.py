@@ -160,7 +160,9 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     public_jsonld = client.get(f"/trust/{public_id}/jsonld")
     assert public_jsonld.status_code == 200
     proof = public_jsonld.json()["proof"]
+    assert proof["authority_consistency"]["ok"] is True
     assert proof["authority_consistency_hash"] == certificate_body["authority_consistency_hash"]
+    assert proof["authority_consistency_hash"] == proof["authority_consistency"]["hash"]
     assert proof["operator_actions"] == []
 
     verify = client.get(f"/verify/{public_id}")
