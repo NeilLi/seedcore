@@ -680,6 +680,9 @@ class ReplayService:
         )
         return reference, self.encode_public_reference(reference)
 
+    def authority_consistency_issues(self, replay: ReplayRecord) -> List[str]:
+        return self._owner_delegation_consistency_issues(replay)
+
     def encode_public_reference(self, reference: PublicTrustReference) -> str:
         payload_segment = self._b64url_encode(
             json.dumps(reference.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")

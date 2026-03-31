@@ -474,6 +474,54 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert body["tamper_status"] == "authority_mismatch"
 
 
+def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-router-owner-mismatch-publish-1",
+            intent_id="intent-router-owner-mismatch-publish-1",
+            asset_id="asset-owner-mismatch-publish-1",
+        ),
+        disposition="allow",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=[],
+    )
+    record["action_intent"] = {
+        "intent_id": "intent-router-owner-mismatch-publish-1",
+        "principal": {
+            "agent_id": "did:seedcore:assistant:warehouse-bot-01",
+            "owner_id": "did:seedcore:owner:acme-001",
+            "delegation_ref": "delegation:owner-8841-transfer",
+        },
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "gateway": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "delegation_ref": "delegation:owner-8841-transfer",
+                }
+            },
+        },
+    }
+    record["policy_decision"]["governed_receipt"]["owner_context"] = {
+        "owner_id": "did:seedcore:owner:other-999",
+        "creator_profile_ref": {"owner_id": "did:seedcore:owner:other-999", "version": "v2"},
+        "trust_preferences_ref": {"owner_id": "did:seedcore:owner:other-999", "trust_version": "v1"},
+    }
+    client = _make_client(record)
+
+    publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
+    assert publish.status_code == 409
+    publish_body = publish.json()["detail"]
+    assert publish_body["code"] == "authority_binding_mismatch"
+    assert "owner_identity_mismatch" in publish_body["issues"]
+
+    refresh = client.post("/trust/refresh", json={"audit_id": record["id"], "ttl_hours": 4})
+    assert refresh.status_code == 409
+    refresh_body = refresh.json()["detail"]
+    assert refresh_body["code"] == "authority_binding_mismatch"
+    assert "owner_identity_mismatch" in refresh_body["issues"]
+
+
 def test_verify_token_surfaces_reference_subject_mismatch() -> None:
     record = _build_audit_record(task_id="task-router-ref-mismatch-1", intent_id="intent-router-ref-mismatch-1", asset_id="asset-ref-mismatch-1")
     client = _make_client(record)

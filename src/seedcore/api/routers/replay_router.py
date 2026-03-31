@@ -264,6 +264,15 @@ async def publish_trust_reference(
         )
     except ReplayServiceError as exc:
         _raise_http_from_service_error(exc)
+    authority_issues = replay_service.authority_consistency_issues(replay)
+    if authority_issues:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "authority_binding_mismatch",
+                "issues": authority_issues,
+            },
+        )
 
     reference, public_id = replay_service.build_public_reference(
         lookup_key=lookup_key,
