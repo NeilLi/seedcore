@@ -2984,6 +2984,7 @@ class ReplayService:
         verification_time: str,
     ) -> VerificationResult:
         projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
+        authority_consistency = self._authority_consistency_summary(replay)
         consistency_issues = self._owner_delegation_consistency_issues(replay)
         verified = replay.verification_status.verified and not consistency_issues
         return VerificationResult(
@@ -3003,6 +3004,8 @@ class ReplayService:
             ),
             verification_time=verification_time,
             public_claims=projection.verifiable_claims,
+            authority_consistency=authority_consistency,
+            authority_consistency_hash=authority_consistency.get("hash"),
             reason=(
                 consistency_issues[0]
                 if consistency_issues
@@ -3096,6 +3099,8 @@ class ReplayService:
             tamper_status=tamper_status,
             verification_time=verification_time,
             public_claims=[],
+            authority_consistency={},
+            authority_consistency_hash=None,
             reason=reason,
         )
 

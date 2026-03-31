@@ -160,6 +160,8 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert verify.status_code == 200
     assert verify.json()["verified"] is True
     assert verify.json()["trust_url"].endswith(f"/trust/{public_id}")
+    assert verify.json()["authority_consistency"]["ok"] is True
+    assert verify.json()["authority_consistency_hash"].startswith("sha256:")
 
 
 def test_replay_lookup_by_subject_id_returns_asset_projection() -> None:
@@ -480,6 +482,9 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert body["verified"] is False
     assert body["reason"] == "owner_identity_mismatch"
     assert body["tamper_status"] == "authority_mismatch"
+    assert body["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in body["authority_consistency"]["issues"]
+    assert body["authority_consistency_hash"] == body["authority_consistency"]["hash"]
 
     replay = client.get("/replay", params={"audit_id": record["id"], "projection": "public"})
     assert replay.status_code == 200
