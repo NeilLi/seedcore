@@ -67,6 +67,7 @@ class TrustPageProjection(BaseModel):
     status: Optional[str] = None
     subject_title: str
     subject_summary: str
+    authority_consistency_hash: Optional[str] = None
     verification_status: Dict[str, Any] = Field(default_factory=dict)
     approvals: Dict[str, Any] = Field(default_factory=dict)
     authorization: Dict[str, Any] = Field(default_factory=dict)

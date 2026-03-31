@@ -141,8 +141,10 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
 
     trust = client.get(f"/trust/{public_id}")
     assert trust.status_code == 200
-    assert trust.json()["subject_title"] == "Asset asset-1"
-    assert trust.json()["public_jsonld_ref"].endswith(f"/trust/{public_id}/jsonld")
+    trust_body = trust.json()
+    assert trust_body["subject_title"] == "Asset asset-1"
+    assert trust_body["authority_consistency_hash"].startswith("sha256:")
+    assert trust_body["public_jsonld_ref"].endswith(f"/trust/{public_id}/jsonld")
 
     certificate = client.get(f"/trust/{public_id}/certificate")
     assert certificate.status_code == 200
@@ -518,6 +520,7 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
         view["verification_status"]["authority_consistency"]["hash"]
         == view["policy_summary"]["authority_consistency"]["hash"]
     )
+    assert view["authority_consistency_hash"] == view["policy_summary"]["authority_consistency"]["hash"]
     assert view["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
     publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
