@@ -516,6 +516,8 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     proof = public_jsonld["proof"]
     assert proof["trust_gap_codes"] == ["owner_trust_merchant_violation"]
     assert proof["trust_gap_details"][0]["category"] == "owner_trust"
+    assert isinstance(proof["authority_consistency_hash"], str)
+    assert proof["authority_consistency_hash"].startswith("sha256:")
     assert proof["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert proof["owner_context"]["creator_profile_ref"]["version"] == "v2"
 
@@ -526,6 +528,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     )
     assert isinstance(certificate.authority_consistency_hash, str)
     assert certificate.authority_consistency_hash.startswith("sha256:")
+    assert certificate.authority_consistency_hash == proof["authority_consistency_hash"]
     assert certificate.operator_actions == []
     assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
     assert certificate.trust_gap_details[0]["category"] == "owner_trust"
@@ -710,6 +713,9 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert authority_verification["hash"] == authority_policy["hash"]
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
     assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
+
+    public_jsonld = service.build_jsonld_export(replay, projection=ReplayProjectionKind.PUBLIC)
+    assert public_jsonld["proof"]["authority_consistency_hash"] == authority_policy["hash"]
 
     certificate = await service.build_trust_certificate(
         replay,

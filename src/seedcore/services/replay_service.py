@@ -343,6 +343,7 @@ class ReplayService:
         payload = materialize_seedcore_custody_event_payload(audit_record=replay.audit_record)
         payload["seedcore:subject_type"] = replay.subject_type
         payload["seedcore:subject_id"] = replay.subject_id
+        authority_consistency = self._authority_consistency_summary(replay)
         owner_context = self._owner_context_summary(replay)
         trust_gap_codes = self._trust_gap_codes(
             replay_authz_graph=replay.authz_graph,
@@ -358,6 +359,7 @@ class ReplayService:
             ],
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "authority_consistency_hash": authority_consistency.get("hash"),
         }
         if owner_context:
             proof_payload["owner_context"] = owner_context

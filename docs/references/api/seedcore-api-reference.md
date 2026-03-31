@@ -123,6 +123,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-page projections now include `operator_actions` with remediation hints when authority consistency issues are present.
 - Trust certificates now include `operator_actions` so exported artifacts preserve operator remediation guidance.
 - Trust-page `authority_consistency` and trust certificates now include `authority_consistency_hash` for quick cross-artifact consistency comparison.
+- JSON-LD proof exports now include `proof.authority_consistency_hash` for cross-artifact consistency comparison.
 
 ## 6. Source Registration API
 
