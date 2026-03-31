@@ -343,6 +343,11 @@ class ReplayService:
         payload = materialize_seedcore_custody_event_payload(audit_record=replay.audit_record)
         payload["seedcore:subject_type"] = replay.subject_type
         payload["seedcore:subject_id"] = replay.subject_id
+        owner_context = self._owner_context_summary(replay)
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+        )
         proof_payload = {
             "type": "SeedCoreReplayProof",
             "verification_status": replay.verification_status.model_dump(mode="json"),
@@ -351,7 +356,11 @@ class ReplayService:
                 self._sanitize_signer_entry(item, include_key_ref=kind in {ReplayProjectionKind.INTERNAL, ReplayProjectionKind.AUDITOR})
                 for item in replay.signer_chain
             ],
+            "trust_gap_codes": trust_gap_codes,
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
         }
+        if owner_context:
+            proof_payload["owner_context"] = owner_context
         approval_context = self._approval_context(replay)
         transition_history = (
             list(approval_context.get("approval_transition_history"))

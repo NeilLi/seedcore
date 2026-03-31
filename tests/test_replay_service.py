@@ -512,6 +512,13 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert any(item.get("claim") == "owner_trust_preference_gap_detected" for item in claims)
     assert any(item.get("claim") == "owner_trust_preferences_version_bound" for item in claims)
 
+    public_jsonld = service.build_jsonld_export(replay, projection=ReplayProjectionKind.PUBLIC)
+    proof = public_jsonld["proof"]
+    assert proof["trust_gap_codes"] == ["owner_trust_merchant_violation"]
+    assert proof["trust_gap_details"][0]["category"] == "owner_trust"
+    assert proof["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
+    assert proof["owner_context"]["creator_profile_ref"]["version"] == "v2"
+
 
 @pytest.mark.asyncio
 async def test_replay_includes_custody_transition_and_dispute_refs():

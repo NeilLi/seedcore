@@ -114,6 +114,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Expired or revoked trust references return `410 Gone` semantics on public trust retrieval.
 - Trust-facing projections now include normalized `trust_gap_details` derived from `trust_gap_codes`.
 - When present in governed receipts, owner context references (`owner_id`, creator profile ref, trust preference ref) are surfaced in `authorization` and `policy_summary`.
+- JSON-LD trust exports now include `proof.trust_gap_codes`, `proof.trust_gap_details`, and owner context references when available.
 
 ## 6. Source Registration API
 

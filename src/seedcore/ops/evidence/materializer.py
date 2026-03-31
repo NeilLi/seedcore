@@ -3,6 +3,34 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional
 
+TRUST_GAP_TAXONOMY: Dict[str, Dict[str, str]] = {
+    "owner_trust_risk_escalation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Owner trust risk threshold exceeded.",
+    },
+    "owner_trust_high_value_step_up": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Owner trust high-value threshold requires step-up approval.",
+    },
+    "owner_trust_merchant_violation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Merchant is outside owner trust allowlist.",
+    },
+    "owner_trust_provenance_violation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Required owner provenance level not satisfied.",
+    },
+    "owner_trust_modality_violation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Required owner evidence modalities missing.",
+    },
+}
+
 
 def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[str, Any]:
     evidence_bundle = audit_record.get("evidence_bundle") if isinstance(audit_record.get("evidence_bundle"), dict) else {}
@@ -42,6 +70,7 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
     authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
     governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
     trust_gap_codes = _resolve_trust_gap_codes(authz_graph=authz_graph, governed_receipt=governed_receipt)
+    owner_context = _owner_context(governed_receipt)
 
     return {
         "@context": {
@@ -83,8 +112,10 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
                 or evidence_bundle.get("decision_graph_snapshot_version")
             ),
             "trust_gap_codes": trust_gap_codes,
+            "trust_gap_details": _trust_gap_details(trust_gap_codes),
             "custody_proof_count": len(governed_receipt.get("custody_proof") or []),
             "provenance_sources": list(governed_receipt.get("provenance_sources") or []),
+            "owner_context": owner_context,
         },
         "custody_transition": {
             "from": transition_receipt.get("from_zone") or zone_checks.get("current_zone") or "unknown_zone",
@@ -203,3 +234,35 @@ def _resolve_trust_gap_codes(*, authz_graph: Dict[str, Any], governed_receipt: D
             if isinstance(code, str) and code.strip() and code not in codes:
                 codes.append(code.strip())
     return codes
+
+
+def _trust_gap_details(codes: list[str]) -> list[Dict[str, Any]]:
+    details: list[Dict[str, Any]] = []
+    for code in codes:
+        normalized = str(code).strip()
+        if not normalized:
+            continue
+        entry = TRUST_GAP_TAXONOMY.get(normalized, {})
+        details.append(
+            {
+                "code": normalized,
+                "category": entry.get("category", "general"),
+                "severity": entry.get("severity", "medium"),
+                "message": entry.get("message", normalized.replace("_", " ")),
+            }
+        )
+    return details
+
+
+def _owner_context(governed_receipt: Dict[str, Any]) -> Dict[str, Any]:
+    raw = governed_receipt.get("owner_context") if isinstance(governed_receipt.get("owner_context"), dict) else {}
+    creator_profile_ref = raw.get("creator_profile_ref") if isinstance(raw.get("creator_profile_ref"), dict) else None
+    trust_preferences_ref = raw.get("trust_preferences_ref") if isinstance(raw.get("trust_preferences_ref"), dict) else None
+    owner_id = str(raw.get("owner_id") or "").strip() or None
+    if owner_id is None and creator_profile_ref is None and trust_preferences_ref is None:
+        return {}
+    return {
+        "owner_id": owner_id,
+        "creator_profile_ref": dict(creator_profile_ref) if isinstance(creator_profile_ref, dict) else None,
+        "trust_preferences_ref": dict(trust_preferences_ref) if isinstance(trust_preferences_ref, dict) else None,
+    }
