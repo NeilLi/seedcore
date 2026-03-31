@@ -42,5 +42,12 @@ The skills update through the existing symlink.
 
 ## Notes
 
-- This V1 plugin is read-only and workflow-oriented.
+- Codex skills are synchronized with the Gemini extension tool surface, including owner/creator authority tools:
+  - `seedcore.identity.owner.*`
+  - `seedcore.creator_profile.*`
+  - `seedcore.delegation.*`
+  - `seedcore.trust_preferences.*`
+  - `seedcore.owner_context.get`
+  - `seedcore.agent_action.preflight`
+- Use write-capable authority tools only for explicit user requests and keep high-consequence decisions on governed preflight/evaluate flows.
 - If the `seedcore.*` MCP server is not available, the skills fall back to documented local commands.

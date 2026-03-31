@@ -17,3 +17,5 @@ If the tools are unavailable, treat that as Gemini extension troubleshooting fir
 - `bash deploy/local/run-api.sh`
 - `python scripts/host/verify_rct_hot_path_shadow.py`
 - `python scripts/host/benchmark_rct_hot_path.py --requests 40 --warmup 4 --concurrency 4`
+
+For Codex parity guidance, see `references/codex-tools.md`.
