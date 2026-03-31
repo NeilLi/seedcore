@@ -2,17 +2,17 @@
 
 Unit-test workflow is currently set to manual runs only.
 
-## Zero-Trust Runtime for Autonomous Systems
+## Zero-Trust Runtime for High-Consequence AI Actions
 
-AI agents are becoming operational, but governance has not kept pace. Enterprises are under pressure to automate, yet they still lack reliable ways to control what autonomous systems are allowed to do, prove why an action was permitted, and contain failures before they become liabilities.
+AI agents are becoming operational, but governance has not kept pace. Enterprises are under pressure to automate, yet they still lack reliable ways to control what high-consequence AI actions are allowed to do, prove why an action was permitted, and contain failures before they become liabilities.
 
-SeedCore solves that problem. We are building the zero-trust runtime for autonomous systems: a deterministic control plane that sits between AI reasoning and real-world execution.
+SeedCore solves that problem. We are building the zero-trust runtime for high-consequence AI actions: a deterministic control plane that sits between AI reasoning and real-world execution.
 
 SeedCore combines a synchronous Policy Decision Point, a Policy Knowledge Graph, and an advisory intelligence layer. AI can advise, but governance decides. Every governed action is evaluated in real time, either denied or issued a short-lived execution token, and recorded with auditable evidence.
 
 Our first wedge is provenance and high-trust supply chains, where trust must be continuously enforced rather than passively recorded. Over time, the same architecture extends to robotics, sovereign AI infrastructure, and multi-agent systems.
 
-We are not building another model layer. We are building the runtime that makes autonomous systems safe enough to trust.
+We are not building another model layer. We are building the runtime that makes high-consequence AI action safe enough to trust.
 
 ## 2026 Product Focus
 
@@ -35,7 +35,6 @@ Supporting documents:
 
 - [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
 - [positioning narrative](docs/development/seedcore_positioning_narrative.md)
-- [useful-this-year execution memo](docs/development/useful_this_year_execution_memo.md)
 - [agent action gateway contract (v1 draft)](docs/development/agent_action_gateway_contract.md)
 
 ## Current Codebase Snapshot
@@ -253,7 +252,7 @@ For playback and black-box forensics, the execution evidence envelope should inc
 
 The current implementation now also supports a nested `transition_receipt` for HAL-backed actuation. That receipt carries the endpoint identity, hardware UUID, token binding, execution timestamp, and receipt nonce, and is verified before governed custody closure.
 
-This is the minimum evidence needed to explain why a custody transition was proposed, what policy allowed it, who or what executed it, and what state the asset was in at completion.
+This is the minimum evidence needed to explain why a custody transition was proposed, what policy allowed it, who or what executed it, and what state the physical good was in at completion.
 
 ### 4. Corrected State Transition Flow
 
@@ -385,7 +384,7 @@ For deep technical details see:
 
 ## Physical Proof Pilot & Demo Architecture
 
-SeedCore is currently capable of running a 100% verifiable "Digital Twin of Trust" pilot, enabling a single robot or sensor stack to manage a narrow asset workflow (e.g., high-value lab samples or secure hardware storage) with zero manual intervention.
+SeedCore is currently capable of running a 100% verifiable "Digital Twin of Trust" pilot, enabling a single robot or sensor stack to manage a narrow physical-goods workflow (e.g., high-value lab samples or secure hardware storage) with zero manual intervention.
 
 ### Core Closed-Loop Flow
 

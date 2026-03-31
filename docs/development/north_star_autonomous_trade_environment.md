@@ -43,7 +43,7 @@ In a high-velocity autonomous environment, "Verification" cannot be a human task
 
 *   **Verifier Agents:** Specialized `RESULT_VERIFIER` agents monitor the event stream in real-time.
 *   **Kernel-Level Verification:** Agents utilize the **Rust `seedcore-verify` kernel** to validate the replay chain. They check signature provenance, policy snapshot alignment, and proof integrity without human intervention.
-*   **Fail-Closed Logic:** If a verifier detects a mismatch (e.g., a broken seal or a trust-anchor failure), the digital twin is automatically moved to a `quarantined` or `verification_failed` state. This triggers an immediate pause on all downstream transactions involving that asset.
+*   **Fail-Closed Logic:** If a verifier detects a mismatch (e.g., a broken seal or a trust-anchor failure), the digital twin is automatically moved to a `quarantined` or `verification_failed` state. This triggers an immediate pause on all downstream transactions involving that physical good.
 
 ---
 
@@ -51,7 +51,7 @@ In a high-velocity autonomous environment, "Verification" cannot be a human task
 
 To enable machines to "trade for human beings," SeedCore implements a root-of-trust based on delegated authority.
 
-*   **Owner Twin Delegation:** Digital twins include a delegation envelope (`owner_id`, `delegations`) that defines which agents possess the authority to move an asset or sign for a delivery.
+*   **Owner Twin Delegation:** Digital twins include a delegation envelope (`owner_id`, `delegations`) that defines which agents possess the authority to move a custody-controlled good or sign for a delivery.
 *   **Multi-Party Governance (Phase B):** For high-value trades, the environment enforces **dual authorization**. Two separate agents (e.g., a "Trade Agent" and a "Compliance Agent") must co-sign a `TransferApprovalEnvelope` before the physical-to-digital loop can initialize.
 *   **DID-Style Identity:** Authority is anchored to verifiable identities, ensuring the principal remains accountable for the actions of their delegated agents.
 
@@ -61,4 +61,4 @@ To enable machines to "trade for human beings," SeedCore implements a root-of-tr
 
 The SeedCore runtime functions as a "Trust Slice" for autonomous operations. By combining the **Decision Graph** (defining what *can* happen) with the **Evidence Loop** (proving what *did* happen), it creates an environment where autonomous trade is not just possible, but mathematically undeniable. 
 
-Every physical handoff is recorded as a digital truth, providing a permanent, replayable audit trail for the entire lifecycle of a restricted asset.
+Every physical handoff is recorded as a digital truth, providing a permanent, replayable audit trail for the entire lifecycle of a restricted good.

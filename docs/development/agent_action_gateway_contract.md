@@ -65,6 +65,17 @@ Optional closure endpoints (v1 scaffold):
 
 The evaluate endpoint should be the only required call for v1 clients.
 
+## Terminology Note
+
+In this contract, schema field names still use `asset` for compatibility with
+the current runtime and hot-path models.
+
+Product meaning:
+
+- `asset` should be read as a custody-controlled physical good, lot, batch,
+  shipment, container, or other real-world item under governed transfer
+- this contract does not imply a digital-asset-only scope
+
 ## Request Contract
 
 ### Top-Level Shape
@@ -368,7 +379,8 @@ This prevents duplicate transfer execution from retry storms.
 Minimum boundary expectations:
 
 - gateway caller must authenticate as an approved agent principal
-- request principal must map to a delegated authority path for target asset
+- request principal must map to a delegated authority path for the target
+  physical good (`asset` in the current schema)
 - approval envelope must resolve from persisted records
 - policy snapshot reference used in decision must be recorded in response
 

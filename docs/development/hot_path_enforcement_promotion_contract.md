@@ -1,7 +1,7 @@
 # Hot-Path PDP Enforcement Promotion Contract
 
 ## Purpose
-This document defines the explicit performance, parity, and reliability thresholds required to promote the **Asset-Centric Hot-Path PDP** from `shadow` mode to `enforce` mode. 
+This document defines the explicit performance, parity, and reliability thresholds required to promote the **Physical-Goods-Centric Hot-Path PDP** from `shadow` mode to `enforce` mode. 
 
 Moving to `enforce` mode means the hot-path decision becomes the authoritative execution gate for **Restricted Custody Transfer (RCT)** workflows.
 
@@ -48,7 +48,7 @@ Before promotion, the following telemetry and safety mechanisms must be active:
 ---
 
 ## 4. Rollback Thresholds (Post-Enforcement)
-If any of these conditions occur in `enforce` mode, the system should be immediately reverted to `shadow` (or `fail-closed` for high-risk assets):
+If any of these conditions occur in `enforce` mode, the system should be immediately reverted to `shadow` (or `fail-closed` for high-risk physical goods):
 
 1.  **Any False-Positive (Allow when Baseline says Deny):** Immediate rollback.
 2.  **P99 Latency > 250ms:** Sustained for more than 5 minutes.

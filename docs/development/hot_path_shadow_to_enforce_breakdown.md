@@ -127,7 +127,7 @@ Concrete work:
 - expand parity accounting to a durable rolling window of at least `1,000` runs
 - record enough context to root-cause mismatches:
   - request id
-  - asset ref
+  - physical-goods ref (`asset_ref` in the current schema)
   - snapshot version
   - baseline view
   - candidate view

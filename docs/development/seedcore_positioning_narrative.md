@@ -136,7 +136,7 @@ It is increasingly:
 - "Who allowed this action?"
 - "Under what policy snapshot?"
 - "What authority did the agent actually have?"
-- "What happened when the action touched a real asset or system?"
+- "What happened when the action touched a real physical good or operational system?"
 - "Can we prove the outcome later?"
 
 ### 3. Most stacks do not solve that boundary
@@ -166,7 +166,7 @@ bounded execution artifacts, and binds the result to replayable evidence.
 SeedCore is most valuable where the cost of a bad action is high:
 
 - restricted custody transfer
-- controlled asset movement
+- controlled movement of custody-sensitive physical goods
 - regulated operational handoffs
 - exception-heavy workflows requiring quarantine and review
 
@@ -230,7 +230,7 @@ Allowed actions receive constrained authority, not open-ended trust.
 
 ### 3. Custody awareness
 
-The runtime understands asset transfer, approval state, and trust gaps.
+The runtime understands transfer of physical goods, approval state, and trust gaps.
 
 ### 4. Replayable proof
 
@@ -320,7 +320,7 @@ Suggested supporting paragraph:
 
 **As AI agents move from advising to acting, enterprises need more than model
 quality. They need a runtime that can enforce policy, bind authority to real
-assets, fail closed when trust is incomplete, and prove what happened after an
+physical goods, fail closed when trust is incomplete, and prove what happened after an
 action occurs. SeedCore provides that layer.**
 
 ## Recommended Founder / Team Narrative
