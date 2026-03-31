@@ -432,6 +432,67 @@ Current focused suite result:
 
 - `51 passed`
 
+### Gemini CLI Extension
+
+SeedCore now includes a Gemini CLI extension scaffold that exposes the read-only
+`seedcore.*` MCP tools from this repository.
+
+This path assumes:
+
+- you run Gemini from an activated Python environment that can import
+  `seedcore`
+- the Python `mcp` dependency is installed in that same environment
+- the local SeedCore runtime is started separately
+
+Install the extension from a local checkout:
+
+```bash
+gemini extensions install .
+```
+
+Or install it from GitHub:
+
+```bash
+gemini extensions install https://github.com/NeilLi/seedcore
+```
+
+Verify that Gemini sees the extension:
+
+```bash
+/extensions list
+```
+
+The extension launches the checked-in MCP server entrypoint at
+[`scripts/gemini/run_seedcore_mcp.py`](/Users/ningli/project/seedcore/scripts/gemini/run_seedcore_mcp.py)
+and should make these tools available in Gemini:
+
+- `seedcore.health`
+- `seedcore.readyz`
+- `seedcore.pkg.status`
+- `seedcore.pkg.authz_graph_status`
+- `seedcore.hotpath.status`
+- `seedcore.hotpath.verify_shadow`
+- `seedcore.hotpath.benchmark`
+- `seedcore.evidence.verify`
+
+The extension does not start SeedCore for you. Bring up the runtime first using
+the host-mode steps above or the full guide in
+[deploy/local/README.md](/Users/ningli/project/seedcore/deploy/local/README.md).
+
+Useful checks after runtime bring-up:
+
+```bash
+curl http://127.0.0.1:8002/health
+curl http://127.0.0.1:8002/readyz
+```
+
+If Gemini installs the extension but the `seedcore.*` tools do not appear or
+fail immediately, see:
+
+- [GEMINI.md](/Users/ningli/project/seedcore/GEMINI.md)
+- [gemini-tools.md](/Users/ningli/project/seedcore/skills/using-seedcore/references/gemini-tools.md)
+- [gemini-troubleshooting.md](/Users/ningli/project/seedcore/skills/using-seedcore/references/gemini-troubleshooting.md)
+
 ### Rust + TypeScript Proof Surface Quick Check
 
 Run the Rust kernel test baseline:

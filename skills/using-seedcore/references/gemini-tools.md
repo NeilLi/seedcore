@@ -2,13 +2,14 @@
 
 When Gemini is using the Seedcore extension:
 
+- The extension should start the local `seedcore` MCP server automatically.
 - Use `seedcore.health` instead of manually curling `/health`.
 - Use `seedcore.readyz` instead of manually curling `/readyz`.
 - Use `seedcore.pkg.status` and `seedcore.pkg.authz_graph_status` before discussing PKG readiness.
 - Use `seedcore.hotpath.status`, `seedcore.hotpath.verify_shadow`, and `seedcore.hotpath.benchmark` for hot-path promotion analysis.
 - Use `seedcore.evidence.verify` for trust or replay verification.
 
-If the MCP server is unavailable, fall back to:
+If the tools are unavailable, treat that as Gemini extension troubleshooting first and only then fall back to:
 
 - `bash deploy/local/run-api.sh`
 - `python scripts/host/verify_rct_hot_path_shadow.py`

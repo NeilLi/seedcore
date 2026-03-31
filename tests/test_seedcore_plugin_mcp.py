@@ -62,7 +62,12 @@ def test_packaging_files_point_to_seedcore_skill_bootstrap():
 
     assert extension["name"] == "seedcore"
     assert extension["contextFileName"] == "GEMINI.md"
+    assert extension["mcpServers"]["seedcore"]["command"] == "python"
+    assert extension["mcpServers"]["seedcore"]["args"] == [
+        "${extensionPath}/scripts/gemini/run_seedcore_mcp.py"
+    ]
     assert "skills/using-seedcore/SKILL.md" in gemini_md
+    assert "gemini-troubleshooting.md" in gemini_md
     assert "~/.agents/skills/seedcore" in codex_install
 
 

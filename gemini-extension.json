@@ -2,5 +2,13 @@
   "name": "seedcore",
   "description": "Read-only SeedCore operator workflows and governance runtime tools",
   "version": "1.0.0",
-  "contextFileName": "GEMINI.md"
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "seedcore": {
+      "command": "python",
+      "args": [
+        "${extensionPath}/scripts/gemini/run_seedcore_mcp.py"
+      ]
+    }
+  }
 }
