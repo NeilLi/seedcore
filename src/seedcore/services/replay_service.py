@@ -2787,6 +2787,7 @@ class ReplayService:
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
         governed_receipt_hash = replay.governed_receipt.get("decision_hash")
+        authority_consistency = self._authority_consistency_summary(replay)
         claims = [
             {
                 "claim": "governed_policy_verified",
@@ -2842,6 +2843,28 @@ class ReplayService:
                     "claim": "custody_trace_available",
                     "value": bool(replay.transition_receipts or replay.asset_custody_state or replay.custody_transition_refs),
                     "source": replay.audit_record_id,
+                }
+            )
+        claims.append(
+            {
+                "claim": "authority_binding_consistent",
+                "value": bool(authority_consistency.get("ok")),
+                "source": governed_receipt_hash or replay.audit_record_id,
+                "details": {
+                    "hash": authority_consistency.get("hash"),
+                },
+            }
+        )
+        if not bool(authority_consistency.get("ok")):
+            claims.append(
+                {
+                    "claim": "authority_binding_mismatch_detected",
+                    "value": True,
+                    "source": governed_receipt_hash or replay.audit_record_id,
+                    "details": {
+                        "issues": list(authority_consistency.get("issues") or []),
+                        "hash": authority_consistency.get("hash"),
+                    },
                 }
             )
         trust_gap_codes = self._trust_gap_codes(

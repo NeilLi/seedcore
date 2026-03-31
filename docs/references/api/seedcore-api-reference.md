@@ -122,6 +122,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust publish/refresh now return `409` with `authority_binding_mismatch` when replay authority bindings are inconsistent before token minting.
 - Trust-page projections now include `authority_consistency` in `verification_status`, `authorization`, and `policy_summary` for operator triage.
 - Trust-page projections now include `operator_actions` with remediation hints when authority consistency issues are present.
+- Trust-page/certificate/verifier claim sets now include authority-binding claims (`authority_binding_consistent`, `authority_binding_mismatch_detected`).
 - Trust certificates now include `operator_actions` so exported artifacts preserve operator remediation guidance.
 - Trust-page `authority_consistency` and trust certificates now include `authority_consistency_hash` for quick cross-artifact consistency comparison.
 - JSON-LD proof exports now include `proof.authority_consistency_hash` for cross-artifact consistency comparison.

@@ -511,6 +511,8 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     claims = replay.public_projection["verifiable_claims"]
     assert any(item.get("claim") == "owner_trust_preference_gap_detected" for item in claims)
     assert any(item.get("claim") == "owner_trust_preferences_version_bound" for item in claims)
+    assert any(item.get("claim") == "authority_binding_consistent" and item.get("value") is True for item in claims)
+    assert all(item.get("claim") != "authority_binding_mismatch_detected" for item in claims)
 
     public_jsonld = service.build_jsonld_export(replay, projection=ReplayProjectionKind.PUBLIC)
     proof = public_jsonld["proof"]
@@ -721,6 +723,10 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert authority_verification["hash"] == authority_policy["hash"]
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
     assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
+    claims = replay.public_projection["verifiable_claims"]
+    mismatch_claim = next(item for item in claims if item.get("claim") == "authority_binding_mismatch_detected")
+    assert mismatch_claim["value"] is True
+    assert "owner_identity_mismatch" in list(mismatch_claim.get("details", {}).get("issues") or [])
 
     public_jsonld = service.build_jsonld_export(replay, projection=ReplayProjectionKind.PUBLIC)
     assert public_jsonld["proof"]["authority_consistency_hash"] == authority_policy["hash"]
