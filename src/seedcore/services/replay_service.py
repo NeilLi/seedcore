@@ -960,15 +960,25 @@ class ReplayService:
                 signature_valid=True,
             )
         if replay.subject_type != reference.subject_type or replay.subject_id != reference.subject_id:
-            return self._failed_verification_result(
+            projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
+            authority_consistency = self._authority_consistency_summary(replay)
+            return VerificationResult(
+                verification_id=str(uuid.uuid4()),
                 reference_type="trust_token",
                 reference_id=reference_id,
-                verification_time=verification_time,
-                reason="reference_subject_mismatch",
                 subject_id=reference.subject_id,
                 subject_type=reference.subject_type,
+                verified=False,
                 signature_valid=True,
+                policy_trace_available=replay.verification_status.policy_trace_available,
+                evidence_trace_available=replay.verification_status.evidence_trace_available,
                 tamper_status="authority_mismatch",
+                verification_time=verification_time,
+                public_claims=projection.verifiable_claims,
+                operator_actions=list(projection.operator_actions),
+                authority_consistency=authority_consistency,
+                authority_consistency_hash=authority_consistency.get("hash"),
+                reason="reference_subject_mismatch",
             )
         return self._verification_result_from_replay(
             replay=replay,

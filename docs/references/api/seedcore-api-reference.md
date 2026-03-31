@@ -137,6 +137,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - JSON-LD proof exports now include full `proof.authority_consistency` (`ok`, `issues`, `hash`) for direct verifier inspection.
 - Verification responses now include `authority_consistency` and `authority_consistency_hash` when replay context is available.
 - Verification responses now include `operator_actions` for direct remediation guidance on authority mismatch cases.
+- `reference_subject_mismatch` verification responses now include replay-derived claims and authority consistency fields for triage.
 
 ## 6. Source Registration API
 

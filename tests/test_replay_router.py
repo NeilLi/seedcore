@@ -619,6 +619,9 @@ def test_verify_token_surfaces_reference_subject_mismatch() -> None:
     assert body["verified"] is False
     assert body["reason"] == "reference_subject_mismatch"
     assert body["tamper_status"] == "authority_mismatch"
+    assert body["authority_consistency"]["ok"] is True
+    assert body["authority_consistency_hash"] == body["authority_consistency"]["hash"]
+    assert body["operator_actions"] == []
 
 
 def test_materialized_custody_event_endpoint_uses_replay_service_jsonld() -> None:

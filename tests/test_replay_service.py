@@ -666,6 +666,9 @@ async def test_verify_reference_fails_on_subject_mismatch_for_signed_token() -> 
     assert verification.verified is False
     assert verification.reason == "reference_subject_mismatch"
     assert verification.tamper_status == "authority_mismatch"
+    assert verification.authority_consistency["ok"] is True
+    assert verification.authority_consistency_hash == verification.authority_consistency["hash"]
+    assert verification.operator_actions == []
 
 
 @pytest.mark.asyncio
