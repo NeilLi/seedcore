@@ -77,6 +77,7 @@ class TrustPageProjection(BaseModel):
     timeline_summary: List[Dict[str, Any]] = Field(default_factory=list)
     verifiable_claims: List[Dict[str, Any]] = Field(default_factory=list)
     public_media_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    operator_actions: List[Dict[str, Any]] = Field(default_factory=list)
     public_jsonld_ref: Optional[str] = None
     public_certificate_ref: Optional[str] = None
 

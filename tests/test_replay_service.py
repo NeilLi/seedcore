@@ -703,6 +703,7 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert authority_verification["ok"] is False
     assert "owner_identity_mismatch" in authority_verification["issues"]
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
+    assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
 
 @pytest.mark.asyncio

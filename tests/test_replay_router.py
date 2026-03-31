@@ -482,6 +482,7 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert "owner_identity_mismatch" in view["authorization"]["authority_consistency"]["issues"]
     assert view["verification_status"]["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in view["verification_status"]["authority_consistency"]["issues"]
+    assert view["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
 
 def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:

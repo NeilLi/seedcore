@@ -687,6 +687,41 @@ class ReplayService:
         issues = self._owner_delegation_consistency_issues(replay)
         return {"ok": not issues, "issues": issues}
 
+    def _operator_actions_for_authority_issues(self, issues: Sequence[str]) -> List[Dict[str, Any]]:
+        actions: List[Dict[str, Any]] = []
+        issue_set = {str(item).strip() for item in issues if str(item).strip()}
+        if "owner_identity_mismatch" in issue_set:
+            actions.append(
+                {
+                    "code": "reconcile_owner_identity",
+                    "priority": "high",
+                    "summary": "Reconcile owner DID bindings across principal, gateway, and owner context.",
+                }
+            )
+        if "delegation_ref_mismatch" in issue_set:
+            actions.append(
+                {
+                    "code": "reconcile_delegation_ref",
+                    "priority": "high",
+                    "summary": "Reconcile delegation reference bindings across principal and gateway.",
+                }
+            )
+        for issue in sorted(issue_set):
+            mapped = {
+                "owner_identity_mismatch",
+                "delegation_ref_mismatch",
+            }
+            if issue in mapped:
+                continue
+            actions.append(
+                {
+                    "code": f"review_{issue}",
+                    "priority": "medium",
+                    "summary": f"Review authority consistency issue: {issue}.",
+                }
+            )
+        return actions
+
     def encode_public_reference(self, reference: PublicTrustReference) -> str:
         payload_segment = self._b64url_encode(
             json.dumps(reference.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1594,6 +1629,7 @@ class ReplayService:
         approvals = self._build_approval_summary(replay)
         authorization = self._build_authorization_summary(replay)
         authority_consistency = self._authority_consistency_summary(replay)
+        operator_actions = self._operator_actions_for_authority_issues(authority_consistency.get("issues") or [])
         dispute_summary = self._build_dispute_summary(replay)
         timeline_summary = [
             {
@@ -1637,6 +1673,7 @@ class ReplayService:
             timeline_summary=timeline_summary,
             verifiable_claims=claims,
             public_media_refs=media_refs,
+            operator_actions=operator_actions,
         )
 
     def _build_custody_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
