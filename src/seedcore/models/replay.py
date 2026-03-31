@@ -107,6 +107,9 @@ class TrustCertificate(BaseModel):
     verification_status: Dict[str, Any] = Field(default_factory=dict)
     trust_assertions: List[Dict[str, Any]] = Field(default_factory=list)
     public_claims: List[Dict[str, Any]] = Field(default_factory=list)
+    trust_gap_codes: List[str] = Field(default_factory=list)
+    trust_gap_details: List[Dict[str, Any]] = Field(default_factory=list)
+    owner_context: Dict[str, Any] = Field(default_factory=dict)
     issued_at: str
     expires_at: Optional[str] = None
     signer_metadata: Dict[str, Any] = Field(default_factory=dict)

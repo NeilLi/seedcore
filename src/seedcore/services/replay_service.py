@@ -771,6 +771,11 @@ class ReplayService:
     ) -> TrustCertificate:
         issued_at = self._utcnow().isoformat()
         projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+        )
+        owner_context = self._owner_context_summary(replay)
         certificate_payload = {
             "certificate_id": str(uuid.uuid4()),
             "public_id": public_id,
@@ -779,6 +784,9 @@ class ReplayService:
             "verification_status": replay.verification_status.model_dump(mode="json"),
             "trust_assertions": projection.verifiable_claims,
             "public_claims": projection.verifiable_claims,
+            "trust_gap_codes": trust_gap_codes,
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "owner_context": owner_context,
             "issued_at": issued_at,
             "expires_at": expires_at,
         }
@@ -798,6 +806,9 @@ class ReplayService:
             verification_status=certificate_payload["verification_status"],
             trust_assertions=certificate_payload["trust_assertions"],
             public_claims=certificate_payload["public_claims"],
+            trust_gap_codes=certificate_payload["trust_gap_codes"],
+            trust_gap_details=certificate_payload["trust_gap_details"],
+            owner_context=certificate_payload["owner_context"],
             issued_at=issued_at,
             expires_at=expires_at,
             signer_metadata=signer_metadata.model_dump(mode="json"),

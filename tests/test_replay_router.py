@@ -140,6 +140,14 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert trust.json()["subject_title"] == "Asset asset-1"
     assert trust.json()["public_jsonld_ref"].endswith(f"/trust/{public_id}/jsonld")
 
+    certificate = client.get(f"/trust/{public_id}/certificate")
+    assert certificate.status_code == 200
+    certificate_body = certificate.json()
+    assert certificate_body["public_id"] == public_id
+    assert isinstance(certificate_body.get("trust_gap_codes"), list)
+    assert isinstance(certificate_body.get("trust_gap_details"), list)
+    assert isinstance(certificate_body.get("owner_context"), dict)
+
     verify = client.get(f"/verify/{public_id}")
     assert verify.status_code == 200
     assert verify.json()["verified"] is True

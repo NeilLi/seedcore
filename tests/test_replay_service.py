@@ -519,6 +519,16 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert proof["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert proof["owner_context"]["creator_profile_ref"]["version"] == "v2"
 
+    certificate = await service.build_trust_certificate(
+        replay,
+        public_id="public-owner-trust-1",
+        expires_at="2026-04-30T10:00:00Z",
+    )
+    assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
+    assert certificate.trust_gap_details[0]["category"] == "owner_trust"
+    assert certificate.owner_context["owner_id"] == "did:seedcore:owner:acme-001"
+    assert certificate.owner_context["trust_preferences_ref"]["trust_version"] == "v3"
+
 
 @pytest.mark.asyncio
 async def test_replay_includes_custody_transition_and_dispute_refs():
