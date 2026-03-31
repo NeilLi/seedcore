@@ -55,6 +55,7 @@ For normative implementation details and active execution priorities, use:
 
 - [Architecture Overview](architecture/overview/architecture.md)
 - [Zero-Trust Custody and Digital-Twin Runtime](architecture/overview/zero_trust_custody_digital_twin_runtime.md)
+- [Sequence Of Trust: Zero-Trust Physical Custody](architecture/overview/sequence_of_trust_zero_trust_physical_custody.md)
 - [Gemini Extension: Owner / Creator Layer Implementation](architecture/overview/gemini_owner_creator_extension.md)
 - [Gemini Owner/Creator Phase 1-3 Quickstart](development/gemini_phase1_quickstart.md)
 - [SeedCore 2026 Execution Plan](development/seedcore_2026_execution_plan.md)
