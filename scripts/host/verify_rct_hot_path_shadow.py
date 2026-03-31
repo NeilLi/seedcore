@@ -15,6 +15,7 @@ from urllib import request
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = REPO_ROOT / "rust" / "fixtures" / "transfers"
+DEFAULT_ARTIFACT_DIR = Path(".local-runtime/hot_path_shadow")
 CANONICAL_CASES = (
     "allow_case",
     "deny_missing_approval",
@@ -275,18 +276,14 @@ def _build_request(
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify Restricted Custody Transfer hot-path shadow parity.")
-    parser.add_argument(
-        "--base-url",
-        default="http://127.0.0.1:8002/api/v1",
-        help="Runtime API base URL.",
-    )
-    args = parser.parse_args()
-
-    evaluate_url = f"{args.base_url.rstrip('/')}/pdp/hot-path/evaluate?debug=true"
-    status_url = f"{args.base_url.rstrip('/')}/pdp/hot-path/status"
-    active_snapshot = _resolve_active_snapshot(args.base_url)
+def run_verification(
+    *,
+    base_url: str,
+    artifact_root: Path | None = DEFAULT_ARTIFACT_DIR,
+) -> dict[str, Any]:
+    evaluate_url = f"{base_url.rstrip('/')}/pdp/hot-path/evaluate?debug=true"
+    status_url = f"{base_url.rstrip('/')}/pdp/hot-path/status"
+    active_snapshot = _resolve_active_snapshot(base_url)
     status_before = _get_json(status_url)
     before_total = int(status_before.get("total") or 0)
     before_parity_ok = int(status_before.get("parity_ok") or 0)
@@ -295,7 +292,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for case_name in CANONICAL_CASES:
         case_dir = FIXTURE_ROOT / case_name
-        persisted_approval = _persist_authoritative_approval(args.base_url, case_dir)
+        persisted_approval = _persist_authoritative_approval(base_url, case_dir)
         payload = _build_request(case_dir, persisted_approval=persisted_approval)
         if active_snapshot:
             payload["policy_snapshot_ref"] = active_snapshot
@@ -304,6 +301,7 @@ def main() -> int:
         rows.append(
             {
                 "case": case_name,
+                "expected_disposition": EXPECTED_DISPOSITIONS.get(case_name),
                 "disposition": response.get("decision", {}).get("disposition"),
                 "reason_code": response.get("decision", {}).get("reason_code"),
                 "latency_ms": response.get("latency_ms"),
@@ -314,21 +312,70 @@ def main() -> int:
     delta_total = max(0, int(status.get("total") or 0) - before_total)
     delta_parity_ok = max(0, int(status.get("parity_ok") or 0) - before_parity_ok)
     delta_mismatched = max(0, int(status.get("mismatched") or 0) - before_mismatched)
+    disposition_mismatches = [
+        row["case"]
+        for row in rows
+        if row.get("disposition") != EXPECTED_DISPOSITIONS.get(row.get("case"))
+    ]
+    recent = status.get("recent_results") or []
+    recent_mismatches = [item for item in recent if not item.get("parity_ok")]
+    passed = status.get("mode") == "shadow" and delta_mismatched == 0 and not disposition_mismatches
+
+    artifact_path: Path | None = None
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "base_url": base_url,
+        "mode": status.get("mode"),
+        "active_snapshot": active_snapshot or "unresolved",
+        "pass": passed,
+        "run_total": delta_total,
+        "run_parity_ok": delta_parity_ok,
+        "run_mismatched": delta_mismatched,
+        "total": int(status.get("total") or 0),
+        "parity_ok": int(status.get("parity_ok") or 0),
+        "mismatched": int(status.get("mismatched") or 0),
+        "latency_ms": status.get("latency_ms") or {},
+        "cases": rows,
+        "disposition_mismatches": disposition_mismatches,
+        "recent_mismatches": recent_mismatches,
+        "artifact_path": None,
+    }
+
+    if artifact_root is not None:
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        artifact_path = artifact_root / f"rct_hot_path_shadow_{timestamp}.json"
+        artifact_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+        summary["artifact_path"] = str(artifact_path)
+
+    return summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Verify Restricted Custody Transfer hot-path shadow parity.")
+    parser.add_argument(
+        "--base-url",
+        default="http://127.0.0.1:8002/api/v1",
+        help="Runtime API base URL.",
+    )
+    args = parser.parse_args()
+
+    summary = run_verification(base_url=args.base_url, artifact_root=DEFAULT_ARTIFACT_DIR)
 
     print("Restricted Custody Transfer Hot-Path Shadow")
-    print(f"mode: {status.get('mode')}")
-    print(f"active_snapshot: {active_snapshot or 'unresolved'}")
+    print(f"mode: {summary.get('mode')}")
+    print(f"active_snapshot: {summary.get('active_snapshot')}")
     print(
         "run_parity: "
-        f"{delta_parity_ok}/{delta_total} ok, "
-        f"{delta_mismatched} mismatched"
+        f"{summary.get('run_parity_ok')}/{summary.get('run_total')} ok, "
+        f"{summary.get('run_mismatched')} mismatched"
     )
     print(
         "parity: "
-        f"{status.get('parity_ok', 0)}/{status.get('total', 0)} ok, "
-        f"{status.get('mismatched', 0)} mismatched"
+        f"{summary.get('parity_ok', 0)}/{summary.get('total', 0)} ok, "
+        f"{summary.get('mismatched', 0)} mismatched"
     )
-    latency = status.get("latency_ms") or {}
+    latency = summary.get("latency_ms") or {}
     print(
         "latency_ms: "
         f"p50={latency.get('p50')} "
@@ -336,35 +383,25 @@ def main() -> int:
         f"p99={latency.get('p99')}"
     )
     print("cases:")
-    for row in rows:
+    for row in summary.get("cases") or []:
         print(
             f"  - {row['case']}: disposition={row['disposition']} "
             f"reason={row['reason_code']} latency_ms={row['latency_ms']}"
         )
+    print(f"artifact: {summary.get('artifact_path')}")
 
-    disposition_mismatches = [
-        row["case"]
-        for row in rows
-        if row.get("disposition") != EXPECTED_DISPOSITIONS.get(row.get("case"))
-    ]
+    disposition_mismatches = list(summary.get("disposition_mismatches") or [])
     if disposition_mismatches:
         print(f"disposition_mismatches: {','.join(disposition_mismatches)}")
 
-    recent = status.get("recent_results") or []
-    mismatches = [item for item in recent if not item.get("parity_ok")]
+    mismatches = summary.get("recent_mismatches") or []
     if mismatches:
         print("recent_mismatches:")
         for item in mismatches:
             print(
                 f"  - {item.get('request_id')}: mismatches={','.join(item.get('mismatches') or [])}"
             )
-    if status.get("mode") != "shadow":
-        return 1
-    if delta_mismatched > 0:
-        return 1
-    if disposition_mismatches:
-        return 1
-    return 0
+    return 0 if summary.get("pass") else 1
 
 
 if __name__ == "__main__":
