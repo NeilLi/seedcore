@@ -147,6 +147,7 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert isinstance(certificate_body.get("trust_gap_codes"), list)
     assert isinstance(certificate_body.get("trust_gap_details"), list)
     assert isinstance(certificate_body.get("owner_context"), dict)
+    assert isinstance(certificate_body.get("operator_actions"), list)
 
     verify = client.get(f"/verify/{public_id}")
     assert verify.status_code == 200

@@ -524,6 +524,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
         public_id="public-owner-trust-1",
         expires_at="2026-04-30T10:00:00Z",
     )
+    assert certificate.operator_actions == []
     assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
     assert certificate.trust_gap_details[0]["category"] == "owner_trust"
     assert certificate.owner_context["owner_id"] == "did:seedcore:owner:acme-001"
@@ -704,6 +705,13 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert "owner_identity_mismatch" in authority_verification["issues"]
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
     assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
+
+    certificate = await service.build_trust_certificate(
+        replay,
+        public_id="public-owner-mismatch-1",
+        expires_at="2026-04-30T10:00:00Z",
+    )
+    assert certificate.operator_actions[0]["code"] == "reconcile_owner_identity"
 
 
 @pytest.mark.asyncio
