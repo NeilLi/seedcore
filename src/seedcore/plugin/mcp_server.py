@@ -31,6 +31,12 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.hotpath.verify_shadow",
     "seedcore.hotpath.benchmark",
     "seedcore.evidence.verify",
+    "seedcore.identity.owner.upsert",
+    "seedcore.identity.owner.get",
+    "seedcore.delegation.grant",
+    "seedcore.delegation.get",
+    "seedcore.delegation.revoke",
+    "seedcore.agent_action.preflight",
     "seedcore.digital_twin.capture_link",
     "seedcore.forensic_replay.fetch",
 ]
@@ -256,6 +262,126 @@ async def handle_evidence_verify(
     result = await runtime.evidence_verify(payload)
     result["source_url"] = runtime.api_url("/verify")
     return result
+
+
+async def handle_owner_identity_upsert(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    did: str,
+    controller: str | None = None,
+    display_name: str | None = None,
+    signing_scheme: str = "ed25519",
+    public_key: str | None = None,
+    key_ref: str | None = None,
+    service_endpoints: dict[str, str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    status: str = "ACTIVE",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "did": did,
+        "signing_scheme": signing_scheme,
+        "status": status,
+        "service_endpoints": service_endpoints or {},
+        "metadata": metadata or {},
+    }
+    if controller is not None:
+        payload["controller"] = controller
+    if display_name is not None:
+        payload["display_name"] = display_name
+    if public_key is not None:
+        payload["public_key"] = public_key
+    if key_ref is not None:
+        payload["key_ref"] = key_ref
+    result = await runtime.register_did(payload)
+    result["source_url"] = runtime.api_url("/identities/dids")
+    return result
+
+
+async def handle_owner_identity_get(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    did: str,
+) -> dict[str, Any]:
+    result = await runtime.get_did(did)
+    result["source_url"] = runtime.api_url(f"/identities/dids/{did}")
+    return result
+
+
+async def handle_delegation_grant(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+    assistant_id: str,
+    authority_level: str = "observer",
+    scope: list[str] | None = None,
+    constraints: dict[str, Any] | None = None,
+    requires_step_up: bool = True,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "owner_id": owner_id,
+        "assistant_id": assistant_id,
+        "authority_level": authority_level,
+        "scope": list(scope or []),
+        "constraints": dict(constraints or {}),
+        "requires_step_up": bool(requires_step_up),
+    }
+    result = await runtime.grant_delegation(payload)
+    result["source_url"] = runtime.api_url("/delegations")
+    return result
+
+
+async def handle_delegation_get(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    delegation_id: str,
+) -> dict[str, Any]:
+    result = await runtime.get_delegation(delegation_id)
+    result["source_url"] = runtime.api_url(f"/delegations/{delegation_id}")
+    return result
+
+
+async def handle_delegation_revoke(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    delegation_id: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if reason is not None:
+        payload["reason"] = reason
+    result = await runtime.revoke_delegation(delegation_id, payload=payload)
+    result["source_url"] = runtime.api_url(f"/delegations/{delegation_id}/revoke")
+    return result
+
+
+async def handle_agent_action_preflight(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    request: dict[str, Any],
+    debug: bool = True,
+    no_execute: bool = True,
+) -> dict[str, Any]:
+    result = await runtime.evaluate_agent_action(
+        request,
+        debug=debug,
+        no_execute=no_execute,
+    )
+    return {
+        "ok": bool(result.get("decision", {}).get("allowed")),
+        "preflight": {
+            "debug": bool(debug),
+            "no_execute": bool(no_execute),
+        },
+        "decision": result.get("decision"),
+        "required_approvals": result.get("required_approvals"),
+        "trust_gaps": result.get("trust_gaps"),
+        "obligations": result.get("obligations"),
+        "minted_artifacts": result.get("minted_artifacts"),
+        "execution_token": result.get("execution_token"),
+        "governed_receipt": result.get("governed_receipt"),
+        "raw": result,
+        "source_url": runtime.api_url("/agent-actions/evaluate"),
+    }
 
 
 async def handle_digital_twin_capture_link(
@@ -485,6 +611,98 @@ if FastMCP is not None:
             audit_id=audit_id,
             subject_id=subject_id,
             subject_type=subject_type,
+        )
+
+
+    @mcp.tool(name="seedcore.identity.owner.upsert")
+    async def seedcore_identity_owner_upsert(
+        ctx: AppContext,
+        did: str,
+        controller: str | None = None,
+        display_name: str | None = None,
+        signing_scheme: str = "ed25519",
+        public_key: str | None = None,
+        key_ref: str | None = None,
+        service_endpoints: dict[str, str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        status: str = "ACTIVE",
+    ) -> dict[str, Any]:
+        return await handle_owner_identity_upsert(
+            _runtime(ctx),
+            did=did,
+            controller=controller,
+            display_name=display_name,
+            signing_scheme=signing_scheme,
+            public_key=public_key,
+            key_ref=key_ref,
+            service_endpoints=service_endpoints,
+            metadata=metadata,
+            status=status,
+        )
+
+
+    @mcp.tool(name="seedcore.identity.owner.get")
+    async def seedcore_identity_owner_get(
+        ctx: AppContext,
+        did: str,
+    ) -> dict[str, Any]:
+        return await handle_owner_identity_get(_runtime(ctx), did=did)
+
+
+    @mcp.tool(name="seedcore.delegation.grant")
+    async def seedcore_delegation_grant(
+        ctx: AppContext,
+        owner_id: str,
+        assistant_id: str,
+        authority_level: str = "observer",
+        scope: list[str] | None = None,
+        constraints: dict[str, Any] | None = None,
+        requires_step_up: bool = True,
+    ) -> dict[str, Any]:
+        return await handle_delegation_grant(
+            _runtime(ctx),
+            owner_id=owner_id,
+            assistant_id=assistant_id,
+            authority_level=authority_level,
+            scope=scope,
+            constraints=constraints,
+            requires_step_up=requires_step_up,
+        )
+
+
+    @mcp.tool(name="seedcore.delegation.get")
+    async def seedcore_delegation_get(
+        ctx: AppContext,
+        delegation_id: str,
+    ) -> dict[str, Any]:
+        return await handle_delegation_get(_runtime(ctx), delegation_id=delegation_id)
+
+
+    @mcp.tool(name="seedcore.delegation.revoke")
+    async def seedcore_delegation_revoke(
+        ctx: AppContext,
+        delegation_id: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_delegation_revoke(
+            _runtime(ctx),
+            delegation_id=delegation_id,
+            reason=reason,
+        )
+
+
+    @mcp.tool(name="seedcore.agent_action.preflight")
+    async def seedcore_agent_action_preflight(
+        ctx: AppContext,
+        request: dict[str, Any],
+        debug: bool = True,
+        no_execute: bool = True,
+    ) -> dict[str, Any]:
+        return await handle_agent_action_preflight(
+            _runtime(ctx),
+            request=request,
+            debug=debug,
+            no_execute=no_execute,
         )
 
 

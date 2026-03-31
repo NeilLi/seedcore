@@ -127,10 +127,14 @@ Product meaning:
     "version": "rules@8.0.0"
   },
   "options": {
-    "debug": false
+    "debug": false,
+    "no_execute": false
   }
 }
 ```
+
+`options.no_execute=true` enables preflight evaluation mode: policy and trust-gap
+evaluation still run, but `ExecutionToken` is withheld.
 
 ### Required Request Rules
 

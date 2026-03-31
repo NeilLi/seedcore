@@ -55,5 +55,7 @@ For normative implementation details and active execution priorities, use:
 
 - [Architecture Overview](architecture/overview/architecture.md)
 - [Zero-Trust Custody and Digital-Twin Runtime](architecture/overview/zero_trust_custody_digital_twin_runtime.md)
+- [Gemini Extension: Owner / Creator Layer Implementation](architecture/overview/gemini_owner_creator_extension.md)
+- [Gemini Owner/Creator Phase 1 Quickstart](development/gemini_phase1_quickstart.md)
 - [SeedCore 2026 Execution Plan](development/seedcore_2026_execution_plan.md)
 - [Agent Action Gateway Contract](development/agent_action_gateway_contract.md)

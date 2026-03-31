@@ -293,6 +293,57 @@ def test_agent_actions_evaluate_quarantines_when_organism_preflight_fails(monkey
     assert "organism_not_ready" in body["trust_gaps"]
 
 
+def test_agent_actions_evaluate_no_execute_query_strips_execution_token(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post("/api/v1/agent-actions/evaluate?no_execute=true", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "allow"
+    assert body["execution_token"] is None
+    assert "ExecutionToken" not in body["minted_artifacts"]
+    assert "PolicyReceipt" in body["minted_artifacts"]
+
+
+def test_agent_actions_evaluate_no_execute_option_strips_execution_token(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    payload = _base_payload()
+    payload["options"]["no_execute"] = True
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "allow"
+    assert body["execution_token"] is None
+    assert "ExecutionToken" not in body["minted_artifacts"]
+
+
 def test_agent_actions_closure_accepts_allow_request_and_records(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()

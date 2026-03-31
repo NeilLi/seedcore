@@ -73,3 +73,9 @@ AI assistants can purchase on behalf of owners under policy guardrails, with tru
 ## Strategic Message
 
 SeedCore is the zero-trust runtime that allows AI assistants to safely publish, transact, and operate in the real world with provable authority and custody.
+
+## Implementation Companion
+
+For an implementation-oriented mapping of the Owner / Creator layer as a Gemini extension, see:
+
+- [Gemini Extension: Owner / Creator Layer Implementation](./gemini_owner_creator_extension.md)

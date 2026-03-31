@@ -137,6 +137,7 @@ class AgentActionOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     debug: bool = False
+    no_execute: bool = False
 
 
 class AgentActionEvaluateRequest(BaseModel):

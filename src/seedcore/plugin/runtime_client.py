@@ -103,3 +103,43 @@ class SeedcoreRuntimeClient:
 
     async def trust_certificate(self, public_id: str) -> dict[str, Any]:
         return await self._request_json(method="GET", url=self.api_url(f"/trust/{public_id}/certificate"))
+
+    async def register_did(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="POST", url=self.api_url("/identities/dids"), payload=payload)
+
+    async def update_did(self, did: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="PATCH", url=self.api_url(f"/identities/dids/{did}"), payload=payload)
+
+    async def get_did(self, did: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/identities/dids/{did}"))
+
+    async def grant_delegation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="POST", url=self.api_url("/delegations"), payload=payload)
+
+    async def get_delegation(self, delegation_id: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/delegations/{delegation_id}"))
+
+    async def revoke_delegation(self, delegation_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._request_json(
+            method="POST",
+            url=self.api_url(f"/delegations/{delegation_id}/revoke"),
+            payload=payload or {},
+        )
+
+    async def evaluate_agent_action(
+        self,
+        payload: dict[str, Any],
+        *,
+        debug: bool = False,
+        no_execute: bool = False,
+    ) -> dict[str, Any]:
+        params = {
+            "debug": "true" if debug else "false",
+            "no_execute": "true" if no_execute else "false",
+        }
+        return await self._request_json(
+            method="POST",
+            url=self.api_url("/agent-actions/evaluate"),
+            payload=payload,
+            params=params,
+        )

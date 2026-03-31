@@ -202,6 +202,22 @@ def _minted_artifacts_from_hot_path_result(
     return minted
 
 
+def _apply_no_execute_preflight(
+    response: AgentActionEvaluateResponse,
+    *,
+    requested: bool,
+) -> AgentActionEvaluateResponse:
+    if not requested:
+        return response
+    retained_artifacts = [item for item in response.minted_artifacts if item != "ExecutionToken"]
+    return response.model_copy(
+        update={
+            "execution_token": None,
+            "minted_artifacts": retained_artifacts,
+        }
+    )
+
+
 def _canonical_payload_hash(payload: Any) -> str:
     canonical_payload = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload or {})
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
@@ -927,8 +943,16 @@ def _as_closure_record_response(record: _AgentActionClosureStoredRecord) -> Agen
 async def evaluate_agent_action(
     payload: AgentActionEvaluateRequest,
     debug: bool = Query(default=False, description="Include check-by-check diagnostics."),
+    no_execute: bool = Query(
+        default=False,
+        description="Preflight mode: evaluate policy and trust gaps without minting ExecutionToken.",
+    ),
 ) -> AgentActionEvaluateResponse:
-    request_hash = _canonical_payload_hash(payload)
+    requested_no_execute = bool(no_execute or payload.options.no_execute)
+    request_hash_base = _canonical_payload_hash(payload)
+    request_hash = hashlib.sha256(
+        f"{request_hash_base}|no_execute={int(requested_no_execute)}".encode("utf-8")
+    ).hexdigest()
     claimed, idempotency_entry = await _claim_idempotency_key(
         idempotency_key=payload.idempotency_key,
         request_id=payload.request_id,
@@ -1001,6 +1025,7 @@ async def evaluate_agent_action(
             governed_receipt=dict(hot_path_result.governed_receipt),
         )
         response = await _apply_organism_preflight(payload=payload, response=response)
+        response = _apply_no_execute_preflight(response, requested=requested_no_execute)
         await _write_request_record(
             _AgentActionStoredRecord(
                 request_id=payload.request_id,
