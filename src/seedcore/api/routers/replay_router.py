@@ -273,6 +273,13 @@ async def publish_trust_reference(
                 "issues": authority_issues,
             },
         )
+    authority_consistency = replay_service.authority_consistency_summary(replay)
+    projection = replay_service.project_record(replay, ReplayProjectionKind.PUBLIC)
+    operator_actions = (
+        list(projection.get("operator_actions") or [])
+        if isinstance(projection, dict)
+        else []
+    )
 
     reference, public_id = replay_service.build_public_reference(
         lookup_key=lookup_key,
@@ -291,6 +298,9 @@ async def publish_trust_reference(
         "expires_at": reference.expires_at,
         "subject_type": replay.subject_type,
         "subject_id": replay.subject_id,
+        "authority_consistency": authority_consistency,
+        "authority_consistency_hash": authority_consistency.get("hash"),
+        "operator_actions": operator_actions,
     }
 
 

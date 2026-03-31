@@ -688,6 +688,9 @@ class ReplayService:
     def authority_consistency_issues(self, replay: ReplayRecord) -> List[str]:
         return self._owner_delegation_consistency_issues(replay)
 
+    def authority_consistency_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        return self._authority_consistency_summary(replay)
+
     def _authority_consistency_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
         issues = self._owner_delegation_consistency_issues(replay)
         summary = {"ok": not issues, "issues": issues}

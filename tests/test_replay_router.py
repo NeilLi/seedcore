@@ -133,7 +133,11 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
 
     publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
     assert publish.status_code == 200
-    public_id = publish.json()["public_id"]
+    publish_body = publish.json()
+    public_id = publish_body["public_id"]
+    assert publish_body["authority_consistency"]["ok"] is True
+    assert publish_body["authority_consistency_hash"].startswith("sha256:")
+    assert publish_body["operator_actions"] == []
 
     trust = client.get(f"/trust/{public_id}")
     assert trust.status_code == 200
@@ -164,6 +168,13 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert isinstance(verify.json()["operator_actions"], list)
     assert verify.json()["authority_consistency"]["ok"] is True
     assert verify.json()["authority_consistency_hash"].startswith("sha256:")
+
+    refresh = client.post("/trust/refresh", json={"audit_id": record["id"], "ttl_hours": 4})
+    assert refresh.status_code == 200
+    refresh_body = refresh.json()
+    assert refresh_body["authority_consistency"]["ok"] is True
+    assert refresh_body["authority_consistency_hash"].startswith("sha256:")
+    assert refresh_body["operator_actions"] == []
 
 
 def test_replay_lookup_by_subject_id_returns_asset_projection() -> None:
