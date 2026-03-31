@@ -159,11 +159,16 @@ This surface adds the missing external authority APIs needed for DID-style ident
 | `POST` | `/api/v1/delegations` | Grant delegated authority from an owner DID to an assistant DID. |
 | `GET` | `/api/v1/delegations/{delegation_id}` | Fetch a delegation record. |
 | `POST` | `/api/v1/delegations/{delegation_id}/revoke` | Revoke a delegation record. |
+| `POST` | `/api/v1/creator-profiles` | Upsert creator profile metadata for an owner DID. |
+| `GET` | `/api/v1/creator-profiles/{owner_id}` | Fetch the current creator profile for an owner DID. |
+| `POST` | `/api/v1/trust-preferences` | Upsert owner trust-preference policy hints. |
+| `GET` | `/api/v1/trust-preferences/{owner_id}` | Fetch current trust preferences for an owner DID. |
 | `POST` | `/api/v1/intents/submit-signed` | Verify an externally signed `ActionIntent` and run it through the current PDP flow. |
 
 ### 8.1 Notes
 
 - DID and delegation records are currently persisted using the existing facts table in the `identity` namespace.
+- Creator profile and trust preference records are also persisted in the `identity` namespace as owner-scoped fact records.
 - Externally signed intent submission currently supports `ed25519` and `hmac_sha256`.
 - Signed submission requires nonce protection and rejects replayed nonces.
 - Signed submission verifies ingress authenticity but still runs the normal PDP and delegation checks before issuing `ExecutionToken`.

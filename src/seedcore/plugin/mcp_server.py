@@ -33,9 +33,13 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.evidence.verify",
     "seedcore.identity.owner.upsert",
     "seedcore.identity.owner.get",
+    "seedcore.creator_profile.upsert",
+    "seedcore.creator_profile.get",
     "seedcore.delegation.grant",
     "seedcore.delegation.get",
     "seedcore.delegation.revoke",
+    "seedcore.trust_preferences.upsert",
+    "seedcore.trust_preferences.get",
     "seedcore.agent_action.preflight",
     "seedcore.digital_twin.capture_link",
     "seedcore.forensic_replay.fetch",
@@ -307,6 +311,48 @@ async def handle_owner_identity_get(
     return result
 
 
+async def handle_creator_profile_upsert(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+    version: str = "v1",
+    status: str = "ACTIVE",
+    display_name: str | None = None,
+    brand_handles: dict[str, str] | None = None,
+    commerce_prefs: dict[str, Any] | None = None,
+    publish_prefs: dict[str, Any] | None = None,
+    risk_profile: dict[str, Any] | None = None,
+    updated_by: str = "identity_router",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "owner_id": owner_id,
+        "version": version,
+        "status": status,
+        "brand_handles": brand_handles or {},
+        "commerce_prefs": commerce_prefs or {},
+        "publish_prefs": publish_prefs or {},
+        "risk_profile": risk_profile or {},
+        "updated_by": updated_by,
+        "metadata": metadata or {},
+    }
+    if display_name is not None:
+        payload["display_name"] = display_name
+    result = await runtime.upsert_creator_profile(payload)
+    result["source_url"] = runtime.api_url("/creator-profiles")
+    return result
+
+
+async def handle_creator_profile_get(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+) -> dict[str, Any]:
+    result = await runtime.get_creator_profile(owner_id)
+    result["source_url"] = runtime.api_url(f"/creator-profiles/{owner_id}")
+    return result
+
+
 async def handle_delegation_grant(
     runtime: SeedcoreRuntimeClient,
     *,
@@ -351,6 +397,50 @@ async def handle_delegation_revoke(
         payload["reason"] = reason
     result = await runtime.revoke_delegation(delegation_id, payload=payload)
     result["source_url"] = runtime.api_url(f"/delegations/{delegation_id}/revoke")
+    return result
+
+
+async def handle_trust_preferences_upsert(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+    trust_version: str = "v1",
+    status: str = "ACTIVE",
+    max_risk_score: float | None = None,
+    merchant_allowlist: list[str] | None = None,
+    required_provenance_level: str | None = None,
+    required_evidence_modalities: list[str] | None = None,
+    high_value_step_up_threshold_usd: float | None = None,
+    updated_by: str = "identity_router",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "owner_id": owner_id,
+        "trust_version": trust_version,
+        "status": status,
+        "merchant_allowlist": list(merchant_allowlist or []),
+        "required_evidence_modalities": list(required_evidence_modalities or []),
+        "updated_by": updated_by,
+        "metadata": metadata or {},
+    }
+    if max_risk_score is not None:
+        payload["max_risk_score"] = float(max_risk_score)
+    if required_provenance_level is not None:
+        payload["required_provenance_level"] = required_provenance_level
+    if high_value_step_up_threshold_usd is not None:
+        payload["high_value_step_up_threshold_usd"] = float(high_value_step_up_threshold_usd)
+    result = await runtime.upsert_trust_preferences(payload)
+    result["source_url"] = runtime.api_url("/trust-preferences")
+    return result
+
+
+async def handle_trust_preferences_get(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+) -> dict[str, Any]:
+    result = await runtime.get_trust_preferences(owner_id)
+    result["source_url"] = runtime.api_url(f"/trust-preferences/{owner_id}")
     return result
 
 
@@ -649,6 +739,43 @@ if FastMCP is not None:
         return await handle_owner_identity_get(_runtime(ctx), did=did)
 
 
+    @mcp.tool(name="seedcore.creator_profile.upsert")
+    async def seedcore_creator_profile_upsert(
+        ctx: AppContext,
+        owner_id: str,
+        version: str = "v1",
+        status: str = "ACTIVE",
+        display_name: str | None = None,
+        brand_handles: dict[str, str] | None = None,
+        commerce_prefs: dict[str, Any] | None = None,
+        publish_prefs: dict[str, Any] | None = None,
+        risk_profile: dict[str, Any] | None = None,
+        updated_by: str = "identity_router",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await handle_creator_profile_upsert(
+            _runtime(ctx),
+            owner_id=owner_id,
+            version=version,
+            status=status,
+            display_name=display_name,
+            brand_handles=brand_handles,
+            commerce_prefs=commerce_prefs,
+            publish_prefs=publish_prefs,
+            risk_profile=risk_profile,
+            updated_by=updated_by,
+            metadata=metadata,
+        )
+
+
+    @mcp.tool(name="seedcore.creator_profile.get")
+    async def seedcore_creator_profile_get(
+        ctx: AppContext,
+        owner_id: str,
+    ) -> dict[str, Any]:
+        return await handle_creator_profile_get(_runtime(ctx), owner_id=owner_id)
+
+
     @mcp.tool(name="seedcore.delegation.grant")
     async def seedcore_delegation_grant(
         ctx: AppContext,
@@ -689,6 +816,43 @@ if FastMCP is not None:
             delegation_id=delegation_id,
             reason=reason,
         )
+
+
+    @mcp.tool(name="seedcore.trust_preferences.upsert")
+    async def seedcore_trust_preferences_upsert(
+        ctx: AppContext,
+        owner_id: str,
+        trust_version: str = "v1",
+        status: str = "ACTIVE",
+        max_risk_score: float | None = None,
+        merchant_allowlist: list[str] | None = None,
+        required_provenance_level: str | None = None,
+        required_evidence_modalities: list[str] | None = None,
+        high_value_step_up_threshold_usd: float | None = None,
+        updated_by: str = "identity_router",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await handle_trust_preferences_upsert(
+            _runtime(ctx),
+            owner_id=owner_id,
+            trust_version=trust_version,
+            status=status,
+            max_risk_score=max_risk_score,
+            merchant_allowlist=merchant_allowlist,
+            required_provenance_level=required_provenance_level,
+            required_evidence_modalities=required_evidence_modalities,
+            high_value_step_up_threshold_usd=high_value_step_up_threshold_usd,
+            updated_by=updated_by,
+            metadata=metadata,
+        )
+
+
+    @mcp.tool(name="seedcore.trust_preferences.get")
+    async def seedcore_trust_preferences_get(
+        ctx: AppContext,
+        owner_id: str,
+    ) -> dict[str, Any]:
+        return await handle_trust_preferences_get(_runtime(ctx), owner_id=owner_id)
 
 
     @mcp.tool(name="seedcore.agent_action.preflight")

@@ -9,10 +9,11 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ...api.external_authority import build_owner_twin_snapshot, get_delegation
 from ...agents.roles.specialization import SpecializationManager
 from ...database import get_async_pg_session_factory, get_async_redis_client
 from ...models.action_intent import (
@@ -139,6 +140,7 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
                 },
                 "gateway": {
                     "idempotency_key": payload.idempotency_key,
+                    "owner_id": payload.principal.owner_id,
                     "delegation_ref": payload.principal.delegation_ref,
                     "organization_ref": payload.principal.organization_ref,
                     "workflow_type": payload.workflow.type,
@@ -216,6 +218,77 @@ def _apply_no_execute_preflight(
             "minted_artifacts": retained_artifacts,
         }
     )
+
+
+def _normalize_delegation_id(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    if normalized.startswith("delegation:"):
+        normalized = normalized.split(":", 1)[1].strip()
+    return normalized or None
+
+
+async def _resolve_owner_twin_snapshot_for_payload(payload: AgentActionEvaluateRequest) -> dict[str, Any] | None:
+    owner_id = str(payload.principal.owner_id or "").strip() or None
+    delegation_id = _normalize_delegation_id(payload.principal.delegation_ref)
+    session_factory = get_async_pg_session_factory()
+    if session_factory is None:
+        return None
+    try:
+        async with session_factory() as session:
+            if owner_id is None and delegation_id is not None:
+                delegation = await get_delegation(session, delegation_id)
+                if delegation is not None:
+                    owner_id = delegation.owner_id
+            if owner_id is None:
+                return None
+            owner_twin = await build_owner_twin_snapshot(session, owner_id)
+            return owner_twin.model_dump(mode="json")
+    except Exception:
+        logger.debug(
+            "Failed to resolve owner twin snapshot for agent action request_id=%s",
+            payload.request_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _annotate_owner_context_in_response(
+    response: AgentActionEvaluateResponse,
+    owner_twin_snapshot: Mapping[str, Any] | None,
+) -> AgentActionEvaluateResponse:
+    if not isinstance(owner_twin_snapshot, Mapping):
+        return response
+    provenance = (
+        owner_twin_snapshot.get("provenance")
+        if isinstance(owner_twin_snapshot.get("provenance"), Mapping)
+        else {}
+    )
+    identity = (
+        owner_twin_snapshot.get("identity")
+        if isinstance(owner_twin_snapshot.get("identity"), Mapping)
+        else {}
+    )
+    creator_profile_ref = (
+        dict(provenance.get("creator_profile_ref"))
+        if isinstance(provenance.get("creator_profile_ref"), Mapping)
+        else None
+    )
+    trust_preferences_ref = (
+        dict(provenance.get("trust_preferences_ref"))
+        if isinstance(provenance.get("trust_preferences_ref"), Mapping)
+        else None
+    )
+    if creator_profile_ref is None and trust_preferences_ref is None:
+        return response
+    governed_receipt = dict(response.governed_receipt or {})
+    governed_receipt["owner_context"] = {
+        "owner_id": identity.get("did") or identity.get("owner_id"),
+        "creator_profile_ref": creator_profile_ref,
+        "trust_preferences_ref": trust_preferences_ref,
+    }
+    return response.model_copy(update={"governed_receipt": governed_receipt})
 
 
 def _canonical_payload_hash(payload: Any) -> str:
@@ -985,11 +1058,18 @@ async def evaluate_agent_action(
                 )
 
     try:
+        owner_twin_snapshot = await _resolve_owner_twin_snapshot_for_payload(payload)
+        relevant_twin_snapshot = (
+            {"owner": owner_twin_snapshot}
+            if isinstance(owner_twin_snapshot, dict)
+            else None
+        )
         hot_path_request = _map_to_hot_path_request(payload)
         # Keep v1 gateway semantics as a contract wrapper around the existing hot-path path.
         authoritative_transfer_approval = await resolve_authoritative_transfer_approval(hot_path_request)
         hot_path_result = evaluate_pdp_hot_path(
             hot_path_request,
+            relevant_twin_snapshot=relevant_twin_snapshot,
             authoritative_approval_envelope=(
                 authoritative_transfer_approval.get("authoritative_approval_envelope")
                 if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
@@ -1026,6 +1106,7 @@ async def evaluate_agent_action(
         )
         response = await _apply_organism_preflight(payload=payload, response=response)
         response = _apply_no_execute_preflight(response, requested=requested_no_execute)
+        response = _annotate_owner_context_in_response(response, owner_twin_snapshot)
         await _write_request_record(
             _AgentActionStoredRecord(
                 request_id=payload.request_id,

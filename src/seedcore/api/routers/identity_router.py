@@ -4,18 +4,24 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from seedcore.api.external_authority import (
+    CreatorProfileUpsertRequest,
     DIDRegistrationRequest,
     DIDUpdateRequest,
     DelegationGrantRequest,
     DelegationRevokeRequest,
     SignedIntentSubmissionRequest,
+    TrustPreferencesUpsertRequest,
     build_owner_twin_snapshot,
+    get_creator_profile,
     get_delegation,
     get_did_document,
+    get_trust_preferences,
     grant_delegation,
     patch_did_document,
     revoke_delegation,
+    upsert_creator_profile,
     upsert_did_document,
+    upsert_trust_preferences,
     verify_signed_intent_submission,
 )
 from seedcore.coordinator.core.governance import build_governance_context
@@ -123,3 +129,43 @@ async def submit_signed_intent(
         "owner_id": payload.owner_id,
     }
     return context
+
+
+@router.post("/creator-profiles")
+async def upsert_creator_profile_endpoint(
+    payload: CreatorProfileUpsertRequest,
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    record = await upsert_creator_profile(session, payload)
+    return record.model_dump(mode="json")
+
+
+@router.get("/creator-profiles/{owner_id}")
+async def fetch_creator_profile(
+    owner_id: str,
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    record = await get_creator_profile(session, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Creator profile for owner '{owner_id}' not found")
+    return record.model_dump(mode="json")
+
+
+@router.post("/trust-preferences")
+async def upsert_trust_preferences_endpoint(
+    payload: TrustPreferencesUpsertRequest,
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    record = await upsert_trust_preferences(session, payload)
+    return record.model_dump(mode="json")
+
+
+@router.get("/trust-preferences/{owner_id}")
+async def fetch_trust_preferences(
+    owner_id: str,
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    record = await get_trust_preferences(session, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Trust preferences for owner '{owner_id}' not found")
+    return record.model_dump(mode="json")

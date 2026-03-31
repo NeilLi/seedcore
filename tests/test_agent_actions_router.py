@@ -344,6 +344,58 @@ def test_agent_actions_evaluate_no_execute_option_strips_execution_token(monkeyp
     assert "ExecutionToken" not in body["minted_artifacts"]
 
 
+def test_agent_actions_evaluate_includes_owner_context_refs_in_governed_receipt(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    captured = {}
+
+    def _fake_evaluate(request, **kwargs):
+        captured["relevant_twin_snapshot"] = kwargs.get("relevant_twin_snapshot")
+        return _allow_hot_path_response()
+
+    async def _fake_owner_snapshot(*args, **kwargs):
+        return {
+            "identity": {"did": "did:seedcore:owner:acme-001"},
+            "provenance": {
+                "creator_profile_ref": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "version": "v2",
+                    "updated_at": "2026-03-31T10:00:00Z",
+                },
+                "trust_preferences_ref": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "trust_version": "v3",
+                    "updated_at": "2026-03-31T10:00:01Z",
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_owner_twin_snapshot_for_payload",
+        _fake_owner_snapshot,
+    )
+
+    payload = _base_payload()
+    payload["principal"]["owner_id"] = "did:seedcore:owner:acme-001"
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    owner_context = body["governed_receipt"]["owner_context"]
+    assert owner_context["owner_id"] == "did:seedcore:owner:acme-001"
+    assert owner_context["creator_profile_ref"]["version"] == "v2"
+    assert owner_context["trust_preferences_ref"]["trust_version"] == "v3"
+    assert isinstance(captured.get("relevant_twin_snapshot"), dict)
+    assert "owner" in captured["relevant_twin_snapshot"]
+
+
 def test_agent_actions_closure_accepts_allow_request_and_records(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()

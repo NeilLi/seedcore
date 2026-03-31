@@ -105,9 +105,9 @@ Recommended trust-preference shape:
 - `required_evidence_modalities`
 - `high_value_step_up_threshold_usd`
 
-## Gemini Extension Surface (Proposed MCP Tools)
+## Gemini Extension Surface (Current MCP Tools)
 
-Current plugin tools are operator/read-only oriented. Add owner/creator tools:
+Owner/creator tools now available:
 
 - `seedcore.identity.owner.upsert`
 - `seedcore.identity.owner.get`

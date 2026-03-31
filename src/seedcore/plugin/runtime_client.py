@@ -143,3 +143,15 @@ class SeedcoreRuntimeClient:
             payload=payload,
             params=params,
         )
+
+    async def upsert_creator_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="POST", url=self.api_url("/creator-profiles"), payload=payload)
+
+    async def get_creator_profile(self, owner_id: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/creator-profiles/{owner_id}"))
+
+    async def upsert_trust_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="POST", url=self.api_url("/trust-preferences"), payload=payload)
+
+    async def get_trust_preferences(self, owner_id: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/trust-preferences/{owner_id}"))

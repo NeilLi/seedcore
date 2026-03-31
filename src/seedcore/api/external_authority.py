@@ -34,6 +34,8 @@ from seedcore.ops.evidence.policy import (
 IDENTITY_NAMESPACE = "identity"
 DID_PREDICATE = "did_document"
 DELEGATION_PREDICATE_PREFIX = "delegation:"
+CREATOR_PROFILE_PREDICATE = "creator_profile"
+TRUST_PREFERENCES_PREDICATE = "trust_preferences"
 DEFAULT_EXTERNAL_INTENT_MAX_SKEW_SECONDS = 300
 DEFAULT_EXTERNAL_INTENT_NONCE_TTL_SECONDS = 300
 _NONCE_CACHE: dict[str, float] = {}
@@ -123,6 +125,60 @@ class SignedIntentSubmissionRequest(BaseModel):
     key_ref: Optional[str] = None
     nonce: str
     signed_at: str
+
+
+class CreatorProfileRecord(BaseModel):
+    owner_id: str
+    version: str = "v1"
+    status: Literal["ACTIVE", "SUPERSEDED", "REVOKED"] = "ACTIVE"
+    display_name: Optional[str] = None
+    brand_handles: dict[str, str] = Field(default_factory=dict)
+    commerce_prefs: dict[str, Any] = Field(default_factory=dict)
+    publish_prefs: dict[str, Any] = Field(default_factory=dict)
+    risk_profile: dict[str, Any] = Field(default_factory=dict)
+    updated_at: str = Field(default_factory=lambda: isoformat(utcnow()))
+    updated_by: str = "identity_router"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreatorProfileUpsertRequest(BaseModel):
+    owner_id: str
+    version: str = "v1"
+    status: Literal["ACTIVE", "SUPERSEDED", "REVOKED"] = "ACTIVE"
+    display_name: Optional[str] = None
+    brand_handles: dict[str, str] = Field(default_factory=dict)
+    commerce_prefs: dict[str, Any] = Field(default_factory=dict)
+    publish_prefs: dict[str, Any] = Field(default_factory=dict)
+    risk_profile: dict[str, Any] = Field(default_factory=dict)
+    updated_by: str = "identity_router"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TrustPreferencesRecord(BaseModel):
+    owner_id: str
+    trust_version: str = "v1"
+    status: Literal["ACTIVE", "SUPERSEDED", "REVOKED"] = "ACTIVE"
+    max_risk_score: Optional[float] = None
+    merchant_allowlist: list[str] = Field(default_factory=list)
+    required_provenance_level: Optional[str] = None
+    required_evidence_modalities: list[str] = Field(default_factory=list)
+    high_value_step_up_threshold_usd: Optional[float] = None
+    updated_at: str = Field(default_factory=lambda: isoformat(utcnow()))
+    updated_by: str = "identity_router"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TrustPreferencesUpsertRequest(BaseModel):
+    owner_id: str
+    trust_version: str = "v1"
+    status: Literal["ACTIVE", "SUPERSEDED", "REVOKED"] = "ACTIVE"
+    max_risk_score: Optional[float] = None
+    merchant_allowlist: list[str] = Field(default_factory=list)
+    required_provenance_level: Optional[str] = None
+    required_evidence_modalities: list[str] = Field(default_factory=list)
+    high_value_step_up_threshold_usd: Optional[float] = None
+    updated_by: str = "identity_router"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 async def upsert_did_document(session: AsyncSession, payload: DIDRegistrationRequest | DIDDocumentRecord) -> DIDDocumentRecord:
@@ -245,6 +301,8 @@ async def get_delegation(session: AsyncSession, delegation_id: str) -> Delegatio
 async def build_owner_twin_snapshot(session: AsyncSession, owner_id: str) -> TwinSnapshot:
     did_document = await get_did_document(session, owner_id)
     delegations = await _list_owner_delegations(session, owner_id)
+    creator_profile = await get_creator_profile(session, owner_id)
+    trust_preferences = await get_trust_preferences(session, owner_id)
     owner_twin = OwnerTwin(
         owner_id=owner_id,
         public_key_fingerprint=(
@@ -284,7 +342,144 @@ async def build_owner_twin_snapshot(session: AsyncSession, owner_id: str) -> Twi
             "revoked": owner_twin.state == "REVOKED",
         },
         governance={"source": "identity_facts"},
+        risk={
+            "max_risk_score": trust_preferences.max_risk_score
+            if trust_preferences is not None
+            else None,
+        },
+        provenance={
+            "creator_profile_ref": (
+                {
+                    "owner_id": owner_id,
+                    "version": creator_profile.version,
+                    "updated_at": creator_profile.updated_at,
+                }
+                if creator_profile is not None
+                else None
+            ),
+            "trust_preferences_ref": (
+                {
+                    "owner_id": owner_id,
+                    "trust_version": trust_preferences.trust_version,
+                    "updated_at": trust_preferences.updated_at,
+                }
+                if trust_preferences is not None
+                else None
+            ),
+        },
+        telemetry={
+            "owner_context": {
+                "creator_profile": (
+                    creator_profile.model_dump(mode="json")
+                    if creator_profile is not None
+                    else None
+                ),
+                "trust_preferences": (
+                    trust_preferences.model_dump(mode="json")
+                    if trust_preferences is not None
+                    else None
+                ),
+            }
+        },
     )
+
+
+async def upsert_creator_profile(
+    session: AsyncSession,
+    payload: CreatorProfileUpsertRequest | CreatorProfileRecord,
+) -> CreatorProfileRecord:
+    record = payload if isinstance(payload, CreatorProfileRecord) else CreatorProfileRecord(
+        owner_id=payload.owner_id,
+        version=payload.version,
+        status=payload.status,
+        display_name=payload.display_name,
+        brand_handles=payload.brand_handles,
+        commerce_prefs=payload.commerce_prefs,
+        publish_prefs=payload.publish_prefs,
+        risk_profile=payload.risk_profile,
+        updated_by=payload.updated_by,
+        metadata=payload.metadata,
+    )
+    fact = await _get_owner_fact(session, owner_id=record.owner_id, predicate=CREATOR_PROFILE_PREDICATE)
+    if fact is None:
+        fact = Fact(
+            text=f"Creator profile for {record.owner_id}",
+            tags=["identity", "creator_profile"],
+            meta_data={"record_type": "creator_profile"},
+            namespace=IDENTITY_NAMESPACE,
+            subject=record.owner_id,
+            predicate=CREATOR_PROFILE_PREDICATE,
+            object_data=record.model_dump(mode="json"),
+            created_by=record.updated_by,
+        )
+        session.add(fact)
+    else:
+        fact.text = f"Creator profile for {record.owner_id}"
+        fact.tags = ["identity", "creator_profile"]
+        fact.meta_data = {"record_type": "creator_profile"}
+        fact.object_data = record.model_dump(mode="json")
+        fact.created_by = record.updated_by
+    await session.commit()
+    return record
+
+
+async def get_creator_profile(session: AsyncSession, owner_id: str) -> CreatorProfileRecord | None:
+    fact = await _get_owner_fact(session, owner_id=owner_id, predicate=CREATOR_PROFILE_PREDICATE)
+    if fact is None or not isinstance(fact.object_data, dict):
+        return None
+    try:
+        return CreatorProfileRecord(**fact.object_data)
+    except Exception:
+        return None
+
+
+async def upsert_trust_preferences(
+    session: AsyncSession,
+    payload: TrustPreferencesUpsertRequest | TrustPreferencesRecord,
+) -> TrustPreferencesRecord:
+    record = payload if isinstance(payload, TrustPreferencesRecord) else TrustPreferencesRecord(
+        owner_id=payload.owner_id,
+        trust_version=payload.trust_version,
+        status=payload.status,
+        max_risk_score=payload.max_risk_score,
+        merchant_allowlist=payload.merchant_allowlist,
+        required_provenance_level=payload.required_provenance_level,
+        required_evidence_modalities=payload.required_evidence_modalities,
+        high_value_step_up_threshold_usd=payload.high_value_step_up_threshold_usd,
+        updated_by=payload.updated_by,
+        metadata=payload.metadata,
+    )
+    fact = await _get_owner_fact(session, owner_id=record.owner_id, predicate=TRUST_PREFERENCES_PREDICATE)
+    if fact is None:
+        fact = Fact(
+            text=f"Trust preferences for {record.owner_id}",
+            tags=["identity", "trust_preferences"],
+            meta_data={"record_type": "trust_preferences"},
+            namespace=IDENTITY_NAMESPACE,
+            subject=record.owner_id,
+            predicate=TRUST_PREFERENCES_PREDICATE,
+            object_data=record.model_dump(mode="json"),
+            created_by=record.updated_by,
+        )
+        session.add(fact)
+    else:
+        fact.text = f"Trust preferences for {record.owner_id}"
+        fact.tags = ["identity", "trust_preferences"]
+        fact.meta_data = {"record_type": "trust_preferences"}
+        fact.object_data = record.model_dump(mode="json")
+        fact.created_by = record.updated_by
+    await session.commit()
+    return record
+
+
+async def get_trust_preferences(session: AsyncSession, owner_id: str) -> TrustPreferencesRecord | None:
+    fact = await _get_owner_fact(session, owner_id=owner_id, predicate=TRUST_PREFERENCES_PREDICATE)
+    if fact is None or not isinstance(fact.object_data, dict):
+        return None
+    try:
+        return TrustPreferencesRecord(**fact.object_data)
+    except Exception:
+        return None
 
 
 def build_external_intent_signing_payload(action_intent: ActionIntent, *, nonce: str, signed_at: str) -> dict[str, Any]:
@@ -387,6 +582,17 @@ async def _get_delegation_fact(session: AsyncSession, delegation_id: str) -> Fac
         select(Fact).where(
             Fact.namespace == IDENTITY_NAMESPACE,
             Fact.predicate == f"{DELEGATION_PREDICATE_PREFIX}{delegation_id}",
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _get_owner_fact(session: AsyncSession, owner_id: str, predicate: str) -> Fact | None:
+    result = await session.execute(
+        select(Fact).where(
+            Fact.namespace == IDENTITY_NAMESPACE,
+            Fact.subject == owner_id,
+            Fact.predicate == predicate,
         )
     )
     return result.scalar_one_or_none()

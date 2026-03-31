@@ -34,6 +34,7 @@ class AgentActionPrincipal(BaseModel):
     role_profile: str
     session_token: Optional[str] = None
     actor_token: Optional[str] = None
+    owner_id: Optional[str] = None
     delegation_ref: Optional[str] = None
     organization_ref: Optional[str] = None
 
@@ -42,7 +43,7 @@ class AgentActionPrincipal(BaseModel):
     def _validate_required_fields(cls, value: str, info) -> str:
         return _normalize_required_str(value, field_name=info.field_name)
 
-    @field_validator("session_token", "actor_token", "delegation_ref", "organization_ref")
+    @field_validator("session_token", "actor_token", "owner_id", "delegation_ref", "organization_ref")
     @classmethod
     def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)

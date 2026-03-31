@@ -1,9 +1,11 @@
-# Gemini Owner/Creator Phase 1 Quickstart
+# Gemini Owner/Creator Phase 1-2 Quickstart
 
-This quickstart shows how to use the new Phase 1 Gemini extension tools for:
+This quickstart shows how to use the Gemini extension tools for:
 
 - owner DID onboarding
+- creator profile persistence
 - assistant delegation lifecycle
+- trust preferences persistence
 - governed action preflight (`no_execute`)
 
 ## Prerequisites
@@ -16,9 +18,13 @@ This quickstart shows how to use the new Phase 1 Gemini extension tools for:
 
 - `seedcore.identity.owner.upsert`
 - `seedcore.identity.owner.get`
+- `seedcore.creator_profile.upsert`
+- `seedcore.creator_profile.get`
 - `seedcore.delegation.grant`
 - `seedcore.delegation.get`
 - `seedcore.delegation.revoke`
+- `seedcore.trust_preferences.upsert`
+- `seedcore.trust_preferences.get`
 - `seedcore.agent_action.preflight`
 
 ## 1) Register Owner Identity
@@ -57,7 +63,52 @@ Validate:
 }
 ```
 
-## 2) Grant Assistant Delegation
+## 2) Upsert Creator Profile
+
+Call:
+
+```json
+{
+  "tool": "seedcore.creator_profile.upsert",
+  "arguments": {
+    "owner_id": "did:seedcore:owner:acme-001",
+    "version": "v1",
+    "status": "ACTIVE",
+    "display_name": "Acme Creator Ops",
+    "brand_handles": {
+      "instagram": "@acme",
+      "youtube": "@acme"
+    },
+    "commerce_prefs": {
+      "merchant_allowlist": [
+        "merchant:trusted-1"
+      ]
+    },
+    "publish_prefs": {
+      "allowed_channels": [
+        "youtube",
+        "shop"
+      ]
+    },
+    "risk_profile": {
+      "tier": "standard"
+    }
+  }
+}
+```
+
+Validate:
+
+```json
+{
+  "tool": "seedcore.creator_profile.get",
+  "arguments": {
+    "owner_id": "did:seedcore:owner:acme-001"
+  }
+}
+```
+
+## 3) Grant Assistant Delegation
 
 Call:
 
@@ -96,7 +147,43 @@ Save `delegation_id` from the response, then check:
 }
 ```
 
-## 3) Run Governed Preflight (No Execute)
+## 4) Upsert Trust Preferences
+
+Call:
+
+```json
+{
+  "tool": "seedcore.trust_preferences.upsert",
+  "arguments": {
+    "owner_id": "did:seedcore:owner:acme-001",
+    "trust_version": "v1",
+    "status": "ACTIVE",
+    "max_risk_score": 0.7,
+    "merchant_allowlist": [
+      "merchant:trusted-1"
+    ],
+    "required_provenance_level": "verified",
+    "required_evidence_modalities": [
+      "camera",
+      "seal_sensor"
+    ],
+    "high_value_step_up_threshold_usd": 1000
+  }
+}
+```
+
+Validate:
+
+```json
+{
+  "tool": "seedcore.trust_preferences.get",
+  "arguments": {
+    "owner_id": "did:seedcore:owner:acme-001"
+  }
+}
+```
+
+## 5) Run Governed Preflight (No Execute)
 
 Use `seedcore.agent_action.preflight` to evaluate policy/trust gaps without minting `ExecutionToken`.
 
@@ -116,6 +203,7 @@ Use `seedcore.agent_action.preflight` to evaluate policy/trust gaps without mint
         "agent_id": "did:seedcore:assistant:warehouse-bot-01",
         "role_profile": "TRANSFER_COORDINATOR",
         "session_token": "session-abc",
+        "owner_id": "did:seedcore:owner:acme-001",
         "delegation_ref": "REPLACE_WITH_DELEGATION_ID",
         "organization_ref": "org:warehouse-north"
       },
@@ -167,6 +255,7 @@ Expected checks:
 - `minted_artifacts` does not include `ExecutionToken`
 
 ## 4) Revoke Delegation
+## 6) Revoke Delegation
 
 ```json
 {

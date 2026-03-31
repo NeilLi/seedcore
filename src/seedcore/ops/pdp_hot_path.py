@@ -345,6 +345,7 @@ async def resolve_authoritative_transfer_approval(
 def evaluate_pdp_hot_path(
     request: HotPathEvaluateRequest,
     *,
+    relevant_twin_snapshot: Mapping[str, Any] | None = None,
     authoritative_approval_envelope: Mapping[str, Any] | None = None,
     authoritative_approval_transition_history: Sequence[Mapping[str, Any]] | None = None,
     authoritative_approval_transition_head: str | None = None,
@@ -462,6 +463,7 @@ def evaluate_pdp_hot_path(
     policy_case = prepare_policy_case(
         request.action_intent,
         policy_snapshot=request.policy_snapshot_ref,
+        relevant_twin_snapshot=relevant_twin_snapshot,
         approved_source_registrations=approved_source_registrations,
         telemetry_summary=telemetry_summary,
         evidence_summary=evidence_summary,
