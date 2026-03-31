@@ -115,6 +115,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-facing projections now include normalized `trust_gap_details` derived from `trust_gap_codes`.
 - When present in governed receipts, owner context references (`owner_id`, creator profile ref, trust preference ref) are surfaced in `authorization` and `policy_summary`.
 - JSON-LD trust exports now include `proof.trust_gap_codes`, `proof.trust_gap_details`, and owner context references when available.
+- Materialized custody-event `policy_verification` now includes `authority_consistency`, `authority_consistency_hash`, and `operator_actions` for forensic triage parity.
 - Trust certificates now include `trust_gap_codes`, `trust_gap_details`, and owner context references when available.
 - Verification now fails with `owner_identity_mismatch` or `delegation_ref_mismatch` when replay authority bindings conflict across principal, gateway, and governed owner context records.
 - Verification of signed trust tokens now fails with `reference_subject_mismatch` when token subject bindings diverge from replay-resolved subject identity.

@@ -598,6 +598,51 @@ def test_materialized_custody_event_endpoint_uses_replay_service_jsonld() -> Non
     assert body["custody_event_jsonld"]["policy_verification"]["authz_disposition"] == "quarantine"
     assert body["custody_event_jsonld"]["policy_verification"]["governed_receipt_hash"] == "receipt-intent-router-4"
     assert body["custody_event_jsonld"]["policy_verification"]["trust_gap_codes"] == ["stale_telemetry"]
+    assert body["custody_event_jsonld"]["policy_verification"]["authority_consistency"]["ok"] is True
+    assert body["custody_event_jsonld"]["policy_verification"]["authority_consistency_hash"].startswith("sha256:")
+    assert body["custody_event_jsonld"]["policy_verification"]["operator_actions"] == []
+
+
+def test_materialized_custody_event_surfaces_authority_mismatch_actions() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-router-4b", intent_id="intent-router-4b", asset_id="asset-4b"),
+        disposition="deny",
+        reason="owner_trust_preference_violation",
+        trust_gap_codes=["owner_trust_merchant_violation"],
+    )
+    record["action_intent"] = {
+        "intent_id": "intent-router-4b",
+        "principal": {
+            "agent_id": "did:seedcore:assistant:warehouse-bot-01",
+            "owner_id": "did:seedcore:owner:acme-001",
+            "delegation_ref": "delegation:owner-8841-transfer",
+        },
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "gateway": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "delegation_ref": "delegation:owner-8841-transfer",
+                }
+            },
+        },
+    }
+    record["policy_decision"]["governed_receipt"]["owner_context"] = {
+        "owner_id": "did:seedcore:owner:other-999",
+        "creator_profile_ref": {"owner_id": "did:seedcore:owner:other-999", "version": "v2"},
+        "trust_preferences_ref": {"owner_id": "did:seedcore:owner:other-999", "trust_version": "v1"},
+    }
+    client = _make_client(record)
+
+    response = client.get("/governance/materialized-custody-event", params={"audit_id": record["id"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    policy_verification = body["custody_event_jsonld"]["policy_verification"]
+    assert policy_verification["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in policy_verification["authority_consistency"]["issues"]
+    assert policy_verification["authority_consistency_hash"] == policy_verification["authority_consistency"]["hash"]
+    assert policy_verification["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
 
 def test_replay_artifacts_include_authz_transition_metadata() -> None:
