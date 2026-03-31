@@ -125,6 +125,7 @@ Owner/creator tools now available:
 - `seedcore.trust_preferences.upsert`
 - `seedcore.trust_preferences.get`
 - `seedcore.owner_context.get`
+- `seedcore.owner_context.preflight`
 - `seedcore.agent_action.preflight`
 
 Notes:

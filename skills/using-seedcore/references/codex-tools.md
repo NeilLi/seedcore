@@ -27,6 +27,7 @@ This mapping keeps Codex behavior aligned with the Gemini extension tool surface
 - `seedcore.trust_preferences.upsert`
 - `seedcore.trust_preferences.get`
 - `seedcore.owner_context.get`
+- `seedcore.owner_context.preflight`
 - `seedcore.agent_action.preflight`
 
 ## Workflow expectations

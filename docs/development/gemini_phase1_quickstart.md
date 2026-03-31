@@ -26,6 +26,7 @@ This quickstart shows how to use the Gemini extension tools for:
 - `seedcore.trust_preferences.upsert`
 - `seedcore.trust_preferences.get`
 - `seedcore.owner_context.get`
+- `seedcore.owner_context.preflight`
 - `seedcore.agent_action.preflight`
 
 ## 1) Register Owner Identity

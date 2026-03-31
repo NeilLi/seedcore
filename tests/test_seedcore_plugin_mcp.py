@@ -21,6 +21,7 @@ from seedcore.plugin.mcp_server import (
     handle_hotpath_benchmark,
     handle_hotpath_verify_shadow,
     handle_owner_context_get,
+    handle_owner_context_preflight,
     handle_pkg_authz_graph_status,
     handle_pkg_status,
     handle_readyz,
@@ -49,6 +50,7 @@ class _RuntimeStub:
         self.trust_jsonld = AsyncMock()
         self.trust_certificate = AsyncMock()
         self.get_did = AsyncMock()
+        self.get_delegation = AsyncMock()
         self.get_creator_profile = AsyncMock()
         self.get_trust_preferences = AsyncMock()
 
@@ -81,6 +83,7 @@ def test_plugin_tool_surface_includes_owner_creator_parity_set():
         "seedcore.trust_preferences.upsert",
         "seedcore.trust_preferences.get",
         "seedcore.owner_context.get",
+        "seedcore.owner_context.preflight",
         "seedcore.agent_action.preflight",
     }
     assert expected_tools.issubset(set(PLUGIN_TOOL_NAMES))
@@ -372,3 +375,56 @@ async def test_handle_owner_context_get_returns_compact_refs_and_hash():
     assert result["owner_context_ref"]["trust_preferences_ref"]["source_predicate"] == "trust_preferences"
     assert result["owner_context_hash"] == owner_context_hash(result["owner_context_ref"])
     assert result["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_handle_owner_context_preflight_returns_policy_signals_and_delegation_checks():
+    runtime = _RuntimeStub()
+    runtime.get_did.return_value = {
+        "did": "did:seedcore:owner:acme-001",
+        "verification_method": {"key_ref": "owner-k1"},
+    }
+    runtime.get_creator_profile.return_value = {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "version": "v2",
+        "updated_at": "2026-03-31T10:00:00Z",
+        "updated_by": "identity_router",
+    }
+    runtime.get_trust_preferences.return_value = {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "trust_version": "v3",
+        "updated_at": "2026-03-31T10:00:01Z",
+        "updated_by": "identity_router",
+        "max_risk_score": 0.7,
+        "merchant_allowlist": ["org:merchant-trusted"],
+        "required_provenance_level": "verified",
+        "required_evidence_modalities": ["camera", "seal_sensor"],
+        "high_value_step_up_threshold_usd": 1000,
+    }
+    runtime.get_delegation.return_value = {
+        "delegation_id": "deleg-1",
+        "owner_id": "did:seedcore:owner:acme-001",
+        "assistant_id": "did:seedcore:assistant:warehouse-bot-01",
+        "status": "ACTIVE",
+    }
+
+    result = await handle_owner_context_preflight(
+        runtime,
+        owner_id="did:seedcore:owner:acme-001",
+        assistant_id="did:seedcore:assistant:warehouse-bot-01",
+        delegation_id="deleg-1",
+        merchant_ref="org:merchant-untrusted",
+        declared_value_usd=1500,
+        observed_provenance_level="basic",
+        available_modalities=["camera"],
+        risk_score=0.9,
+    )
+
+    assert result["ok"] is False
+    assert result["delegation_check"]["valid"] is True
+    assert "owner_trust_risk_escalation" in result["predicted_policy_signals"]["trust_gap_codes"]
+    assert "owner_trust_high_value_step_up" in result["predicted_policy_signals"]["trust_gap_codes"]
+    assert "owner_trust_merchant_violation" in result["predicted_policy_signals"]["trust_gap_codes"]
+    assert "owner_trust_provenance_violation" in result["predicted_policy_signals"]["trust_gap_codes"]
+    assert "owner_trust_modality_violation" in result["predicted_policy_signals"]["trust_gap_codes"]
+    assert "owner_trust_modalities_missing" in result["predicted_policy_signals"]["reason_codes"]

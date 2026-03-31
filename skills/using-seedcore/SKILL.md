@@ -46,9 +46,10 @@ Use this skill at the start of SeedCore-specific work.
 16. `seedcore.trust_preferences.upsert`
 17. `seedcore.trust_preferences.get`
 18. `seedcore.owner_context.get`
-19. `seedcore.agent_action.preflight`
-20. `seedcore.digital_twin.capture_link`
-21. `seedcore.forensic_replay.fetch`
+19. `seedcore.owner_context.preflight`
+20. `seedcore.agent_action.preflight`
+21. `seedcore.digital_twin.capture_link`
+22. `seedcore.forensic_replay.fetch`
 
 ## Fallback commands
 

@@ -42,6 +42,7 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.trust_preferences.upsert",
     "seedcore.trust_preferences.get",
     "seedcore.owner_context.get",
+    "seedcore.owner_context.preflight",
     "seedcore.agent_action.preflight",
     "seedcore.digital_twin.capture_link",
     "seedcore.forensic_replay.fetch",
@@ -542,6 +543,131 @@ async def handle_owner_context_get(
     }
 
 
+def _provenance_rank(level: str | None) -> int:
+    normalized = str(level or "").strip().lower()
+    order = {"none": 0, "basic": 1, "verified": 2, "certified": 3}
+    return int(order.get(normalized, 0))
+
+
+async def handle_owner_context_preflight(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    owner_id: str,
+    assistant_id: str | None = None,
+    delegation_id: str | None = None,
+    merchant_ref: str | None = None,
+    declared_value_usd: float | None = None,
+    required_modalities: list[str] | None = None,
+    available_modalities: list[str] | None = None,
+    observed_provenance_level: str | None = None,
+    risk_score: float | None = None,
+) -> dict[str, Any]:
+    owner_context = await handle_owner_context_get(
+        runtime,
+        owner_id=owner_id,
+        include_identity=True,
+        include_creator_profile=True,
+        include_trust_preferences=True,
+    )
+    trust_preferences = (
+        owner_context.get("trust_preferences")
+        if isinstance(owner_context.get("trust_preferences"), dict)
+        else {}
+    )
+    delegation_check: dict[str, Any] = {
+        "checked": bool(delegation_id),
+        "delegation_id": delegation_id,
+        "valid": None,
+        "issues": [],
+    }
+    if delegation_id:
+        try:
+            delegation = await runtime.get_delegation(delegation_id)
+            delegation_check["record"] = delegation
+            status = str(delegation.get("status") or "").strip().upper()
+            delegation_owner = str(delegation.get("owner_id") or "").strip()
+            delegation_assistant = str(delegation.get("assistant_id") or "").strip()
+            if status != "ACTIVE":
+                delegation_check["issues"].append("delegation_not_active")
+            if delegation_owner and delegation_owner != owner_id:
+                delegation_check["issues"].append("delegation_owner_mismatch")
+            if assistant_id and delegation_assistant and delegation_assistant != assistant_id:
+                delegation_check["issues"].append("delegation_assistant_mismatch")
+            delegation_check["valid"] = len(delegation_check["issues"]) == 0
+        except SeedcorePluginError:
+            delegation_check["issues"].append("delegation_not_found")
+            delegation_check["valid"] = False
+
+    trust_gap_codes: list[str] = []
+    reason_codes: list[str] = []
+
+    def _add_gap(code: str, reason_code: str) -> None:
+        if code not in trust_gap_codes:
+            trust_gap_codes.append(code)
+        if reason_code not in reason_codes:
+            reason_codes.append(reason_code)
+
+    if isinstance(trust_preferences.get("max_risk_score"), (int, float)) and isinstance(risk_score, (int, float)):
+        if float(risk_score) > float(trust_preferences["max_risk_score"]):
+            _add_gap("owner_trust_risk_escalation", "owner_trust_risk_threshold_exceeded")
+
+    if isinstance(trust_preferences.get("high_value_step_up_threshold_usd"), (int, float)) and isinstance(
+        declared_value_usd, (int, float)
+    ):
+        if float(declared_value_usd) >= float(trust_preferences["high_value_step_up_threshold_usd"]):
+            _add_gap("owner_trust_high_value_step_up", "owner_trust_high_value_threshold_exceeded")
+
+    allowlist = (
+        [str(item).strip() for item in trust_preferences.get("merchant_allowlist", []) if str(item).strip()]
+        if isinstance(trust_preferences.get("merchant_allowlist"), list)
+        else []
+    )
+    if merchant_ref and allowlist and str(merchant_ref).strip() not in set(allowlist):
+        _add_gap("owner_trust_merchant_violation", "owner_trust_merchant_not_allowlisted")
+
+    required_level = str(trust_preferences.get("required_provenance_level") or "").strip().lower()
+    if required_level:
+        observed_level = str(observed_provenance_level or "").strip().lower()
+        if not observed_level:
+            _add_gap("owner_trust_provenance_violation", "owner_trust_provenance_missing")
+        elif _provenance_rank(observed_level) < _provenance_rank(required_level):
+            _add_gap("owner_trust_provenance_violation", "owner_trust_provenance_insufficient_level")
+
+    policy_required_modalities = (
+        [str(item).strip() for item in trust_preferences.get("required_evidence_modalities", []) if str(item).strip()]
+        if isinstance(trust_preferences.get("required_evidence_modalities"), list)
+        else []
+    )
+    combined_required = sorted(set(policy_required_modalities + [str(item).strip() for item in (required_modalities or []) if str(item).strip()]))
+    available = sorted(set(str(item).strip() for item in (available_modalities or []) if str(item).strip()))
+    missing_modalities = sorted(set(combined_required) - set(available)) if combined_required else []
+    if missing_modalities:
+        _add_gap("owner_trust_modality_violation", "owner_trust_modalities_missing")
+
+    return {
+        "ok": not trust_gap_codes and (delegation_check["valid"] is not False),
+        "owner_id": owner_id,
+        "assistant_id": assistant_id,
+        "owner_context_hash": owner_context.get("owner_context_hash"),
+        "owner_context_ref": owner_context.get("owner_context_ref"),
+        "delegation_check": delegation_check,
+        "predicted_policy_signals": {
+            "trust_gap_codes": trust_gap_codes,
+            "reason_codes": reason_codes,
+            "missing_modalities": missing_modalities,
+        },
+        "inputs": {
+            "merchant_ref": merchant_ref,
+            "declared_value_usd": declared_value_usd,
+            "observed_provenance_level": observed_provenance_level,
+            "risk_score": risk_score,
+            "required_modalities": list(required_modalities or []),
+            "available_modalities": list(available_modalities or []),
+        },
+        "warnings": list(owner_context.get("warnings") or []),
+    }
+
+
 async def handle_agent_action_preflight(
     runtime: SeedcoreRuntimeClient,
     *,
@@ -967,6 +1093,33 @@ if FastMCP is not None:
             include_identity=include_identity,
             include_creator_profile=include_creator_profile,
             include_trust_preferences=include_trust_preferences,
+        )
+
+
+    @mcp.tool(name="seedcore.owner_context.preflight")
+    async def seedcore_owner_context_preflight(
+        ctx: AppContext,
+        owner_id: str,
+        assistant_id: str | None = None,
+        delegation_id: str | None = None,
+        merchant_ref: str | None = None,
+        declared_value_usd: float | None = None,
+        required_modalities: list[str] | None = None,
+        available_modalities: list[str] | None = None,
+        observed_provenance_level: str | None = None,
+        risk_score: float | None = None,
+    ) -> dict[str, Any]:
+        return await handle_owner_context_preflight(
+            _runtime(ctx),
+            owner_id=owner_id,
+            assistant_id=assistant_id,
+            delegation_id=delegation_id,
+            merchant_ref=merchant_ref,
+            declared_value_usd=declared_value_usd,
+            required_modalities=required_modalities,
+            available_modalities=available_modalities,
+            observed_provenance_level=observed_provenance_level,
+            risk_score=risk_score,
         )
 
 
