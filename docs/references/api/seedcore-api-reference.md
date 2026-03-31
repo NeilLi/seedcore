@@ -112,6 +112,8 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Public trust references are signed and time-bounded.
 - Revocation depends on Redis. If Redis is unavailable, revoke returns `503`.
 - Expired or revoked trust references return `410 Gone` semantics on public trust retrieval.
+- Trust-facing projections now include normalized `trust_gap_details` derived from `trust_gap_codes`.
+- When present in governed receipts, owner context references (`owner_id`, creator profile ref, trust preference ref) are surfaced in `authorization` and `policy_summary`.
 
 ## 6. Source Registration API
 

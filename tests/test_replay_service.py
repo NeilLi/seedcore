@@ -466,6 +466,54 @@ async def test_replay_surfaces_authz_transition_metadata_for_quarantine() -> Non
 
 
 @pytest.mark.asyncio
+async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-owner-trust-1", intent_id="intent-owner-trust-1", asset_id="asset-owner-trust-1"),
+        disposition="deny",
+        reason="owner_trust_preference_violation",
+        trust_gap_codes=["owner_trust_merchant_violation"],
+    )
+    governed_receipt = (
+        record.get("policy_decision", {}).get("governed_receipt")
+        if isinstance(record.get("policy_decision"), dict)
+        and isinstance(record.get("policy_decision", {}).get("governed_receipt"), dict)
+        else {}
+    )
+    governed_receipt["owner_context"] = {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "creator_profile_ref": {
+            "owner_id": "did:seedcore:owner:acme-001",
+            "version": "v2",
+            "updated_at": "2026-03-31T10:00:00Z",
+        },
+        "trust_preferences_ref": {
+            "owner_id": "did:seedcore:owner:acme-001",
+            "trust_version": "v3",
+            "updated_at": "2026-03-31T10:00:01Z",
+        },
+    }
+    record["policy_decision"]["governed_receipt"] = governed_receipt
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-owner-trust-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    authorization = replay.public_projection["authorization"]
+    assert authorization["trust_gap_codes"] == ["owner_trust_merchant_violation"]
+    assert authorization["trust_gap_details"][0]["category"] == "owner_trust"
+    assert authorization["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
+    assert authorization["owner_context"]["trust_preferences_ref"]["trust_version"] == "v3"
+
+    claims = replay.public_projection["verifiable_claims"]
+    assert any(item.get("claim") == "owner_trust_preference_gap_detected" for item in claims)
+    assert any(item.get("claim") == "owner_trust_preferences_version_bound" for item in claims)
+
+
+@pytest.mark.asyncio
 async def test_replay_includes_custody_transition_and_dispute_refs():
     record = _build_audit_record(task_id="task-graph-1", intent_id="intent-graph-1", asset_id="asset-graph-1")
     dispute_case = {

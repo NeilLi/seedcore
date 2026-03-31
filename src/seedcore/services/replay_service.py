@@ -53,6 +53,28 @@ TRUST_TOKEN_PREFIX = "stp1"
 DEFAULT_TRUST_REFERENCE_TTL_HOURS = int(os.getenv("SEEDCORE_TRUST_REFERENCE_TTL_HOURS", "168"))
 TRUST_PROJECTION_VERSION = os.getenv("SEEDCORE_TRUST_PROJECTION_VERSION", "v1")
 DEFAULT_TRUST_BUNDLE_SCHEMA_VERSION = os.getenv("SEEDCORE_TRUST_BUNDLE_SCHEMA_VERSION", "phase_a_v1")
+TRUST_GAP_TAXONOMY: Dict[str, Dict[str, str]] = {
+    "owner_trust_risk_escalation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Owner trust risk threshold exceeded.",
+    },
+    "owner_trust_merchant_violation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Merchant is outside owner trust allowlist.",
+    },
+    "owner_trust_provenance_violation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Required owner provenance level not satisfied.",
+    },
+    "owner_trust_modality_violation": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Required owner evidence modalities missing.",
+    },
+}
 
 
 class ReplayServiceError(ValueError):
@@ -1628,12 +1650,14 @@ class ReplayService:
                 or replay.evidence_bundle.get("decision_graph_snapshot_version")
             ),
             "trust_gap_codes": trust_gap_codes,
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
             "restricted_token_recommended": bool(replay.authz_graph.get("restricted_token_recommended")),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
             "workflow_status": self._workflow_status(replay),
             "authority_path_summary": list(replay.authz_graph.get("authority_path_summary") or []),
             "minted_artifacts": list(replay.authz_graph.get("minted_artifacts") or []),
             "obligations": list(replay.authz_graph.get("obligations") or []),
+            "owner_context": self._owner_context_summary(replay),
         }
 
     def _build_dispute_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -2619,6 +2643,10 @@ class ReplayService:
         }
 
     def _build_authorization_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        trust_gap_codes = self._trust_gap_codes(
+            replay_authz_graph=replay.authz_graph,
+            replay_governed_receipt=replay.governed_receipt,
+        )
         return {
             "disposition": replay.authz_graph.get("disposition") or replay.governed_receipt.get("disposition"),
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
@@ -2653,6 +2681,9 @@ class ReplayService:
                 if isinstance(replay.audit_record, dict)
                 else None
             ) or replay.evidence_bundle.get("execution_token_id"),
+            "trust_gap_codes": trust_gap_codes,
+            "trust_gap_details": self._trust_gap_details(trust_gap_codes),
+            "owner_context": self._owner_context_summary(replay),
         }
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
@@ -2726,7 +2757,77 @@ class ReplayService:
                     "source": governed_receipt_hash or replay.audit_record_id,
                 }
             )
+        owner_trust_codes = [code for code in trust_gap_codes if code.startswith("owner_trust_")]
+        if owner_trust_codes:
+            claims.append(
+                {
+                    "claim": "owner_trust_preference_gap_detected",
+                    "value": True,
+                    "source": governed_receipt_hash or replay.audit_record_id,
+                    "details": {"codes": owner_trust_codes},
+                }
+            )
+        owner_context = self._owner_context_summary(replay)
+        if owner_context:
+            if owner_context.get("creator_profile_ref"):
+                claims.append(
+                    {
+                        "claim": "owner_creator_profile_version_bound",
+                        "value": True,
+                        "source": governed_receipt_hash or replay.audit_record_id,
+                    }
+                )
+            if owner_context.get("trust_preferences_ref"):
+                claims.append(
+                    {
+                        "claim": "owner_trust_preferences_version_bound",
+                        "value": True,
+                        "source": governed_receipt_hash or replay.audit_record_id,
+                    }
+                )
         return claims
+
+    def _trust_gap_details(self, trust_gap_codes: Sequence[str]) -> List[Dict[str, Any]]:
+        details: List[Dict[str, Any]] = []
+        for code in trust_gap_codes:
+            normalized = str(code).strip()
+            if not normalized:
+                continue
+            entry = dict(TRUST_GAP_TAXONOMY.get(normalized) or {})
+            details.append(
+                {
+                    "code": normalized,
+                    "category": entry.get("category", "general"),
+                    "severity": entry.get("severity", "medium"),
+                    "message": entry.get("message", normalized.replace("_", " ")),
+                }
+            )
+        return details
+
+    def _owner_context_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        owner_context = (
+            replay.governed_receipt.get("owner_context")
+            if isinstance(replay.governed_receipt.get("owner_context"), Mapping)
+            else {}
+        )
+        creator_profile_ref = (
+            dict(owner_context.get("creator_profile_ref"))
+            if isinstance(owner_context.get("creator_profile_ref"), Mapping)
+            else None
+        )
+        trust_preferences_ref = (
+            dict(owner_context.get("trust_preferences_ref"))
+            if isinstance(owner_context.get("trust_preferences_ref"), Mapping)
+            else None
+        )
+        owner_id = str(owner_context.get("owner_id") or "").strip() or None
+        if owner_id is None and creator_profile_ref is None and trust_preferences_ref is None:
+            return {}
+        return {
+            "owner_id": owner_id,
+            "creator_profile_ref": creator_profile_ref,
+            "trust_preferences_ref": trust_preferences_ref,
+        }
 
     def _trust_gap_codes(
         self,
