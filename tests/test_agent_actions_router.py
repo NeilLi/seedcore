@@ -69,6 +69,26 @@ def _base_payload() -> dict:
     }
 
 
+def _base_closure_payload(
+    *,
+    request_id: str = "req-transfer-2026-0001",
+    closure_id: str = "closure-transfer-2026-0001",
+    idempotency_key: str = "idem-closure-2026-0001",
+) -> dict:
+    return {
+        "contract_version": "seedcore.agent_action_gateway.v1",
+        "request_id": request_id,
+        "closure_id": closure_id,
+        "idempotency_key": idempotency_key,
+        "closed_at": "2026-03-31T10:02:00Z",
+        "outcome": "completed",
+        "evidence_bundle_id": "evidence-bundle-001",
+        "transition_receipt_ids": ["transition-receipt-001"],
+        "node_id": "node-warehouse-gateway-01",
+        "summary": {"settlement_target": "asset:lot-8841"},
+    }
+
+
 def _allow_hot_path_response() -> HotPathEvaluateResponse:
     return HotPathEvaluateResponse(
         request_id="req-transfer-2026-0001",
@@ -271,3 +291,160 @@ def test_agent_actions_evaluate_quarantines_when_organism_preflight_fails(monkey
     assert body["execution_token"] is None
     assert "ExecutionToken" not in body["minted_artifacts"]
     assert "organism_not_ready" in body["trust_gaps"]
+
+
+def test_agent_actions_closure_accepts_allow_request_and_records(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    closure_payload = _base_closure_payload()
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=closure_payload,
+    )
+    assert close_response.status_code == 200
+    close_body = close_response.json()
+    assert close_body["request_id"] == "req-transfer-2026-0001"
+    assert close_body["closure_id"] == "closure-transfer-2026-0001"
+    assert close_body["status"] == "accepted_pending_settlement"
+    assert close_body["settlement_status"] == "pending"
+    assert close_body["replay_status"] == "pending"
+    assert close_body["linked_disposition"] == "allow"
+
+    get_response = client.get("/api/v1/agent-actions/closures/closure-transfer-2026-0001")
+    assert get_response.status_code == 200
+    record_body = get_response.json()
+    assert record_body["closure_id"] == "closure-transfer-2026-0001"
+    assert record_body["request_id"] == "req-transfer-2026-0001"
+    assert record_body["status"] == "completed"
+
+
+def test_agent_actions_closure_rejects_missing_request():
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    assert response.status_code == 404
+
+
+def test_agent_actions_closure_idempotency_replay_and_conflict(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    closure_payload = _base_closure_payload()
+    first_close = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=closure_payload,
+    )
+    assert first_close.status_code == 200
+
+    replay_close = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=closure_payload,
+    )
+    assert replay_close.status_code == 200
+
+    conflicting_payload = _base_closure_payload()
+    conflicting_payload["evidence_bundle_id"] = "evidence-bundle-999"
+    conflict_close = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=conflicting_payload,
+    )
+    assert conflict_close.status_code == 409
+    detail = conflict_close.json()["detail"]
+    assert detail["error_code"] == "idempotency_conflict"
+
+
+def test_agent_actions_closure_rejects_non_allow_request(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_fail)
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    assert close_response.status_code == 409
+    detail = close_response.json()["detail"]
+    assert detail["error_code"] == "closure_not_allowed"
+
+
+def test_agent_actions_closure_marks_replay_ready_when_settlement_applied(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    async def _settlement_applied(*args, **kwargs):
+        return "applied", {"updated": 3, "version_bumped": 3}
+
+    monkeypatch.setattr(agent_actions_router, "_apply_closure_settlement_handoff", _settlement_applied)
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    assert close_response.status_code == 200
+    body = close_response.json()
+    assert body["settlement_status"] == "applied"
+    assert body["replay_status"] == "ready"
+    assert body["settlement_result"]["updated"] == 3

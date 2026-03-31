@@ -191,3 +191,55 @@ class AgentActionRequestRecordResponse(BaseModel):
     status: Literal["completed"] = "completed"
     recorded_at: datetime
     response: AgentActionEvaluateResponse
+
+
+class AgentActionClosureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["seedcore.agent_action_gateway.v1"] = GATEWAY_CONTRACT_VERSION
+    request_id: str
+    closure_id: str
+    idempotency_key: str
+    closed_at: datetime
+    outcome: Literal["completed", "quarantined", "failed"] = "completed"
+    evidence_bundle_id: str
+    transition_receipt_ids: List[str] = Field(default_factory=list)
+    node_id: Optional[str] = None
+    summary: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("request_id", "closure_id", "idempotency_key", "evidence_bundle_id")
+    @classmethod
+    def _validate_required_fields(cls, value: str, info) -> str:
+        return _normalize_required_str(value, field_name=info.field_name)
+
+    @field_validator("node_id")
+    @classmethod
+    def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_optional_str(value)
+
+
+class AgentActionClosureResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["seedcore.agent_action_gateway.v1"] = GATEWAY_CONTRACT_VERSION
+    request_id: str
+    closure_id: str
+    accepted_at: datetime
+    status: Literal["accepted_pending_settlement"] = "accepted_pending_settlement"
+    settlement_status: Literal["pending", "applied", "rejected"] = "pending"
+    replay_status: Literal["pending", "ready"] = "pending"
+    linked_disposition: str
+    settlement_result: Dict[str, Any] = Field(default_factory=dict)
+    next_actions: List[str] = Field(default_factory=list)
+
+
+class AgentActionClosureRecordResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["seedcore.agent_action_gateway.v1"] = GATEWAY_CONTRACT_VERSION
+    closure_id: str
+    request_id: str
+    idempotency_key: str
+    status: Literal["completed"] = "completed"
+    recorded_at: datetime
+    response: AgentActionClosureResponse

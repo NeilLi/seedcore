@@ -58,6 +58,11 @@ Optional idempotency retrieval endpoint (recommended):
 
 - `GET /api/v1/agent-actions/requests/{request_id}`
 
+Optional closure endpoints (v1 scaffold):
+
+- `POST /api/v1/agent-actions/{request_id}/closures`
+- `GET /api/v1/agent-actions/closures/{closure_id}`
+
 The evaluate endpoint should be the only required call for v1 clients.
 
 ## Request Contract
@@ -272,6 +277,31 @@ state, not from embedded request payloads.
   }
 }
 ```
+
+## Closure Contract (Scaffold)
+
+To align with the 2026 "closure and proof" layer, this v1 draft includes a
+contract-first closure scaffold.
+
+Current behavior in this scaffold:
+
+- closure is accepted only for requests that were decided as `allow`
+- closure acknowledgement is persisted with idempotency semantics
+- settlement handoff is feature-flagged (`SEEDCORE_AGENT_ACTION_ENABLE_SETTLEMENT_HANDOFF`)
+- settlement status is one of:
+  - `pending`
+  - `applied`
+  - `rejected`
+- replay status is one of:
+  - `pending`
+  - `ready`
+- no execution-path or twin-settlement behavior is changed in this slice
+
+Primary response semantics:
+
+- `status = accepted_pending_settlement`
+- `settlement_status` reflects handoff outcome
+- `replay_status` remains `pending` until settlement is applied
 
 ### Response Rules
 
