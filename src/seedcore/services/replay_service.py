@@ -2913,21 +2913,92 @@ class ReplayService:
         verification_time: str,
     ) -> VerificationResult:
         projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
+        consistency_issues = self._owner_delegation_consistency_issues(replay)
+        verified = replay.verification_status.verified and not consistency_issues
         return VerificationResult(
             verification_id=str(uuid.uuid4()),
             reference_type=reference_type,
             reference_id=reference_id,
             subject_id=replay.subject_id,
             subject_type=replay.subject_type,
-            verified=replay.verification_status.verified,
+            verified=verified,
             signature_valid=replay.verification_status.signature_valid,
             policy_trace_available=replay.verification_status.policy_trace_available,
             evidence_trace_available=replay.verification_status.evidence_trace_available,
-            tamper_status=replay.verification_status.tamper_status,
+            tamper_status=(
+                "authority_mismatch"
+                if consistency_issues
+                else replay.verification_status.tamper_status
+            ),
             verification_time=verification_time,
             public_claims=projection.verifiable_claims,
-            reason=None if replay.verification_status.verified else "verification_failed",
+            reason=(
+                consistency_issues[0]
+                if consistency_issues
+                else (None if replay.verification_status.verified else "verification_failed")
+            ),
         )
+
+    def _owner_delegation_consistency_issues(self, replay: ReplayRecord) -> List[str]:
+        action_intent = (
+            replay.audit_record.get("action_intent")
+            if isinstance(replay.audit_record.get("action_intent"), Mapping)
+            else {}
+        )
+        principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), Mapping) else {}
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), Mapping) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), Mapping) else {}
+        gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
+        owner_context = self._owner_context_summary(replay)
+        creator_profile_ref = (
+            owner_context.get("creator_profile_ref")
+            if isinstance(owner_context.get("creator_profile_ref"), Mapping)
+            else {}
+        )
+        trust_preferences_ref = (
+            owner_context.get("trust_preferences_ref")
+            if isinstance(owner_context.get("trust_preferences_ref"), Mapping)
+            else {}
+        )
+        issues: List[str] = []
+
+        principal_owner_id = str(principal.get("owner_id") or "").strip()
+        gateway_owner_id = str(gateway.get("owner_id") or "").strip()
+        owner_context_owner_id = str(owner_context.get("owner_id") or "").strip()
+        creator_profile_owner_id = str(creator_profile_ref.get("owner_id") or "").strip()
+        trust_preferences_owner_id = str(trust_preferences_ref.get("owner_id") or "").strip()
+
+        owner_id_candidates = [
+            candidate
+            for candidate in [
+                principal_owner_id,
+                gateway_owner_id,
+                owner_context_owner_id,
+                creator_profile_owner_id,
+                trust_preferences_owner_id,
+            ]
+            if candidate
+        ]
+        if len(set(owner_id_candidates)) > 1:
+            issues.append("owner_identity_mismatch")
+
+        principal_delegation_ref = self._normalize_delegation_ref(principal.get("delegation_ref"))
+        gateway_delegation_ref = self._normalize_delegation_ref(gateway.get("delegation_ref"))
+        if (
+            principal_delegation_ref is not None
+            and gateway_delegation_ref is not None
+            and principal_delegation_ref != gateway_delegation_ref
+        ):
+            issues.append("delegation_ref_mismatch")
+        return issues
+
+    def _normalize_delegation_ref(self, value: Any) -> Optional[str]:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        if normalized.startswith("delegation:"):
+            normalized = normalized.split(":", 1)[1].strip()
+        return normalized or None
 
     def _failed_verification_result(
         self,

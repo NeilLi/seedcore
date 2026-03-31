@@ -430,6 +430,50 @@ def test_verify_post_requires_exactly_one_lookup() -> None:
     assert "exactly one" in response.json()["detail"]
 
 
+def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-router-owner-mismatch-1",
+            intent_id="intent-router-owner-mismatch-1",
+            asset_id="asset-owner-mismatch-1",
+        ),
+        disposition="allow",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=[],
+    )
+    record["action_intent"] = {
+        "intent_id": "intent-router-owner-mismatch-1",
+        "principal": {
+            "agent_id": "did:seedcore:assistant:warehouse-bot-01",
+            "owner_id": "did:seedcore:owner:acme-001",
+            "delegation_ref": "delegation:owner-8841-transfer",
+        },
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "gateway": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "delegation_ref": "delegation:owner-8841-transfer",
+                }
+            },
+        },
+    }
+    record["policy_decision"]["governed_receipt"]["owner_context"] = {
+        "owner_id": "did:seedcore:owner:other-999",
+        "creator_profile_ref": {"owner_id": "did:seedcore:owner:other-999", "version": "v2"},
+        "trust_preferences_ref": {"owner_id": "did:seedcore:owner:other-999", "trust_version": "v1"},
+    }
+    client = _make_client(record)
+
+    response = client.post("/verify", json={"audit_id": record["id"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verified"] is False
+    assert body["reason"] == "owner_identity_mismatch"
+    assert body["tamper_status"] == "authority_mismatch"
+
+
 def test_materialized_custody_event_endpoint_uses_replay_service_jsonld() -> None:
     record = _apply_transition_metadata(
         _build_audit_record(task_id="task-router-4", intent_id="intent-router-4", asset_id="asset-1")

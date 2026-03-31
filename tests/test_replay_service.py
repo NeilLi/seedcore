@@ -620,6 +620,92 @@ async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_veri
 
 
 @pytest.mark.asyncio
+async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-owner-mismatch-1", intent_id="intent-owner-mismatch-1", asset_id="asset-owner-mismatch-1"),
+        disposition="allow",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=[],
+    )
+    record["action_intent"] = {
+        "intent_id": "intent-owner-mismatch-1",
+        "principal": {
+            "agent_id": "did:seedcore:assistant:warehouse-bot-01",
+            "owner_id": "did:seedcore:owner:acme-001",
+            "delegation_ref": "delegation:owner-8841-transfer",
+        },
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "gateway": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "delegation_ref": "delegation:owner-8841-transfer",
+                }
+            },
+        },
+    }
+    record["policy_decision"]["governed_receipt"]["owner_context"] = {
+        "owner_id": "did:seedcore:owner:other-999",
+        "creator_profile_ref": {"owner_id": "did:seedcore:owner:other-999", "version": "v2"},
+        "trust_preferences_ref": {"owner_id": "did:seedcore:owner:other-999", "trust_version": "v1"},
+    }
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+    )
+
+    verification = await service.verify_reference(_DummySession(), audit_id=record["id"])
+    assert verification.verified is False
+    assert verification.reason == "owner_identity_mismatch"
+    assert verification.tamper_status == "authority_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_verify_reference_fails_on_delegation_ref_mismatch() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-delegation-mismatch-1", intent_id="intent-delegation-mismatch-1", asset_id="asset-delegation-mismatch-1"),
+        disposition="allow",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=[],
+    )
+    record["action_intent"] = {
+        "intent_id": "intent-delegation-mismatch-1",
+        "principal": {
+            "agent_id": "did:seedcore:assistant:warehouse-bot-01",
+            "owner_id": "did:seedcore:owner:acme-001",
+            "delegation_ref": "delegation:owner-8841-transfer",
+        },
+        "action": {
+            "type": "TRANSFER_CUSTODY",
+            "parameters": {
+                "gateway": {
+                    "owner_id": "did:seedcore:owner:acme-001",
+                    "delegation_ref": "delegation:owner-9999-transfer",
+                }
+            },
+        },
+    }
+    record["policy_decision"]["governed_receipt"]["owner_context"] = {
+        "owner_id": "did:seedcore:owner:acme-001",
+        "creator_profile_ref": {"owner_id": "did:seedcore:owner:acme-001", "version": "v2"},
+        "trust_preferences_ref": {"owner_id": "did:seedcore:owner:acme-001", "trust_version": "v1"},
+    }
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+    )
+
+    verification = await service.verify_reference(_DummySession(), audit_id=record["id"])
+    assert verification.verified is False
+    assert verification.reason == "delegation_ref_mismatch"
+    assert verification.tamper_status == "authority_mismatch"
+
+
+@pytest.mark.asyncio
 async def test_replay_projection_maps_restricted_custody_transfer_to_quarantined_status():
     record = _apply_transfer_workflow_metadata(
         _build_audit_record(task_id="task-transfer-q", intent_id="intent-transfer-q", asset_id="asset-transfer-q"),
