@@ -1,6 +1,6 @@
 ---
 name: using-seedcore
-description: Use when the task is about SeedCore runtime operations, hot-path promotion, PKG observability, evidence verification, digital twin capture from public links, local bring-up, or creating/using the Seedcore Codex or Gemini plugin. Prefer the read-only `seedcore.*` MCP tools before raw commands.
+description: Use when the task is about SeedCore runtime operations, hot-path promotion, PKG observability, evidence verification, forensic replay, digital twin capture from public links, local bring-up, or creating/using the Seedcore Codex or Gemini plugin. Prefer the read-only `seedcore.*` MCP tools before raw commands.
 ---
 
 # Using Seedcore
@@ -20,6 +20,7 @@ Use this skill at the start of SeedCore-specific work.
 - Use `seedcore-hotpath-promotion` for shadow-to-enforce analysis, parity checks, and benchmarks.
 - Use `seedcore-pkg-observability` for PKG and authz-graph readiness checks.
 - Use `seedcore-evidence-verify` for replay or trust-reference verification.
+- Use `seedcore-forensic-replay` for replaying audit, subject, task, intent, or public trust-page forensic history.
 - Use `seedcore-digital-twin-capture` for draft digital twin capture from public links such as YouTube.
 
 ## Preferred tool order
@@ -33,6 +34,7 @@ Use this skill at the start of SeedCore-specific work.
 7. `seedcore.hotpath.benchmark`
 8. `seedcore.evidence.verify`
 9. `seedcore.digital_twin.capture_link`
+10. `seedcore.forensic_replay.fetch`
 
 ## Fallback commands
 

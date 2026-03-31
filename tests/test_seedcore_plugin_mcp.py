@@ -16,6 +16,7 @@ from seedcore.plugin.mcp_server import (
     app,
     handle_digital_twin_capture_link,
     handle_evidence_verify,
+    handle_forensic_replay_fetch,
     handle_health,
     handle_hotpath_benchmark,
     handle_hotpath_verify_shadow,
@@ -38,6 +39,13 @@ class _RuntimeStub:
         self.pkg_authz_graph_status = AsyncMock()
         self.hotpath_status = AsyncMock()
         self.evidence_verify = AsyncMock()
+        self.replay = AsyncMock()
+        self.replay_timeline = AsyncMock()
+        self.replay_artifacts = AsyncMock()
+        self.replay_jsonld = AsyncMock()
+        self.trust_page = AsyncMock()
+        self.trust_jsonld = AsyncMock()
+        self.trust_certificate = AsyncMock()
 
     def root_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -252,3 +260,63 @@ async def test_handle_digital_twin_capture_link_returns_draft_candidate(monkeypa
     assert result["ok"] is True
     assert result["authority"]["verified"] is False
     assert result["digital_twin_candidate"]["twin_id"] == "external:youtube:test"
+
+
+@pytest.mark.asyncio
+async def test_handle_forensic_replay_fetch_combines_internal_replay_calls():
+    runtime = _RuntimeStub()
+    runtime.replay.return_value = {
+        "lookup_key": "audit_id",
+        "lookup_value": "audit-123",
+        "projection": "buyer",
+        "record": {
+            "replay_id": "replay:audit-123",
+            "subject_type": "product",
+            "subject_id": "prod-1",
+            "task_id": "task-1",
+            "intent_id": "intent-1",
+            "audit_record_id": "audit-123",
+            "verification_status": {"verified": True},
+        },
+        "view": {"subject_title": "Wild Honey Lot"},
+    }
+    runtime.replay_timeline.return_value = {
+        "timeline": [{"event_type": "policy_approved"}],
+        "verification_status": {"verified": True},
+    }
+    runtime.replay_artifacts.return_value = {"public_artifacts": {"verifiable_claims": []}}
+    runtime.replay_jsonld.return_value = {"@context": "https://schema.org"}
+
+    result = await handle_forensic_replay_fetch(runtime, audit_id="audit-123", projection="buyer")
+
+    assert result["ok"] is True
+    assert result["mode"] == "replay_record"
+    assert result["replay_id"] == "replay:audit-123"
+    assert result["view"]["subject_title"] == "Wild Honey Lot"
+    assert result["jsonld"]["@context"] == "https://schema.org"
+
+
+@pytest.mark.asyncio
+async def test_handle_forensic_replay_fetch_returns_public_trust_page():
+    runtime = _RuntimeStub()
+    runtime.trust_page.return_value = {
+        "subject_title": "Wild Honey Lot",
+        "subject_summary": "Buyer-facing replay",
+        "workflow_type": "forensic_replay",
+        "status": "verified",
+        "verification_status": {"verified": True},
+        "timeline_summary": [{"event_type": "published"}],
+        "verifiable_claims": [{"claim": "origin"}],
+        "public_media_refs": [{"url": "https://example.com/media.jpg"}],
+        "public_jsonld_ref": "https://example.com/trust/pub-1/jsonld",
+        "public_certificate_ref": "https://example.com/trust/pub-1/certificate",
+    }
+    runtime.trust_jsonld.return_value = {"@context": "https://schema.org"}
+    runtime.trust_certificate.return_value = {"certificate_id": "cert-1"}
+
+    result = await handle_forensic_replay_fetch(runtime, public_id="pub-1")
+
+    assert result["ok"] is True
+    assert result["mode"] == "public_trust_page"
+    assert result["public_id"] == "pub-1"
+    assert result["certificate"]["certificate_id"] == "cert-1"

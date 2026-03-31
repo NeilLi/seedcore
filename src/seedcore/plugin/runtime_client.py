@@ -47,9 +47,10 @@ class SeedcoreRuntimeClient:
         method: str,
         url: str,
         payload: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            response = await self.http.request(method, url, json=payload)
+            response = await self.http.request(method, url, json=payload, params=params)
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as exc:
@@ -81,3 +82,24 @@ class SeedcoreRuntimeClient:
 
     async def evidence_verify(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request_json(method="POST", url=self.api_url("/verify"), payload=payload)
+
+    async def replay(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url("/replay"), params=params)
+
+    async def replay_timeline(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url("/replay/timeline"), params=params)
+
+    async def replay_artifacts(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url("/replay/artifacts"), params=params)
+
+    async def replay_jsonld(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url("/replay/jsonld"), params=params)
+
+    async def trust_page(self, public_id: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/trust/{public_id}"))
+
+    async def trust_jsonld(self, public_id: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/trust/{public_id}/jsonld"))
+
+    async def trust_certificate(self, public_id: str) -> dict[str, Any]:
+        return await self._request_json(method="GET", url=self.api_url(f"/trust/{public_id}/certificate"))

@@ -32,6 +32,7 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.hotpath.benchmark",
     "seedcore.evidence.verify",
     "seedcore.digital_twin.capture_link",
+    "seedcore.forensic_replay.fetch",
 ]
 
 
@@ -271,6 +272,129 @@ async def handle_digital_twin_capture_link(
     )
 
 
+def _replay_lookup_params(
+    *,
+    audit_id: str | None = None,
+    subject_id: str | None = None,
+    subject_type: str | None = None,
+    task_id: str | None = None,
+    intent_id: str | None = None,
+    projection: str = "buyer",
+) -> dict[str, Any]:
+    provided = [
+        bool(audit_id and audit_id.strip()),
+        bool(subject_id and subject_id.strip()),
+        bool(task_id and task_id.strip()),
+        bool(intent_id and intent_id.strip()),
+    ]
+    if sum(provided) != 1:
+        raise ValueError("Provide exactly one of audit_id, subject_id, task_id, or intent_id")
+    payload: dict[str, Any] = {"projection": projection}
+    if audit_id:
+        payload["audit_id"] = audit_id
+    if subject_id:
+        payload["subject_id"] = subject_id
+    if subject_type:
+        payload["subject_type"] = subject_type
+    if task_id:
+        payload["task_id"] = task_id
+    if intent_id:
+        payload["intent_id"] = intent_id
+    return payload
+
+
+async def handle_forensic_replay_fetch(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    public_id: str | None = None,
+    audit_id: str | None = None,
+    subject_id: str | None = None,
+    subject_type: str | None = None,
+    task_id: str | None = None,
+    intent_id: str | None = None,
+    projection: str = "buyer",
+) -> dict[str, Any]:
+    provided = [
+        bool(public_id and public_id.strip()),
+        bool(audit_id and audit_id.strip()),
+        bool(subject_id and subject_id.strip()),
+        bool(task_id and task_id.strip()),
+        bool(intent_id and intent_id.strip()),
+    ]
+    if sum(provided) != 1:
+        raise ValueError("Provide exactly one of public_id, audit_id, subject_id, task_id, or intent_id")
+    if public_id and public_id.strip():
+        trust_page = await runtime.trust_page(public_id.strip())
+        trust_jsonld = await runtime.trust_jsonld(public_id.strip())
+        trust_certificate = await runtime.trust_certificate(public_id.strip())
+        verification_status = (
+            trust_page.get("verification_status")
+            if isinstance(trust_page.get("verification_status"), dict)
+            else {}
+        )
+        return {
+            "ok": bool(verification_status.get("verified")),
+            "mode": "public_trust_page",
+            "public_id": public_id.strip(),
+            "subject_title": trust_page.get("subject_title"),
+            "subject_summary": trust_page.get("subject_summary"),
+            "workflow_type": trust_page.get("workflow_type"),
+            "status": trust_page.get("status"),
+            "verification_status": verification_status,
+            "approvals": trust_page.get("approvals"),
+            "authorization": trust_page.get("authorization"),
+            "custody_summary": trust_page.get("custody_summary"),
+            "timeline_summary": trust_page.get("timeline_summary"),
+            "verifiable_claims": trust_page.get("verifiable_claims"),
+            "public_media_refs": trust_page.get("public_media_refs"),
+            "public_jsonld_ref": trust_page.get("public_jsonld_ref"),
+            "public_certificate_ref": trust_page.get("public_certificate_ref"),
+            "jsonld": trust_jsonld,
+            "certificate": trust_certificate,
+            "source_url": runtime.api_url(f"/trust/{public_id.strip()}"),
+        }
+
+    params = _replay_lookup_params(
+        audit_id=audit_id,
+        subject_id=subject_id,
+        subject_type=subject_type,
+        task_id=task_id,
+        intent_id=intent_id,
+        projection=projection,
+    )
+    replay = await runtime.replay(params)
+    timeline = await runtime.replay_timeline({key: value for key, value in params.items() if key != "projection"})
+    artifacts = await runtime.replay_artifacts(params)
+    jsonld = await runtime.replay_jsonld(params)
+    record = replay.get("record") if isinstance(replay.get("record"), dict) else {}
+    verification_status = (
+        record.get("verification_status")
+        if isinstance(record.get("verification_status"), dict)
+        else timeline.get("verification_status")
+        if isinstance(timeline.get("verification_status"), dict)
+        else {}
+    )
+    return {
+        "ok": bool(verification_status.get("verified")),
+        "mode": "replay_record",
+        "lookup_key": replay.get("lookup_key"),
+        "lookup_value": replay.get("lookup_value"),
+        "projection": replay.get("projection"),
+        "replay_id": record.get("replay_id"),
+        "subject_type": record.get("subject_type"),
+        "subject_id": record.get("subject_id"),
+        "task_id": record.get("task_id"),
+        "intent_id": record.get("intent_id"),
+        "audit_record_id": record.get("audit_record_id"),
+        "verification_status": verification_status,
+        "view": replay.get("view"),
+        "timeline": timeline.get("timeline"),
+        "artifacts": artifacts,
+        "jsonld": jsonld,
+        "source_url": runtime.api_url("/replay"),
+    }
+
+
 if FastMCP is not None:
     @asynccontextmanager
     async def app_lifespan(server: FastMCP):
@@ -376,6 +500,29 @@ if FastMCP is not None:
             source_url=source_url,
             twin_kind=twin_kind,
             subject_name=subject_name,
+        )
+
+
+    @mcp.tool(name="seedcore.forensic_replay.fetch")
+    async def seedcore_forensic_replay_fetch(
+        ctx: AppContext,
+        public_id: str | None = None,
+        audit_id: str | None = None,
+        subject_id: str | None = None,
+        subject_type: str | None = None,
+        task_id: str | None = None,
+        intent_id: str | None = None,
+        projection: str = "buyer",
+    ) -> dict[str, Any]:
+        return await handle_forensic_replay_fetch(
+            _runtime(ctx),
+            public_id=public_id,
+            audit_id=audit_id,
+            subject_id=subject_id,
+            subject_type=subject_type,
+            task_id=task_id,
+            intent_id=intent_id,
+            projection=projection,
         )
 else:  # pragma: no cover - only used in envs missing the optional dependency
     mcp = None
