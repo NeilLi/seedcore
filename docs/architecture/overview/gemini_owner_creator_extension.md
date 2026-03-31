@@ -55,6 +55,12 @@ Gemini extension responsibilities:
 - return profile provenance (`updated_at`, signer/key_ref, source namespace)
 - expose profile as read-mostly to assistants unless owner-delegated
 
+Current runtime refs include additive provenance metadata for creator/trust records:
+
+- `updated_by`
+- `source_namespace` and `source_predicate`
+- `signer_did` and `signer_key_ref` (when owner DID verification metadata is available)
+
 Recommended minimal profile schema:
 
 - `creator_id` (DID)

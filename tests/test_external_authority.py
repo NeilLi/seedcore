@@ -158,3 +158,52 @@ async def test_verify_signed_intent_submission_hmac_and_replay(monkeypatch):
     replayed, replay_error, _ = await ext.verify_signed_intent_submission(object(), submission)
     assert replayed is False
     assert replay_error == "replayed_nonce"
+
+
+@pytest.mark.asyncio
+async def test_build_owner_twin_snapshot_includes_provenance_source_and_signer_metadata(monkeypatch):
+    async def _fake_get_did_document(session, did):
+        return ext.DIDDocumentRecord(
+            did=did,
+            verification_method=ext.DIDVerificationMethod(
+                signing_scheme="ed25519",
+                key_ref="owner-k1",
+            ),
+        )
+
+    async def _fake_list_owner_delegations(session, owner_id):
+        return []
+
+    async def _fake_get_creator_profile(session, owner_id):
+        return ext.CreatorProfileRecord(
+            owner_id=owner_id,
+            version="v2",
+            updated_by="identity_router",
+        )
+
+    async def _fake_get_trust_preferences(session, owner_id):
+        return ext.TrustPreferencesRecord(
+            owner_id=owner_id,
+            trust_version="v3",
+            updated_by="identity_router",
+        )
+
+    monkeypatch.setattr(ext, "get_did_document", _fake_get_did_document)
+    monkeypatch.setattr(ext, "_list_owner_delegations", _fake_list_owner_delegations)
+    monkeypatch.setattr(ext, "get_creator_profile", _fake_get_creator_profile)
+    monkeypatch.setattr(ext, "get_trust_preferences", _fake_get_trust_preferences)
+
+    snapshot = await ext.build_owner_twin_snapshot(object(), "did:seedcore:owner:test-owner")
+    creator_ref = snapshot.provenance["creator_profile_ref"]
+    trust_ref = snapshot.provenance["trust_preferences_ref"]
+
+    assert creator_ref["source_namespace"] == "identity"
+    assert creator_ref["source_predicate"] == "creator_profile"
+    assert creator_ref["updated_by"] == "identity_router"
+    assert creator_ref["signer_did"] == "did:seedcore:owner:test-owner"
+    assert creator_ref["signer_key_ref"] == "owner-k1"
+    assert trust_ref["source_namespace"] == "identity"
+    assert trust_ref["source_predicate"] == "trust_preferences"
+    assert trust_ref["updated_by"] == "identity_router"
+    assert trust_ref["signer_did"] == "did:seedcore:owner:test-owner"
+    assert trust_ref["signer_key_ref"] == "owner-k1"

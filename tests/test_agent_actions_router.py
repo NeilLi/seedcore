@@ -363,11 +363,21 @@ def test_agent_actions_evaluate_includes_owner_context_refs_in_governed_receipt(
                     "owner_id": "did:seedcore:owner:acme-001",
                     "version": "v2",
                     "updated_at": "2026-03-31T10:00:00Z",
+                    "updated_by": "identity_router",
+                    "source_namespace": "identity",
+                    "source_predicate": "creator_profile",
+                    "signer_did": "did:seedcore:owner:acme-001",
+                    "signer_key_ref": "owner-k1",
                 },
                 "trust_preferences_ref": {
                     "owner_id": "did:seedcore:owner:acme-001",
                     "trust_version": "v3",
                     "updated_at": "2026-03-31T10:00:01Z",
+                    "updated_by": "identity_router",
+                    "source_namespace": "identity",
+                    "source_predicate": "trust_preferences",
+                    "signer_did": "did:seedcore:owner:acme-001",
+                    "signer_key_ref": "owner-k1",
                 },
             },
         }
@@ -394,6 +404,10 @@ def test_agent_actions_evaluate_includes_owner_context_refs_in_governed_receipt(
     assert owner_context["owner_id"] == "did:seedcore:owner:acme-001"
     assert owner_context["creator_profile_ref"]["version"] == "v2"
     assert owner_context["trust_preferences_ref"]["trust_version"] == "v3"
+    assert owner_context["creator_profile_ref"]["source_namespace"] == "identity"
+    assert owner_context["creator_profile_ref"]["signer_key_ref"] == "owner-k1"
+    assert owner_context["trust_preferences_ref"]["source_predicate"] == "trust_preferences"
+    assert owner_context["trust_preferences_ref"]["signer_did"] == "did:seedcore:owner:acme-001"
     assert isinstance(captured.get("relevant_twin_snapshot"), dict)
     assert "owner" in captured["relevant_twin_snapshot"]
 

@@ -485,11 +485,21 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
             "owner_id": "did:seedcore:owner:acme-001",
             "version": "v2",
             "updated_at": "2026-03-31T10:00:00Z",
+            "updated_by": "identity_router",
+            "source_namespace": "identity",
+            "source_predicate": "creator_profile",
+            "signer_did": "did:seedcore:owner:acme-001",
+            "signer_key_ref": "owner-k1",
         },
         "trust_preferences_ref": {
             "owner_id": "did:seedcore:owner:acme-001",
             "trust_version": "v3",
             "updated_at": "2026-03-31T10:00:01Z",
+            "updated_by": "identity_router",
+            "source_namespace": "identity",
+            "source_predicate": "trust_preferences",
+            "signer_did": "did:seedcore:owner:acme-001",
+            "signer_key_ref": "owner-k1",
         },
     }
     record["policy_decision"]["governed_receipt"] = governed_receipt
@@ -509,6 +519,10 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert authorization["trust_gap_details"][0]["category"] == "owner_trust"
     assert authorization["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert authorization["owner_context"]["trust_preferences_ref"]["trust_version"] == "v3"
+    assert authorization["owner_context"]["creator_profile_ref"]["source_namespace"] == "identity"
+    assert authorization["owner_context"]["creator_profile_ref"]["signer_key_ref"] == "owner-k1"
+    assert authorization["owner_context"]["trust_preferences_ref"]["source_predicate"] == "trust_preferences"
+    assert authorization["owner_context"]["trust_preferences_ref"]["signer_did"] == "did:seedcore:owner:acme-001"
 
     claims = replay.public_projection["verifiable_claims"]
     assert any(item.get("claim") == "owner_trust_preference_gap_detected" for item in claims)
@@ -527,6 +541,8 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert proof["operator_actions"] == []
     assert proof["owner_context"]["owner_id"] == "did:seedcore:owner:acme-001"
     assert proof["owner_context"]["creator_profile_ref"]["version"] == "v2"
+    assert proof["owner_context"]["creator_profile_ref"]["source_namespace"] == "identity"
+    assert proof["owner_context"]["trust_preferences_ref"]["source_predicate"] == "trust_preferences"
 
     certificate = await service.build_trust_certificate(
         replay,
@@ -543,6 +559,8 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert certificate.trust_gap_details[0]["category"] == "owner_trust"
     assert certificate.owner_context["owner_id"] == "did:seedcore:owner:acme-001"
     assert certificate.owner_context["trust_preferences_ref"]["trust_version"] == "v3"
+    assert certificate.owner_context["creator_profile_ref"]["updated_by"] == "identity_router"
+    assert certificate.owner_context["trust_preferences_ref"]["signer_key_ref"] == "owner-k1"
 
 
 @pytest.mark.asyncio

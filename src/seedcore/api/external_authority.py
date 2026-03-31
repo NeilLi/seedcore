@@ -323,6 +323,12 @@ async def build_owner_twin_snapshot(session: AsyncSession, owner_id: str) -> Twi
         ],
         state="ACTIVE" if did_document is None else did_document.status,
     )
+    signer_did = did_document.did if did_document is not None else owner_id
+    signer_key_ref = (
+        did_document.verification_method.key_ref
+        if did_document is not None and did_document.verification_method is not None
+        else None
+    )
     return TwinSnapshot(
         twin_kind="owner",
         twin_id=owner_id,
@@ -353,6 +359,11 @@ async def build_owner_twin_snapshot(session: AsyncSession, owner_id: str) -> Twi
                     "owner_id": owner_id,
                     "version": creator_profile.version,
                     "updated_at": creator_profile.updated_at,
+                    "updated_by": creator_profile.updated_by,
+                    "source_namespace": IDENTITY_NAMESPACE,
+                    "source_predicate": CREATOR_PROFILE_PREDICATE,
+                    "signer_did": signer_did,
+                    "signer_key_ref": signer_key_ref,
                 }
                 if creator_profile is not None
                 else None
@@ -362,6 +373,11 @@ async def build_owner_twin_snapshot(session: AsyncSession, owner_id: str) -> Twi
                     "owner_id": owner_id,
                     "trust_version": trust_preferences.trust_version,
                     "updated_at": trust_preferences.updated_at,
+                    "updated_by": trust_preferences.updated_by,
+                    "source_namespace": IDENTITY_NAMESPACE,
+                    "source_predicate": TRUST_PREFERENCES_PREDICATE,
+                    "signer_did": signer_did,
+                    "signer_key_ref": signer_key_ref,
                 }
                 if trust_preferences is not None
                 else None
