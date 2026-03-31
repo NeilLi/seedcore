@@ -50,6 +50,20 @@ from .action_intent import (
     TwinRevisionStage,
     TwinSnapshot,
 )
+from .agent_action_gateway import (
+    AgentActionApproval,
+    AgentActionAsset,
+    AgentActionEvaluateRequest,
+    AgentActionEvaluateResponse,
+    AgentActionRequestRecordResponse,
+    AgentActionOptions,
+    AgentActionPrincipal,
+    AgentActionSecurityContract,
+    AgentActionTelemetry,
+    AgentActionWorkflow,
+    GATEWAY_CONTRACT_VERSION,
+    WORKFLOW_TYPE_RCT,
+)
 from .evidence_bundle import (
     AttestationProof,
     CoSignature,
@@ -90,6 +104,16 @@ from .task_payload import TaskPayload
 # Try to build __all__ dynamically to support both full and thin envs
 __all__ = [
     "ActionIntent",
+    "AgentActionApproval",
+    "AgentActionAsset",
+    "AgentActionEvaluateRequest",
+    "AgentActionEvaluateResponse",
+    "AgentActionRequestRecordResponse",
+    "AgentActionOptions",
+    "AgentActionPrincipal",
+    "AgentActionSecurityContract",
+    "AgentActionTelemetry",
+    "AgentActionWorkflow",
     "AuthorityLevel",
     "DelegatedAuthority",
     "DelegationConstraint",
@@ -100,6 +124,7 @@ __all__ = [
     "PolicyDecision",
     "TwinRevisionStage",
     "TwinSnapshot",
+    "GATEWAY_CONTRACT_VERSION",
     "EvidenceBundle",
     "HALCaptureEnvelope",
     "KeyBindingProof",
@@ -128,6 +153,7 @@ __all__ = [
     "Task",
     "TaskPayload",
     "VerificationResult",
+    "WORKFLOW_TYPE_RCT",
     "AttestationProof",
     "CoSignature",
 ]

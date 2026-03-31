@@ -11,6 +11,30 @@ This note breaks down the requirement:
 
 It is grounded in the current repository, not an abstract target state.
 
+## Program Placement (2026)
+
+This hot-path track is a dependency inside the broader 2026 productization
+program, not an isolated optimization project.
+
+Program alignment:
+
+- Q2 priority in
+  [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md):
+  make the current RCT wedge operationally promotable
+- Q3 priority in
+  [agent_action_gateway_contract.md](/Users/ningli/project/seedcore/docs/development/agent_action_gateway_contract.md):
+  expose a stable external agent boundary over a trustworthy decision path
+- product narrative in
+  [seedcore_positioning_narrative.md](/Users/ningli/project/seedcore/docs/development/seedcore_positioning_narrative.md):
+  SeedCore owns admissibility and proof, so the decision path must be
+  operationally defensible
+
+Practical implication:
+
+- `shadow -> enforce` readiness is part of "useful this year"
+- if this track stalls, the external agent gateway becomes a thin wrapper around
+  non-promotable internals
+
 ## Current Repo State
 
 What already exists:
@@ -268,6 +292,8 @@ The cleanest sequencing is:
    load rather than intuition.
 4. Phase 4 after the benchmark exposes the real bottlenecks.
 5. Phase 5 last, once the system is genuinely promotable.
+6. Agent Action Gateway rollout after Phase 1/2 minimums are stable, so external
+   callers do not bind to unstable decision semantics.
 
 ## Practical Definition Of Done
 

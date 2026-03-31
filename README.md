@@ -14,6 +14,30 @@ Our first wedge is provenance and high-trust supply chains, where trust must be 
 
 We are not building another model layer. We are building the runtime that makes autonomous systems safe enough to trust.
 
+## 2026 Product Focus
+
+For the current execution phase, SeedCore is intentionally constrained to one
+must-win product workflow:
+
+- **Agent-Governed Restricted Custody Transfer**
+
+That means the near-term product boundary is:
+
+- external agent request
+- governed runtime decision (`allow` / `deny` / `quarantine` / `escalate`)
+- bounded execution authority
+- replayable evidence and verification surface
+
+This keeps the work focused on the layer SeedCore can uniquely own:
+governed admissibility and proof, not generalized model intelligence.
+
+Supporting documents:
+
+- [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
+- [positioning narrative](docs/development/seedcore_positioning_narrative.md)
+- [useful-this-year execution memo](docs/development/useful_this_year_execution_memo.md)
+- [agent action gateway contract (v1 draft)](docs/development/agent_action_gateway_contract.md)
+
 ## Current Codebase Snapshot
 
 Based on the current repository state, SeedCore is already organized around the three trust problems that most agent systems leave unresolved:
@@ -317,6 +341,12 @@ In short, the highest-priority remaining work is:
 - hardware-backed signer and device-trust hardening
 - external audit anchoring and default receipt-chain promotion
 - dual-authorization and rollout/activation hardening across runtime surfaces
+
+For the 2026 productized execution sequence, use:
+
+- [SeedCore 2026 Execution Plan](docs/development/seedcore_2026_execution_plan.md)
+- [Agent Action Gateway Contract](docs/development/agent_action_gateway_contract.md)
+- [Hot-Path Shadow To Enforce Breakdown](docs/development/hot_path_shadow_to_enforce_breakdown.md)
 
 ## Architecture Overview
 
@@ -722,6 +752,9 @@ Versioned governed API surface under `/api/v1`:
   - `GET /api/v1/tasks/{task_id}/governance`
   - `POST /api/v1/tasks/{task_id}/cancel`
   - `GET /api/v1/tasks/{task_id}/logs`
+- `Agent Actions`
+  - `POST /api/v1/agent-actions/evaluate`
+  - `GET /api/v1/agent-actions/requests/{request_id}`
 - `Source Registrations`
   - `POST /api/v1/source-registrations`
   - `GET /api/v1/source-registrations/{registration_id}`
