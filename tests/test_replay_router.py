@@ -473,6 +473,16 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert body["reason"] == "owner_identity_mismatch"
     assert body["tamper_status"] == "authority_mismatch"
 
+    replay = client.get("/replay", params={"audit_id": record["id"], "projection": "public"})
+    assert replay.status_code == 200
+    view = replay.json()["view"]
+    assert view["policy_summary"]["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in view["policy_summary"]["authority_consistency"]["issues"]
+    assert view["authorization"]["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in view["authorization"]["authority_consistency"]["issues"]
+    assert view["verification_status"]["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in view["verification_status"]["authority_consistency"]["issues"]
+
 
 def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:
     record = _apply_transition_metadata(

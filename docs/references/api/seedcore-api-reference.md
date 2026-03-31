@@ -119,6 +119,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Verification now fails with `owner_identity_mismatch` or `delegation_ref_mismatch` when replay authority bindings conflict across principal, gateway, and governed owner context records.
 - Verification of signed trust tokens now fails with `reference_subject_mismatch` when token subject bindings diverge from replay-resolved subject identity.
 - Trust publish/refresh now return `409` with `authority_binding_mismatch` when replay authority bindings are inconsistent before token minting.
+- Trust-page projections now include `authority_consistency` in `verification_status`, `authorization`, and `policy_summary` for operator triage.
 
 ## 6. Source Registration API
 

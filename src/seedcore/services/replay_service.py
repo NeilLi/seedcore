@@ -683,6 +683,10 @@ class ReplayService:
     def authority_consistency_issues(self, replay: ReplayRecord) -> List[str]:
         return self._owner_delegation_consistency_issues(replay)
 
+    def _authority_consistency_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
+        issues = self._owner_delegation_consistency_issues(replay)
+        return {"ok": not issues, "issues": issues}
+
     def encode_public_reference(self, reference: PublicTrustReference) -> str:
         payload_segment = self._b64url_encode(
             json.dumps(reference.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1589,6 +1593,7 @@ class ReplayService:
         policy_summary = self._build_policy_summary(replay)
         approvals = self._build_approval_summary(replay)
         authorization = self._build_authorization_summary(replay)
+        authority_consistency = self._authority_consistency_summary(replay)
         dispute_summary = self._build_dispute_summary(replay)
         timeline_summary = [
             {
@@ -1613,12 +1618,16 @@ class ReplayService:
             subject_summary = f"{subject_label} {replay.subject_id} has a governed replay record with trust-safe evidence."
         else:
             subject_summary = f"{subject_label} {replay.subject_id} can be verified from governed policy and evidence records."
+        if not authority_consistency["ok"]:
+            subject_summary = f"{subject_summary} Authority binding mismatches require operator review."
+        verification_status = replay.verification_status.model_dump(mode="json")
+        verification_status["authority_consistency"] = authority_consistency
         return TrustPageProjection(
             workflow_type=workflow_type,
             status=workflow_status,
             subject_title=f"{subject_label} {replay.subject_id}",
             subject_summary=subject_summary,
-            verification_status=replay.verification_status.model_dump(mode="json"),
+            verification_status=verification_status,
             approvals=approvals,
             authorization=authorization,
             custody_summary=custody_summary,
@@ -1697,6 +1706,7 @@ class ReplayService:
             "minted_artifacts": list(replay.authz_graph.get("minted_artifacts") or []),
             "obligations": list(replay.authz_graph.get("obligations") or []),
             "owner_context": self._owner_context_summary(replay),
+            "authority_consistency": self._authority_consistency_summary(replay),
         }
 
     def _build_dispute_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -2723,6 +2733,7 @@ class ReplayService:
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
             "owner_context": self._owner_context_summary(replay),
+            "authority_consistency": self._authority_consistency_summary(replay),
         }
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:

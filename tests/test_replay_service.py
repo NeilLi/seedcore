@@ -692,6 +692,18 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert verification.reason == "owner_identity_mismatch"
     assert verification.tamper_status == "authority_mismatch"
 
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+    authority_policy = replay.public_projection["policy_summary"]["authority_consistency"]
+    authority_authz = replay.public_projection["authorization"]["authority_consistency"]
+    authority_verification = replay.public_projection["verification_status"]["authority_consistency"]
+    assert authority_policy["ok"] is False
+    assert "owner_identity_mismatch" in authority_policy["issues"]
+    assert authority_authz["ok"] is False
+    assert "owner_identity_mismatch" in authority_authz["issues"]
+    assert authority_verification["ok"] is False
+    assert "owner_identity_mismatch" in authority_verification["issues"]
+    assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
+
 
 @pytest.mark.asyncio
 async def test_verify_reference_fails_on_delegation_ref_mismatch() -> None:
