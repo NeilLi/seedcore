@@ -503,6 +503,7 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
 
     authorization = replay.public_projection["authorization"]
+    assert replay.public_projection["authority_consistency"]["ok"] is True
     assert replay.public_projection["authority_consistency_hash"].startswith("sha256:")
     assert authorization["trust_gap_codes"] == ["owner_trust_merchant_violation"]
     assert authorization["trust_gap_details"][0]["category"] == "owner_trust"
@@ -724,7 +725,10 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     assert authority_verification["ok"] is False
     assert "owner_identity_mismatch" in authority_verification["issues"]
     assert authority_verification["hash"] == authority_policy["hash"]
+    assert replay.public_projection["authority_consistency"]["ok"] is False
+    assert "owner_identity_mismatch" in replay.public_projection["authority_consistency"]["issues"]
     assert replay.public_projection["authority_consistency_hash"] == authority_policy["hash"]
+    assert replay.public_projection["authority_consistency_hash"] == replay.public_projection["authority_consistency"]["hash"]
     assert "Authority binding mismatches require operator review." in replay.public_projection["subject_summary"]
     assert replay.public_projection["operator_actions"][0]["code"] == "reconcile_owner_identity"
     claims = replay.public_projection["verifiable_claims"]

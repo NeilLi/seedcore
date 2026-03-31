@@ -1679,6 +1679,7 @@ class ReplayService:
             status=workflow_status,
             subject_title=f"{subject_label} {replay.subject_id}",
             subject_summary=subject_summary,
+            authority_consistency=authority_consistency,
             authority_consistency_hash=authority_consistency.get("hash"),
             verification_status=verification_status,
             approvals=approvals,
