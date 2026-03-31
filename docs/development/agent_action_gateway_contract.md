@@ -92,6 +92,7 @@ Product meaning:
     "role_profile": "TRANSFER_COORDINATOR",
     "session_token": "session-abc",
     "actor_token": null,
+    "owner_id": "did:seedcore:owner:acme-001",
     "delegation_ref": "delegation:owner-8841-transfer",
     "organization_ref": "org:warehouse-north"
   },
@@ -215,6 +216,7 @@ The gateway should map request payloads to internal runtime models as follows.
 - `approval_context.approval_envelope_id`
 - `approval_context.expected_envelope_version`
 - `gateway.idempotency_key`
+- `gateway.owner_id` (when provided)
 - `gateway.delegation_ref`
 - `gateway.organization_ref`
 

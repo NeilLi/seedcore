@@ -80,6 +80,10 @@ OWNER_SCOPE_VIOLATION_DENY_CODE = "owner_scope_violation"
 OWNER_ZONE_VIOLATION_DENY_CODE = "owner_zone_violation"
 OWNER_MODALITY_VIOLATION_DENY_CODE = "owner_modality_violation"
 OWNER_OBSERVER_DENY_CODE = "owner_observer_restricted"
+OWNER_TRUST_MERCHANT_DENY_CODE = "owner_trust_merchant_violation"
+OWNER_TRUST_PROVENANCE_DENY_CODE = "owner_trust_provenance_violation"
+OWNER_TRUST_MODALITY_DENY_CODE = "owner_trust_modality_violation"
+OWNER_TRUST_RISK_ESCALATION_CODE = "owner_trust_risk_escalation"
 MISSING_MANDATORY_EVIDENCE_DENY_CODE = "missing_mandatory_evidence"
 COGNITIVE_DENY_CODE = "cognitive_policy_denied"
 POLICY_ESCALATION_CODE = "policy_escalation_required"
@@ -1531,6 +1535,9 @@ def _evaluate_twin_policy(policy_case: PolicyCase) -> PolicyDecision | None:
     owner_violation = _evaluate_owner_delegation_policy(policy_case)
     if owner_violation is not None:
         return owner_violation
+    owner_trust_violation = _evaluate_owner_trust_preferences_policy(policy_case)
+    if owner_trust_violation is not None:
+        return owner_trust_violation
 
     for twin in twins.values():
         if bool(twin.delegation.get("revoked")):
@@ -1659,15 +1666,7 @@ def _evaluate_owner_delegation_policy(policy_case: PolicyCase) -> PolicyDecision
         )
 
     required_modality = [item.strip() for item in matched.constraints.required_modality if str(item).strip()]
-    available = set(
-        str(item).strip()
-        for item in (
-            policy_case.evidence_summary.get("available")
-            if isinstance(policy_case.evidence_summary.get("available"), list)
-            else []
-        )
-        if str(item).strip()
-    )
+    available = _available_modalities(policy_case)
     if required_modality and not set(required_modality).issubset(available):
         return _deny_decision(
             "Owner delegation required modality evidence is missing.",
@@ -1688,6 +1687,173 @@ def _evaluate_owner_delegation_policy(policy_case: PolicyCase) -> PolicyDecision
                 cognitive_assessment=assessment,
                 explanations=["owner_step_up=true"],
             )
+
+    return None
+
+
+def _owner_trust_preferences(policy_case: PolicyCase) -> Mapping[str, Any] | None:
+    owner_twin = policy_case.relevant_twin_snapshot.get("owner")
+    if owner_twin is None:
+        return None
+    telemetry = owner_twin.telemetry if isinstance(owner_twin.telemetry, Mapping) else {}
+    owner_context = telemetry.get("owner_context") if isinstance(telemetry.get("owner_context"), Mapping) else {}
+    trust_preferences = (
+        owner_context.get("trust_preferences")
+        if isinstance(owner_context.get("trust_preferences"), Mapping)
+        else None
+    )
+    if trust_preferences is None:
+        return None
+    status = str(trust_preferences.get("status") or "ACTIVE").strip().upper()
+    if status != "ACTIVE":
+        return None
+    return trust_preferences
+
+
+def _available_modalities(policy_case: PolicyCase) -> set[str]:
+    evidence_summary = policy_case.evidence_summary if isinstance(policy_case.evidence_summary, Mapping) else {}
+    available = set(
+        str(item).strip()
+        for item in (
+            evidence_summary.get("available")
+            if isinstance(evidence_summary.get("available"), list)
+            else []
+        )
+        if str(item).strip()
+    )
+    evidence_refs = (
+        evidence_summary.get("evidence_refs")
+        if isinstance(evidence_summary.get("evidence_refs"), list)
+        else []
+    )
+    for raw in evidence_refs:
+        value = str(raw).strip().lower()
+        if not value:
+            continue
+        if "camera" in value or "cam" in value:
+            available.add("camera")
+        if "seal" in value:
+            available.add("seal_sensor")
+        if "rfid" in value:
+            available.add("rfid")
+        if "qr" in value:
+            available.add("qr")
+        if "weight" in value:
+            available.add("weight")
+        if "lock" in value:
+            available.add("lock")
+    return available
+
+
+def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyDecision | None:
+    trust_preferences = _owner_trust_preferences(policy_case)
+    if trust_preferences is None:
+        return None
+
+    risk_score = _policy_case_risk_score(policy_case)
+    max_risk_score = trust_preferences.get("max_risk_score")
+    if isinstance(max_risk_score, (int, float)) and risk_score is not None and risk_score > float(max_risk_score):
+        return _escalate_decision(
+            "Owner trust preference risk threshold exceeded.",
+            policy_case.policy_snapshot,
+            cognitive_assessment=policy_case.cognitive_assessment,
+            explanations=[
+                f"risk_score={risk_score}",
+                f"max_risk_score={float(max_risk_score)}",
+            ],
+            authz_graph={
+                "reason": OWNER_TRUST_RISK_ESCALATION_CODE,
+                "trust_gaps": [{"code": OWNER_TRUST_RISK_ESCALATION_CODE}],
+            },
+            governed_receipt={"trust_gap_codes": [OWNER_TRUST_RISK_ESCALATION_CODE]},
+        )
+
+    merchant_allowlist = [
+        str(item).strip()
+        for item in (
+            trust_preferences.get("merchant_allowlist")
+            if isinstance(trust_preferences.get("merchant_allowlist"), list)
+            else []
+        )
+        if str(item).strip()
+    ]
+    if merchant_allowlist:
+        parameters = (
+            policy_case.action_intent.action.parameters
+            if isinstance(policy_case.action_intent.action.parameters, Mapping)
+            else {}
+        )
+        gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
+        merchant_ref = str(gateway.get("organization_ref") or "").strip()
+        if merchant_ref and merchant_ref not in set(merchant_allowlist):
+            return _deny_decision(
+                "Owner trust preference merchant allowlist does not permit this request.",
+                OWNER_TRUST_MERCHANT_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case, floor=0.7),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=[f"merchant_ref={merchant_ref}", f"allowlist={','.join(merchant_allowlist)}"],
+            )
+
+    required_provenance_level = str(trust_preferences.get("required_provenance_level") or "").strip().lower()
+    if required_provenance_level:
+        category_envelope = (
+            policy_case.action_intent.resource.category_envelope
+            if isinstance(policy_case.action_intent.resource.category_envelope, Mapping)
+            else {}
+        )
+        resource_level = str(category_envelope.get("provenance_level") or "").strip().lower()
+        evidence_summary = policy_case.evidence_summary if isinstance(policy_case.evidence_summary, Mapping) else {}
+        evidence_level = str(evidence_summary.get("provenance_level") or "").strip().lower()
+        observed_level = resource_level or evidence_level
+        if not observed_level:
+            return _deny_decision(
+                "Owner trust preference requires provenance level evidence.",
+                OWNER_TRUST_PROVENANCE_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case, floor=0.72),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                evidence_gaps=["provenance_level"],
+                explanations=[f"required_provenance_level={required_provenance_level}"],
+            )
+        order = {"none": 0, "basic": 1, "verified": 2, "certified": 3}
+        required_rank = order.get(required_provenance_level, 0)
+        observed_rank = order.get(observed_level, 0)
+        if observed_rank < required_rank:
+            return _deny_decision(
+                "Owner trust preference provenance level is not sufficient.",
+                OWNER_TRUST_PROVENANCE_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case, floor=0.72),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                evidence_gaps=["provenance_level"],
+                explanations=[
+                    f"required_provenance_level={required_provenance_level}",
+                    f"observed_provenance_level={observed_level}",
+                ],
+            )
+
+    required_modalities = [
+        str(item).strip()
+        for item in (
+            trust_preferences.get("required_evidence_modalities")
+            if isinstance(trust_preferences.get("required_evidence_modalities"), list)
+            else []
+        )
+        if str(item).strip()
+    ]
+    available_modalities = _available_modalities(policy_case)
+    if required_modalities and not set(required_modalities).issubset(available_modalities):
+        missing = sorted(set(required_modalities) - available_modalities)
+        return _deny_decision(
+            "Owner trust preference required modalities are missing.",
+            OWNER_TRUST_MODALITY_DENY_CODE,
+            policy_case.policy_snapshot,
+            risk_score=_policy_case_risk_score(policy_case, floor=0.72),
+            cognitive_assessment=policy_case.cognitive_assessment,
+            evidence_gaps=missing,
+            explanations=[f"required_evidence_modalities={','.join(required_modalities)}"],
+        )
 
     return None
 

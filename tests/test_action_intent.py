@@ -1542,3 +1542,59 @@ def test_evaluate_intent_restricted_custody_transfer_denies_when_expected_custod
     assert decision.authz_graph["reason"] == "expected_custodian_mismatch"
     assert any(item["code"] == "expected_custodian" for item in decision.authz_graph["missing_prerequisites"])
     assert decision.obligations == [{"code": "update_verification_surface"}]
+
+
+def test_evaluate_intent_escalates_when_owner_trust_max_risk_exceeded() -> None:
+    payload = _base_payload()
+    owner_twin = build_twin_snapshot(payload)["owner"].model_dump(mode="json")
+    owner_twin["telemetry"] = {
+        "owner_context": {
+            "trust_preferences": {
+                "status": "ACTIVE",
+                "trust_version": "v1",
+                "max_risk_score": 0.2,
+            }
+        }
+    }
+
+    decision = evaluate_intent(
+        payload,
+        relevant_twin_snapshot={"owner": owner_twin},
+        cognitive_assessment={
+            "recommended_disposition": "allow",
+            "risk_score": 0.9,
+        },
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "escalate"
+    assert decision.authz_graph.get("reason") == "owner_trust_risk_escalation"
+    assert "owner_trust_risk_escalation" in list(decision.governed_receipt.get("trust_gap_codes") or [])
+
+
+def test_evaluate_intent_denies_when_owner_trust_merchant_not_allowlisted() -> None:
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["action"]["parameters"] = {
+        "gateway": {
+            "organization_ref": "org:merchant-untrusted",
+        }
+    }
+    owner_twin = build_twin_snapshot(payload)["owner"].model_dump(mode="json")
+    owner_twin["telemetry"] = {
+        "owner_context": {
+            "trust_preferences": {
+                "status": "ACTIVE",
+                "trust_version": "v1",
+                "merchant_allowlist": ["org:merchant-trusted"],
+            }
+        }
+    }
+
+    decision = evaluate_intent(
+        payload,
+        relevant_twin_snapshot={"owner": owner_twin},
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "deny"
+    assert decision.deny_code == "owner_trust_merchant_violation"
