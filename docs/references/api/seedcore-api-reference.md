@@ -130,6 +130,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-page/certificate/verifier claim sets now include authority-binding claims (`authority_binding_consistent`, `authority_binding_mismatch_detected`).
 - Trust certificates now include `operator_actions` so exported artifacts preserve operator remediation guidance.
 - Trust-page `authority_consistency` and trust certificates now include `authority_consistency_hash` for quick cross-artifact consistency comparison.
+- Trust certificates now include full `authority_consistency` (`ok`, `issues`, `hash`) for direct verifier inspection.
 - JSON-LD proof exports now include `proof.authority_consistency_hash` for cross-artifact consistency comparison.
 - JSON-LD proof exports now include `proof.operator_actions` for remediation guidance parity with trust page/certificate/verify surfaces.
 - JSON-LD proof exports now include full `proof.authority_consistency` (`ok`, `issues`, `hash`) for direct verifier inspection.

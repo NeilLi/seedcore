@@ -533,8 +533,10 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
         public_id="public-owner-trust-1",
         expires_at="2026-04-30T10:00:00Z",
     )
+    assert certificate.authority_consistency["ok"] is True
     assert isinstance(certificate.authority_consistency_hash, str)
     assert certificate.authority_consistency_hash.startswith("sha256:")
+    assert certificate.authority_consistency_hash == certificate.authority_consistency["hash"]
     assert certificate.authority_consistency_hash == proof["authority_consistency_hash"]
     assert certificate.operator_actions == []
     assert certificate.trust_gap_codes == ["owner_trust_merchant_violation"]
@@ -748,7 +750,10 @@ async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
         public_id="public-owner-mismatch-1",
         expires_at="2026-04-30T10:00:00Z",
     )
+    assert certificate.authority_consistency["ok"] is False
+    assert "owner_identity_mismatch" in certificate.authority_consistency["issues"]
     assert certificate.authority_consistency_hash == authority_policy["hash"]
+    assert certificate.authority_consistency_hash == certificate.authority_consistency["hash"]
     assert certificate.operator_actions[0]["code"] == "reconcile_owner_identity"
 
 

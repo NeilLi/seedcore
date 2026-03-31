@@ -152,8 +152,10 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert certificate.status_code == 200
     certificate_body = certificate.json()
     assert certificate_body["public_id"] == public_id
+    assert certificate_body["authority_consistency"]["ok"] is True
     assert isinstance(certificate_body.get("authority_consistency_hash"), str)
     assert certificate_body["authority_consistency_hash"].startswith("sha256:")
+    assert certificate_body["authority_consistency_hash"] == certificate_body["authority_consistency"]["hash"]
     assert isinstance(certificate_body.get("trust_gap_codes"), list)
     assert isinstance(certificate_body.get("trust_gap_details"), list)
     assert isinstance(certificate_body.get("owner_context"), dict)
