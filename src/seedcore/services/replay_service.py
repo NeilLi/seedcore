@@ -899,6 +899,17 @@ class ReplayService:
                 subject_type=reference.subject_type,
                 signature_valid=True,
             )
+        if replay.subject_type != reference.subject_type or replay.subject_id != reference.subject_id:
+            return self._failed_verification_result(
+                reference_type="trust_token",
+                reference_id=reference_id,
+                verification_time=verification_time,
+                reason="reference_subject_mismatch",
+                subject_id=reference.subject_id,
+                subject_type=reference.subject_type,
+                signature_valid=True,
+                tamper_status="authority_mismatch",
+            )
         return self._verification_result_from_replay(
             replay=replay,
             reference_type="trust_token",

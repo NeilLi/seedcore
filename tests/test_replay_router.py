@@ -474,6 +474,26 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert body["tamper_status"] == "authority_mismatch"
 
 
+def test_verify_token_surfaces_reference_subject_mismatch() -> None:
+    record = _build_audit_record(task_id="task-router-ref-mismatch-1", intent_id="intent-router-ref-mismatch-1", asset_id="asset-ref-mismatch-1")
+    client = _make_client(record)
+
+    publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
+    assert publish.status_code == 200
+    public_id = publish.json()["public_id"]
+    decoded = replay_router_module.replay_service.decode_public_reference(public_id)
+    mismatched_public_id = replay_router_module.replay_service.encode_public_reference(
+        decoded.model_copy(update={"subject_id": "asset-ref-mismatch-other"})
+    )
+
+    verify = client.get(f"/verify/{mismatched_public_id}")
+    assert verify.status_code == 200
+    body = verify.json()
+    assert body["verified"] is False
+    assert body["reason"] == "reference_subject_mismatch"
+    assert body["tamper_status"] == "authority_mismatch"
+
+
 def test_materialized_custody_event_endpoint_uses_replay_service_jsonld() -> None:
     record = _apply_transition_metadata(
         _build_audit_record(task_id="task-router-4", intent_id="intent-router-4", asset_id="asset-1")

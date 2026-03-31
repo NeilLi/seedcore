@@ -620,6 +620,37 @@ async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_veri
 
 
 @pytest.mark.asyncio
+async def test_verify_reference_fails_on_subject_mismatch_for_signed_token() -> None:
+    record = _build_audit_record(task_id="task-ref-mismatch-1", intent_id="intent-ref-mismatch-1", asset_id="asset-ref-mismatch-1")
+    dao = type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})()
+    service = ReplayService(
+        governance_audit_dao=dao,
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+    _, public_id = service.build_public_reference(
+        lookup_key="audit_id",
+        lookup_value=record["id"],
+        replay=replay,
+        ttl_hours=4,
+    )
+    decoded = service.decode_public_reference(public_id)
+    mismatched_public_id = service.encode_public_reference(
+        decoded.model_copy(update={"subject_id": "asset-ref-mismatch-other"})
+    )
+    verification = await service.verify_reference(
+        _DummySession(),
+        public_id=mismatched_public_id,
+    )
+
+    assert verification.verified is False
+    assert verification.reason == "reference_subject_mismatch"
+    assert verification.tamper_status == "authority_mismatch"
+
+
+@pytest.mark.asyncio
 async def test_verify_reference_fails_on_owner_identity_mismatch() -> None:
     record = _apply_transition_metadata(
         _build_audit_record(task_id="task-owner-mismatch-1", intent_id="intent-owner-mismatch-1", asset_id="asset-owner-mismatch-1"),
