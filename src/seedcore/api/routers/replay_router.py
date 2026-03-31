@@ -193,6 +193,8 @@ async def get_replay_artifacts(
             "projection": projection.value,
             "verification_status": replay.verification_status.model_dump(mode="json"),
             "public_artifacts": {
+                "authority_consistency_hash": view.get("authority_consistency_hash"),
+                "operator_actions": view.get("operator_actions"),
                 "fingerprint_summary": view.get("fingerprint_summary"),
                 "policy_summary": view.get("policy_summary"),
                 "public_media_refs": view.get("public_media_refs"),

@@ -523,6 +523,12 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert view["authority_consistency_hash"] == view["policy_summary"]["authority_consistency"]["hash"]
     assert view["operator_actions"][0]["code"] == "reconcile_owner_identity"
 
+    artifacts = client.get("/replay/artifacts", params={"audit_id": record["id"], "projection": "public"})
+    assert artifacts.status_code == 200
+    public_artifacts = artifacts.json()["public_artifacts"]
+    assert public_artifacts["authority_consistency_hash"] == view["authority_consistency_hash"]
+    assert public_artifacts["operator_actions"][0]["code"] == "reconcile_owner_identity"
+
     publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
     assert publish.status_code == 409
 
@@ -719,7 +725,10 @@ def test_replay_artifacts_include_approval_transition_chain_for_transfer_flow() 
 
     public = client.get("/replay/artifacts", params={"audit_id": record["id"], "projection": "public"})
     assert public.status_code == 200
-    public_chain = public.json()["public_artifacts"]["approval_transition_chain"]
+    public_artifacts = public.json()["public_artifacts"]
+    assert public_artifacts["authority_consistency_hash"].startswith("sha256:")
+    assert public_artifacts["operator_actions"] == []
+    public_chain = public_artifacts["approval_transition_chain"]
     assert public_chain["count"] == 1
     assert public_chain["head"] == "sha256:5cbde77901f79006292aff1d9508f13ed64018f166f559aa0de39aef31dccb72"
     assert "previous_status" not in public_chain["events"][0]
