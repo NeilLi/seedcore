@@ -138,6 +138,13 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert publish_body["authority_consistency"]["ok"] is True
     assert publish_body["authority_consistency_hash"].startswith("sha256:")
     assert publish_body["operator_actions"] == []
+    assert publish_body["proof_surface"]["artifact_refs"]["trust_url"] == publish_body["trust_url"]
+    assert publish_body["proof_surface"]["artifact_refs"]["jsonld_url"] == publish_body["jsonld_url"]
+    assert publish_body["proof_surface"]["artifact_refs"]["certificate_url"] == publish_body["certificate_url"]
+    assert publish_body["proof_surface"]["key_hashes"]["authority_consistency_hash"] == publish_body["authority_consistency_hash"]
+    assert isinstance(publish_body["proof_surface"]["trust_gap_codes"], list)
+    assert isinstance(publish_body["proof_surface"]["owner_context_ref"], dict)
+    assert publish_body["proof_surface"]["operator_action_codes"] == []
 
     trust = client.get(f"/trust/{public_id}")
     assert trust.status_code == 200
@@ -183,6 +190,9 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert refresh_body["authority_consistency"]["ok"] is True
     assert refresh_body["authority_consistency_hash"].startswith("sha256:")
     assert refresh_body["operator_actions"] == []
+    assert refresh_body["proof_surface"]["artifact_refs"]["trust_url"] == refresh_body["trust_url"]
+    assert refresh_body["proof_surface"]["key_hashes"]["authority_consistency_hash"] == refresh_body["authority_consistency_hash"]
+    assert refresh_body["proof_surface"]["operator_action_codes"] == []
 
 
 def test_replay_lookup_by_subject_id_returns_asset_projection() -> None:

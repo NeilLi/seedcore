@@ -75,6 +75,45 @@ def _public_urls(request: Request, public_id: str) -> Dict[str, str]:
     }
 
 
+def _proof_surface_summary(
+    *,
+    projection: Dict[str, Any],
+    urls: Dict[str, str],
+    authority_consistency: Dict[str, Any],
+    operator_actions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    policy_summary = projection.get("policy_summary") if isinstance(projection.get("policy_summary"), dict) else {}
+    fingerprint_summary = (
+        projection.get("fingerprint_summary")
+        if isinstance(projection.get("fingerprint_summary"), dict)
+        else {}
+    )
+    owner_context = policy_summary.get("owner_context") if isinstance(policy_summary.get("owner_context"), dict) else {}
+    return {
+        "artifact_refs": {
+            "trust_url": urls["trust_url"],
+            "jsonld_url": urls["jsonld_url"],
+            "certificate_url": urls["certificate_url"],
+        },
+        "key_hashes": {
+            "authority_consistency_hash": authority_consistency.get("hash"),
+            "governed_receipt_hash": policy_summary.get("governed_receipt_hash"),
+            "fingerprint_hash": fingerprint_summary.get("fingerprint_hash"),
+        },
+        "trust_gap_codes": list(policy_summary.get("trust_gap_codes") or []),
+        "owner_context_ref": {
+            "owner_id": owner_context.get("owner_id"),
+            "creator_profile_ref": owner_context.get("creator_profile_ref"),
+            "trust_preferences_ref": owner_context.get("trust_preferences_ref"),
+        },
+        "operator_action_codes": [
+            str(item.get("code"))
+            for item in operator_actions
+            if isinstance(item, dict) and item.get("code")
+        ],
+    }
+
+
 async def _resolve_public_reference_or_http(public_id: str) -> tuple[Any, Any]:
     try:
         reference = replay_service.decode_public_reference(public_id)
@@ -314,6 +353,12 @@ async def publish_trust_reference(
         "authority_consistency": authority_consistency,
         "authority_consistency_hash": authority_consistency.get("hash"),
         "operator_actions": operator_actions,
+        "proof_surface": _proof_surface_summary(
+            projection=projection,
+            urls=urls,
+            authority_consistency=authority_consistency,
+            operator_actions=operator_actions,
+        ),
     }
 
 
