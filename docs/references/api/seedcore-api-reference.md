@@ -127,6 +127,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-page projections now also expose top-level `authority_consistency` for direct API consumers.
 - Trust-page projections now include `operator_actions` with remediation hints when authority consistency issues are present.
 - Public replay-artifact payloads now include `authority_consistency_hash` and `operator_actions` for lightweight triage parity.
+- Public replay-artifact payloads now also include `authority_consistency` for direct `ok/issues/hash` inspection.
 - Trust-page/certificate/verifier claim sets now include authority-binding claims (`authority_binding_consistent`, `authority_binding_mismatch_detected`).
 - Trust certificates now include `operator_actions` so exported artifacts preserve operator remediation guidance.
 - Trust-page `authority_consistency` and trust certificates now include `authority_consistency_hash` for quick cross-artifact consistency comparison.
