@@ -78,6 +78,7 @@ class AgentActionAsset(BaseModel):
     from_zone: Optional[str] = None
     to_zone: Optional[str] = None
     provenance_hash: str
+    declared_value_usd: Optional[float] = Field(default=None, ge=0)
 
     @field_validator("asset_id", "provenance_hash")
     @classmethod

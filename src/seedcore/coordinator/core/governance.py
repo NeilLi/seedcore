@@ -80,10 +80,12 @@ OWNER_SCOPE_VIOLATION_DENY_CODE = "owner_scope_violation"
 OWNER_ZONE_VIOLATION_DENY_CODE = "owner_zone_violation"
 OWNER_MODALITY_VIOLATION_DENY_CODE = "owner_modality_violation"
 OWNER_OBSERVER_DENY_CODE = "owner_observer_restricted"
+OWNER_VALUE_LIMIT_DENY_CODE = "owner_value_limit_violation"
 OWNER_TRUST_MERCHANT_DENY_CODE = "owner_trust_merchant_violation"
 OWNER_TRUST_PROVENANCE_DENY_CODE = "owner_trust_provenance_violation"
 OWNER_TRUST_MODALITY_DENY_CODE = "owner_trust_modality_violation"
 OWNER_TRUST_RISK_ESCALATION_CODE = "owner_trust_risk_escalation"
+OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE = "owner_trust_high_value_step_up"
 MISSING_MANDATORY_EVIDENCE_DENY_CODE = "missing_mandatory_evidence"
 COGNITIVE_DENY_CODE = "cognitive_policy_denied"
 POLICY_ESCALATION_CODE = "policy_escalation_required"
@@ -1678,6 +1680,21 @@ def _evaluate_owner_delegation_policy(policy_case: PolicyCase) -> PolicyDecision
             explanations=[f"required_modality={','.join(required_modality)}"],
         )
 
+    if isinstance(matched.constraints.max_value_usd, (int, float)):
+        value_usd = _action_value_usd(policy_case.action_intent)
+        if value_usd is not None and value_usd > float(matched.constraints.max_value_usd):
+            return _deny_decision(
+                "Owner delegation value limit does not permit this action.",
+                OWNER_VALUE_LIMIT_DENY_CODE,
+                policy_case.policy_snapshot,
+                risk_score=_policy_case_risk_score(policy_case, floor=0.76),
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=[
+                    f"value_usd={round(value_usd, 2)}",
+                    f"max_value_usd={float(matched.constraints.max_value_usd)}",
+                ],
+            )
+
     if matched.requires_step_up:
         assessment = policy_case.cognitive_assessment
         if assessment is not None and assessment.recommended_disposition != "allow":
@@ -1768,6 +1785,25 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
             governed_receipt={"trust_gap_codes": [OWNER_TRUST_RISK_ESCALATION_CODE]},
         )
 
+    high_value_step_up_threshold_usd = trust_preferences.get("high_value_step_up_threshold_usd")
+    if isinstance(high_value_step_up_threshold_usd, (int, float)):
+        value_usd = _action_value_usd(policy_case.action_intent)
+        if value_usd is not None and value_usd >= float(high_value_step_up_threshold_usd):
+            return _escalate_decision(
+                "Owner trust preference high-value threshold requires step-up approval.",
+                policy_case.policy_snapshot,
+                cognitive_assessment=policy_case.cognitive_assessment,
+                explanations=[
+                    f"value_usd={round(value_usd, 2)}",
+                    f"high_value_step_up_threshold_usd={float(high_value_step_up_threshold_usd)}",
+                ],
+                authz_graph={
+                    "reason": OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE,
+                    "trust_gaps": [{"code": OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE}],
+                },
+                governed_receipt={"trust_gap_codes": [OWNER_TRUST_HIGH_VALUE_STEP_UP_CODE]},
+            )
+
     merchant_allowlist = [
         str(item).strip()
         for item in (
@@ -1855,6 +1891,39 @@ def _evaluate_owner_trust_preferences_policy(policy_case: PolicyCase) -> PolicyD
             explanations=[f"required_evidence_modalities={','.join(required_modalities)}"],
         )
 
+    return None
+
+
+def _action_value_usd(action_intent: ActionIntent) -> float | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, Mapping) else {}
+    category_envelope = (
+        action_intent.resource.category_envelope
+        if isinstance(action_intent.resource.category_envelope, Mapping)
+        else {}
+    )
+    candidates: list[Any] = [
+        parameters.get("value_usd"),
+        parameters.get("amount_usd"),
+        parameters.get("order_total_usd"),
+        parameters.get("estimated_value_usd"),
+        category_envelope.get("value_usd"),
+        category_envelope.get("price_usd"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, (int, float)):
+            value = float(candidate)
+            if value >= 0:
+                return value
+        if isinstance(candidate, str):
+            normalized = candidate.strip().replace(",", "")
+            if not normalized:
+                continue
+            try:
+                value = float(normalized)
+            except ValueError:
+                continue
+            if value >= 0:
+                return value
     return None
 
 

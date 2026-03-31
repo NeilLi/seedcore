@@ -172,6 +172,7 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
     monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
 
     payload = _base_payload()
+    payload["asset"]["declared_value_usd"] = 1500
     payload.pop("policy_snapshot_ref")
     response = client.post("/api/v1/agent-actions/evaluate", json=payload)
     assert response.status_code == 200
@@ -187,6 +188,7 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
     )
     assert mapped_request.action_intent.resource.lot_id == "lot-8841"
     assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
+    assert mapped_request.action_intent.action.parameters["value_usd"] == 1500.0
 
 
 def test_agent_actions_evaluate_requires_identity_proof():

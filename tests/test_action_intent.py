@@ -1598,3 +1598,60 @@ def test_evaluate_intent_denies_when_owner_trust_merchant_not_allowlisted() -> N
     assert decision.allowed is False
     assert decision.disposition == "deny"
     assert decision.deny_code == "owner_trust_merchant_violation"
+
+
+def test_evaluate_intent_escalates_when_owner_trust_high_value_threshold_exceeded() -> None:
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["action"]["parameters"] = {
+        "value_usd": 1500,
+    }
+    owner_twin = build_twin_snapshot(payload)["owner"].model_dump(mode="json")
+    owner_twin["telemetry"] = {
+        "owner_context": {
+            "trust_preferences": {
+                "status": "ACTIVE",
+                "trust_version": "v1",
+                "high_value_step_up_threshold_usd": 1000,
+            }
+        }
+    }
+
+    decision = evaluate_intent(
+        payload,
+        relevant_twin_snapshot={"owner": owner_twin},
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "escalate"
+    assert decision.authz_graph.get("reason") == "owner_trust_high_value_step_up"
+    assert "owner_trust_high_value_step_up" in list(decision.governed_receipt.get("trust_gap_codes") or [])
+
+
+def test_evaluate_intent_denies_when_owner_delegation_max_value_exceeded() -> None:
+    payload = _base_payload()
+    payload["params"]["governance"]["action_intent"]["action"]["parameters"] = {
+        "value_usd": 250,
+    }
+    owner_twin = build_twin_snapshot(payload)["owner"].model_dump(mode="json")
+    owner_twin["delegation"] = {
+        "delegations": [
+            {
+                "assistant_id": "agent-1",
+                "authority_level": "signer",
+                "scope": ["asset-1"],
+                "constraints": {
+                    "max_value_usd": 100,
+                },
+                "requires_step_up": False,
+            }
+        ]
+    }
+
+    decision = evaluate_intent(
+        payload,
+        relevant_twin_snapshot={"owner": owner_twin},
+    )
+
+    assert decision.allowed is False
+    assert decision.disposition == "deny"
+    assert decision.deny_code == "owner_value_limit_violation"

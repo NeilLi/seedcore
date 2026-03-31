@@ -162,6 +162,8 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
             },
         ),
     )
+    if payload.asset.declared_value_usd is not None:
+        action_intent.action.parameters["value_usd"] = float(payload.asset.declared_value_usd)
     policy_snapshot_ref = payload.policy_snapshot_ref or payload.security_contract.version
     return HotPathEvaluateRequest(
         contract_version=HOT_PATH_CONTRACT_VERSION,

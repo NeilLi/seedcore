@@ -1,4 +1,4 @@
-# Gemini Owner/Creator Phase 1-2 Quickstart
+# Gemini Owner/Creator Phase 1-3 Quickstart
 
 This quickstart shows how to use the Gemini extension tools for:
 
@@ -209,8 +209,8 @@ Use `seedcore.agent_action.preflight` to evaluate policy/trust gaps without mint
       },
       "workflow": {
         "type": "restricted_custody_transfer",
-        "action_type": "TRANSFER_CUSTODY",
-        "valid_until": "2026-03-31T10:01:00Z"
+      "action_type": "TRANSFER_CUSTODY",
+      "valid_until": "2026-03-31T10:01:00Z"
       },
       "asset": {
         "asset_id": "asset:lot-8841",
@@ -242,6 +242,18 @@ Use `seedcore.agent_action.preflight` to evaluate policy/trust gaps without mint
         "debug": true,
         "no_execute": true
       }
+    }
+  }
+}
+```
+
+Optional high-value signal for trust step-up:
+
+```json
+{
+  "request": {
+    "asset": {
+      "declared_value_usd": 1500
     }
   }
 }

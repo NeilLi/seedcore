@@ -59,6 +59,11 @@ TRUST_GAP_TAXONOMY: Dict[str, Dict[str, str]] = {
         "severity": "high",
         "message": "Owner trust risk threshold exceeded.",
     },
+    "owner_trust_high_value_step_up": {
+        "category": "owner_trust",
+        "severity": "high",
+        "message": "Owner trust high-value threshold requires step-up approval.",
+    },
     "owner_trust_merchant_violation": {
         "category": "owner_trust",
         "severity": "high",

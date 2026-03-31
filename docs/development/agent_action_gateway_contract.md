@@ -108,7 +108,8 @@ Product meaning:
     "to_custodian_ref": "principal:outbound_mgr_002",
     "from_zone": "vault_a",
     "to_zone": "handoff_bay_3",
-    "provenance_hash": "sha256:asset-provenance"
+    "provenance_hash": "sha256:asset-provenance",
+    "declared_value_usd": 1500
   },
   "approval": {
     "approval_envelope_id": "approval-transfer-001",
@@ -219,6 +220,7 @@ The gateway should map request payloads to internal runtime models as follows.
 - `gateway.owner_id` (when provided)
 - `gateway.delegation_ref`
 - `gateway.organization_ref`
+- `value_usd` from `asset.declared_value_usd` when provided
 
 `ActionIntent.resource.asset_id`:
 
