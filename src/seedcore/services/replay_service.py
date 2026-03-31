@@ -39,6 +39,10 @@ from seedcore.models.replay import (
     VerificationResult,
 )
 from seedcore.ops.evidence.materializer import materialize_seedcore_custody_event_payload
+from seedcore.ops.evidence.authority_consistency import (
+    authority_consistency_summary,
+    operator_actions_for_authority_issues,
+)
 from seedcore.ops.evidence.policy import build_policy_summary, canonical_json, sha256_hex
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
@@ -693,45 +697,19 @@ class ReplayService:
         return self._authority_consistency_summary(replay)
 
     def _authority_consistency_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
-        issues = self._owner_delegation_consistency_issues(replay)
-        summary = {"ok": not issues, "issues": issues}
-        summary["hash"] = f"sha256:{sha256_hex(canonical_json(summary))}"
-        return summary
+        action_intent = (
+            replay.audit_record.get("action_intent")
+            if isinstance(replay.audit_record.get("action_intent"), Mapping)
+            else {}
+        )
+        owner_context = self._owner_context_summary(replay)
+        return authority_consistency_summary(
+            action_intent=action_intent,
+            owner_context=owner_context,
+        )
 
     def _operator_actions_for_authority_issues(self, issues: Sequence[str]) -> List[Dict[str, Any]]:
-        actions: List[Dict[str, Any]] = []
-        issue_set = {str(item).strip() for item in issues if str(item).strip()}
-        if "owner_identity_mismatch" in issue_set:
-            actions.append(
-                {
-                    "code": "reconcile_owner_identity",
-                    "priority": "high",
-                    "summary": "Reconcile owner DID bindings across principal, gateway, and owner context.",
-                }
-            )
-        if "delegation_ref_mismatch" in issue_set:
-            actions.append(
-                {
-                    "code": "reconcile_delegation_ref",
-                    "priority": "high",
-                    "summary": "Reconcile delegation reference bindings across principal and gateway.",
-                }
-            )
-        for issue in sorted(issue_set):
-            mapped = {
-                "owner_identity_mismatch",
-                "delegation_ref_mismatch",
-            }
-            if issue in mapped:
-                continue
-            actions.append(
-                {
-                    "code": f"review_{issue}",
-                    "priority": "medium",
-                    "summary": f"Review authority consistency issue: {issue}.",
-                }
-            )
-        return actions
+        return operator_actions_for_authority_issues(issues)
 
     def encode_public_reference(self, reference: PublicTrustReference) -> str:
         payload_segment = self._b64url_encode(
@@ -3059,65 +3037,7 @@ class ReplayService:
         )
 
     def _owner_delegation_consistency_issues(self, replay: ReplayRecord) -> List[str]:
-        action_intent = (
-            replay.audit_record.get("action_intent")
-            if isinstance(replay.audit_record.get("action_intent"), Mapping)
-            else {}
-        )
-        principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), Mapping) else {}
-        action = action_intent.get("action") if isinstance(action_intent.get("action"), Mapping) else {}
-        parameters = action.get("parameters") if isinstance(action.get("parameters"), Mapping) else {}
-        gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
-        owner_context = self._owner_context_summary(replay)
-        creator_profile_ref = (
-            owner_context.get("creator_profile_ref")
-            if isinstance(owner_context.get("creator_profile_ref"), Mapping)
-            else {}
-        )
-        trust_preferences_ref = (
-            owner_context.get("trust_preferences_ref")
-            if isinstance(owner_context.get("trust_preferences_ref"), Mapping)
-            else {}
-        )
-        issues: List[str] = []
-
-        principal_owner_id = str(principal.get("owner_id") or "").strip()
-        gateway_owner_id = str(gateway.get("owner_id") or "").strip()
-        owner_context_owner_id = str(owner_context.get("owner_id") or "").strip()
-        creator_profile_owner_id = str(creator_profile_ref.get("owner_id") or "").strip()
-        trust_preferences_owner_id = str(trust_preferences_ref.get("owner_id") or "").strip()
-
-        owner_id_candidates = [
-            candidate
-            for candidate in [
-                principal_owner_id,
-                gateway_owner_id,
-                owner_context_owner_id,
-                creator_profile_owner_id,
-                trust_preferences_owner_id,
-            ]
-            if candidate
-        ]
-        if len(set(owner_id_candidates)) > 1:
-            issues.append("owner_identity_mismatch")
-
-        principal_delegation_ref = self._normalize_delegation_ref(principal.get("delegation_ref"))
-        gateway_delegation_ref = self._normalize_delegation_ref(gateway.get("delegation_ref"))
-        if (
-            principal_delegation_ref is not None
-            and gateway_delegation_ref is not None
-            and principal_delegation_ref != gateway_delegation_ref
-        ):
-            issues.append("delegation_ref_mismatch")
-        return issues
-
-    def _normalize_delegation_ref(self, value: Any) -> Optional[str]:
-        normalized = str(value or "").strip()
-        if not normalized:
-            return None
-        if normalized.startswith("delegation:"):
-            normalized = normalized.split(":", 1)[1].strip()
-        return normalized or None
+        return list(self._authority_consistency_summary(replay).get("issues") or [])
 
     def _failed_verification_result(
         self,

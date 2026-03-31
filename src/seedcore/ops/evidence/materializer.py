@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from typing import Any, Dict, Optional
+
+from seedcore.ops.evidence.authority_consistency import (
+    authority_consistency_summary,
+    operator_actions_for_authority_issues as _build_operator_actions_for_authority_issues,
+)
 
 TRUST_GAP_TAXONOMY: Dict[str, Dict[str, str]] = {
     "owner_trust_risk_escalation": {
@@ -274,85 +277,14 @@ def _owner_context(governed_receipt: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _normalize_delegation_ref(value: Any) -> str | None:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return None
-    if normalized.startswith("delegation:"):
-        normalized = normalized.split(":", 1)[1].strip()
-    return normalized or None
-
-
 def _authority_consistency_summary(*, audit_record: Dict[str, Any], governed_receipt: Dict[str, Any]) -> Dict[str, Any]:
     action_intent = audit_record.get("action_intent") if isinstance(audit_record.get("action_intent"), dict) else {}
-    principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
-    action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
-    parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
-    gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), dict) else {}
     owner_context = _owner_context(governed_receipt)
-    creator_profile_ref = (
-        owner_context.get("creator_profile_ref")
-        if isinstance(owner_context.get("creator_profile_ref"), dict)
-        else {}
+    return authority_consistency_summary(
+        action_intent=action_intent,
+        owner_context=owner_context,
     )
-    trust_preferences_ref = (
-        owner_context.get("trust_preferences_ref")
-        if isinstance(owner_context.get("trust_preferences_ref"), dict)
-        else {}
-    )
-    principal_owner_id = str(principal.get("owner_id") or "").strip()
-    gateway_owner_id = str(gateway.get("owner_id") or "").strip()
-    owner_context_owner_id = str(owner_context.get("owner_id") or "").strip()
-    creator_profile_owner_id = str(creator_profile_ref.get("owner_id") or "").strip()
-    trust_preferences_owner_id = str(trust_preferences_ref.get("owner_id") or "").strip()
-    owner_id_candidates = [
-        candidate
-        for candidate in [
-            principal_owner_id,
-            gateway_owner_id,
-            owner_context_owner_id,
-            creator_profile_owner_id,
-            trust_preferences_owner_id,
-        ]
-        if candidate
-    ]
-    issues: list[str] = []
-    if len(set(owner_id_candidates)) > 1:
-        issues.append("owner_identity_mismatch")
-
-    principal_delegation_ref = _normalize_delegation_ref(principal.get("delegation_ref"))
-    gateway_delegation_ref = _normalize_delegation_ref(gateway.get("delegation_ref"))
-    if (
-        principal_delegation_ref is not None
-        and gateway_delegation_ref is not None
-        and principal_delegation_ref != gateway_delegation_ref
-    ):
-        issues.append("delegation_ref_mismatch")
-    summary = {"ok": not issues, "issues": issues}
-    digest = hashlib.sha256(
-        json.dumps(summary, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    ).hexdigest()
-    summary["hash"] = f"sha256:{digest}"
-    return summary
 
 
 def _operator_actions_for_authority_issues(issues: list[str]) -> list[Dict[str, Any]]:
-    actions: list[Dict[str, Any]] = []
-    issue_set = {str(item).strip() for item in issues if str(item).strip()}
-    if "owner_identity_mismatch" in issue_set:
-        actions.append(
-            {
-                "code": "reconcile_owner_identity",
-                "priority": "high",
-                "summary": "Reconcile owner DID bindings across principal, gateway, and owner context.",
-            }
-        )
-    if "delegation_ref_mismatch" in issue_set:
-        actions.append(
-            {
-                "code": "reconcile_delegation_ref",
-                "priority": "high",
-                "summary": "Reconcile delegation reference bindings across principal and gateway.",
-            }
-        )
-    return actions
+    return _build_operator_actions_for_authority_issues(issues)
