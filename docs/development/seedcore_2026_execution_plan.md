@@ -35,6 +35,7 @@ In practice, that means:
 
 - one canonical workflow
 - one external agent boundary
+- one physical custody boundary
 - one runtime decision contract
 - one evidence loop
 - one verification surface
@@ -53,10 +54,19 @@ User-level promise:
 - SeedCore validates authority and policy
 - SeedCore returns `allow`, `deny`, `quarantine`, or `escalate`
 - if allowed, SeedCore mints bounded execution authority
-- the action closes with replayable evidence
+- the action closes with sensor-grounded, replayable evidence
 - operators and partners can verify the result afterward
 
 This should be treated as the canonical 2026 package.
+
+For 2026, that package should be grounded in one concrete physical story:
+
+- the governed good is physically handled during transfer
+- the edge evidence source is a Jetson AGX Orin-class node
+- the Q4 pilot package scopes a Unitree B2-class robot as the physical courier
+  or custodian actor
+- the digital twin mutation is tied to the exact transfer event, not only the
+  policy decision
 
 ## Execution Principles
 
@@ -122,9 +132,21 @@ Goal:
 Required outcomes:
 
 - evidence ingestion required for selected allowed actions
+- sensor-grounded evidence schemas for cryptographically signed edge telemetry
 - authoritative twin settlement on completion
+- atomic linkage between twin-state mutation and localized physical evidence:
+  - location
+  - environmental readings
+  - hardware health
 - audit-chain consistency across runtime, replay, and verification
 - explicit failure handling for missing or invalid evidence
+
+Interpretation:
+
+- "settlement" is not only a completed status flag
+- settlement means SeedCore can prove which governed state transition occurred,
+  which physical evidence was attached, and which twin state was finalized as a
+  result
 
 ### Workstream 4: Verification Surface Productization
 
@@ -138,6 +160,7 @@ Required outcomes:
 - narrow partner/public proof surfaces
 - stable explanation payloads
 - signer provenance and authority-source visibility
+- digital-twin state visibility at the exact handover moment
 - runbooks for lookup, exception handling, and investigation
 
 ### Workstream 5: Pilot Packaging
@@ -153,6 +176,16 @@ Required outcomes:
 - one scripted demo / simulation
 - one verification package
 - one clear integration guide
+- one physical handover story that crosses the edge boundary
+
+The Q4 pilot package should be explicit about the hardware story:
+
+- the Unitree B2 is the scoped physical actor for custody movement or handover
+- the Jetson edge node is the scoped telemetry and local execution boundary
+- the pilot demonstrates allow / deny behavior using both digital credentials
+  and real-time physical telemetry
+- the operator surface shows both proof artifacts and the twin state captured at
+  custody transfer time
 
 ## Quarter Plan
 
@@ -170,9 +203,17 @@ This quarter should focus on hardening what already exists.
 - freeze and version the current runtime-up RCT sign-off bundle
 - implement runtime-selectable hot-path mode semantics
 - persist parity events and build `1,000`-run exportable evidence
+- instrument hot-path observability consistently across Kubernetes and host-mode
+  environments
 - add graph freshness and dependency-based auto-quarantine
 - add dedicated hot-path benchmark harness coverage for concurrent load
 - promote runtime matrix capture and replay verification into CI / host gates
+- define the deployment topology used by CI / host gates and benchmark the Ray
+  coordination path under that topology
+- include simulated edge-network conditions in hot-path testing:
+  - intermittent connectivity
+  - sensor jitter / noise
+  - edge hardware latency
 
 ### Exit criteria
 
@@ -180,6 +221,8 @@ This quarter should focus on hardening what already exists.
 - hot-path observability is operator-grade
 - `shadow` mode becomes promotion-quality evidence
 - the runtime is stable enough to expose as a real integration boundary
+- concurrency results reflect real coordination behavior, not only local happy
+  path benchmarks
 
 ### Non-goals
 
@@ -207,6 +250,10 @@ This quarter should make SeedCore usable by external agent systems.
   - minted artifacts
 - reference adapter or SDK for one current agent platform
 - developer integration guide and sample flow
+- edge-to-cloud synchronization contract for Dockerized edge nodes running the
+  restricted-transfer boundary
+- reconnection and reconciliation rules for restricted transfers under
+  intermittent connectivity
 
 ### Exit criteria
 
@@ -214,6 +261,7 @@ This quarter should make SeedCore usable by external agent systems.
 - SeedCore no longer requires callers to understand internal coordinator
   semantics
 - denial, quarantine, and escalation behavior are externally legible
+- the edge node can safely reconcile local custody outcomes after reconnect
 
 ### Recommended discipline
 
@@ -232,15 +280,23 @@ This quarter should turn the runtime into a buyer- and operator-legible pilot.
 
 - evidence-required closure for selected transfer actions
 - authoritative twin settlement integrated into the runtime story
+- sensor-grounded closure using Jetson-captured localized telemetry
 - operator verification surface ready for live usage
 - partner-facing proof flow for post-hoc verification
 - one design-partner simulation or controlled pilot package
+- Unitree B2 included as the physical custodian / courier actor in the pilot
+- scripted zero-trust physical handover demonstrating policy `allow` / `deny`
+  against real-time edge telemetry
+- lightweight self-contained verification package that does not require the full
+  SeedCore runtime stack
 - operating metrics for:
   - allow / deny / quarantine / escalate rates
   - latency profile
   - parity stability
   - evidence closure rate
   - replay verification success
+  - edge reconciliation time
+  - time to proof
 
 ### Exit criteria
 
@@ -248,6 +304,8 @@ This quarter should turn the runtime into a buyer- and operator-legible pilot.
 - a real or simulated external agent can initiate the flow
 - the proof surface explains the final result without requiring source-code
   access
+- the physical handover path is demonstrated with hardware in the loop, not
+  only mocked software components
 
 ## Deliverable Map
 
@@ -270,6 +328,7 @@ The delivery order should stay strict.
 - evidence ingestion
 - settlement
 - replay and verification consistency
+- edge-to-cloud reconciliation
 
 ### Layer 4: Pilot packaging
 
@@ -277,6 +336,7 @@ The delivery order should stay strict.
 - deployment path
 - operator flow
 - partner proof flow
+- physical handover packaging
 
 Do not invert this order.
 
@@ -291,6 +351,8 @@ The year should be measured with a small set of metrics.
 - mismatch root-cause closure time
 - dependency freshness violations
 - auto-quarantine rate
+- evidence payload ingestion p50 / p95 latency
+- evidence payload size distribution
 
 ### Workflow metrics
 
@@ -298,6 +360,8 @@ The year should be measured with a small set of metrics.
 - approval completeness rate
 - evidence closure rate
 - replay verification success rate
+- edge node reconciliation time after reconnect
+- twin-settlement completion time after governed action close
 
 ### Product metrics
 
@@ -305,6 +369,7 @@ The year should be measured with a small set of metrics.
 - operator time to explain a decision
 - time to investigate a failed transfer
 - number of required manual trust-ops steps per transfer
+- time for a third-party verifier to validate one exported transfer package
 
 ## Ownership Model
 
@@ -338,6 +403,7 @@ ownership lanes:
 - design-partner workflow
 - onboarding path
 - operational metrics and sign-off
+- hardware-in-the-loop validation
 
 This helps prevent "everything is infra" drift.
 
@@ -387,14 +453,39 @@ Counter:
 
 - treat verification and evidence as first-class release gates
 
+### Risk 5: The edge-to-cloud reality gap
+
+Symptom:
+
+- the governed transfer works in centralized simulation but breaks under
+  intermittent networking, sensor noise, or physical hardware latency
+
+Counter:
+
+- require Q2 hot-path testing to include degraded edge-network conditions
+- require Q4 pilot evidence to come from actual hardware in the loop
+
+### Risk 6: Verification package dependency bloat
+
+Symptom:
+
+- a third party needs too much internal SeedCore infrastructure just to verify
+  one completed transfer
+
+Counter:
+
+- keep the Q4 verification package lightweight and self-contained
+- rely only on standard cryptographic primitives and exported proof artifacts,
+  not the full Kubernetes / Ray runtime
+
 ## 2026 Decision Rule
 
 When choosing between two tasks, prefer the one that makes this sentence more
 true:
 
 > An external agent can request a restricted transfer through SeedCore, SeedCore
-> can govern the action safely, and a third party can verify what happened
-> afterward.
+> can govern the action safely across the cloud and edge boundary, and a third
+> party can verify what happened afterward.
 
 If a task does not strengthen that sentence, it is probably not on the critical
 path.
@@ -407,6 +498,8 @@ SeedCore has had a successful 2026 if, by year end, it can honestly claim:
 - we have one operator-grade proof surface for it
 - we can prove both authorization and post-action closure
 - we can show denial, quarantine, and escalation as strengths, not edge cases
+- we can demonstrate the workflow with physical hardware and edge telemetry in
+  the loop
 - we occupy a necessary layer between frontier agents and real-world execution
 
 That is enough to matter.
