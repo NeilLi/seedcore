@@ -360,6 +360,9 @@ class ReplayService:
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(trust_gap_codes),
             "authority_consistency_hash": authority_consistency.get("hash"),
+            "operator_actions": self._operator_actions_for_authority_issues(
+                authority_consistency.get("issues") or []
+            ),
         }
         if owner_context:
             proof_payload["owner_context"] = owner_context
