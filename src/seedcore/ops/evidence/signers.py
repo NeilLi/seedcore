@@ -485,7 +485,7 @@ DEFAULT_SIGNER_POLICIES: dict[str, ArtifactSignerPolicy] = {
         artifact_type="transition_receipt",
         allowed_schemes=("hmac_sha256", "ed25519", ECDSA_P256_SCHEME),
         default_scheme="hmac_sha256",
-        preferred_scheme=ECDSA_P256_SCHEME,
+        preferred_scheme="ed25519",
         require_attestation=False,
         config_profile="transition_receipt_attested",
     ),
@@ -1001,7 +1001,10 @@ def _derive_key_ref(public_key_bytes: bytes) -> str:
 
 
 def _load_ed25519_private_key_from_env() -> Optional[Ed25519PrivateKey]:
-    encoded = os.getenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64", "").strip()
+    encoded = (
+        os.getenv("SEEDCORE_HAL_RECEIPT_PRIVATE_KEY_B64", "").strip()
+        or os.getenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_B64", "").strip()
+    )
     pem = os.getenv("SEEDCORE_EVIDENCE_ED25519_PRIVATE_KEY_PEM", "").strip()
     if pem:
         try:

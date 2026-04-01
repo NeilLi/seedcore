@@ -8,6 +8,22 @@ import mock_ray_dependencies  # noqa: F401
 import pytest
 
 from seedcore.hal.custody.transition_receipts import build_transition_receipt
+
+
+@pytest.fixture(autouse=True)
+def _stub_rust_execution_token_for_tool_manager(monkeypatch):
+    monkeypatch.setattr(
+        "seedcore.tools.manager.verify_execution_token_with_rust",
+        lambda token, now=None: {"verified": True},
+    )
+    monkeypatch.setattr(
+        "seedcore.tools.manager.enforce_execution_token_with_rust",
+        lambda token, request_context, now=None: {"allowed": True},
+    )
+
+
+def _stub_token_signature() -> dict:
+    return {"signer_type": "test", "signing_scheme": "stub"}
 from seedcore.agents.base import BaseAgent
 from seedcore.agents.roles import RoleProfile, RoleRegistry, Specialization
 from seedcore.models.task_payload import TaskPayload
@@ -47,7 +63,7 @@ async def test_tool_manager_requires_execution_token_for_actuation():
             "token_id": "tok-1",
             "intent_id": "intent-1",
             "valid_until": "2099-01-01T00:00:00+00:00",
-            "signature": "sig-1",
+            "signature": _stub_token_signature(),
             "constraints": {
                 "action_type": "MOVE",
                 "target_zone": "zone-a",
@@ -79,7 +95,11 @@ async def test_tool_manager_requires_execution_token_for_actuation():
 
 
 @pytest.mark.asyncio
-async def test_tool_manager_rejects_mismatched_execution_token_constraints():
+async def test_tool_manager_rejects_mismatched_execution_token_constraints(monkeypatch):
+    monkeypatch.setattr(
+        "seedcore.tools.manager.enforce_execution_token_with_rust",
+        lambda token, request_context, now=None: {"allowed": False, "error_code": "target_zone"},
+    )
     manager = ToolManager()
     await manager.register_internal(DummyReachyMotionTool())
 
@@ -94,7 +114,7 @@ async def test_tool_manager_rejects_mismatched_execution_token_constraints():
             "token_id": "tok-1",
             "intent_id": "intent-1",
             "valid_until": "2099-01-01T00:00:00+00:00",
-            "signature": "sig-1",
+            "signature": _stub_token_signature(),
             "constraints": {"target_zone": "zone-b"},
         },
     }
@@ -146,7 +166,7 @@ async def test_base_agent_closes_governed_custody_loop():
                     "token_id": "tok-governed-1",
                     "intent_id": "intent-governed-1",
                     "valid_until": "2099-01-01T00:00:00+00:00",
-                    "signature": "sig-governed-1",
+                    "signature": _stub_token_signature(),
                 },
                 "policy_decision": {"allowed": True},
             },
@@ -197,7 +217,7 @@ async def test_tool_manager_requires_execution_token_for_memory_write():
             "token_id": "tok-1",
             "intent_id": "intent-1",
             "valid_until": "2099-01-01T00:00:00+00:00",
-            "signature": "sig-1",
+            "signature": _stub_token_signature(),
             "constraints": {
                 "action_type": "WRITE",
                 "target_zone": None,
@@ -240,7 +260,7 @@ async def test_tool_manager_requires_execution_token_for_custody_ledger_record()
             "token_id": "tok-2",
             "intent_id": "intent-2",
             "valid_until": "2099-01-01T00:00:00+00:00",
-            "signature": "sig-2",
+            "signature": _stub_token_signature(),
             "constraints": {
                 "action_type": "RECORD",
                 "asset_id": "task-2",

@@ -139,7 +139,12 @@ class _FakeHolonFabric:
         return None
 
 
-def test_tool_manager_memory_routes_use_runtime_contracts():
+def test_tool_manager_memory_routes_use_runtime_contracts(monkeypatch):
+    monkeypatch.setattr(
+        ToolManager,
+        "_requires_execution_token",
+        lambda self, name: False,
+    )
     mw_manager = _FakeMwManager()
     holon_fabric = _FakeHolonFabric()
     manager = ToolManager(mw_manager=mw_manager, holon_fabric=holon_fabric)

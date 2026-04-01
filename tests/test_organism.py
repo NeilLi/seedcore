@@ -598,12 +598,11 @@ async def test_organism_core_execute_on_agent(mock_ray, mock_config_file):
     assert result["success"] is True
     evidence = result.get("meta", {}).get("evidence_bundle", {})
     assert evidence.get("intent_ref") == "governance://action-intent/intent-test-123"
-    assert isinstance(evidence.get("executed_at"), str)
-    assert "telemetry_snapshot" in evidence
-    assert "execution_receipt" in evidence
-    assert isinstance(
-        evidence.get("execution_receipt", {}).get("signature"), str
-    )
+    assert isinstance(evidence.get("created_at"), str)
+    exec_summary = evidence.get("evidence_inputs", {}).get("execution_summary", {})
+    assert isinstance(exec_summary.get("executed_at"), str)
+    assert evidence.get("telemetry_refs")
+    assert isinstance(evidence.get("signature"), str)
     # Verify execute_task.remote was called
     execute_task_remote_mock.assert_called_once()
 

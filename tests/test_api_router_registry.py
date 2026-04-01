@@ -9,9 +9,11 @@ def test_active_router_specs_preserve_mount_order():
     assert ACTIVE_ROUTER_SPECS == (
         ("Tasks", "tasks_router"),
         ("Replay", "replay_router"),
+        ("Agent Actions", "agent_actions_router"),
         ("Source Registrations", "source_registrations_router"),
         ("Tracking Events", "tracking_events_router"),
         ("Identity", "identity_router"),
+        ("Transfer Approvals", "transfer_approvals_router"),
         ("Custody", "custody_router"),
         ("Control", "control_router"),
         ("Advisory", "advisory_router"),

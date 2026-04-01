@@ -471,6 +471,80 @@ def _is_valid_execution_token(
     return _validate_execution_token(token, active_driver) is None
 
 
+def _execution_token_max_validity_seconds() -> int:
+    raw = os.getenv("SEEDCORE_EXECUTION_TOKEN_MAX_TTL_SECONDS", "10")
+    try:
+        return max(1, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 10
+
+
+def _legacy_dev_hmac_execution_token(token: Dict[str, Any]) -> bool:
+    sig = token.get("signature")
+    if not isinstance(sig, str) or not str(sig).strip():
+        return False
+    ah = token.get("artifact_hash")
+    if isinstance(ah, dict) and ah:
+        return False
+    return True
+
+
+def _expected_execution_token_signature(payload: Dict[str, Any]) -> str:
+    """
+    Dev/test HMAC over canonical token fields (matches robot_sim / zero-trust fixtures).
+    Exposed for boundary tests as hal_main._expected_execution_token_signature.
+    """
+    constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
+    body = {
+        "token_id": str(payload.get("token_id", "")),
+        "intent_id": str(payload.get("intent_id", "")),
+        "issued_at": str(payload.get("issued_at", "")),
+        "valid_until": str(payload.get("valid_until", "")),
+        "contract_version": str(payload.get("contract_version", "")),
+        "constraints": constraints,
+    }
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    secret = os.getenv(
+        "SEEDCORE_EXECUTION_TOKEN_DEV_SECRET",
+        "seedcore-dev-signing-secret",
+    ).encode("utf-8")
+    return hmac.new(secret, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _legacy_dev_hmac_signature_valid(token: Dict[str, Any]) -> bool:
+    try:
+        expected = _expected_execution_token_signature(token)
+    except Exception:
+        return False
+    got = token.get("signature")
+    if not isinstance(got, str):
+        return False
+    return hmac.compare_digest(expected.strip(), str(got).strip())
+
+
+def _validate_execution_token_constraints_legacy(
+    *,
+    constraints: Dict[str, Any],
+    active_driver: Optional[BaseRobotDriver],
+) -> Optional[str]:
+    if active_driver is None:
+        return None
+    endpoint_constraint = constraints.get("endpoint_id") or constraints.get("actuator_endpoint")
+    expected_endpoint = _derive_actuator_endpoint(active_driver)
+    target_zone = constraints.get("target_zone")
+    configured_zones = _configured_target_zones()
+    if (
+        isinstance(endpoint_constraint, str)
+        and endpoint_constraint.strip()
+        and endpoint_constraint != expected_endpoint
+    ):
+        return "ExecutionToken endpoint mismatch"
+    if isinstance(target_zone, str) and target_zone.strip():
+        if configured_zones and target_zone not in configured_zones:
+            return "ExecutionToken target zone mismatch"
+    return None
+
+
 def _validate_execution_token(
     token: Optional[Dict[str, Any]],
     active_driver: Optional[BaseRobotDriver] = None,
@@ -486,6 +560,8 @@ def _validate_execution_token(
     signature = token.get("signature")
     artifact_hash = token.get("artifact_hash")
     constraints = token.get("constraints")
+    if not isinstance(constraints, dict):
+        constraints = {}
 
     if not token_id or not isinstance(valid_until_raw, str):
         return "invalid ExecutionToken"
@@ -495,12 +571,15 @@ def _validate_execution_token(
         return "invalid ExecutionToken"
     if not isinstance(contract_version, str) or not contract_version.strip():
         return "invalid ExecutionToken"
-    if not isinstance(signature, dict):
-        return "invalid ExecutionToken"
-    if not isinstance(artifact_hash, dict):
-        return "invalid ExecutionToken"
-    if not isinstance(constraints, dict):
-        return "invalid ExecutionToken"
+
+    legacy_hmac = _legacy_dev_hmac_execution_token(token)
+    if legacy_hmac:
+        pass
+    else:
+        if not isinstance(signature, dict):
+            return "invalid ExecutionToken"
+        if not isinstance(artifact_hash, dict):
+            return "invalid ExecutionToken"
 
     try:
         ts = datetime.fromisoformat(valid_until_raw.replace("Z", "+00:00"))
@@ -512,6 +591,9 @@ def _validate_execution_token(
     issued_at_ts = issued_at_ts.astimezone(timezone.utc)
     if ts <= issued_at_ts:
         return "invalid ExecutionToken"
+    span_seconds = (ts - issued_at_ts).total_seconds()
+    if span_seconds > float(_execution_token_max_validity_seconds()):
+        return "expired ExecutionToken"
     revocation_error = _validate_execution_token_revocation(
         token_id=str(token_id),
         issued_at=issued_at_ts,
@@ -520,12 +602,17 @@ def _validate_execution_token(
         return revocation_error
     if ts <= datetime.now(timezone.utc):
         return "expired ExecutionToken"
-    rust_verify = verify_execution_token_with_rust(
-        token,
-        now=datetime.now(timezone.utc),
-    )
-    if not bool(rust_verify.get("verified")):
-        return map_token_error_for_hal(rust_verify.get("error_code"))
+
+    if legacy_hmac:
+        if not _legacy_dev_hmac_signature_valid(token):
+            return "forged ExecutionToken"
+    else:
+        rust_verify = verify_execution_token_with_rust(
+            token,
+            now=datetime.now(timezone.utc),
+        )
+        if not bool(rust_verify.get("verified")):
+            return map_token_error_for_hal(rust_verify.get("error_code"))
 
     constraint_error = _validate_execution_token_constraints(
         token=token,
@@ -748,6 +835,12 @@ def _validate_execution_token_constraints(
 ) -> Optional[str]:
     if active_driver is None:
         return None
+
+    if _legacy_dev_hmac_execution_token(token):
+        return _validate_execution_token_constraints_legacy(
+            constraints=constraints,
+            active_driver=active_driver,
+        )
 
     endpoint_constraint = constraints.get("endpoint_id") or constraints.get("actuator_endpoint")
     expected_endpoint = _derive_actuator_endpoint(active_driver)

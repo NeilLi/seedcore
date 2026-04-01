@@ -157,12 +157,12 @@ async def test_week4_allow_to_endpoint_response_and_evidence_capture() -> None:
         )
 
         bundle = out["meta"]["evidence_bundle"]
-        assert bundle["execution_receipt"]["actuator_endpoint"] == response["actuator_endpoint"]
-        assert bundle["execution_receipt"]["actuator_result_hash"] == response["result_hash"]
-        assert (
-            bundle["execution_receipt"]["transition_receipt"]["payload_hash"]
-            == response["transition_receipt"]["payload_hash"]
-        )
+        summary = bundle["evidence_inputs"]["execution_summary"]
+        assert summary["actuator_endpoint"] == response["actuator_endpoint"]
+        assert summary["actuator_result_hash"] == response["result_hash"]
+        transition_receipts = bundle["evidence_inputs"]["transition_receipts"]
+        assert transition_receipts
+        assert transition_receipts[0]["payload_hash"] == response["transition_receipt"]["payload_hash"]
     finally:
         driver.disconnect()
         hal_main.driver = original
@@ -211,7 +211,7 @@ async def test_robot_sim_endpoint_emits_ed25519_transition_receipt_when_key_conf
         )
 
         receipt = response["transition_receipt"]
-        assert receipt["proof_type"] == "ed25519"
+        assert receipt["signer_metadata"]["signing_scheme"] == "ed25519"
         assert verify_transition_receipt(
             receipt,
             expected_intent_id="intent-week4",
