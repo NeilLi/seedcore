@@ -73,6 +73,12 @@ python scripts/host/verify_rct_hot_path_shadow.py
 python scripts/host/benchmark_rct_hot_path.py --requests 40 --warmup 4 --concurrency 4
 ```
 
+Parity mismatch drill (shadow promotion gate): truncates the JSONL ring, fills the promotion window with clean `allow_case` runs, restarts the API with `SEEDCORE_HOT_PATH_PARITY_DRILL_STABLE_DENY=1` (stable path forced deny while the hot path still allows), then posts one more evaluation. Expect a `parity_ok: false` line in the log, `promotion_eligible` / `enforce_ready` false on `GET .../pdp/hot-path/status`, and the sliding window to reflect the mismatch (not a full “reset” of unrelated history). The script **SIGKILLs any TCP listener on `PORT` (default 8002)** until the port is free, then starts its own `uvicorn`; if another API keeps respawning on that port, use `PORT=8012` (and matching `BASE_URL`) or stop the other supervisor first.
+
+```bash
+bash scripts/host/drill_hot_path_parity_mismatch.sh
+```
+
 ### Experimental host-Ray mode
 
 Use this only when you need local Ray/Serve/bootstrap behavior.

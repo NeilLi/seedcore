@@ -34,6 +34,7 @@ HOT_PATH_CONTRACT_VERSION = "pdp.hot_path.asset_transfer.v1"
 HOT_PATH_MODE_ENV = "SEEDCORE_RCT_HOT_PATH_MODE"
 HOT_PATH_CANARY_PERCENT_ENV = "SEEDCORE_RCT_HOT_PATH_CANARY_PERCENT"
 HOT_PATH_PROMOTION_GATE_DISABLED_ENV = "SEEDCORE_HOT_PATH_PROMOTION_GATE_DISABLED"
+HOT_PATH_PARITY_DRILL_STABLE_DENY_ENV = "SEEDCORE_HOT_PATH_PARITY_DRILL_STABLE_DENY"
 HOT_PATH_STALE_GRAPH_MAX_AGE_SECONDS = int(
     os.getenv("SEEDCORE_RCT_HOT_PATH_GRAPH_MAX_AGE_SECONDS", "600")
 )
@@ -196,6 +197,41 @@ def _promotion_gate_disabled() -> bool:
         "yes",
         "on",
     )
+
+
+def _parity_drill_stable_path_shift_enabled() -> bool:
+    """Operator-only: simulate stable-path deny while hot-path still allows (parity mismatch)."""
+    return str(os.getenv(HOT_PATH_PARITY_DRILL_STABLE_DENY_ENV, "")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _baseline_for_parity_recording(
+    baseline: PolicyDecision,
+    candidate: PolicyDecision,
+) -> PolicyDecision:
+    if not _parity_drill_stable_path_shift_enabled():
+        return baseline
+    b_disp = str(baseline.disposition or "deny").strip().lower()
+    c_disp = str(candidate.disposition or "deny").strip().lower()
+    if c_disp == "allow" and b_disp == "allow":
+        logger.warning(
+            "%s active: recording synthetic stable-path deny against hot-path allow for parity evidence",
+            HOT_PATH_PARITY_DRILL_STABLE_DENY_ENV,
+        )
+        return baseline.model_copy(
+            deep=True,
+            update={
+                "disposition": "deny",
+                "allowed": False,
+                "deny_code": "operator_parity_drill_stable_path_deny",
+                "reason": "Parity drill: simulated stable-path policy deny (env parity drill).",
+            },
+        )
+    return baseline
 
 
 def _parity_persist_event(*, parity: Mapping[str, Any], latency_ms: int) -> None:
@@ -598,7 +634,7 @@ def evaluate_pdp_hot_path(
         latency_ms=response.latency_ms,
         parity=_shadow_parity_result(
             request=request,
-            baseline=baseline_decision,
+            baseline=_baseline_for_parity_recording(baseline_decision, decision),
             candidate=decision,
         ),
     )

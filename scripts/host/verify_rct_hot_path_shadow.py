@@ -137,6 +137,7 @@ def _build_request(
     case_dir: Path,
     *,
     persisted_approval: dict[str, Any],
+    request_id_suffix: str | None = None,
 ) -> dict[str, Any]:
     action_intent_input = _read_json(case_dir / "input.action_intent.json")
     asset_state = _read_json(case_dir / "input.asset_state.json")
@@ -147,6 +148,8 @@ def _build_request(
         else _read_json(case_dir / "input.approval_envelope.json")
     )
     request_id = f"shadow:{case_dir.name}"
+    if request_id_suffix:
+        request_id = f"{request_id}:{request_id_suffix.strip()}"
     issued_at = str(approval_envelope.get("created_at") or datetime.now(timezone.utc).isoformat())
     expires_at = str(approval_envelope.get("expires_at") or issued_at)
     requested_at = issued_at
@@ -280,6 +283,8 @@ def run_verification(
     *,
     base_url: str,
     artifact_root: Path | None = DEFAULT_ARTIFACT_DIR,
+    only_cases: tuple[str, ...] | None = None,
+    request_id_suffix: str | None = None,
 ) -> dict[str, Any]:
     evaluate_url = f"{base_url.rstrip('/')}/pdp/hot-path/evaluate?debug=true"
     status_url = f"{base_url.rstrip('/')}/pdp/hot-path/status"
@@ -290,10 +295,15 @@ def run_verification(
     before_mismatched = int(status_before.get("mismatched") or 0)
 
     rows: list[dict[str, Any]] = []
-    for case_name in CANONICAL_CASES:
+    case_sequence = only_cases if only_cases else CANONICAL_CASES
+    for case_name in case_sequence:
         case_dir = FIXTURE_ROOT / case_name
         persisted_approval = _persist_authoritative_approval(base_url, case_dir)
-        payload = _build_request(case_dir, persisted_approval=persisted_approval)
+        payload = _build_request(
+            case_dir,
+            persisted_approval=persisted_approval,
+            request_id_suffix=request_id_suffix,
+        )
         if active_snapshot:
             payload["policy_snapshot_ref"] = active_snapshot
             payload["action_intent"]["action"]["security_contract"]["version"] = active_snapshot
@@ -358,9 +368,30 @@ def main() -> int:
         default="http://127.0.0.1:8002/api/v1",
         help="Runtime API base URL.",
     )
+    parser.add_argument(
+        "--only",
+        dest="only_cases",
+        default="",
+        help="Comma-separated subset of canonical cases (e.g. allow_case).",
+    )
+    parser.add_argument(
+        "--request-id-suffix",
+        default="",
+        help="Append to shadow request_id for deduplication across repeated runs.",
+    )
     args = parser.parse_args()
 
-    summary = run_verification(base_url=args.base_url, artifact_root=DEFAULT_ARTIFACT_DIR)
+    only_tuple: tuple[str, ...] | None = None
+    if str(args.only_cases or "").strip():
+        only_tuple = tuple(c.strip() for c in str(args.only_cases).split(",") if c.strip())
+    suffix = str(args.request_id_suffix or "").strip() or None
+
+    summary = run_verification(
+        base_url=args.base_url,
+        artifact_root=DEFAULT_ARTIFACT_DIR,
+        only_cases=only_tuple,
+        request_id_suffix=suffix,
+    )
 
     print("Restricted Custody Transfer Hot-Path Shadow")
     print(f"mode: {summary.get('mode')}")
