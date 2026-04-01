@@ -229,8 +229,11 @@ Capture bundle:
 
 What should be done next:
 
-1. Freeze and version the captured runtime sign-off bundle as a release
-   artifact.
+1. ~~Freeze and version the captured runtime sign-off bundle as a release
+   artifact.~~ **Done (2026-04-01).** Canonical tree: `tests/fixtures/demo/rct_signoff_v1/`
+   with `manifest.json` checksums; machine verification:
+   `python scripts/tools/verify_rct_signoff_bundle.py`; release record and tarball:
+   `release/rct_slice1_live_signoff_v1/README.md`.
 2. Promote capture verification into a repeatable CI/host gate (shadow parity +
    runtime matrix + replay-chain verify).
 3. Define explicit criteria for any future `shadow` -> `enforce` hot-path

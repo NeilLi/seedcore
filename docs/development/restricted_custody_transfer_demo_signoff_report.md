@@ -172,6 +172,12 @@ Capture root:
 
 - `.local-runtime/rct_live_signoff/20260330T061828Z`
 
+**Frozen release artifact (repo):** the same capture is pinned under
+`tests/fixtures/demo/rct_signoff_v1/` with a SHA-256 manifest; verify with
+`python scripts/tools/verify_rct_signoff_bundle.py`. Distributable tarball and
+checksums live under `release/rct_slice1_live_signoff_v1/` (see that folder’s
+`README.md`).
+
 Captured matrix:
 
 | case | audit_id | disposition | business_state | approval_envelope_id | approval_envelope_version | approval_binding_hash | policy_receipt_id | transition_receipt_ids |
