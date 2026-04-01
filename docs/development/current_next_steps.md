@@ -519,6 +519,10 @@ capabilities:
 - external verification surface: a partner-visible trust page or API for
   approved stakeholders only
 
+Authoritative Q2 product specification for this phase:
+
+- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
+
 If Phase D expands beyond that narrow proof surface before the canonical
 workflow is demonstrably credible, it will dilute the product story and slow
 the trust proof.
@@ -616,6 +620,8 @@ Default build order:
 3. publish the asset-centric forensic view for the canonical transfer chain
 4. expose partner-visible replay or trust-page verification for approved
    stakeholders
+5. implement the four Q2 UI screens in order: transfer queue, transfer detail,
+   asset-centric forensics, replay/verification view
 
 Success condition:
 

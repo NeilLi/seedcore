@@ -214,6 +214,7 @@ Do not let the phase drift into:
 - [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
 - [restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
 - [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
+- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
 - [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md)
 - [rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md)
 - [pkg_authz_graph_rfc.md](/Users/ningli/project/seedcore/docs/development/pkg_authz_graph_rfc.md)

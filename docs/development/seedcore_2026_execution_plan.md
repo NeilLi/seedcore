@@ -261,6 +261,10 @@ Required outcomes:
   - physical replay and telemetry timeline
 - runbooks for lookup, exception handling, and investigation
 
+Q2 product spec for this workstream:
+
+- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
+
 ### Workstream 5: Pilot Packaging
 
 Goal:
@@ -306,6 +310,8 @@ first replay-grade forensic schema.
 ### Must-ship items
 
 - freeze and version the current runtime-up RCT sign-off bundle
+- freeze the Q2 Audit-Trail UI contract for the four-screen verification surface
+  (`Transfers`, transfer detail, asset forensics, replay/verification)
 - implement runtime-selectable hot-path mode semantics
 - persist parity events and build `1,000`-run exportable evidence
 - instrument hot-path observability consistently across Kubernetes and host-mode
