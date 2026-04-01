@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import zlib
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,13 +28,20 @@ from seedcore.models.pdp_hot_path import (
     HotPathTelemetryContext,
 )
 from seedcore.ops.pkg.manager import get_global_pkg_manager
+from seedcore.ops.hot_path_parity_log import get_hot_path_parity_logger, parity_log_file_path
 
 HOT_PATH_CONTRACT_VERSION = "pdp.hot_path.asset_transfer.v1"
 HOT_PATH_MODE_ENV = "SEEDCORE_RCT_HOT_PATH_MODE"
+HOT_PATH_CANARY_PERCENT_ENV = "SEEDCORE_RCT_HOT_PATH_CANARY_PERCENT"
+HOT_PATH_PROMOTION_GATE_DISABLED_ENV = "SEEDCORE_HOT_PATH_PROMOTION_GATE_DISABLED"
 HOT_PATH_STALE_GRAPH_MAX_AGE_SECONDS = int(
     os.getenv("SEEDCORE_RCT_HOT_PATH_GRAPH_MAX_AGE_SECONDS", "600")
 )
-HOT_PATH_SUPPORTED_MODES = {"shadow", "enforce"}
+HOT_PATH_SUPPORTED_MODES = frozenset({"shadow", "canary", "enforce"})
+HOT_PATH_PROMOTION_WINDOW_N = int(os.getenv("SEEDCORE_HOT_PATH_PROMOTION_WINDOW_N", "1000"))
+HOT_PATH_PROMOTION_MIN_PARITY_RATIO = float(
+    os.getenv("SEEDCORE_HOT_PATH_PROMOTION_MIN_PARITY_RATIO", "0.999")
+)
 
 REASON_CODE_DEFAULTS = {
     "allow": "restricted_custody_transfer_allowed",
@@ -55,22 +63,26 @@ class HotPathShadowStats:
     false_positive_allow_count: int = 0
     last_false_positive_allow_at: str | None = None
     latencies_ms: deque[int] = field(default_factory=lambda: deque(maxlen=2048))
-    recent_results: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200))
+    recent_results: deque[dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=HOT_PATH_PROMOTION_WINDOW_N)
+    )
     lock: Lock = field(default_factory=Lock)
 
     def record(self, *, latency_ms: int, parity: Mapping[str, Any]) -> None:
+        parity_copy = dict(parity)
         with self.lock:
             self.total += 1
             now = datetime.now(timezone.utc).isoformat()
             self.last_run_at = now
             self.latencies_ms.append(int(latency_ms))
-            parity_ok = bool(parity.get("parity_ok"))
+            parity_ok = bool(parity_copy.get("parity_ok"))
             if parity_ok:
                 self.parity_ok += 1
             else:
                 self.mismatched += 1
                 self.last_mismatch_at = now
-            self.recent_results.append(dict(parity))
+            self.recent_results.append(parity_copy)
+        _parity_persist_event(parity=parity_copy, latency_ms=int(latency_ms))
 
     def record_false_positive_allow(
         self,
@@ -82,28 +94,28 @@ class HotPathShadowStats:
         baseline_reason_code: str | None = None,
         candidate_reason_code: str | None = None,
     ) -> None:
+        row = {
+            "request_id": request_id,
+            "asset_ref": asset_ref,
+            "parity_ok": False,
+            "mismatches": ["false_positive_allow"],
+            "baseline": {
+                "disposition": baseline_disposition,
+                "reason_code": baseline_reason_code or "",
+            },
+            "candidate": {
+                "disposition": candidate_disposition,
+                "reason_code": candidate_reason_code or "",
+            },
+            "signal": "false_positive_allow",
+            "signaled_at": datetime.now(timezone.utc).isoformat(),
+        }
         with self.lock:
-            now = datetime.now(timezone.utc).isoformat()
+            now = row["signaled_at"]
             self.false_positive_allow_count += 1
             self.last_false_positive_allow_at = now
-            self.recent_results.append(
-                {
-                    "request_id": request_id,
-                    "asset_ref": asset_ref,
-                    "parity_ok": False,
-                    "mismatches": ["false_positive_allow"],
-                    "baseline": {
-                        "disposition": baseline_disposition,
-                        "reason_code": baseline_reason_code or "",
-                    },
-                    "candidate": {
-                        "disposition": candidate_disposition,
-                        "reason_code": candidate_reason_code or "",
-                    },
-                    "signal": "false_positive_allow",
-                    "signaled_at": now,
-                }
-            )
+            self.recent_results.append(row)
+        _parity_persist_event(parity=row, latency_ms=0)
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -136,10 +148,81 @@ _TRANSFER_APPROVAL_DAO = TransferApprovalEnvelopeDAO()
 
 
 def resolve_hot_path_mode() -> str:
+    """Runtime PDP hot-path mode (read on each call — no process restart required)."""
     raw_mode = str(os.getenv(HOT_PATH_MODE_ENV, "shadow")).strip().lower()
     if raw_mode in HOT_PATH_SUPPORTED_MODES:
         return raw_mode
     return "shadow"
+
+
+def resolve_hot_path_canary_percent() -> int:
+    """When mode is `canary`, fraction of requests (0–100) that use candidate-authoritative PDP."""
+    try:
+        pct = int(str(os.getenv(HOT_PATH_CANARY_PERCENT_ENV, "10")).strip())
+    except ValueError:
+        return 10
+    return max(0, min(100, pct))
+
+
+def hot_path_authority_uses_candidate(request_id: str) -> bool:
+    """
+    PDP authority selection for Restricted Custody Transfer on the coordinator path.
+
+    - shadow: baseline governance is authoritative; hot path runs for parity only.
+    - enforce: hot-path (compiled-authz) decision is authoritative (fail-closed on errors).
+    - canary: deterministic per-request mix — a canary_percent slice uses the hot path as authoritative.
+    """
+    mode = resolve_hot_path_mode()
+    if mode == "enforce":
+        return True
+    if mode == "shadow":
+        return False
+    if mode == "canary":
+        pct = resolve_hot_path_canary_percent()
+        if pct <= 0:
+            return False
+        if pct >= 100:
+            return True
+        rid = str(request_id or "").strip() or "anonymous"
+        bucket = zlib.adler32(rid.encode("utf-8")) % 100
+        return bucket < pct
+    return False
+
+
+def _promotion_gate_disabled() -> bool:
+    return str(os.getenv(HOT_PATH_PROMOTION_GATE_DISABLED_ENV, "")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _parity_persist_event(*, parity: Mapping[str, Any], latency_ms: int) -> None:
+    logger_inst = get_hot_path_parity_logger()
+    event = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": int(latency_ms),
+        "resolved_mode": resolve_hot_path_mode(),
+        **dict(parity),
+    }
+    logger_inst.append(event)
+
+
+def compute_hot_path_promotion_status() -> dict[str, Any]:
+    """
+    Mathematical promotion gate: last N persisted runs must meet minimum parity ratio (default 99.9%).
+    N and ratio are overridable via SEEDCORE_HOT_PATH_PROMOTION_WINDOW_N and
+    SEEDCORE_HOT_PATH_PROMOTION_MIN_PARITY_RATIO.
+    """
+    stats = get_hot_path_parity_logger().window_stats()
+    gate_disabled = _promotion_gate_disabled()
+    return {
+        **stats,
+        "promotion_gate_disabled": gate_disabled,
+        "promotion_eligible": bool(stats.get("promotion_eligible")),
+        "parity_log_path": str(parity_log_file_path()),
+    }
 
 
 def build_hot_path_request(
@@ -525,6 +608,17 @@ def evaluate_pdp_hot_path(
 def hot_path_shadow_status() -> dict[str, Any]:
     status = _HOT_PATH_SHADOW_STATS.snapshot()
     runtime_status = _resolve_hot_path_runtime_status()
+    promotion = compute_hot_path_promotion_status()
+    runtime_ready = bool(
+        runtime_status.get("authz_graph_ready")
+        and runtime_status.get("graph_freshness_ok")
+        and runtime_status.get("restricted_transfer_ready")
+    )
+    enforce_ready = bool(
+        runtime_ready
+        and (promotion.get("promotion_gate_disabled") or promotion.get("promotion_eligible"))
+    )
+    mode = str(status.get("resolved_mode") or "shadow")
     status.update(
         {
             "active_snapshot_version": runtime_status.get("active_snapshot_version"),
@@ -533,11 +627,10 @@ def hot_path_shadow_status() -> dict[str, Any]:
             "graph_freshness_ok": runtime_status.get("graph_freshness_ok"),
             "authz_graph_ready": runtime_status.get("authz_graph_ready"),
             "restricted_transfer_ready": runtime_status.get("restricted_transfer_ready"),
-            "enforce_ready": bool(
-                runtime_status.get("authz_graph_ready")
-                and runtime_status.get("graph_freshness_ok")
-                and runtime_status.get("restricted_transfer_ready")
-            ),
+            "canary_percent": resolve_hot_path_canary_percent() if mode == "canary" else None,
+            "runtime_ready": runtime_ready,
+            "promotion": promotion,
+            "enforce_ready": enforce_ready,
         }
     )
     return status

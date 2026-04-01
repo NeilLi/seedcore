@@ -112,6 +112,7 @@ from ..ops.pdp_hot_path import (
     build_hot_path_failure_response,
     build_hot_path_request,
     evaluate_pdp_hot_path,
+    hot_path_authority_uses_candidate,
     record_false_positive_hot_path_signal,
     resolve_hot_path_mode,
 )
@@ -1556,7 +1557,8 @@ class Coordinator:
             request_id=str(payload.get("task_id") or policy_case.action_intent.intent_id),
         )
         hot_path_mode = resolve_hot_path_mode()
-        if hot_path_mode == "shadow":
+        use_hot_path_authority = hot_path_authority_uses_candidate(hot_path_request.request_id)
+        if not use_hot_path_authority:
             try:
                 evaluate_pdp_hot_path(
                     hot_path_request,
@@ -1566,7 +1568,9 @@ class Coordinator:
                 )
             except Exception:
                 logger.warning(
-                    "Hot-path shadow evaluation failed; keeping baseline-authoritative decision.",
+                    "Hot-path parity evaluation failed; keeping baseline-authoritative decision "
+                    "(mode=%s).",
+                    hot_path_mode,
                     exc_info=True,
                 )
             return baseline_governance

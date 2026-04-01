@@ -223,6 +223,7 @@ async def test_build_action_intent_governance_context_keeps_baseline_authority_i
         patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-rct-001")), \
         patch.object(cs, "evaluate_pdp_hot_path", return_value=_hot_path_response()) as hot_path_eval, \
         patch.object(cs, "resolve_hot_path_mode", return_value="shadow"), \
+        patch.object(cs, "hot_path_authority_uses_candidate", return_value=False), \
         patch.object(cs, "build_governance_context_from_hot_path_response") as hot_path_governance:
         result = await coordinator._build_action_intent_governance_context(
             payload=payload,
@@ -260,6 +261,83 @@ async def test_build_action_intent_governance_context_uses_hot_path_authority_in
         patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-rct-001")), \
         patch.object(cs, "evaluate_pdp_hot_path", return_value=_hot_path_response("allow")) as hot_path_eval, \
         patch.object(cs, "resolve_hot_path_mode", return_value="enforce"), \
+        patch.object(cs, "hot_path_authority_uses_candidate", return_value=True), \
+        patch.object(cs, "record_false_positive_hot_path_signal") as false_positive_signal, \
+        patch.object(cs, "build_governance_context_from_hot_path_response", return_value=hot_path_governance):
+        result = await coordinator._build_action_intent_governance_context(
+            payload=payload,
+            existing_governance={},
+            approved_source_registrations={},
+            authoritative_transfer_approval={},
+            relevant_twin_snapshot={},
+            telemetry_summary={},
+            evidence_summary={},
+        )
+
+    assert result == hot_path_governance
+    hot_path_eval.assert_called_once()
+    false_positive_signal.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_build_action_intent_governance_context_canary_respects_authority_bucket_off():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+    coordinator.cognitive_client = None
+
+    baseline_governance = {"policy_decision": {"allowed": True, "disposition": "allow"}}
+    policy_case = _fake_policy_case()
+    payload = {"task_id": "task-rct-canary", "params": {"governance": {}}}
+
+    with patch.object(cs, "prepare_policy_case", return_value=policy_case), \
+        patch.object(
+            cs,
+            "evaluate_intent",
+            return_value=PolicyDecision(allowed=True, disposition="allow", reason="baseline_allow"),
+        ), \
+        patch.object(cs, "build_governance_context_from_policy_case", return_value=baseline_governance), \
+        patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-canary")), \
+        patch.object(cs, "evaluate_pdp_hot_path", return_value=_hot_path_response()) as hot_path_eval, \
+        patch.object(cs, "resolve_hot_path_mode", return_value="canary"), \
+        patch.object(cs, "hot_path_authority_uses_candidate", return_value=False), \
+        patch.object(cs, "build_governance_context_from_hot_path_response") as hot_path_governance:
+        result = await coordinator._build_action_intent_governance_context(
+            payload=payload,
+            existing_governance={},
+            approved_source_registrations={},
+            authoritative_transfer_approval={},
+            relevant_twin_snapshot={},
+            telemetry_summary={},
+            evidence_summary={},
+        )
+
+    assert result == baseline_governance
+    hot_path_eval.assert_called_once()
+    hot_path_governance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_action_intent_governance_context_canary_uses_hot_path_when_bucket_on():
+    with patch.object(cs.Coordinator, "__init__", return_value=None):
+        coordinator = cs.Coordinator.__new__(cs.Coordinator)
+    coordinator.cognitive_client = None
+
+    policy_case = _fake_policy_case()
+    baseline_governance = {"policy_decision": {"allowed": False, "disposition": "deny"}}
+    hot_path_governance = {"policy_decision": {"allowed": True, "disposition": "allow"}}
+    payload = {"task_id": "task-rct-canary-2", "params": {"governance": {}}}
+
+    with patch.object(cs, "prepare_policy_case", return_value=policy_case), \
+        patch.object(
+            cs,
+            "evaluate_intent",
+            return_value=PolicyDecision(allowed=False, disposition="deny", reason="baseline_deny", deny_code="policy_denied"),
+        ), \
+        patch.object(cs, "build_governance_context_from_policy_case", return_value=baseline_governance), \
+        patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-canary-2")), \
+        patch.object(cs, "evaluate_pdp_hot_path", return_value=_hot_path_response("allow")) as hot_path_eval, \
+        patch.object(cs, "resolve_hot_path_mode", return_value="canary"), \
+        patch.object(cs, "hot_path_authority_uses_candidate", return_value=True), \
         patch.object(cs, "record_false_positive_hot_path_signal") as false_positive_signal, \
         patch.object(cs, "build_governance_context_from_hot_path_response", return_value=hot_path_governance):
         result = await coordinator._build_action_intent_governance_context(
@@ -328,6 +406,7 @@ async def test_build_action_intent_governance_context_fails_closed_when_hot_path
         patch.object(cs, "build_hot_path_request", return_value=SimpleNamespace(request_id="req-rct-001")), \
         patch.object(cs, "evaluate_pdp_hot_path", side_effect=RuntimeError("boom")), \
         patch.object(cs, "resolve_hot_path_mode", return_value="enforce"), \
+        patch.object(cs, "hot_path_authority_uses_candidate", return_value=True), \
         patch.object(cs, "build_hot_path_failure_response", return_value=failure_response) as failure_builder, \
         patch.object(cs, "build_governance_context_from_hot_path_response", return_value=failure_governance):
         result = await coordinator._build_action_intent_governance_context(
