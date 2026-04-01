@@ -14,6 +14,7 @@ import mock_eventizer_dependencies  # noqa: F401
 
 import seedcore.api.routers.agent_actions_router as agent_actions_router
 from seedcore.models.action_intent import ExecutionToken
+from seedcore.models.agent_action_gateway import AgentActionClosureRequest
 from seedcore.models.pdp_hot_path import HotPathDecisionView, HotPathEvaluateResponse
 
 
@@ -189,6 +190,95 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
     assert mapped_request.action_intent.resource.lot_id == "lot-8841"
     assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
     assert mapped_request.action_intent.action.parameters["value_usd"] == 1500.0
+
+
+def test_agent_actions_evaluate_maps_scope_and_fingerprint_fields(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    captured = {}
+
+    def _fake_evaluate(request, **kwargs):
+        captured["request"] = request
+        return _allow_hot_path_response()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    payload = _base_payload()
+    payload["principal"]["hardware_fingerprint"] = {
+        "fingerprint_id": "fp:jetson-orin-01",
+        "node_id": "node:jetson-orin-01",
+        "public_key_fingerprint": "sha256:fingerprint-key",
+    }
+    payload["authority_scope"] = {
+        "scope_id": "scope:rct-2026-0001",
+        "asset_ref": "asset:lot-8841",
+        "expected_from_zone": "vault_a",
+        "expected_to_zone": "handoff_bay_3",
+        "expected_coordinate_ref": "gazebo://warehouse/shelf/A3",
+    }
+    payload["forensic_context"] = {
+        "reason_trace_ref": "reason:trace-1",
+        "fingerprint_components": {
+            "economic_hash": "sha256:econ",
+            "physical_presence_hash": "sha256:presence",
+            "reasoning_hash": "sha256:reasoning",
+            "actuator_hash": "sha256:actuator",
+        },
+    }
+    payload["telemetry"]["current_zone"] = "vault_a"
+    payload["telemetry"]["current_coordinate_ref"] = "gazebo://warehouse/shelf/A3"
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200
+    mapped_request = captured["request"]
+    gateway_params = mapped_request.action_intent.action.parameters["gateway"]
+    assert gateway_params["scope_id"] == "scope:rct-2026-0001"
+    assert gateway_params["expected_coordinate_ref"] == "gazebo://warehouse/shelf/A3"
+    assert gateway_params["hardware_fingerprint_id"] == "fp:jetson-orin-01"
+    assert gateway_params["reason_trace_ref"] == "reason:trace-1"
+    body = response.json()
+    assert body["authority_scope_verdict"]["status"] == "matched"
+    assert body["fingerprint_verdict"]["status"] == "matched"
+
+
+def test_agent_actions_evaluate_denies_when_scope_coordinate_mismatch(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    payload = _base_payload()
+    payload["authority_scope"] = {
+        "scope_id": "scope:rct-2026-0001",
+        "asset_ref": "asset:lot-8841",
+        "expected_coordinate_ref": "gazebo://warehouse/shelf/A3",
+    }
+    payload["telemetry"]["current_coordinate_ref"] = "gazebo://warehouse/shelf/B9"
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "deny"
+    assert body["decision"]["reason_code"] == "coordinate_scope_mismatch"
+    assert body["execution_token"] is None
+    assert "ExecutionToken" not in body["minted_artifacts"]
+    assert "authority_scope_mismatch" in body["trust_gaps"]
 
 
 def test_agent_actions_evaluate_requires_identity_proof():
@@ -567,3 +657,55 @@ def test_agent_actions_closure_marks_replay_ready_when_settlement_applied(monkey
     assert body["settlement_status"] == "applied"
     assert body["replay_status"] == "ready"
     assert body["settlement_result"]["updated"] == 3
+
+
+def test_build_closure_evidence_bundle_includes_forensic_block():
+    request_record = agent_actions_router._AgentActionStoredRecord(
+        request_id="req-transfer-2026-0001",
+        idempotency_key="idem-transfer-2026-0001",
+        request_hash="hash-1",
+        recorded_at=datetime.now(timezone.utc),
+        response=agent_actions_router.AgentActionEvaluateResponse(
+            request_id="req-transfer-2026-0001",
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=10,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="ok",
+                reason="ok",
+                policy_snapshot_ref="snapshot:1",
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-1",
+                intent_id="req-transfer-2026-0001",
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:00:06Z",
+                contract_version="rules@8.0.0",
+                constraints={"endpoint_id": "node-x"},
+            ),
+        ),
+        request_payload={},
+    )
+    closure_payload = AgentActionClosureRequest.model_validate(
+        {
+            "contract_version": "seedcore.agent_action_gateway.v1",
+            "request_id": "req-transfer-2026-0001",
+            "closure_id": "closure-transfer-2026-0001",
+            "idempotency_key": "idem-closure-2026-0001",
+            "closed_at": "2026-03-31T10:02:00Z",
+            "outcome": "completed",
+            "evidence_bundle_id": "evidence-bundle-001",
+            "transition_receipt_ids": ["transition-receipt-001"],
+            "forensic_block": {
+                "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
+                "@type": "ForensicBlock",
+                "block_header": {"audit_id": "audit-abc"},
+            },
+        }
+    )
+    bundle = agent_actions_router._build_closure_evidence_bundle(
+        closure_payload=closure_payload,
+        request_record=request_record,
+    )
+    assert bundle["forensic_block"]["@type"] == "ForensicBlock"

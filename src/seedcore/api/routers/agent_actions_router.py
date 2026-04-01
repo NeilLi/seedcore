@@ -117,6 +117,33 @@ def _to_utc_iso(value: datetime) -> str:
 
 
 def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEvaluateRequest:
+    gateway_parameters: Dict[str, Any] = {
+        "idempotency_key": payload.idempotency_key,
+        "owner_id": payload.principal.owner_id,
+        "delegation_ref": payload.principal.delegation_ref,
+        "organization_ref": payload.principal.organization_ref,
+        "workflow_type": payload.workflow.type,
+    }
+    if payload.principal.hardware_fingerprint is not None:
+        gateway_parameters["hardware_fingerprint_id"] = payload.principal.hardware_fingerprint.fingerprint_id
+        gateway_parameters["hardware_public_key_fingerprint"] = payload.principal.hardware_fingerprint.public_key_fingerprint
+        gateway_parameters["hardware_node_id"] = payload.principal.hardware_fingerprint.node_id
+    if payload.authority_scope is not None:
+        gateway_parameters["scope_id"] = payload.authority_scope.scope_id
+        gateway_parameters["asset_ref"] = payload.authority_scope.asset_ref
+        gateway_parameters["product_ref"] = payload.authority_scope.product_ref
+        gateway_parameters["facility_ref"] = payload.authority_scope.facility_ref
+        gateway_parameters["expected_from_zone"] = payload.authority_scope.expected_from_zone
+        gateway_parameters["expected_to_zone"] = payload.authority_scope.expected_to_zone
+        gateway_parameters["expected_coordinate_ref"] = payload.authority_scope.expected_coordinate_ref
+        gateway_parameters["max_radius_meters"] = payload.authority_scope.max_radius_meters
+    if payload.forensic_context is not None:
+        gateway_parameters["reason_trace_ref"] = payload.forensic_context.reason_trace_ref
+        if payload.forensic_context.fingerprint_components is not None:
+            gateway_parameters["fingerprint_components"] = payload.forensic_context.fingerprint_components.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
     action_intent = ActionIntent(
         intent_id=payload.request_id,
         timestamp=_to_utc_iso(payload.requested_at),
@@ -139,11 +166,7 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
                     "expected_envelope_version": payload.approval.expected_envelope_version,
                 },
                 "gateway": {
-                    "idempotency_key": payload.idempotency_key,
-                    "owner_id": payload.principal.owner_id,
-                    "delegation_ref": payload.principal.delegation_ref,
-                    "organization_ref": payload.principal.organization_ref,
-                    "workflow_type": payload.workflow.type,
+                    **gateway_parameters,
                 },
             },
         ),
@@ -158,6 +181,12 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
                     "to_custodian_ref": payload.asset.to_custodian_ref,
                     "from_zone": payload.asset.from_zone,
                     "to_zone": payload.asset.to_zone,
+                    "product_ref": payload.asset.product_ref,
+                    "expected_coordinate_ref": (
+                        payload.authority_scope.expected_coordinate_ref
+                        if payload.authority_scope is not None
+                        else None
+                    ),
                 }
             },
         ),
@@ -183,6 +212,158 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
             evidence_refs=list(payload.telemetry.evidence_refs),
         ),
     )
+
+
+def _build_authority_scope_verdict(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
+    scope = payload.authority_scope
+    if scope is None:
+        return {
+            "status": "unverified",
+            "scope_id": None,
+            "mismatch_keys": [],
+        }
+    mismatches: List[str] = []
+    if scope.asset_ref != payload.asset.asset_id:
+        mismatches.append("asset_scope_mismatch")
+    if scope.product_ref and payload.asset.product_ref and scope.product_ref != payload.asset.product_ref:
+        mismatches.append("asset_product_scope_mismatch")
+    if scope.expected_from_zone and payload.asset.from_zone and scope.expected_from_zone != payload.asset.from_zone:
+        mismatches.append("from_zone_scope_mismatch")
+    if scope.expected_to_zone and payload.asset.to_zone and scope.expected_to_zone != payload.asset.to_zone:
+        mismatches.append("to_zone_scope_mismatch")
+    if (
+        scope.expected_coordinate_ref
+        and payload.telemetry.current_coordinate_ref
+        and scope.expected_coordinate_ref != payload.telemetry.current_coordinate_ref
+    ):
+        mismatches.append("coordinate_scope_mismatch")
+    if (
+        payload.telemetry.current_zone
+        and scope.expected_from_zone
+        and scope.expected_to_zone
+        and payload.telemetry.current_zone not in {scope.expected_from_zone, scope.expected_to_zone}
+    ):
+        mismatches.append("telemetry_zone_out_of_scope")
+    return {
+        "status": "mismatch" if mismatches else "matched",
+        "scope_id": scope.scope_id,
+        "mismatch_keys": mismatches,
+    }
+
+
+def _build_fingerprint_verdict(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
+    missing_components: List[str] = []
+    if payload.principal.hardware_fingerprint is None:
+        missing_components.append("hardware_fingerprint")
+    components = payload.forensic_context.fingerprint_components if payload.forensic_context is not None else None
+    if components is None:
+        missing_components.extend(
+            [
+                "economic_hash",
+                "physical_presence_hash",
+                "reasoning_hash",
+                "actuator_hash",
+            ]
+        )
+    else:
+        if not components.economic_hash:
+            missing_components.append("economic_hash")
+        if not components.physical_presence_hash:
+            missing_components.append("physical_presence_hash")
+        if not components.reasoning_hash:
+            missing_components.append("reasoning_hash")
+        if not components.actuator_hash:
+            missing_components.append("actuator_hash")
+    return {
+        "status": "incomplete" if missing_components else "matched",
+        "missing_components": missing_components,
+        "mismatch_keys": [],
+    }
+
+
+def _apply_forensic_scope_guards(
+    *,
+    payload: AgentActionEvaluateRequest,
+    response: AgentActionEvaluateResponse,
+) -> AgentActionEvaluateResponse:
+    if payload.authority_scope is None:
+        return response
+    disposition = str(response.decision.disposition or "").strip().lower()
+    if disposition != "allow":
+        return response
+
+    scope_verdict = response.authority_scope_verdict if isinstance(response.authority_scope_verdict, dict) else {}
+    mismatch_keys = [
+        str(item).strip()
+        for item in list(scope_verdict.get("mismatch_keys") or [])
+        if str(item).strip()
+    ]
+    if mismatch_keys:
+        trust_gaps = list(response.trust_gaps)
+        if "authority_scope_mismatch" not in trust_gaps:
+            trust_gaps.append("authority_scope_mismatch")
+        minted_artifacts = [item for item in response.minted_artifacts if item != "ExecutionToken"]
+        return response.model_copy(
+            update={
+                "decision": response.decision.model_copy(
+                    update={
+                        "allowed": False,
+                        "disposition": "deny",
+                        "reason_code": (
+                            "coordinate_scope_mismatch"
+                            if "coordinate_scope_mismatch" in mismatch_keys
+                            else "authority_scope_mismatch"
+                        ),
+                        "reason": "Authority scope mismatch detected for the requested transfer.",
+                    }
+                ),
+                "execution_token": None,
+                "trust_gaps": trust_gaps,
+                "minted_artifacts": minted_artifacts,
+            }
+        )
+
+    expected_coordinate_ref = str(payload.authority_scope.expected_coordinate_ref or "").strip()
+    if expected_coordinate_ref and not str(payload.telemetry.current_coordinate_ref or "").strip():
+        trust_gaps = list(response.trust_gaps)
+        if "coordinate_scope_unverified" not in trust_gaps:
+            trust_gaps.append("coordinate_scope_unverified")
+        minted_artifacts = [item for item in response.minted_artifacts if item != "ExecutionToken"]
+        return response.model_copy(
+            update={
+                "decision": response.decision.model_copy(
+                    update={
+                        "allowed": False,
+                        "disposition": "quarantine",
+                        "reason_code": "coordinate_scope_unverified",
+                        "reason": "Coordinate-bound authority cannot be verified from current telemetry.",
+                    }
+                ),
+                "execution_token": None,
+                "trust_gaps": trust_gaps,
+                "minted_artifacts": minted_artifacts,
+            }
+        )
+    return response
+
+
+def _build_forensic_linkage(
+    *,
+    payload: AgentActionEvaluateRequest,
+    response: AgentActionEvaluateResponse,
+) -> Dict[str, Any]:
+    forensic_block_id = None
+    if isinstance(response.governed_receipt, dict):
+        forensic_block_id = response.governed_receipt.get("forensic_block_id")
+    return {
+        "forensic_block_id": forensic_block_id,
+        "reason_trace_ref": (
+            payload.forensic_context.reason_trace_ref
+            if payload.forensic_context is not None
+            else None
+        ),
+        "public_replay_ready": False,
+    }
 
 
 def _minted_artifacts_from_hot_path_result(
@@ -792,6 +973,11 @@ def _build_closure_evidence_bundle(
         "evidence_bundle_id": closure_payload.evidence_bundle_id,
         "node_id": resolved_node_id or None,
         "execution_receipt": {"node_id": resolved_node_id} if resolved_node_id else {},
+        "forensic_block": (
+            dict(closure_payload.forensic_block)
+            if isinstance(closure_payload.forensic_block, dict)
+            else {}
+        ),
         "evidence_inputs": {
             "execution_summary": {"node_id": resolved_node_id} if resolved_node_id else {},
             "transition_receipts": transition_receipts,
@@ -1103,12 +1289,19 @@ async def evaluate_agent_action(
                 governed_receipt=dict(hot_path_result.governed_receipt),
                 signer_provenance=list(hot_path_result.signer_provenance),
             ),
+            authority_scope_verdict=_build_authority_scope_verdict(payload),
+            fingerprint_verdict=_build_fingerprint_verdict(payload),
             execution_token=hot_path_result.execution_token,
             governed_receipt=dict(hot_path_result.governed_receipt),
+            forensic_linkage={},
         )
+        response = _apply_forensic_scope_guards(payload=payload, response=response)
         response = await _apply_organism_preflight(payload=payload, response=response)
         response = _apply_no_execute_preflight(response, requested=requested_no_execute)
         response = _annotate_owner_context_in_response(response, owner_twin_snapshot)
+        response = response.model_copy(
+            update={"forensic_linkage": _build_forensic_linkage(payload=payload, response=response)}
+        )
         await _write_request_record(
             _AgentActionStoredRecord(
                 request_id=payload.request_id,
@@ -1219,6 +1412,12 @@ async def close_agent_action(
             closure_id=payload.closure_id,
             accepted_at=datetime.now(timezone.utc),
             linked_disposition=linked_disposition,
+            forensic_block_id=(
+                str(payload.forensic_block.get("block_header", {}).get("audit_id")).strip()
+                if isinstance(payload.forensic_block.get("block_header"), dict)
+                and str(payload.forensic_block.get("block_header", {}).get("audit_id")).strip()
+                else None
+            ),
             settlement_status=settlement_status,
             replay_status=replay_status,
             settlement_result=settlement_result,

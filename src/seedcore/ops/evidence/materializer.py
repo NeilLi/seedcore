@@ -77,6 +77,7 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
     trust_gap_codes = _resolve_trust_gap_codes(authz_graph=authz_graph, governed_receipt=governed_receipt)
     owner_context = _owner_context(governed_receipt)
     authority_consistency = _authority_consistency_summary(audit_record=audit_record, governed_receipt=governed_receipt)
+    forensic_block = _resolve_forensic_block(audit_record=audit_record, evidence_bundle=evidence_bundle)
 
     return {
         "@context": {
@@ -133,6 +134,7 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
         },
         "signature": evidence_bundle.get("signature"),
         "signer_metadata": signer_metadata,
+        "seedcore:forensic_block": forensic_block,
     }
 
 
@@ -288,3 +290,89 @@ def _authority_consistency_summary(*, audit_record: Dict[str, Any], governed_rec
 
 def _operator_actions_for_authority_issues(issues: list[str]) -> list[Dict[str, Any]]:
     return _build_operator_actions_for_authority_issues(issues)
+
+
+def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Dict[str, Any]) -> Dict[str, Any]:
+    existing = evidence_bundle.get("forensic_block")
+    if isinstance(existing, dict) and existing:
+        return dict(existing)
+
+    policy_decision = audit_record.get("policy_decision") if isinstance(audit_record.get("policy_decision"), dict) else {}
+    authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
+    governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
+    action_intent = audit_record.get("action_intent") if isinstance(audit_record.get("action_intent"), dict) else {}
+    gateway_context = (
+        action_intent.get("action", {}).get("parameters", {}).get("gateway")
+        if isinstance(action_intent.get("action"), dict)
+        else {}
+    )
+    if not isinstance(gateway_context, dict):
+        gateway_context = {}
+    fingerprint_components = gateway_context.get("fingerprint_components")
+    if not isinstance(fingerprint_components, dict):
+        fingerprint_components = {}
+    return {
+        "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
+        "@type": "ForensicBlock",
+        "block_header": {
+            "audit_id": audit_record.get("id"),
+            "timestamp": audit_record.get("recorded_at") or evidence_bundle.get("created_at"),
+            "version": "1.0.0-rc1",
+            "sequence_index": None,
+        },
+        "authority_context": {
+            "@type": "DelegatedAuthority",
+            "principal_id": action_intent.get("principal", {}).get("agent_id") if isinstance(action_intent.get("principal"), dict) else None,
+            "hardware_fingerprint": gateway_context.get("hardware_public_key_fingerprint"),
+            "kms_key_ref": evidence_bundle.get("signer_metadata", {}).get("key_ref") if isinstance(evidence_bundle.get("signer_metadata"), dict) else None,
+            "delegation_chain_hash": gateway_context.get("delegation_ref"),
+            "execution_token_id": evidence_bundle.get("execution_token_id"),
+        },
+        "economic_evidence": {
+            "@type": "CommerceTransaction",
+            "platform": "unspecified",
+            "order_id": None,
+            "transaction_hash": fingerprint_components.get("economic_hash"),
+            "quote_hash": None,
+            "asset_identity": action_intent.get("resource", {}).get("asset_id") if isinstance(action_intent.get("resource"), dict) else None,
+        },
+        "spatial_evidence": {
+            "@type": "PhysicalPresence",
+            "environment": "unspecified",
+            "facility_id": gateway_context.get("facility_ref"),
+            "coordinate_binding": {
+                "coordinate_ref": gateway_context.get("expected_coordinate_ref"),
+                "system": "unspecified",
+            },
+            "presence_proof_hash": fingerprint_components.get("physical_presence_hash"),
+        },
+        "cognitive_evidence": {
+            "@type": "PolicyReasoning",
+            "policy_receipt_id": audit_record.get("policy_receipt", {}).get("policy_receipt_id")
+            if isinstance(audit_record.get("policy_receipt"), dict)
+            else None,
+            "decision": str(authz_graph.get("disposition") or governed_receipt.get("disposition") or "").upper() or None,
+            "reasoning_trace_hash": fingerprint_components.get("reasoning_hash"),
+            "matched_policy_refs": list(authz_graph.get("matched_policy_refs") or []),
+        },
+        "physical_evidence": {
+            "@type": "ActuatorProof",
+            "device_actor": evidence_bundle.get("node_id"),
+            "edge_node": evidence_bundle.get("node_id"),
+            "trajectory_hash": (
+                evidence_bundle.get("evidence_inputs", {}).get("execution_summary", {}).get("actuator_result_hash")
+                if isinstance(evidence_bundle.get("evidence_inputs"), dict)
+                and isinstance(evidence_bundle.get("evidence_inputs", {}).get("execution_summary"), dict)
+                else None
+            ),
+            "actuator_telemetry": {
+                "motor_torque_hash": fingerprint_components.get("actuator_hash"),
+            },
+            "sensor_signatures": [],
+        },
+        "settlement_status": {
+            "is_finalized": None,
+            "twin_mutation_id": None,
+            "forensic_integrity_hash": None,
+        },
+    }

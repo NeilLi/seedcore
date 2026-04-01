@@ -676,6 +676,34 @@ def test_materialized_custody_event_endpoint_uses_replay_service_jsonld() -> Non
     assert body["custody_event_jsonld"]["policy_verification"]["operator_actions"] == []
 
 
+def test_materialized_custody_event_includes_forensic_block_when_present() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-router-forensic-1", intent_id="intent-router-forensic-1", asset_id="asset-fb-1")
+    )
+    record["evidence_bundle"]["forensic_block"] = {
+        "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
+        "@type": "ForensicBlock",
+        "block_header": {
+            "audit_id": record["id"],
+            "sequence_index": 42,
+        },
+        "physical_evidence": {
+            "@type": "ActuatorProof",
+            "actuator_telemetry": {"motor_torque_hash": "torque-sig-9922-881"},
+        },
+    }
+    client = _make_client(record)
+
+    response = client.get("/governance/materialized-custody-event", params={"audit_id": record["id"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    forensic_block = body["custody_event_jsonld"]["seedcore:forensic_block"]
+    assert forensic_block["@type"] == "ForensicBlock"
+    assert forensic_block["block_header"]["audit_id"] == record["id"]
+    assert forensic_block["physical_evidence"]["actuator_telemetry"]["motor_torque_hash"] == "torque-sig-9922-881"
+
+
 def test_materialized_custody_event_surfaces_authority_mismatch_actions() -> None:
     record = _apply_transition_metadata(
         _build_audit_record(task_id="task-router-4b", intent_id="intent-router-4b", asset_id="asset-4b"),
