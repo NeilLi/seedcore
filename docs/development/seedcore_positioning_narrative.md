@@ -21,6 +21,11 @@ SeedCore is:
 
 **The zero-trust execution and proof layer for high-consequence agent actions.**
 
+In deployment terms for 2026:
+
+**SeedCore is the Verifiable Agentic Ledger and trust anchor service for the
+cluster.**
+
 Short form:
 
 **SeedCore makes AI actions governable, custody-aware, and replay-verifiable.**
@@ -182,6 +187,57 @@ The evidence layer proves what happened.
 ```
 
 This is simple, memorable, and aligned with the repo.
+
+## Diagram Positioning (Brain, Boundaries, Ledger)
+
+When presenting architecture diagrams, keep SeedCore in this exact role:
+
+- top layer (`Brain/Intent`): humans and AI agents generate intent
+- bottom layer (`Sandboxes/Reality`): physical and economic systems emit facts
+- center hub (`SeedCore`): policy decision plus forensic evidence integration
+
+Policy boundary:
+
+- SeedCore is the PDP every high-consequence action must consult before
+  execution
+- no scoped authority token is issued unless policy and authority checks pass
+
+Boundary evidence sources:
+
+- economic boundary (`Shopify Sandbox`): order and transaction identifiers as
+  economic evidence
+- physical boundary (`Gazebo` now, `Jetson`/robot edge later): telemetry,
+  trajectory, and hardware/sensor digests as physical evidence
+
+Convergence rule:
+
+- economic and physical fingerprints must converge into a single forensic
+  handshake block
+- that block is replayable and auditable through verification and forensic
+  replay surfaces
+
+This keeps SeedCore framed as the accountability hub, not only a decision API.
+
+## Cluster Operational Role (Trust Slice)
+
+For production posture, SeedCore should run as a high-availability cloud
+service and act as a dedicated trust slice in the broader runtime.
+
+Component interactions:
+
+| Component | SeedCore role |
+| :--- | :--- |
+| Confluent Kafka | Consume intent and telemetry events, emit policy outcomes and scoped authority |
+| Ray / Kubernetes | Execute compiled authz graph and shard-aware hot-path routing |
+| Redis | Support revocation and emergency cutoff signaling paths |
+| Cloud KMS | Sign policy and transition artifacts with hardware-backed keys |
+| Ledger / enterprise audit store | Persist signed forensic blocks for replay and external audit |
+
+Trust-slice invariant:
+
+- even if an agent or edge node is compromised, SeedCore remains the final
+  authority and refuses to attest a handshake when policy or cryptographic
+  evidence does not match.
 
 ## The Product Story
 

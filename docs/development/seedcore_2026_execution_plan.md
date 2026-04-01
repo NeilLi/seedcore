@@ -63,6 +63,28 @@ User-level promise:
 
 This should be treated as the canonical 2026 package.
 
+## Architectural Positioning In One Diagram
+
+Use this framing consistently across roadmap and architecture discussions:
+
+- top (`Brain/Intent`): humans and AI agents originate intent
+- bottom (`Sandboxes/Reality`): economic and physical systems emit evidence
+- center hub (`SeedCore`): PDP plus forensic evidence integrator
+
+Boundary mapping:
+
+- economic boundary: commerce transaction and order identifiers (for example,
+  Shopify sandbox)
+- physical boundary: simulation or edge telemetry and motion evidence (Gazebo
+  in Q3, Jetson/robot edge in Q4)
+
+SeedCore obligation:
+
+- do not issue scoped authority for high-consequence execution unless policy,
+  approval lineage, and boundary evidence requirements are satisfied
+- persist one replayable forensic handshake chain tying decision, authority,
+  and closure evidence together
+
 For 2026, that package should be grounded in one concrete physical story:
 
 - the governed good is physically handled during transfer
@@ -114,6 +136,27 @@ Transfer`, it is sidecar.
 ## Workstreams
 
 The year should be run as five connected workstreams.
+
+## Cluster Deployment Posture (Trust Slice)
+
+For pilot and production-facing deployments, SeedCore should run as a
+high-availability trust service on the cloud cluster rather than as a
+single-node demo dependency.
+
+Operational role by substrate:
+
+| Substrate | Operational role |
+| :--- | :--- |
+| Confluent Kafka | Event backbone for intent, telemetry, and policy outcome streams |
+| Ray + Kubernetes | Distributed execution for compiled authz graph and shard-aware hot-path routing |
+| Redis | Token revocation and emergency cutoff propagation |
+| Cloud KMS | Hardware-backed signing for policy and transition artifacts |
+| Durable forensic store | Long-lived persistence for signed forensic blocks and replay evidence |
+
+Non-negotiable invariant:
+
+- SeedCore is the final authority service for the trust slice. If evidence
+  convergence fails, SeedCore must not attest the forensic handshake.
 
 ### Workstream 1: Hot-Path Operability
 

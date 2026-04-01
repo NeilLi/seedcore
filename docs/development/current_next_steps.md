@@ -102,6 +102,14 @@ Operationally, that lens sharpens four design commitments:
 - failures should be explainable through deterministic forensic replay rather
   than post-hoc log digging
 
+Diagram positioning and deployment posture should stay explicit:
+
+- top (`Brain/Intent`): humans and AI agents initiate high-consequence requests
+- bottom (`Sandboxes/Reality`): economic and physical systems emit evidence
+- center (`SeedCore`): PDP plus forensic evidence integrator and replay anchor
+- cluster role: SeedCore runs as a high-availability trust slice service, not a
+  best-effort sidecar
+
 ## Canonical Digital Fingerprint Chain
 
 For the canonical 2026 workflow, the minimum provenance story should bind four
@@ -119,6 +127,16 @@ evidence classes into one chain:
 - actuator proof:
   - trajectory hash
   - motor torque, weight, or other physical-effort telemetry hash
+
+Integration baseline for this stage:
+
+| Component | SeedCore interaction |
+| :--- | :--- |
+| Confluent Kafka | intent + telemetry ingress, policy outcome / scoped authority egress |
+| Ray / Kubernetes | shard-aware compiled decision graph execution for hot path |
+| Redis | revocation and emergency cutoff signaling |
+| Cloud KMS | signer hardening for policy and transition artifacts |
+| Durable forensic store | persistence of signed forensic blocks for replay and audit |
 
 The point is not to force every integration to emit the exact same modalities on
 day one. The point is to ensure that every high-value transfer can answer, in a
@@ -245,6 +263,14 @@ What should be done next:
    - replay export shape
 5. Keep broader signer expansion and non-RCT hardening in later phases
    (outside Slice 1 closure scope).
+
+Interpretation note:
+
+- Item 2 (CI/host gate) should be prioritized before broadening deployment
+  blast radius.
+- `runtime_ready` wiring work is an environment/integration follow-up and should
+  proceed in parallel, but is not a blocker to preserving the frozen sign-off
+  artifact in item 1.
 
 ### Explicit Sidecar
 

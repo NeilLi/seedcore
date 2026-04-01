@@ -45,6 +45,18 @@ Secondary workflows such as registration intake, release from quarantine, and
 other approval flows remain useful, but they are not the primary execution
 spine.
 
+## System Placement Rule
+
+For this demo phase, every architecture diagram and walkthrough should preserve
+the same placement:
+
+- `AI/Human intent` above the trust boundary
+- `economic + physical evidence emitters` below the trust boundary
+- `SeedCore` at the center as PDP and forensic evidence integrator
+
+This is the minimum story needed for external reviewers to see the trust
+boundary clearly.
+
 ## Primary Rule
 
 Every near-term Phase A, B, C, and D deliverable must improve Restricted
@@ -127,6 +139,8 @@ Demo happy path:
 - the PDP hot path evaluates against the canonical snapshot
 - the runtime mints a `PolicyReceipt`, `TransitionReceipt`, and governed proof chain
 - the courier verifies the handoff before accepting custody through the proof surface or `seedcore-verify`
+- SeedCore records a forensic handshake block where economic identifiers and
+  physical telemetry fingerprints converge under one runtime `audit_id`
 
 Mandatory sibling failure modes:
 
@@ -154,6 +168,9 @@ For the current delivery slice, the demo must run against these runtime truths:
 - proof surfaces render approval version, approval binding hash, policy receipt id, transition receipt ids, signer provenance, and runtime custody state from runtime artifacts
 - hot-path rollout stays in `shadow` mode until parity evidence is green
 - VLA optimization work remains explicitly sidecar to this demo
+- cluster posture treats SeedCore as a trust slice service, with stream ingress
+  from Kafka, distributed policy execution via Ray/Kubernetes, revocation paths
+  via Redis, and signing anchored in Cloud KMS
 
 ## Product-First Rule
 

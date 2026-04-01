@@ -12,6 +12,12 @@ The SeedCore runtime is designed to facilitate a "Genuine Environment" for auton
 
 This environment is built on four technical pillars.
 
+Architecturally, this should be shown as a three-layer placement:
+
+- top (`Brain/Intent`): humans and AI agents propose actions
+- bottom (`Sandboxes/Reality`): economic and physical systems emit evidence
+- center (`SeedCore`): PDP + forensic evidence integrator + replay authority
+
 ---
 
 ## 1. The Persistent Twin & Settlement Track
@@ -34,6 +40,13 @@ The transition from a physical task to a digital truth is governed by a "Certifi
     *   **Telemetry:** GPS, vision (latest frame), and sensor data.
     *   **Transition Receipt:** A cryptographically sealed proof of execution.
     *   **Trust Anchors:** Use of **TPM 2.0 or KMS anchors** (Phase A) to ensure the bundle cannot be spoofed or repudiated.
+
+Forensic handshake rule:
+
+- economic identifiers (for example order/transaction IDs from commerce
+  systems) and physical telemetry fingerprints (for example point-cloud,
+  trajectory, motor/effort digests) must converge under one replayable
+  runtime chain before closure is considered admissible.
 
 ---
 
@@ -62,3 +75,21 @@ To enable machines to "trade for human beings," SeedCore implements a root-of-tr
 The SeedCore runtime functions as a "Trust Slice" for autonomous operations. By combining the **Decision Graph** (defining what *can* happen) with the **Evidence Loop** (proving what *did* happen), it creates an environment where autonomous trade is not just possible, but mathematically undeniable. 
 
 Every physical handoff is recorded as a digital truth, providing a permanent, replayable audit trail for the entire lifecycle of a restricted good.
+
+### Cluster Service Posture
+
+In production, this trust slice should run as a high-availability cluster
+service and integrate with the surrounding stack as follows:
+
+| Component | Trust-slice interaction |
+| :--- | :--- |
+| Confluent Kafka | transport for intent, telemetry, and policy outcome streams |
+| Ray / Kubernetes | distributed compute for compiled decision graph hot-path evaluation |
+| Redis | revocation and emergency cutoff propagation |
+| Cloud KMS | hardware-backed signing for receipts and transition artifacts |
+| Durable forensic store | long-term persistence for signed forensic blocks and replay trails |
+
+Final-authority invariant:
+
+- if policy, authority lineage, or cryptographic evidence convergence fails,
+  SeedCore refuses to attest the forensic handshake.
