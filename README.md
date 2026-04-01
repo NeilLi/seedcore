@@ -379,6 +379,16 @@ SeedCore currently uses:
 - **Ray Actors** for governed agent and execution runtime behavior
 - **Postgres / Redis / Neo4j** for state, memory, telemetry, and policy foundations
 
+Operational role by substrate:
+
+| Substrate | Operational role |
+| --- | --- |
+| Confluent Kafka | Event backbone for intent, telemetry, and policy outcome streams |
+| Ray + Kubernetes | Distributed execution for compiled authz graph and shard-aware hot-path routing |
+| Redis | Token revocation and emergency cutoff propagation |
+| Cloud KMS | Hardware-backed signing for policy and transition artifacts |
+| Durable forensic store | Long-lived persistence for signed forensic blocks and replay evidence |
+
 We use Ray because SeedCore is designed as an execution runtime, not a single-model application. The goal is not to optimize for the smallest possible architecture today, but for the right long-term runtime architecture for governed agent execution. As workflows become more distributed, policy-aware, and model-diverse, the runtime needs a substrate that can coordinate computation, scheduling, stateful actors, and scaling across cloud services, edge deployments, and eventually local inference environments.
 
 Ray fits that direction by giving SeedCore a practical control plane for:
