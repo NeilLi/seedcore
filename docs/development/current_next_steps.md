@@ -682,6 +682,10 @@ The concrete service/CLI-first Rust kernel proposal for that same track now
 lives in
 [rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
 
+For post-2026 high-vertical staging (SeedCore trust boundary + IGX/Jetson
+physical execution boundary), see:
+[seedcore_2027_high_vertical_direction.md](/Users/ningli/project/seedcore/docs/development/seedcore_2027_high_vertical_direction.md).
+
 ## Red-Team Program
 
 The forensic-ledger story only becomes credible if the failure modes are

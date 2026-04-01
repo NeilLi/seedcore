@@ -674,3 +674,13 @@ SeedCore has had a successful 2026 if, by year end, it can honestly claim:
 - we occupy a necessary layer between frontier agents and real-world execution
 
 That is enough to matter.
+
+## 2027 Continuation
+
+After 2026 closure, the next-stage high-vertical deployment direction is
+tracked in:
+
+- [seedcore_2027_high_vertical_direction.md](/Users/ningli/project/seedcore/docs/development/seedcore_2027_high_vertical_direction.md)
+
+This continuation keeps the same trust-boundary model while adding staged
+hardware-bound execution identity for IGX/Jetson edge deployments.
