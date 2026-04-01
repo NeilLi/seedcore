@@ -10,7 +10,7 @@ SeedCore solves that problem. We are building the zero-trust runtime for high-co
 
 SeedCore combines a synchronous Policy Decision Point, a Policy Knowledge Graph, and an advisory intelligence layer. AI can advise, but governance decides. Every governed action is evaluated in real time, either denied or issued a short-lived execution token, and recorded with auditable evidence.
 
-Our first wedge is provenance and high-trust supply chains, where trust must be continuously enforced rather than passively recorded. Over time, the same architecture extends to robotics, sovereign AI infrastructure, and multi-agent systems.
+Our first wedge is provenance and high-trust supply chains, where trust must be continuously enforced rather than passively recorded. The current design direction is to make SeedCore a verifiable agentic ledger: a black-box flight recorder for governed actions that binds authority, physical scope, and replayable evidence into one trust runtime. Over time, the same architecture extends to robotics, sovereign AI infrastructure, and multi-agent systems.
 
 We are not building another model layer. We are building the runtime that makes high-consequence AI action safe enough to trust.
 
@@ -21,18 +21,29 @@ must-win product workflow:
 
 - **Agent-Governed Restricted Custody Transfer**
 
+This is now the repository's clearest milestone and roadmap anchor:
+
+- Slice 1 live sign-off for the canonical Restricted Custody Transfer wedge was
+  closed on **March 30, 2026**
+- the next upgrade path treats that wedge as a **Forensic Handshake**
+- the first adversarial drill to prove the boundary is a **MITM coordinate
+  redirect** against the scoped transfer flow
+
 That means the near-term product boundary is:
 
 - external agent request
 - governed runtime decision (`allow` / `deny` / `quarantine` / `escalate`)
-- bounded execution authority
+- transaction-specific execution authority
+- device- and scope-bound accountability
 - replayable evidence and verification surface
+- forensic-block and replay linkage
 
 This keeps the work focused on the layer SeedCore can uniquely own:
 governed admissibility and proof, not generalized model intelligence.
 
 Supporting documents:
 
+- [current next steps](docs/development/current_next_steps.md)
 - [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
 - [positioning narrative](docs/development/seedcore_positioning_narrative.md)
 - [agent action gateway contract (v1 draft)](docs/development/agent_action_gateway_contract.md)
@@ -70,7 +81,7 @@ Phase A trust hardening has now crossed an important checkpoint:
 - strict TPM attestation fixtures now exercise a positive path with a real AK certificate, endorsement root, and signed quote envelope
 - Rekor-style transparency anchoring is integrated as an optional path for high-value receipts, with stub mode retained for local development
 
-This means the repository is no longer just describing zero-trust ideas. It already contains the runtime seams needed to make authority, policy, and custody inspectable in code.
+This means the repository is no longer just describing zero-trust ideas. It already contains the runtime seams needed to make authority, policy, custody, and forensic replay inspectable in code.
 
 ## Trust Challenges
 
@@ -121,6 +132,15 @@ Current implementation:
 - HAL-backed transitions can carry signed `transition_receipt` payloads with nonce-based replay detection
 - governed closure persists receipt hash, nonce, transition sequence, endpoint identity, and authority source
 - forensic sealing captures a pre-contact evidence structure for edge-side custody events, with hardened-mode support for trust-anchor-backed `hal_capture` signing on attested endpoints
+
+Direction of travel:
+
+- evolve the custody trail into a verifiable agentic ledger for the Restricted
+  Custody Transfer wedge
+- bind product or asset identity, physical scope, and hardware fingerprint into
+  the same governed chain
+- make replay-visible mismatch outcomes first-class, especially for MITM
+  coordinate redirect attempts
 
 Current gap profile:
 
@@ -327,7 +347,9 @@ In these environments, the default action is quarantine, not graceful degradatio
 
 The detailed next-step plan now lives in [docs/development/current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md).
 
-That document is the better source of truth because the implementation and verification state is moving faster than the architecture overview in this root README.
+That document is the better source of truth because the implementation and
+verification state is moving faster than the architecture overview in this root
+README.
 
 The recommended language-boundary evolution for that next stage lives in
 [docs/development/language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
@@ -338,8 +360,10 @@ The concrete Rust workspace proposal for that same track lives in
 In short, the highest-priority remaining work is:
 
 - hardware-backed signer and device-trust hardening
-- external audit anchoring and default receipt-chain promotion
+- transaction-specific authority scope for Restricted Custody Transfer
+- forensic-block and replay-chain promotion across runtime surfaces
 - dual-authorization and rollout/activation hardening across runtime surfaces
+- first red-team validation via MITM coordinate redirect on the canonical wedge
 
 For the 2026 productized execution sequence, use:
 
@@ -384,6 +408,14 @@ For deep technical details see:
 ## Physical Proof Pilot & Demo Architecture
 
 SeedCore is currently capable of running a 100% verifiable "Digital Twin of Trust" pilot, enabling a single robot or sensor stack to manage a narrow physical-goods workflow (e.g., high-value lab samples or secure hardware storage) with zero manual intervention.
+
+The next-step pilot direction is narrower and stronger:
+
+- keep the demo centered on **Restricted Custody Transfer**
+- treat the flow as a **Forensic Handshake** from request -> decision -> scoped
+  execution -> forensic closure
+- use the first red-team drill, **MITM coordinate redirect**, to prove that
+  scope mismatch becomes `deny` or `quarantine` rather than silent drift
 
 ### Core Closed-Loop Flow
 
