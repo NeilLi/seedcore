@@ -4,15 +4,11 @@ CI is active for `push` to `main`, `pull_request`, and manual dispatch
 
 ## Zero-Trust Runtime for High-Consequence AI Actions
 
-AI agents are becoming operational, but governance has not kept pace. Enterprises are under pressure to automate, yet they still lack reliable ways to control what high-consequence AI actions are allowed to do, prove why an action was permitted, and contain failures before they become liabilities.
+AI agents are becoming operational, but governance has not kept pace. Enterprises are under pressure to automate, yet they still need reliable ways to control what high-consequence AI actions are allowed to do, prove why an action was permitted, and contain failures before they become liabilities.
 
-SeedCore solves that problem. We are building the zero-trust runtime for high-consequence AI actions: a deterministic control plane that sits between AI reasoning and real-world execution.
+SeedCore is a deterministic, zero-trust runtime for high-consequence AI actions. It evaluates governed requests in real time using a synchronous Policy Decision Point (PDP) over the active Policy Knowledge Graph; advisory AI can propose, but governance issues a short-lived `ExecutionToken` only when the decision is `allow`.
 
-SeedCore combines a synchronous Policy Decision Point, a Policy Knowledge Graph, and an advisory intelligence layer. AI can advise, but governance decides. Every governed action is evaluated in real time, either denied or issued a short-lived execution token, and recorded with auditable evidence.
-
-Our first wedge is provenance and high-trust supply chains, where trust must be continuously enforced rather than passively recorded. The current design direction is to make SeedCore a verifiable agentic ledger: a black-box flight recorder for governed actions that binds authority, physical scope, and replayable evidence into one trust runtime. Over time, the same architecture extends to robotics, sovereign AI infrastructure, and multi-agent systems.
-
-We are not building another model layer. We are building the runtime that makes high-consequence AI action safe enough to trust.
+All outcomes (`allow` / `deny` / `quarantine` / `escalate`) are recorded with replayable, auditable evidence. SeedCore is not another model layer; it is the runtime that makes high-consequence AI action safe enough to execute.
 
 ## 2026 Product Focus
 
@@ -21,16 +17,16 @@ must-win product workflow:
 
 - **Agent-Governed Restricted Custody Transfer**
 
-This is now the repository's clearest milestone and roadmap anchor:
+This is now the repository's clearest milestone and roadmap anchor: Slice 1
+live sign-off for the canonical Restricted Custody Transfer wedge was closed on
+**March 30, 2026**, and Q2 **Window A host-first closure** completed on
+**April 2, 2026**.
 
-- Slice 1 live sign-off for the canonical Restricted Custody Transfer wedge was
-  closed on **March 30, 2026**
-- Q2 **Window A host-first closure** was completed on **April 2, 2026**:
-  CI/host verification gates are now aligned and executable as one acceptance
-  path for queue/detail/replay/runbook/forensics plus degraded-edge drills
-- the next upgrade path treats that wedge as a **Forensic Handshake**
-- the first adversarial drill to prove the boundary is a **MITM coordinate
-  redirect** against the scoped transfer flow
+For the live roadmap and closure details, see:
+
+- [current next steps](docs/development/current_next_steps.md)
+- [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
+- [Q2 product spec](docs/development/q2_2026_audit_trail_ui_spec.md)
 
 That means the near-term product boundary is:
 
@@ -64,27 +60,15 @@ Recent changes reinforced that direction in two concrete areas:
 1. **HAL transition attestation and receipt verification**
 2. **Execution token TTL, revocation, and emergency stop controls**
 
-The current baseline now includes:
+Implemented in this repo (high-level):
 
-- signer-provider abstractions that can route trust-critical receipt signing through TPM 2.0, vTPM, cloud KMS, Ed25519, or legacy HMAC paths depending on policy and environment
-- restricted-custody HAL transition receipts that now use a Phase A trust contract with TPM-oriented `ecdsa_p256_sha256` signing on the hardened path
-- an opt-in hardened runtime mode (`SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE=true`) that forces attested HAL `transition_receipt` and `hal_capture` paths onto trust-anchor-backed `ecdsa_p256_sha256` signing
-- evidence bundles that bind transition receipt hashes into execution receipts for governed closure and replay checks
-- short-lived execution tokens with explicit TTL enforcement at both PDP issuance time and HAL validation time
-- Redis-backed token revocation and an operator-triggered emergency cutoff path at the HAL boundary
-- PKG-first routing where action execution remains behind a policy-produced proto-plan rather than LLM-only actuation
-- a Rust authority kernel workspace under `rust/` with deterministic proof, approval, policy, token, and verifier crates
-- a `seedcore-verify` CLI that supports transfer verification, replay-chain checks, trust-bundle inspection, and strict TPM attestation verification paths
-- a TypeScript trust surface workspace under `ts/` including strict verifier-output contracts, a verification API facade, and workflow-specific proof pages
+- Trust-critical receipt signing routed through TPM/KMS/Ed25519/HMAC paths based on policy and environment.
+- Short-lived `ExecutionToken` authority with TTL enforcement, revocation, and an operator-triggered emergency cutoff at the HAL boundary.
+- Replay-verifiable evidence bundles plus offline verification via the `seedcore-verify` kernel/CLI.
+- Q2 verification surface (operator console + verification API) under `/api/v1/verification/*`.
+- Hot-path observability under `/api/v1/pdp/hot-path/status` plus Prometheus text at `/api/v1/pdp/hot-path/metrics`.
 
-Phase A trust hardening has now crossed an important checkpoint:
-
-- trust-bearing receipts can carry explicit `trust_proof` material for key binding, attestation, replay, revocation, and transparency anchoring
-- offline verification can succeed with artifact plus trust bundle, without consulting the SeedCore database
-- strict TPM attestation fixtures now exercise a positive path with a real AK certificate, endorsement root, and signed quote envelope
-- Rekor-style transparency anchoring is integrated as an optional path for high-value receipts, with stub mode retained for local development
-
-This means the repository is no longer just describing zero-trust ideas. It already contains the runtime seams needed to make authority, policy, custody, and forensic replay inspectable in code.
+Restricted-custody trust hardening supports explicit `trust_proof` material, enabling offline verification against artifacts and a trust bundle (TPM fixture path included).
 
 ## Trust Challenges
 
@@ -99,12 +83,10 @@ Current implementation:
 - HAL transition receipts can prove which endpoint executed a governed action
 - the robot-sim and HAL boundary now reject revoked tokens and emergency-stopped token populations
 
-Current gap profile:
+Operational notes:
 
-- non-Phase-A and development paths still permit software-backed signing modes and should not be confused with the hardened restricted-custody path
-- fleet-scale physical TPM rollout, device provisioning, and production operating drills still need to mature beyond the current fixture and test harness baseline
-- the forensic sealer path is still pilot-grade by default and should not be treated as production-grade device attestation until rollout/provisioning controls are exercised end to end
-- production rollout hardening and drills are tracked in [TPM Fleet Rollout Runbook](docs/development/tpm_fleet_rollout_runbook.md)
+- Local modes may use software-backed signing; production trust anchors are selected via signer/provenance policy and environment.
+- Fleet-scale TPM rollout, device provisioning, and production operating drills are documented in [TPM Fleet Rollout Runbook](docs/development/tpm_fleet_rollout_runbook.md).
 
 ### 2. Policy Enforcement Layer
 
@@ -119,12 +101,6 @@ Current implementation:
 - policy snapshots can be hot-activated fleet-wide through `POST /api/v1/pkg/snapshots/{snapshot_version}/activate`
 - edge policy consumers can resolve desired versions through `POST /api/v1/pkg/ota/heartbeat` and subscribe to `GET /api/v1/pkg/ota/stream`
 
-Recent closure updates:
-
-- policy rollout now supports hot fleet activation via `POST /api/v1/pkg/snapshots/{snapshot_version}/activate`, publishing runtime updates over the PKG stream without pod restarts
-- OCPS/risk signals now gate high-risk break-glass with deterministic procedure claims (`procedure_id`, `incident_id`, `reason_code`) and explicit deny/explanation paths
-- compliance distribution to edge runtimes now supports an always-on OTA policy stream via `POST /api/v1/pkg/ota/heartbeat` + `GET /api/v1/pkg/ota/stream`
-
 ### 3. Trusted Chain of Custody
 
 SeedCore already has the beginnings of a governed custody ledger.
@@ -136,20 +112,10 @@ Current implementation:
 - governed closure persists receipt hash, nonce, transition sequence, endpoint identity, and authority source
 - forensic sealing captures a pre-contact evidence structure for edge-side custody events, with hardened-mode support for trust-anchor-backed `hal_capture` signing on attested endpoints
 
-Direction of travel:
+Operational model:
 
-- evolve the custody trail into a verifiable agentic ledger for the Restricted
-  Custody Transfer wedge
-- bind product or asset identity, physical scope, and hardware fingerprint into
-  the same governed chain
-- make replay-visible mismatch outcomes first-class, especially for MITM
-  coordinate redirect attempts
-
-Current gap profile:
-
-- the primary custody trail still depends on SeedCore-managed stores even though optional external transparency anchoring is now supported for selected high-value receipts
-- full public transparency-log verification and always-on anchoring policy are not yet the default operating mode across every custody flow
-- inter-agent and cognitive handoff custody is not yet represented with the same signed transition contract used for HAL actuation
+- Custody closure persists receipt hashes, nonces, transition sequence, endpoint identity, and authority source; replay-visible mismatch outcomes are surfaced for quarantine/rollback investigation.
+- Optional external transparency anchoring is supported for selected high-value receipts; always-on anchoring policy is documented in later rollout runbooks.
 
 **Execution boundary**
 
@@ -163,7 +129,7 @@ SeedCore is not a chatbot wrapper or a generic tool-calling layer. It is a gover
 
 In the current repository baseline, **AI judgment** lives in the cognitive and coordinator planning stack. That layer can interpret, enrich, and route work, but it does not authorize high-stakes execution.
 
-The current baseline is being shaped to provide:
+The current baseline provides:
 
 - deny-by-default authorization before movement or release
 - governed dispatch through accountable agents
@@ -544,8 +510,15 @@ and should make these tools available in Gemini:
 - `seedcore.pkg.status`
 - `seedcore.pkg.authz_graph_status`
 - `seedcore.hotpath.status`
+- `seedcore.hotpath.metrics`
 - `seedcore.hotpath.verify_shadow`
 - `seedcore.hotpath.benchmark`
+- `seedcore.verification.queue`
+- `seedcore.verification.transfer_review`
+- `seedcore.verification.workflow_projection`
+- `seedcore.verification.workflow_verification_detail`
+- `seedcore.verification.workflow_replay`
+- `seedcore.verification.runbook_lookup`
 - `seedcore.evidence.verify`
 
 The extension does not start SeedCore for you. Bring up the runtime first using
