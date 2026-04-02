@@ -2,9 +2,11 @@
 
 This note seeds **Q4 forensic-block population** and **digital-twin / physical closure** linkage. It is a design sketch, not a frozen contract.
 
+**Implemented reference:** Pydantic `EdgeTelemetryEnvelopeV0` in `src/seedcore/models/edge_telemetry.py` and fixture `tests/fixtures/edge_telemetry/sample_envelope_v0.json` (validated in `tests/test_edge_telemetry_envelope.py`).
+
 ## Signed edge telemetry (motor, load, environmental)
 
-- **Envelope**: `EdgeTelemetryEnvelopeV0` with `telemetry_id`, `edge_node_ref`, `asset_ref`, `observed_at` (UTC), `sensor_kind` (e.g. `motor_torque`, `weight_cell`, `temperature`), `samples` (ordered numeric series or aggregate stats), `nonce`, and `signer` (`key_ref`, `algorithm`, `signature`).
+- **Envelope**: `EdgeTelemetryEnvelopeV0` with `telemetry_id`, `edge_node_ref`, `asset_ref`, `observed_at` (UTC), `sensor_kind` (e.g. `motor_torque`, `weight_cell`, `temperature`), `samples` (ordered numeric series or aggregate stats), `nonce`, and `signer` (`key_ref`, `algorithm`, `signature_b64`).
 - **Payload hash**: canonical JSON (stable key order) → SHA-256 → embedded in the envelope and in the **physical-presence** fingerprint component at closure.
 - **Replay**: verifier holds public key material or cert chain reference; offline replay recomputes hash and checks signature before accepting telemetry as evidence.
 

@@ -101,6 +101,12 @@ from .pdp_hot_path import (
     HotPathSignerProvenance,
     HotPathTelemetryContext,
 )
+from .edge_telemetry import (
+    EDGE_TELEMETRY_ENVELOPE_VERSION,
+    EdgeTelemetryEnvelopeV0,
+    EdgeTelemetrySampleV0,
+    EdgeTelemetrySignerV0,
+)
 from .task_api import Task
 from .task_payload import TaskPayload
 
@@ -156,6 +162,10 @@ __all__ = [
     "HotPathEvaluateResponse",
     "HotPathSignerProvenance",
     "HotPathTelemetryContext",
+    "EDGE_TELEMETRY_ENVELOPE_VERSION",
+    "EdgeTelemetryEnvelopeV0",
+    "EdgeTelemetrySampleV0",
+    "EdgeTelemetrySignerV0",
     "Task",
     "TaskPayload",
     "VerificationResult",

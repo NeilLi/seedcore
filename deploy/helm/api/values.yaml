@@ -4,6 +4,7 @@ service:
   type: ClusterIP
   port: 80
 env:
+  SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE: kubernetes
   RAY_ADDRESS: ray://seedcore-svc-stable-svc:10001
   SEEDCORE_NS: seedcore-dev
   COG_APP_NAME: seedcore-dev-dev-cognitive_core

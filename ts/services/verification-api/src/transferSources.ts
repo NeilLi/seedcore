@@ -30,6 +30,8 @@ import {
   toTransferStatusView,
 } from "@seedcore/contracts";
 
+import { resolveRunbookLinks, type RunbookRef } from "./runbooks.js";
+
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../../../..");
 const COMMAND_CWD = process.env.INIT_CWD ?? process.cwd();
@@ -85,6 +87,8 @@ export interface TransferQueueRow {
     asset_forensics: string;
     asset_forensics_rest: string;
     replay_verification: string;
+    /** Dedicated replay contract (receipt chain + failure panel + links). */
+    verification_replay: string;
     workflow_projection: string;
   };
 }
@@ -116,8 +120,24 @@ export interface VerificationDetailResponse {
     missing_prerequisites: string[];
     reason_code: string;
     reason: string;
+    runbook_links: RunbookRef[];
   };
 }
+
+export interface VerificationReplayResponse {
+  contract_version: "seedcore.verification_replay.v1";
+  workflow_id: string;
+  receipt_chain: VerificationDetailResponse["receipt_chain"];
+  failure_panel: VerificationDetailResponse["failure_panel"];
+  links: {
+    verification_detail: string;
+    workflow_projection: string;
+    transfer_audit_trail: string;
+    asset_forensic_projection: string;
+  };
+}
+
+export type { RunbookRef } from "./runbooks.js";
 
 export interface TransferCatalogItem {
   id: string;
@@ -305,6 +325,24 @@ export function buildQueryString(query: TransferSourceQuery): string {
     if (query.subject_id) {
       params.set("subject_id", query.subject_id);
     }
+  }
+  if (query.status) {
+    params.set("status", query.status);
+  }
+  if (query.disposition) {
+    params.set("disposition", query.disposition);
+  }
+  if (query.facility) {
+    params.set("facility", query.facility);
+  }
+  if (query.zone) {
+    params.set("zone", query.zone);
+  }
+  if (query.approval_state) {
+    params.set("approval_state", query.approval_state);
+  }
+  if (query.replay_readiness) {
+    params.set("replay_readiness", query.replay_readiness);
   }
   return params.toString();
 }
@@ -1608,14 +1646,15 @@ function buildQueueRow(
 ): TransferQueueRow {
   const linkQuery: TransferSourceQuery =
     queryForLinks.source === "fixture" && fixtureDir
-      ? { source: "fixture", dir: fixtureDir }
+      ? { ...queryForLinks, source: "fixture", dir: fixtureDir }
       : { ...queryForLinks };
   const qs = buildQueryString(linkQuery);
   const wf = encodeURIComponent(scenario.workflow_id);
   const topBlocker = scenario.status.blocker_codes[0] ?? null;
-  const assetForensicsRest = linkQuery.source === "fixture"
-    ? buildAssetForensicsRestPath(scenario.transfer_proof.asset_ref, linkQuery)
-    : `/api/v1/verification/assets/forensics?${qs}`;
+  const assetForensicsRest = buildAssetForensicsRestPath(
+    scenario.transfer_proof.asset_ref,
+    linkQuery.source === "fixture" ? linkQuery : { source: "runtime" },
+  );
   return {
     queue_key: queueKey,
     workflow_id: scenario.workflow_id,
@@ -1644,6 +1683,7 @@ function buildQueueRow(
       asset_forensics: `/api/v1/verification/assets/forensics?${qs}`,
       asset_forensics_rest: assetForensicsRest,
       replay_verification: `/api/v1/verification/workflows/${wf}/verification-detail?${qs}`,
+      verification_replay: `/api/v1/verification/workflows/${wf}/replay?${qs}`,
       workflow_projection: `/api/v1/verification/workflows/${wf}/projection?${qs}`,
     },
   };
@@ -1664,6 +1704,13 @@ function buildFailurePanel(scenario: TransferScenario): VerificationDetailRespon
       headline = "Negative or incomplete verification state";
     }
   }
+  const reasonCode = scenario.transfer_audit_trail.decision.reason_code;
+  const runbook_links = resolveRunbookLinks({
+    reason_code: reasonCode,
+    disposition: d,
+    business_state: bs,
+    blockers: scenario.status.blocker_codes,
+  });
   return {
     active: terminalNegative,
     path: d,
@@ -1672,8 +1719,9 @@ function buildFailurePanel(scenario: TransferScenario): VerificationDetailRespon
     blockers: scenario.status.blocker_codes,
     trust_gaps: scenario.asset_forensics.trust_gaps,
     missing_prerequisites: scenario.asset_forensics.missing_prerequisites,
-    reason_code: scenario.transfer_audit_trail.decision.reason_code,
+    reason_code: reasonCode,
     reason: scenario.transfer_audit_trail.decision.reason,
+    runbook_links,
   };
 }
 
@@ -1747,6 +1795,42 @@ export async function buildVerificationDetailForWorkflow(
   return buildVerificationDetailFromScenario(scenario);
 }
 
+export function buildVerificationReplayFromScenario(
+  scenario: TransferScenario,
+  linkQuery: TransferSourceQuery,
+): VerificationReplayResponse {
+  const qs = buildQueryString(linkQuery);
+  const wf = encodeURIComponent(scenario.workflow_id);
+  return {
+    contract_version: "seedcore.verification_replay.v1",
+    workflow_id: scenario.workflow_id,
+    receipt_chain: buildReceiptChain(scenario),
+    failure_panel: buildFailurePanel(scenario),
+    links: {
+      verification_detail: `/api/v1/verification/workflows/${wf}/verification-detail?${qs}`,
+      workflow_projection: `/api/v1/verification/workflows/${wf}/projection?${qs}`,
+      transfer_audit_trail: `/api/v1/verification/transfers/audit-trail?${qs}`,
+      asset_forensic_projection: `/api/v1/verification/assets/forensics?${qs}`,
+    },
+  };
+}
+
+export async function buildVerificationReplayForWorkflow(
+  workflowId: string,
+  query: TransferSourceQuery,
+): Promise<VerificationReplayResponse> {
+  const scenario = await buildTransferScenarioByWorkflowId(workflowId, query);
+  const linkQuery: TransferSourceQuery =
+    query.source === "fixture"
+      ? (() => {
+          const root = resolveTransferRoot(query.root);
+          const dir = path.join(root, workflowId.trim());
+          return { ...query, source: "fixture", dir };
+        })()
+      : { ...query };
+  return buildVerificationReplayFromScenario(scenario, linkQuery);
+}
+
 export async function resolveFixtureScenarioByAssetRef(
   assetRef: string,
   query: TransferSourceQuery,
@@ -1775,6 +1859,26 @@ export async function resolveFixtureScenarioByAssetRef(
     }
   }
   throw new Error(`fixture_not_found:asset_ref:${normalized}`);
+}
+
+/**
+ * REST path `/assets/{asset_ref}/forensics`: fixtures scan by asset_ref; runtime uses subject_id replay lookup.
+ */
+export async function resolveScenarioByAssetRef(
+  assetRef: string,
+  query: TransferSourceQuery,
+): Promise<TransferScenario> {
+  const normalized = assetRef.trim();
+  if (!normalized) {
+    throw new Error("invalid_asset_ref");
+  }
+  if (query.source === "runtime") {
+    return buildAssetScenario({
+      source: "runtime",
+      subject_id: normalized,
+    });
+  }
+  return resolveFixtureScenarioByAssetRef(normalized, query);
 }
 
 export async function listTransferQueue(query: TransferSourceQuery): Promise<TransferQueueRow[]> {

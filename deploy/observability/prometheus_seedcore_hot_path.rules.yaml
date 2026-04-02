@@ -1,0 +1,54 @@
+# Prometheus alerting examples for PDP hot-path observability (seedcore.observability.hot_path.v1).
+# Wire scrape job to GET /api/v1/pdp/hot-path/status and map JSON fields into metrics, or use
+# json_exporter / recording rules from your telemetry pipeline.
+#
+# Expected series (after relabel/recording):
+#   seedcore_hot_path_alert_level{deployment_role="kubernetes|ray"}  # 0=ok, 1=warning, 2=critical
+#   seedcore_hot_path_rollback_triggered
+#   seedcore_hot_path_recent_mismatch_count
+#   seedcore_hot_path_graph_freshness_ok
+#   seedcore_hot_path_latency_slo_met
+#
+groups:
+  - name: seedcore_hot_path
+    rules:
+      - alert: SeedcoreHotPathRollbackActive
+        expr: seedcore_hot_path_rollback_triggered == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SeedCore hot-path auto-rollback is active"
+          description: "Do not promote candidate PDP; inspect rollback_reasons on /api/v1/pdp/hot-path/status."
+
+      - alert: SeedcoreHotPathCriticalAlerts
+        expr: seedcore_hot_path_alert_level >= 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SeedCore hot-path observability alert_level is critical"
+
+      - alert: SeedcoreHotPathMismatchSpike
+        expr: seedcore_hot_path_recent_mismatch_count > 0 and seedcore_hot_path_total_runs > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hot-path parity window contains mismatches"
+
+      - alert: SeedcoreHotPathGraphStale
+        expr: seedcore_hot_path_graph_freshness_ok == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Authz graph failed freshness check"
+
+      - alert: SeedcoreHotPathLatencySLOBreach
+        expr: seedcore_hot_path_latency_slo_met == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hot-path latency SLO not met for promotion window"

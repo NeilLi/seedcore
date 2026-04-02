@@ -136,6 +136,8 @@ spec:
               value: "1"
             - name: SEEDCORE_VERIFY_BIN
               value: "/usr/local/bin/seedcore-verify"
+            - name: SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE
+              value: "ray"
             - name: RAY_OVERRIDE_RESOURCES
               value: '{"head_node": 1}'
             - name: XGB_STORAGE_PATH

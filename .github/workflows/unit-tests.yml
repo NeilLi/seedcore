@@ -1,6 +1,9 @@
 name: unit-tests
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -32,3 +35,17 @@ jobs:
           PYTHONWARNINGS: "ignore::DeprecationWarning"
         run: |
           pytest -q tests/test_authz_parity_service.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+
+      - name: TypeScript — typecheck and Q2 verification contracts
+        run: |
+          cd ts
+          npm ci
+          npm run typecheck
+          npm test

@@ -367,6 +367,13 @@ export function renderReplayPage(detail: any, query: string, workflowId: string)
         ${renderList(Array.isArray(failure.trust_gaps) ? failure.trust_gaps : [])}
         <h3>Missing prerequisites</h3>
         ${renderList(Array.isArray(failure.missing_prerequisites) ? failure.missing_prerequisites : [])}
+        <h3>Runbooks</h3>
+        ${renderApiLinks(
+          (Array.isArray(failure.runbook_links) ? failure.runbook_links : []).map((r: { title?: string; href_path?: string }) => [
+            r.title ?? "runbook",
+            typeof r.href_path === "string" ? r.href_path : undefined,
+          ]),
+        )}
       </section>
 
       <section class="card" style="overflow-x:auto">

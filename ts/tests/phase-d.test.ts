@@ -12,8 +12,12 @@ import {
   buildRuntimeScenarioFromReplay,
   buildAssetScenario,
   buildTransferScenario,
+  buildVerificationDetailFromScenario,
+  buildVerificationReplayFromScenario,
   listTransferCatalog,
+  listTransferQueue,
 } from "../services/verification-api/src/transferSources.ts";
+import { getRunbook, listRunbookSummaries } from "../services/verification-api/src/runbooks.ts";
 import {
   renderCatalogPage,
   renderForensicsPage,
@@ -57,6 +61,48 @@ test("fixture scenarios map into Phase D business states and readiness", async (
     assert.ok(parseTransferAuditTrail(scenario.transfer_audit_trail));
     assert.ok(parseAssetForensicProjection(scenario.asset_forensic_projection));
   }
+});
+
+test("Q2 verification detail and replay contracts include runbook links", async () => {
+  const scenario = await buildTransferScenario({
+    source: "fixture",
+    dir: "rust/fixtures/transfers/deny_missing_approval",
+  });
+  const detail = buildVerificationDetailFromScenario(scenario);
+  assert.equal(detail.contract_version, "seedcore.verification_detail.v1");
+  assert.ok(Array.isArray(detail.failure_panel.runbook_links));
+  assert.ok(detail.failure_panel.runbook_links.length >= 1);
+
+  const replay = buildVerificationReplayFromScenario(scenario, {
+    source: "fixture",
+    dir: "rust/fixtures/transfers/deny_missing_approval",
+  });
+  assert.equal(replay.contract_version, "seedcore.verification_replay.v1");
+  assert.ok(replay.links.verification_detail.includes("/verification-detail"));
+  assert.ok(replay.links.transfer_audit_trail.includes("/audit-trail"));
+  assert.ok(replay.failure_panel.runbook_links.length >= 1);
+});
+
+test("transfer queue rows expose dedicated verification replay URL", async () => {
+  const rows = await listTransferQueue({
+    source: "fixture",
+    root: "rust/fixtures/transfers",
+    status: "verified",
+    approval_state: "APPROVED",
+  });
+  const allow = rows.find((r) => r.queue_key === "allow_case");
+  assert.ok(allow);
+  assert.ok(allow!.links.verification_replay.includes("/replay"));
+  assert.ok(allow!.links.verification_replay.includes("status=verified"));
+  assert.ok(allow!.links.verification_replay.includes("approval_state=APPROVED"));
+});
+
+test("runbook index and entries are stable", () => {
+  const slugs = listRunbookSummaries();
+  assert.ok(slugs.some((s) => s.slug === "operator_transfer_overview"));
+  const rb = getRunbook("trust_gap_quarantine");
+  assert.ok(rb);
+  assert.ok(rb!.steps.length >= 1);
 });
 
 test("catalog exposes status preview and forensic links", async () => {
@@ -270,6 +316,7 @@ test("replay page preserves runtime lookup links for transfer and forensics", as
         missing_prerequisites: [],
         reason_code: "none",
         reason: "none",
+        runbook_links: [],
       },
     },
     "source=runtime&workflow_id=audit-123",

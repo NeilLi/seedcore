@@ -6,11 +6,13 @@ import {
   buildTransferScenario,
   buildTransferScenarioByWorkflowId,
   buildVerificationDetailForWorkflow,
+  buildVerificationReplayForWorkflow,
   listTransferCatalog,
   listTransferQueue,
   parseTransferQuery,
-  resolveFixtureScenarioByAssetRef,
+  resolveScenarioByAssetRef,
 } from "./transferSources.js";
+import { getRunbook, listRunbookSummaries } from "./runbooks.js";
 
 function jsonResponse(
   res: http.ServerResponse,
@@ -33,6 +35,9 @@ function errorStatus(message: string): number {
     || message.startsWith("invalid_asset_ref")
   ) {
     return 422;
+  }
+  if (message.startsWith("invalid_runbook_slug")) {
+    return 404;
   }
   if (message.startsWith("runtime_fetch_failed:")) {
     const parts = message.split(":");
@@ -97,7 +102,7 @@ export const server = http.createServer(async (req, res) => {
       const middle = url.pathname.slice(assetsPrefix.length, url.pathname.length - forensicsSuffix.length);
       if (middle.length > 0 && middle !== "forensics" && !middle.includes("/")) {
         const assetRef = decodeURIComponent(middle);
-        const scenario = await resolveFixtureScenarioByAssetRef(assetRef, query);
+        const scenario = await resolveScenarioByAssetRef(assetRef, query);
         jsonResponse(res, 200, scenario.asset_forensic_projection);
         return;
       }
@@ -130,6 +135,40 @@ export const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/v1/verification/transfers/audit-trail") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario.transfer_audit_trail);
+      return;
+    }
+
+    if (url.pathname === "/api/v1/verification/runbook" || url.pathname === "/api/v1/verification/runbook/") {
+      jsonResponse(res, 200, { contract_version: "seedcore.verification_runbook_index.v1", runbooks: listRunbookSummaries() });
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/v1/verification/runbook/")) {
+      const slug = decodeURIComponent(
+        url.pathname.replace("/api/v1/verification/runbook/", "").replace(/\/+$/, ""),
+      );
+      if (!slug) {
+        jsonResponse(res, 404, { error: "not_found" });
+        return;
+      }
+      const entry = getRunbook(slug);
+      if (!entry) {
+        jsonResponse(res, 404, { error: "invalid_runbook_slug", detail: slug });
+        return;
+      }
+      jsonResponse(res, 200, { contract_version: "seedcore.verification_runbook_entry.v1", ...entry });
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/v1/verification/workflows/") && url.pathname.endsWith("/replay")) {
+      const workflowId = decodeURIComponent(
+        url.pathname
+          .replace("/api/v1/verification/workflows/", "")
+          .replace("/replay", "")
+          .replace(/\/+$/, ""),
+      );
+      const replay = await buildVerificationReplayForWorkflow(workflowId, query);
+      jsonResponse(res, 200, replay);
       return;
     }
 
