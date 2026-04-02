@@ -72,6 +72,7 @@ def test_run_benchmark_writes_summary_artifact(tmp_path, monkeypatch) -> None:
     assert persisted["simulated_client_failure_rate"] == 0.0
     assert persisted["simulated_transport_failure_injections"] == 0
     assert persisted["simulated_connectivity_exhausted_count"] == 0
+    assert persisted["disposition_by_case"] == {"allow_case": {"allow": 2}}
 
 
 def test_run_benchmark_accepts_delay_and_jitter_metadata(tmp_path, monkeypatch) -> None:

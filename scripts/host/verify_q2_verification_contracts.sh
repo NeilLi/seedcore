@@ -5,7 +5,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
-python -m pytest -q tests/test_pdp_hot_path_router.py tests/test_edge_telemetry_envelope.py tests/test_benchmark_rct_hot_path.py
+python -m pytest -q \
+  tests/test_pdp_hot_path_router.py \
+  tests/test_edge_telemetry_envelope.py \
+  tests/test_benchmark_rct_hot_path.py \
+  tests/test_rct_degraded_edge_drill_matrix.py
 cd "${ROOT}/ts"
 npm run typecheck
 npm test

@@ -109,11 +109,11 @@ export SEEDCORE_DISPATCHER_MAIN_INTERVAL_S="${SEEDCORE_DISPATCHER_MAIN_INTERVAL_
 # External API mock controls (safe local defaults).
 # Set to 1/true/yes/on to use deterministic non-network mock behavior.
 export SEEDCORE_MOCK_EXTERNAL_APIS="${SEEDCORE_MOCK_EXTERNAL_APIS:-0}"
-export SEEDCORE_MOCK_GEMINI_API="${SEEDCORE_MOCK_GEMINI_API:-0}"
-export GOOGLE_API_MOCK="${GOOGLE_API_MOCK:-0}"
-export GEMINI_API_MOCK="${GEMINI_API_MOCK:-0}"
-export SYNOPSIS_EMBEDDING_MOCK="${SYNOPSIS_EMBEDDING_MOCK:-0}"
-export NIM_RETRIEVAL_MOCK="${NIM_RETRIEVAL_MOCK:-0}"
+export SEEDCORE_MOCK_GEMINI_API="${SEEDCORE_MOCK_GEMINI_API:-1}"
+export GOOGLE_API_MOCK="${GOOGLE_API_MOCK:-1}"
+export GEMINI_API_MOCK="${GEMINI_API_MOCK:-1}"
+export SYNOPSIS_EMBEDDING_MOCK="${SYNOPSIS_EMBEDDING_MOCK:-1}"
+export NIM_RETRIEVAL_MOCK="${NIM_RETRIEVAL_MOCK:-1}"
 
 # Local host-mode should prefer a working provider over container defaults.
 # If Gemini credentials are present but OpenAI is unset or clearly placeholder-only,

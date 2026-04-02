@@ -8,7 +8,7 @@ import random
 import statistics
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -177,6 +177,16 @@ def run_benchmark(
     external_latencies = [float(item["external_latency_ms"]) for item in results if item.get("status") == "ok"]
     reason_counts = Counter(str(item.get("reason_code") or "") for item in results)
     disposition_counts = Counter(str(item.get("disposition") or "") for item in results)
+    disposition_by_case: dict[str, dict[str, int]] = {}
+    by_case: dict[str, Counter] = defaultdict(Counter)
+    for item in results:
+        case = str(item.get("case") or "unknown")
+        if item.get("status") != "ok":
+            by_case[case]["request_error"] += 1
+            continue
+        disp = str(item.get("disposition") or "none")
+        by_case[case][disp] += 1
+    disposition_by_case = {case: dict(counts) for case, counts in by_case.items()}
     error_count = sum(1 for item in results if item.get("status") != "ok")
     exhausted = sum(
         1 for item in results if item.get("error") == "simulated_connectivity_exhausted"
@@ -216,6 +226,7 @@ def run_benchmark(
             "avg": round(statistics.fmean(external_latencies), 2) if external_latencies else None,
         },
         "disposition_counts": dict(disposition_counts),
+        "disposition_by_case": disposition_by_case,
         "quarantine_count": int(disposition_counts.get("quarantine", 0)),
         "top_reason_codes": [
             {"reason_code": reason_code, "count": count}
@@ -315,6 +326,9 @@ def main() -> int:
         f"synth_transport_injections={summary.get('simulated_transport_failure_injections')} "
         f"synth_exhausted={summary.get('simulated_connectivity_exhausted_count')}"
     )
+    dbc = summary.get("disposition_by_case") or {}
+    if dbc:
+        print(f"disposition_by_case: {json.dumps(dbc, sort_keys=True)}")
     print(f"artifact: {summary.get('artifact_path')}")
     return 0
 
