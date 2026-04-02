@@ -52,3 +52,6 @@ jobs:
 
       - name: Q2 verification API HTTP fixture matrix
         run: bash scripts/ci/q2_verification_api_fixture_gate.sh
+
+      - name: Q2 degraded-edge drill matrix
+        run: bash scripts/ci/q2_degraded_edge_drill_matrix.sh

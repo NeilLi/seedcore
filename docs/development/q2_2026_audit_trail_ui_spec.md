@@ -56,10 +56,14 @@ Implemented in code:
 Still open for full Q2 closure:
 
 - CI/CD enforcement for full Q2 acceptance matrix across environments
+  (implemented as CI + host gates; remaining: validate in each real
+  deployment topology).
 - deployment-realistic observability and alert validation for the hot-path
-  operator story
+  operator story (unit-validated JSON-to-metrics semantics + live host script
+  added; remaining: run in real K8s/Ray deployments).
 - adversarial and degraded-edge-condition acceptance coverage for the Q2
-  verification slice (pytest drill matrix is in repo; broaden to live envs)
+  verification slice (expanded drills in repo; remaining: broaden to live envs
+  once observability wiring is proven).
 - ~~read-only Gemini-visible verification tools~~ **Initial bundle shipped:** MCP tools
   `seedcore.verification.*` and `seedcore.hotpath.metrics` (see
   `skills/using-seedcore/references/gemini-tools.md`)

@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 VERIFICATION_API_BASE="${SEEDCORE_VERIFICATION_API_BASE:-http://127.0.0.1:7071}"
 RUNTIME_API_BASE="${SEEDCORE_RUNTIME_API_BASE:-http://127.0.0.1:8002/api/v1}"
 DB_NAME="${SEEDCORE_DB_NAME:-seedcore}"
@@ -70,14 +73,13 @@ echo "Verification API: ${VERIFICATION_API_BASE}"
 echo "Runtime API:      ${RUNTIME_API_BASE}"
 
 if [[ "${SEEDCORE_SKIP_Q2_FIXTURE_GATE:-}" != "1" ]]; then
-  echo "== Q2 verification API fixture gate (queue / replay / runbook / lookup) =="
-  Q2_QUEUE="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/transfers/queue?source=fixture&root=rust/fixtures/transfers")"
-  check "q2 fixture queue has rows" jq -e '.items | length >= 1' <<<"${Q2_QUEUE}" >/dev/null
-  check "q2 queue trust_alerts field" jq -e '.items[0].trust_alerts | type == "array"' <<<"${Q2_QUEUE}" >/dev/null
-  Q2_REP="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/workflows/allow_case/replay?source=fixture&root=rust/fixtures/transfers")"
-  check "q2 fixture replay contract" jq -e '.contract_version == "seedcore.verification_replay.v1"' <<<"${Q2_REP}" >/dev/null
-  Q2_RB="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/runbook/lookup?reason_code=trust_gap_quarantine")"
-  check "q2 runbook lookup" jq -e '.contract_version == "seedcore.verification_runbook_lookup.v1"' <<<"${Q2_RB}" >/dev/null
+  echo "== Q2 verification API fixture acceptance matrix (queue / detail / replay / runbooks / forensics) =="
+  SEEDCORE_VERIFICATION_API_BASE="${VERIFICATION_API_BASE}" bash "${ROOT}/scripts/host/verify_q2_verification_api_fixtures.sh"
+fi
+
+if [[ "${SEEDCORE_SKIP_HOT_PATH_OBSERVABILITY_GATE:-}" != "1" ]]; then
+  echo "== Hot-path observability live check (status <-> metrics) =="
+  SEEDCORE_RUNTIME_API_BASE="${RUNTIME_API_BASE}" bash "${ROOT}/scripts/host/verify_hot_path_observability.sh"
 fi
 
 AUDIT_ID="$(find_runtime_audit_id || true)"

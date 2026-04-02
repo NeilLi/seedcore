@@ -330,20 +330,32 @@ The next execution sequence should now move from contract freeze into
 operational closure and external-boundary productization.
 
 1. **2026-04-02 to 2026-04-12: Q2 acceptance gating**
-   - promote the new verification-service checks into required CI policy
+   - promote the verification-api HTTP fixture checks into required CI policy
+     (`scripts/ci/q2_verification_api_fixture_gate.sh`).
    - make host verification use the same gate set as CI
-   - treat queue/detail/replay/runbook/forensics checks as a single acceptance
-     matrix for the RCT slice
+     (`scripts/host/verify_q2_verification_api_fixtures.sh`), including:
+     queue + Screen 2 detail (`/transfers/review`) + Screen 4 detail (`/workflows/*/verification-detail`)
+     + replay + runbook lookup + forensics.
+   - treat queue/detail/replay/runbook/forensics checks as a single required
+     acceptance matrix for the RCT slice.
 2. **2026-04-08 to 2026-04-19: deployment observability closure**
    - wire `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` through the actual deployment
-     paths already checked into repo
-   - land the JSON-to-metrics bridge needed for Prometheus alerting
-   - verify alert semantics against real status payloads rather than static
-     examples only
+     paths already checked into repo.
+   - verify JSON-to-metrics export semantics by matching `/pdp/hot-path/status`
+     against `/pdp/hot-path/metrics` in CI
+     (`test_pdp_hot_path_metrics_exposes_prometheus_text`).
+   - add a live host verification script to validate status <-> metrics consistency
+     against real status payloads:
+     `scripts/host/verify_hot_path_observability.sh`.
 3. **2026-04-15 to 2026-04-30: degraded-edge and adversarial drill matrix**
-   - add intermittent-connectivity, stale-graph, replay-injection, and
-     coordinate-tamper scenarios to the repeatable verification slice
-   - make rollback and quarantine evidence export part of the same drill bundle
+   - expand the repeatable verification slice to include:
+     stale-graph + stale telemetry (RCT hot-path drill matrix),
+     intermittent-connectivity (synthetic flaky transport benchmark),
+     coordinate tamper (agent action gateway coordinate mismatch),
+     and replay-injection / authority mismatch (replay router tamper surfaces).
+   - enforce the drill bundle explicitly in CI and host mode via:
+     `scripts/ci/q2_degraded_edge_drill_matrix.sh` and
+     `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
 4. **2026-05-01 to 2026-05-21: Agent Action Gateway productization**
    - add one reference adapter for a current agent platform
    - add one narrow commerce-side adapter for the canonical transaction story

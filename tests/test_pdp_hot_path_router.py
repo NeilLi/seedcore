@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -238,14 +239,67 @@ def test_pdp_hot_path_quarantines_when_compiled_graph_is_stale(monkeypatch):
     assert body["decision"]["reason_code"] == "compiled_authz_graph_stale"
 
 
-def test_pdp_hot_path_metrics_exposes_prometheus_text() -> None:
-    response = _make_client().get("/api/v1/pdp/hot-path/metrics")
+def test_pdp_hot_path_metrics_exposes_prometheus_text(monkeypatch) -> None:
+    role = "unittest"
+    monkeypatch.setenv("SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE", role)
+
+    compiled_at = datetime.now(timezone.utc).isoformat()
+    manager = _manager(compiled_at=compiled_at)
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", pdp_hot_path.HotPathShadowStats())
+    monkeypatch.setenv("SEEDCORE_RCT_HOT_PATH_MODE", "enforce")
+    monkeypatch.setenv("SEEDCORE_HOT_PATH_PROMOTION_GATE_DISABLED", "1")
+    pdp_hot_path.record_false_positive_hot_path_signal(
+        request_id="req-false-positive",
+        asset_ref="asset:lot-8841",
+        baseline_disposition="deny",
+        candidate_disposition="allow",
+        baseline_reason_code="policy_denied",
+        candidate_reason_code="restricted_custody_transfer_allowed",
+    )
+
+    client = _make_client()
+    status = client.get("/api/v1/pdp/hot-path/status")
+    assert status.status_code == 200
+    status_body = status.json()
+
+    response = client.get("/api/v1/pdp/hot-path/metrics")
     assert response.status_code == 200
     body = response.text
     assert "seedcore_hot_path_alert_level" in body
     assert "seedcore_hot_path_rollback_triggered" in body
     assert "seedcore_hot_path_graph_freshness_ok" in body
     assert "text/plain" in (response.headers.get("content-type") or "")
+
+    def gauge_value(name: str) -> float:
+        prefix = f'{name}{{deployment_role="'
+        lines = [line for line in body.splitlines() if line.startswith(prefix)]
+        assert lines, f"missing metrics gauge: {name}"
+        found_roles: list[str] = []
+        for line in lines:
+            # Example: seedcore_hot_path_alert_level{deployment_role="unittest"} 2
+            after = line.split('deployment_role="', 1)[1]
+            found_role = after.split('"', 1)[0]
+            found_roles.append(found_role)
+            if found_role == role:
+                after_brace = line.split("}", 1)[1]
+                return float(after_brace.strip())
+        found_roles_unique = sorted(set(found_roles))
+        assert False, f"missing metrics gauge: {name} deployment_role={role} (found roles: {found_roles_unique})"
+
+    alert_level = str(status_body.get("observability", {}).get("alert_level") or "ok").strip().lower()
+    expected_alert_num = {"critical": 2, "warning": 1, "ok": 0}.get(alert_level, 0)
+    assert gauge_value("seedcore_hot_path_alert_level") == expected_alert_num
+    assert gauge_value("seedcore_hot_path_rollback_triggered") == (1.0 if status_body.get("rollback_triggered") else 0.0)
+    assert gauge_value("seedcore_hot_path_graph_freshness_ok") == (
+        1.0 if status_body.get("graph_freshness_ok") else 0.0
+    )
+    assert gauge_value("seedcore_hot_path_total_runs") == float(status_body.get("total") or 0)
+    assert gauge_value("seedcore_hot_path_recent_mismatch_count") == float(status_body.get("recent_mismatch_count") or 0)
+
+    ga = status_body.get("graph_age_seconds")
+    if ga is not None:
+        assert abs(gauge_value("seedcore_hot_path_graph_age_seconds") - float(ga)) < 1e-6
 
 
 def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):

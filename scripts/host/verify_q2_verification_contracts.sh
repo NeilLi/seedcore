@@ -7,9 +7,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 python -m pytest -q \
   tests/test_pdp_hot_path_router.py \
-  tests/test_edge_telemetry_envelope.py \
-  tests/test_benchmark_rct_hot_path.py \
-  tests/test_rct_degraded_edge_drill_matrix.py
+  tests/test_edge_telemetry_envelope.py
+
+bash "${ROOT}/scripts/host/verify_q2_degraded_edge_drill_matrix.sh"
 cd "${ROOT}/ts"
 npm run typecheck
 npm test

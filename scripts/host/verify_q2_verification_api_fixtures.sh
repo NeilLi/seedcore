@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live verification API checks (fixtures only): queue, replay, runbook, forensics, lookup.
+# Live verification API checks (fixtures only): queue, detail, replay, runbook, forensics, lookup.
 # Requires verification-api on SEEDCORE_VERIFICATION_API_BASE (default http://127.0.0.1:7071).
 set -euo pipefail
 VERIFICATION_API_BASE="${SEEDCORE_VERIFICATION_API_BASE:-http://127.0.0.1:7071}"
@@ -41,8 +41,18 @@ check "queue returns items" jq -e '.items | length >= 1' <<<"${QUEUE}" >/dev/nul
 
 check "queue row includes trust_alerts" jq -e '.items[0].trust_alerts | type == "array"' <<<"${QUEUE}" >/dev/null
 
+# Screen 2 (transfer review) should return contract-shaped projections.
+REVIEW="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/transfers/review?source=fixture&dir=rust/fixtures/transfers/allow_case")"
+check "transfer review includes projections" jq -e '.verification_projection.contract_version == "seedcore.verification_surface_projection.v1"' <<<"${REVIEW}" >/dev/null
+check "transfer review includes audit + forensics" jq -e '.transfer_audit_trail.contract_version == "seedcore.verification_surface_projection.v1" and .asset_forensic_projection.contract_version == "seedcore.verification_surface_projection.v1"' <<<"${REVIEW}" >/dev/null
+
 REPLAY="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/workflows/allow_case/replay?source=fixture&root=rust/fixtures/transfers")"
 check "replay contract version" jq -e '.contract_version == "seedcore.verification_replay.v1"' <<<"${REPLAY}" >/dev/null
+
+# Screen 4 detail bundle should include the failure panel and receipt chain.
+DETAIL="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/workflows/allow_case/verification-detail?source=fixture&root=rust/fixtures/transfers")"
+check "verification detail contract version" jq -e '.contract_version == "seedcore.verification_detail.v1"' <<<"${DETAIL}" >/dev/null
+check "verification detail includes runbook links" jq -e '.failure_panel.runbook_links | length >= 1' <<<"${DETAIL}" >/dev/null
 
 RB="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/runbook")"
 check "runbook index" jq -e '.runbooks | length >= 1' <<<"${RB}" >/dev/null
