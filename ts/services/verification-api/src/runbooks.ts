@@ -74,6 +74,44 @@ const RUNBOOKS: Record<string, RunbookEntry> = {
     ],
     related_reason_codes: [],
   },
+  stale_telemetry: {
+    slug: "stale_telemetry",
+    title: "Stale telemetry or freshness violation",
+    summary: "Telemetry age exceeded policy; quarantine is the governed outcome until fresh evidence lands.",
+    steps: [
+      "Compare telemetry_context freshness_seconds to max_allowed_age_seconds on the audit trail request card.",
+      "Validate edge clock skew and ingestion lag; capture a new signed telemetry envelope.",
+      "Re-run hot-path evaluation after freshness is within SLO; confirm trust_alerts clear on the queue row.",
+    ],
+    related_reason_codes: ["stale_telemetry", "telemetry_freshness", "freshness"],
+  },
+  authority_scope_mismatch: {
+    slug: "authority_scope_mismatch",
+    title: "Authority / coordinate / asset scope mismatch",
+    summary: "Intent asset, zones, or coordinates do not match the scoped authority graph (deny path).",
+    steps: [
+      "Read authority_scope.mismatch_keys and authority_scope_verdict on Screen 2.",
+      "Verify asset_ref and product_ref align across action_intent, asset_context, and custody transition.",
+      "If coordinates are in scope, confirm expected_coordinate_ref matches physical evidence refs.",
+    ],
+    related_reason_codes: [
+      "asset_custody_mismatch",
+      "authority_scope_mismatch",
+      "coordinate_scope_mismatch",
+      "asset_product_scope_mismatch",
+    ],
+  },
+  snapshot_not_ready: {
+    slug: "snapshot_not_ready",
+    title: "Policy snapshot skew / graph not ready",
+    summary: "Request snapshot_ref does not match the active compiled authorization graph.",
+    steps: [
+      "Compare decision.policy_snapshot_ref to GET /api/v1/pkg/status active_version.",
+      "Activate the expected rules snapshot or resubmit the transfer with the active snapshot ref.",
+      "Confirm authz graph compiled_at and graph_freshness_ok before retrying evaluation.",
+    ],
+    related_reason_codes: ["snapshot_not_ready", "snapshot_skew", "hot_path_dependency_unavailable"],
+  },
 };
 
 export function listRunbookSummaries(): Array<{ slug: string; title: string }> {

@@ -54,7 +54,7 @@ function renderOperatorShell(nav: OperatorNavKey, listQuery: string, hotPath: Ho
       ${item("verification", "Verification", `/queue?${q}`)}
       ${item("runbooks", "Runbooks", `/runbooks`)}
       <form class="topnav-search" method="get" action="/search" style="display:inline-flex;gap:6px;align-items:center;margin-left:18px">
-        <input name="q" placeholder="audit UUID · workflow id · asset ref" size="32" aria-label="Search" />
+        <input name="q" placeholder="audit UUID · workflow · asset:… · envelope:… · request:…" size="36" aria-label="Search" />
         <button type="submit">Search</button>
       </form>
     </nav>
@@ -171,6 +171,56 @@ export function statusClass(state: string): "ok" | "warn" | "bad" {
   return "bad";
 }
 
+function withQueryParam(listQuery: string, key: string, value: string | null | undefined): string {
+  const p = new URLSearchParams(listQuery);
+  if (value === null || value === undefined || value === "") {
+    p.delete(key);
+  } else {
+    p.set(key, value);
+  }
+  return p.toString();
+}
+
+function inputValueFromQuery(listQuery: string, key: string): string {
+  const v = new URLSearchParams(listQuery).get(key);
+  return v ? escapeHtml(v) : "";
+}
+
+function renderQueueBusinessStateStrip(items: any[], listQuery: string): string {
+  const counts: Record<string, number> = {
+    verified: 0,
+    quarantined: 0,
+    rejected: 0,
+    review_required: 0,
+    pending_approval: 0,
+  };
+  for (const row of items) {
+    const bs = String(row.trust_summary?.business_state ?? "");
+    if (bs in counts) {
+      counts[bs] += 1;
+    }
+  }
+  const chip = (label: string, state: string) => {
+    const qs = escapeHtml(withQueryParam(listQuery, "status", state));
+    const cls = statusClass(state);
+    return `<a class="status ${cls}" href="/queue?${qs}">${escapeHtml(label)} (${counts[state]})</a>`;
+  };
+  const clearQs = escapeHtml(withQueryParam(listQuery, "status", null));
+  return `
+      <section class="card">
+        <h2>Business-readable status (queue)</h2>
+        <p class="sub">Counts reflect the current filter result set. Click to filter the table.</p>
+        <div class="row">
+          ${chip("Verified", "verified")}
+          ${chip("Quarantined", "quarantined")}
+          ${chip("Rejected", "rejected")}
+          ${chip("Review required", "review_required")}
+          ${chip("Pending approval", "pending_approval")}
+          <a class="status" href="/queue?${clearQs}">Clear status filter</a>
+        </div>
+      </section>`;
+}
+
 function renderList(values: string[]): string {
   if (!Array.isArray(values) || values.length === 0) {
     return `<p class="empty">none</p>`;
@@ -271,7 +321,7 @@ export function renderQueuePage(queuePayload: any, listQuery: string, shell?: Op
   }
   const strip =
     alertCounts.size > 0
-      ? `<section class="card"><h2>Trust alerts (queue)</h2><div class="row">${[...alertCounts.entries()]
+      ? `<section class="card"><h2>Trust alerts (queue)</h2><p class="sub">Aggregated codes include replay readiness, trust gaps, scope verification, prerequisites, and verification errors.</p><div class="row">${[...alertCounts.entries()]
           .map(([k, v]) => `<span class="status warn">${escapeHtml(k)} (${v})</span>`)
           .join(" ")}</div></section>`
       : "";
@@ -318,6 +368,7 @@ export function renderQueuePage(queuePayload: any, listQuery: string, shell?: Op
   const listParams = new URLSearchParams(listQuery);
   const rootVal = escapeHtml(listParams.get("root") ?? "rust/fixtures/transfers");
   const sourceVal = escapeHtml(listParams.get("source") ?? "fixture");
+  const statusStrip = items.length > 0 ? renderQueueBusinessStateStrip(items, listQuery) : "";
   return page(
     "Transfer queue",
     `
@@ -327,18 +378,21 @@ export function renderQueuePage(queuePayload: any, listQuery: string, shell?: Op
         <a href="/?${filterBase}">Scenario cards</a>
         · <a href="/queue?${filterBase}">Refresh queue</a>
       </p>
+      ${statusStrip}
       <section class="card">
         <h2>Filters</h2>
-        <form method="get" action="/queue" class="row">
+        <form method="get" action="/queue" class="row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
           <input type="hidden" name="source" value="${sourceVal}" />
           <input type="hidden" name="root" value="${rootVal}" />
-          <label>status / bucket <input name="status" placeholder="verified, quarantined, …" /></label>
-          <label>disposition <input name="disposition" placeholder="allow, deny, …" /></label>
-          <label>facility <input name="facility" /></label>
-          <label>zone <input name="zone" /></label>
-          <label>approval <input name="approval_state" placeholder="APPROVED, PENDING, …" /></label>
-          <label>replay <input name="replay_readiness" placeholder="ready, pending" /></label>
-          <label>trust alert <input name="trust_alert" placeholder="replay_not_ready, …" /></label>
+          <label>status / bucket<br /><input name="status" placeholder="verified, quarantined, …" value="${inputValueFromQuery(listQuery, "status")}" /></label>
+          <label>disposition<br /><input name="disposition" placeholder="allow, deny, …" value="${inputValueFromQuery(listQuery, "disposition")}" /></label>
+          <label>facility<br /><input name="facility" value="${inputValueFromQuery(listQuery, "facility")}" /></label>
+          <label>zone<br /><input name="zone" value="${inputValueFromQuery(listQuery, "zone")}" /></label>
+          <label>approval<br /><input name="approval_state" placeholder="APPROVED, PENDING, …" value="${inputValueFromQuery(listQuery, "approval_state")}" /></label>
+          <label>replay<br /><input name="replay_readiness" placeholder="ready, pending" value="${inputValueFromQuery(listQuery, "replay_readiness")}" /></label>
+          <label>trust alert<br /><input name="trust_alert" placeholder="replay_not_ready, …" value="${inputValueFromQuery(listQuery, "trust_alert")}" /></label>
+          <label>envelope id<br /><input name="approval_envelope_id" placeholder="substring" value="${inputValueFromQuery(listQuery, "approval_envelope_id")}" /></label>
+          <label>request id<br /><input name="request_id" placeholder="substring" value="${inputValueFromQuery(listQuery, "request_id")}" /></label>
           <button type="submit">Apply</button>
         </form>
       </section>
@@ -373,8 +427,17 @@ export function renderQueuePage(queuePayload: any, listQuery: string, shell?: Op
   );
 }
 
-export function renderRunbooksPage(indexPayload: any, shell?: OperatorShellOptions): string {
+export function renderRunbooksPage(
+  indexPayload: any,
+  shell?: OperatorShellOptions,
+  verificationApiBase?: string,
+): string {
   const books = Array.isArray(indexPayload?.runbooks) ? indexPayload.runbooks : [];
+  const base = (verificationApiBase ?? "").replace(/\/+$/, "");
+  const presetLookup = (label: string, reason: string) =>
+    base
+      ? `<li><a href="${escapeHtml(`${base}/api/v1/verification/runbook/lookup?reason_code=${encodeURIComponent(reason)}`)}">${escapeHtml(label)}</a></li>`
+      : "";
   const cards = books
     .map(
       (b: { slug?: string; title?: string }) => `
@@ -384,11 +447,25 @@ export function renderRunbooksPage(indexPayload: any, shell?: OperatorShellOptio
       </article>`,
     )
     .join("");
+  const quick =
+    base &&
+    `<section class="card">
+        <h2>Preset runbook lookups</h2>
+        <p class="sub">Resolved against <code>seedcore.verification_runbook_lookup.v1</code> on the verification service.</p>
+        <ul>
+          ${presetLookup("Stale telemetry", "stale_telemetry")}
+          ${presetLookup("Trust gap / quarantine", "trust_gap_quarantine")}
+          ${presetLookup("Policy denied", "policy_denied")}
+          ${presetLookup("Snapshot not ready", "snapshot_not_ready")}
+          ${presetLookup("Scope / asset mismatch", "asset_custody_mismatch")}
+        </ul>
+      </section>`;
   return page(
     "Operator runbooks",
     `
       <h1>Runbooks</h1>
       <p class="sub">Investigation guides keyed for failure panels and operator drills (read-only JSON under verification API).</p>
+      ${quick || `<p class="sub">Set <code>SEEDCORE_VERIFICATION_API_BASE</code> on the operator console to enable preset lookup links.</p>`}
       <section class="grid">${cards || `<article class="card"><p class="empty">No runbooks.</p></article>`}</section>
     `,
     shell,
@@ -461,6 +538,35 @@ export function renderReplayPage(
         <div class="row">asset: <code>${escapeHtml(projection.asset_ref)}</code></div>
         <div class="row">replay verifiable (chain): <code>${String(chain.replay_verifiable)}</code></div>
         <div class="row">terminal disposition: <code>${escapeHtml(String(chain.terminal_disposition ?? ""))}</code></div>
+      </section>
+
+      <section class="card">
+        <h2>Verification summary</h2>
+        <div class="row">signature valid: <code>${String(projection.verification.signature_valid)}</code></div>
+        <div class="row">policy trace available: <code>${String(projection.verification.policy_trace_available)}</code></div>
+        <div class="row">evidence trace available: <code>${String(projection.verification.evidence_trace_available)}</code></div>
+        <div class="row">tamper status: <code>${escapeHtml(projection.verification.tamper_status)}</code></div>
+      </section>
+
+      <section class="card">
+        <h2>Verification actions</h2>
+        <p class="sub">Open JSON contracts on the verification service (same host/port as API base in deployments).</p>
+        <ul>
+          <li>
+            <a href="/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/replay?${query}"><code>GET …/replay</code></a>
+            — dedicated replay bundle (<code>seedcore.verification_replay.v1</code>)
+          </li>
+          <li>
+            <a href="/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/projection?${query}"><code>GET …/projection</code></a>
+            — <code>VerificationSurfaceProjection</code>
+          </li>
+          <li>${projection.links.replay_ref ? `<a href="${escapeHtml(projection.links.replay_ref)}">Replay ref (from projection)</a>` : `<span class="empty">no replay ref on projection</span>`}</li>
+          <li>${projection.links.trust_ref ? `<a href="${escapeHtml(projection.links.trust_ref)}">Trust ref</a>` : `<span class="empty">no trust ref</span>`}</li>
+          <li>
+            <a href="/api/v1/verification/runbook/lookup?reason_code=${encodeURIComponent(String(failure.reason_code ?? ""))}"><code>Runbook lookup</code></a>
+            for current reason code
+          </li>
+        </ul>
       </section>
 
       <section class="card">
@@ -544,18 +650,32 @@ export function renderTransferPage(reviewPayload: any, query: string, shell?: Op
           <h2>Request + Authority</h2>
           <div class="row">request id: <code>${escapeHtml(auditTrail.request.request_id)}</code></div>
           <div class="row">requested at: <code>${escapeHtml(auditTrail.request.requested_at)}</code></div>
+          <div class="row">workflow type: <code>${escapeHtml(auditTrail.request.workflow_type)}</code></div>
+          <div class="row">valid until: <code>${escapeHtml(auditTrail.request.valid_until ?? "none")}</code></div>
+          <div class="row">idempotency key: <code>${escapeHtml(auditTrail.request.idempotency_key ?? "none")}</code></div>
           <div class="row">request summary: ${escapeHtml(auditTrail.request.request_summary)}</div>
           <div class="row">action type: <code>${escapeHtml(auditTrail.request.action_type)}</code></div>
+          <h3>Principal and authority</h3>
           <div class="row">agent id: <code>${escapeHtml(auditTrail.principal.agent_id)}</code></div>
           <div class="row">role profile: <code>${escapeHtml(auditTrail.principal.role_profile)}</code></div>
           <div class="row">owner id: <code>${escapeHtml(auditTrail.principal.owner_id ?? "none")}</code></div>
           <div class="row">delegation ref: <code>${escapeHtml(auditTrail.principal.delegation_ref ?? "none")}</code></div>
           <div class="row">organization ref: <code>${escapeHtml(auditTrail.principal.organization_ref ?? "none")}</code></div>
-          <div class="row">fingerprint id: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.fingerprint_id ?? "none")}</code></div>
-          <div class="row">fingerprint pubkey: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.public_key_fingerprint ?? "none")}</code></div>
+          <div class="row">hardware fingerprint id: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.fingerprint_id ?? "none")}</code></div>
+          <div class="row">node id: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.node_id ?? "none")}</code></div>
+          <div class="row">public key fingerprint: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.public_key_fingerprint ?? "none")}</code></div>
+          <div class="row">attestation type: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.attestation_type ?? "none")}</code></div>
+          <div class="row">key ref: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.key_ref ?? "none")}</code></div>
+          <h3>Scope</h3>
           <div class="row">scope id: <code>${escapeHtml(auditTrail.authority_scope.scope_id ?? "none")}</code></div>
-          <div class="row">scope verdict: <code>${escapeHtml(auditTrail.authority_scope.authority_scope_verdict)}</code></div>
-          <h3>Scope Mismatch Keys</h3>
+          <div class="row">asset ref: <code>${escapeHtml(auditTrail.authority_scope.asset_ref)}</code></div>
+          <div class="row">product ref: <code>${escapeHtml(auditTrail.authority_scope.product_ref ?? "none")}</code></div>
+          <div class="row">facility ref: <code>${escapeHtml(auditTrail.authority_scope.facility_ref ?? "none")}</code></div>
+          <div class="row">expected from zone: <code>${escapeHtml(auditTrail.authority_scope.expected_from_zone ?? "none")}</code></div>
+          <div class="row">expected to zone: <code>${escapeHtml(auditTrail.authority_scope.expected_to_zone ?? "none")}</code></div>
+          <div class="row">expected coordinate ref: <code>${escapeHtml(auditTrail.authority_scope.expected_coordinate_ref ?? "none")}</code></div>
+          <div class="row">authority scope verdict: <code>${escapeHtml(auditTrail.authority_scope.authority_scope_verdict)}</code></div>
+          <h3>Scope mismatch keys</h3>
           ${renderList(auditTrail.authority_scope.mismatch_keys)}
         </article>
 
@@ -573,10 +693,23 @@ export function renderTransferPage(reviewPayload: any, query: string, shell?: Op
           <div class="row">execution token id: <code>${escapeHtml(auditTrail.artifacts.execution_token_id ?? "none")}</code></div>
           <div class="row">audit id: <code>${escapeHtml(auditTrail.artifacts.audit_id)}</code></div>
           <div class="row">forensic block id: <code>${escapeHtml(auditTrail.artifacts.forensic_block_id ?? "none")}</code></div>
-          <h3>Minted Artifacts</h3>
+          <h3>Minted artifacts</h3>
           ${renderList(auditTrail.artifacts.minted_artifacts)}
           <h3>Obligations</h3>
           ${renderList(auditTrail.artifacts.obligations.map((value: unknown) => JSON.stringify(value)))}
+          <h3>Approvals</h3>
+          <div class="row">approval status: <code>${escapeHtml(auditTrail.approvals.approval_status ?? "none")}</code></div>
+          <div class="row">required approvers: <code>${escapeHtml(auditTrail.approvals.required.join(", ") || "none")}</code></div>
+          <div class="row">completed by: <code>${escapeHtml(auditTrail.approvals.completed_by.join(", ") || "none")}</code></div>
+          <div class="row">approval envelope id: <code>${escapeHtml(auditTrail.approvals.approval_envelope_id ?? "none")}</code></div>
+          <div class="row">expected envelope version: <code>${escapeHtml(String(auditTrail.approvals.approval_envelope_version ?? "none"))}</code></div>
+          <div class="row">approval binding hash: <code>${escapeHtml(auditTrail.approvals.approval_binding_hash ?? "none")}</code></div>
+          <div class="row">co-signed (required satisfied): <code>${escapeHtml(
+            String(
+              auditTrail.approvals.required.length > 0
+                && auditTrail.approvals.completed_by.length >= auditTrail.approvals.required.length,
+            ),
+          )}</code></div>
         </article>
 
         <article class="card">

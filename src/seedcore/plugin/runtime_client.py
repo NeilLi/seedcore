@@ -15,6 +15,11 @@ def normalize_runtime_base_url(base_url: str | None = None) -> str:
     return resolved.rstrip("/")
 
 
+def normalize_verification_read_base_url(base_url: str | None = None) -> str:
+    resolved = (base_url or os.getenv("SEEDCORE_VERIFICATION_API_BASE") or "http://127.0.0.1:7071").strip()
+    return resolved.rstrip("/")
+
+
 class SeedcoreRuntimeClient:
     """Thin HTTP adapter over the public SeedCore API surface."""
 
@@ -79,6 +84,18 @@ class SeedcoreRuntimeClient:
 
     async def hotpath_status(self) -> dict[str, Any]:
         return await self._request_json(method="GET", url=self.api_url("/pdp/hot-path/status"))
+
+    async def hotpath_metrics_text(self) -> str:
+        url = self.api_url("/pdp/hot-path/metrics")
+        try:
+            response = await self.http.get(url)
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            raise SeedcorePluginError(f"GET {url} failed with status {status}") from exc
+        except httpx.HTTPError as exc:
+            raise SeedcorePluginError(f"SeedCore runtime unavailable at {url}: {exc}") from exc
 
     async def evidence_verify(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request_json(method="POST", url=self.api_url("/verify"), payload=payload)
@@ -155,3 +172,44 @@ class SeedcoreRuntimeClient:
 
     async def get_trust_preferences(self, owner_id: str) -> dict[str, Any]:
         return await self._request_json(method="GET", url=self.api_url(f"/trust-preferences/{owner_id}"))
+
+
+class SeedcoreVerificationReadClient:
+    """Read-only HTTP client for the TS verification service (Q2 operator projections)."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.base_url = normalize_verification_read_base_url(base_url)
+        self.timeout = timeout if timeout is not None else float(os.getenv("SEEDCORE_VERIFICATION_TIMEOUT", "15.0"))
+        self._owns_http_client = http_client is None
+        self.http = http_client or httpx.AsyncClient(timeout=self.timeout)
+
+    def url(self, path: str) -> str:
+        return f"{self.base_url}{path if path.startswith('/') else f'/{path}'}"
+
+    async def close(self) -> None:
+        if self._owns_http_client:
+            await self.http.aclose()
+
+    async def get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        url = self.url(path)
+        try:
+            response = await self.http.get(url, params=params or {})
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            raise SeedcorePluginError(f"GET {url} failed with status {status}") from exc
+        except httpx.HTTPError as exc:
+            raise SeedcorePluginError(f"Verification service unavailable at {url}: {exc}") from exc
+        except ValueError as exc:
+            raise SeedcorePluginError(f"GET {url} returned non-JSON response") from exc
+
+        if not isinstance(data, dict):
+            raise SeedcorePluginError(f"GET {url} returned unexpected payload type")
+        return data

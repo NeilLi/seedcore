@@ -4,7 +4,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import FastAPI, Request  # pyright: ignore[reportMissingImports]
 from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingImports]
@@ -19,7 +19,11 @@ except ModuleNotFoundError:  # pragma: no cover - exercised implicitly in local 
 
 from . import host_tools
 from .capture_tools import capture_digital_twin_from_link
-from .runtime_client import SeedcorePluginError, SeedcoreRuntimeClient
+from .runtime_client import (
+    SeedcorePluginError,
+    SeedcoreRuntimeClient,
+    SeedcoreVerificationReadClient,
+)
 from seedcore.ops.evidence.owner_context import owner_context_hash as build_owner_context_hash
 
 
@@ -29,8 +33,15 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.pkg.status",
     "seedcore.pkg.authz_graph_status",
     "seedcore.hotpath.status",
+    "seedcore.hotpath.metrics",
     "seedcore.hotpath.verify_shadow",
     "seedcore.hotpath.benchmark",
+    "seedcore.verification.queue",
+    "seedcore.verification.transfer_review",
+    "seedcore.verification.workflow_projection",
+    "seedcore.verification.workflow_verification_detail",
+    "seedcore.verification.workflow_replay",
+    "seedcore.verification.runbook_lookup",
     "seedcore.evidence.verify",
     "seedcore.identity.owner.upsert",
     "seedcore.identity.owner.get",
@@ -50,8 +61,9 @@ PLUGIN_TOOL_NAMES = [
 
 
 class ServiceState:
-    def __init__(self, runtime: SeedcoreRuntimeClient):
+    def __init__(self, runtime: SeedcoreRuntimeClient, verification: SeedcoreVerificationReadClient):
         self.runtime = runtime
+        self.verification = verification
 
 
 AppContext = Context[ServerSession, ServiceState] if FastMCP is not None else Any
@@ -154,6 +166,366 @@ async def handle_hotpath_status(runtime: SeedcoreRuntimeClient) -> dict[str, Any
         "latency_ms": raw.get("latency_ms"),
         "recent_results": raw.get("recent_results"),
         "source_url": runtime.api_url("/pdp/hot-path/status"),
+    }
+
+
+async def handle_hotpath_metrics(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    max_chars: int = 65536,
+) -> dict[str, Any]:
+    text = await runtime.hotpath_metrics_text()
+    limit = max(1024, min(int(max_chars), 2_000_000))
+    truncated = len(text) > limit
+    return {
+        "ok": True,
+        "read_only": True,
+        "content_type": "text/plain; version=0.0.4",
+        "truncated": truncated,
+        "returned_chars": len(text) if not truncated else limit,
+        "total_chars": len(text),
+        "text": text if not truncated else text[:limit],
+        "source_url": runtime.api_url("/pdp/hot-path/metrics"),
+    }
+
+
+def _verification_read_params(
+    *,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"source": source}
+    if fixture_root:
+        params["root"] = fixture_root
+    optional: dict[str, Any] = {
+        "dir": fixture_dir,
+        "audit_id": audit_id,
+        "intent_id": intent_id,
+        "subject_id": subject_id,
+        "status": status,
+        "disposition": disposition,
+        "facility": facility,
+        "zone": zone,
+        "approval_state": approval_state,
+        "replay_readiness": replay_readiness,
+        "trust_alert": trust_alert,
+        "approval_envelope_id": approval_envelope_id,
+        "request_id": request_id,
+    }
+    for key, value in optional.items():
+        if value is not None and str(value).strip() != "":
+            params[key] = value
+    return params
+
+
+def _verification_filters(
+    *,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    return _verification_read_params(
+        source=source,
+        fixture_root=fixture_root,
+        fixture_dir=fixture_dir,
+        audit_id=audit_id,
+        intent_id=intent_id,
+        subject_id=subject_id,
+        status=status,
+        disposition=disposition,
+        facility=facility,
+        zone=zone,
+        approval_state=approval_state,
+        replay_readiness=replay_readiness,
+        trust_alert=trust_alert,
+        approval_envelope_id=approval_envelope_id,
+        request_id=request_id,
+    )
+
+
+async def handle_verification_queue(
+    verification: SeedcoreVerificationReadClient,
+    *,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    params = _verification_filters(
+        source=source,
+        fixture_root=fixture_root,
+        fixture_dir=fixture_dir,
+        audit_id=audit_id,
+        intent_id=intent_id,
+        subject_id=subject_id,
+        status=status,
+        disposition=disposition,
+        facility=facility,
+        zone=zone,
+        approval_state=approval_state,
+        replay_readiness=replay_readiness,
+        trust_alert=trust_alert,
+        approval_envelope_id=approval_envelope_id,
+        request_id=request_id,
+    )
+    data = await verification.get_json("/api/v1/verification/transfers/queue", params=params)
+    base = verification.url("/api/v1/verification/transfers/queue")
+    return {
+        "ok": True,
+        "read_only": True,
+        "data": data,
+        "source_url": f"{base}?{urlencode(params)}",
+    }
+
+
+async def handle_verification_transfer_review(
+    verification: SeedcoreVerificationReadClient,
+    *,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    params = _verification_filters(
+        source=source,
+        fixture_root=fixture_root,
+        fixture_dir=fixture_dir,
+        audit_id=audit_id,
+        intent_id=intent_id,
+        subject_id=subject_id,
+        status=status,
+        disposition=disposition,
+        facility=facility,
+        zone=zone,
+        approval_state=approval_state,
+        replay_readiness=replay_readiness,
+        trust_alert=trust_alert,
+        approval_envelope_id=approval_envelope_id,
+        request_id=request_id,
+    )
+    data = await verification.get_json("/api/v1/verification/transfers/review", params=params)
+    base = verification.url("/api/v1/verification/transfers/review")
+    return {
+        "ok": True,
+        "read_only": True,
+        "data": data,
+        "source_url": f"{base}?{urlencode(params)}",
+    }
+
+
+async def handle_verification_workflow_projection(
+    verification: SeedcoreVerificationReadClient,
+    *,
+    workflow_id: str,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    params = _verification_filters(
+        source=source,
+        fixture_root=fixture_root,
+        fixture_dir=fixture_dir,
+        audit_id=audit_id,
+        intent_id=intent_id,
+        subject_id=subject_id,
+        status=status,
+        disposition=disposition,
+        facility=facility,
+        zone=zone,
+        approval_state=approval_state,
+        replay_readiness=replay_readiness,
+        trust_alert=trust_alert,
+        approval_envelope_id=approval_envelope_id,
+        request_id=request_id,
+    )
+    wid = quote(workflow_id.strip(), safe="")
+    path = f"/api/v1/verification/workflows/{wid}/projection"
+    data = await verification.get_json(path, params=params)
+    base = verification.url(path)
+    return {
+        "ok": True,
+        "read_only": True,
+        "data": data,
+        "source_url": f"{base}?{urlencode(params)}",
+    }
+
+
+async def handle_verification_workflow_detail(
+    verification: SeedcoreVerificationReadClient,
+    *,
+    workflow_id: str,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    params = _verification_filters(
+        source=source,
+        fixture_root=fixture_root,
+        fixture_dir=fixture_dir,
+        audit_id=audit_id,
+        intent_id=intent_id,
+        subject_id=subject_id,
+        status=status,
+        disposition=disposition,
+        facility=facility,
+        zone=zone,
+        approval_state=approval_state,
+        replay_readiness=replay_readiness,
+        trust_alert=trust_alert,
+        approval_envelope_id=approval_envelope_id,
+        request_id=request_id,
+    )
+    wid = quote(workflow_id.strip(), safe="")
+    path = f"/api/v1/verification/workflows/{wid}/verification-detail"
+    data = await verification.get_json(path, params=params)
+    base = verification.url(path)
+    return {
+        "ok": True,
+        "read_only": True,
+        "data": data,
+        "source_url": f"{base}?{urlencode(params)}",
+    }
+
+
+async def handle_verification_workflow_replay(
+    verification: SeedcoreVerificationReadClient,
+    *,
+    workflow_id: str,
+    source: str = "fixture",
+    fixture_root: str | None = "rust/fixtures/transfers",
+    fixture_dir: str | None = None,
+    audit_id: str | None = None,
+    intent_id: str | None = None,
+    subject_id: str | None = None,
+    status: str | None = None,
+    disposition: str | None = None,
+    facility: str | None = None,
+    zone: str | None = None,
+    approval_state: str | None = None,
+    replay_readiness: str | None = None,
+    trust_alert: str | None = None,
+    approval_envelope_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    params = _verification_filters(
+        source=source,
+        fixture_root=fixture_root,
+        fixture_dir=fixture_dir,
+        audit_id=audit_id,
+        intent_id=intent_id,
+        subject_id=subject_id,
+        status=status,
+        disposition=disposition,
+        facility=facility,
+        zone=zone,
+        approval_state=approval_state,
+        replay_readiness=replay_readiness,
+        trust_alert=trust_alert,
+        approval_envelope_id=approval_envelope_id,
+        request_id=request_id,
+    )
+    wid = quote(workflow_id.strip(), safe="")
+    path = f"/api/v1/verification/workflows/{wid}/replay"
+    data = await verification.get_json(path, params=params)
+    base = verification.url(path)
+    return {
+        "ok": True,
+        "read_only": True,
+        "data": data,
+        "source_url": f"{base}?{urlencode(params)}",
+    }
+
+
+async def handle_verification_runbook_lookup(
+    verification: SeedcoreVerificationReadClient,
+    *,
+    reason_code: str,
+    disposition: str | None = None,
+    business_state: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"reason_code": reason_code.strip()}
+    if disposition and disposition.strip():
+        params["disposition"] = disposition.strip()
+    if business_state and business_state.strip():
+        params["business_state"] = business_state.strip()
+    data = await verification.get_json("/api/v1/verification/runbook/lookup", params=params)
+    base = verification.url("/api/v1/verification/runbook/lookup")
+    return {
+        "ok": True,
+        "read_only": True,
+        "data": data,
+        "source_url": f"{base}?{urlencode(params)}",
     }
 
 
@@ -839,10 +1211,11 @@ if FastMCP is not None:
     @asynccontextmanager
     async def app_lifespan(server: FastMCP):
         runtime = SeedcoreRuntimeClient()
+        verification = SeedcoreVerificationReadClient()
         try:
-            yield ServiceState(runtime=runtime)
+            yield ServiceState(runtime=runtime, verification=verification)
         finally:
-            await runtime.close()
+            await asyncio.gather(runtime.close(), verification.close())
 
 
     mcp = FastMCP("Seedcore Plugin MCP", lifespan=app_lifespan)
@@ -850,6 +1223,9 @@ if FastMCP is not None:
 
     def _runtime(ctx: AppContext) -> SeedcoreRuntimeClient:
         return ctx.request_context.lifespan_context.runtime
+
+    def _verification(ctx: AppContext) -> SeedcoreVerificationReadClient:
+        return ctx.request_context.lifespan_context.verification
 
 
     @mcp.tool(name="seedcore.health")
@@ -875,6 +1251,14 @@ if FastMCP is not None:
     @mcp.tool(name="seedcore.hotpath.status")
     async def seedcore_hotpath_status(ctx: AppContext) -> dict[str, Any]:
         return await handle_hotpath_status(_runtime(ctx))
+
+
+    @mcp.tool(name="seedcore.hotpath.metrics")
+    async def seedcore_hotpath_metrics(
+        ctx: AppContext,
+        max_chars: int = 65536,
+    ) -> dict[str, Any]:
+        return await handle_hotpath_metrics(_runtime(ctx), max_chars=max_chars)
 
 
     @mcp.tool(name="seedcore.hotpath.verify_shadow")
@@ -906,6 +1290,222 @@ if FastMCP is not None:
             warmup=warmup,
             concurrency=concurrency,
             artifact_dir=artifact_dir,
+        )
+
+
+    @mcp.tool(name="seedcore.verification.queue")
+    async def seedcore_verification_queue(
+        ctx: AppContext,
+        source: str = "fixture",
+        fixture_root: str | None = "rust/fixtures/transfers",
+        fixture_dir: str | None = None,
+        audit_id: str | None = None,
+        intent_id: str | None = None,
+        subject_id: str | None = None,
+        status: str | None = None,
+        disposition: str | None = None,
+        facility: str | None = None,
+        zone: str | None = None,
+        approval_state: str | None = None,
+        replay_readiness: str | None = None,
+        trust_alert: str | None = None,
+        approval_envelope_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_verification_queue(
+            _verification(ctx),
+            source=source,
+            fixture_root=fixture_root,
+            fixture_dir=fixture_dir,
+            audit_id=audit_id,
+            intent_id=intent_id,
+            subject_id=subject_id,
+            status=status,
+            disposition=disposition,
+            facility=facility,
+            zone=zone,
+            approval_state=approval_state,
+            replay_readiness=replay_readiness,
+            trust_alert=trust_alert,
+            approval_envelope_id=approval_envelope_id,
+            request_id=request_id,
+        )
+
+
+    @mcp.tool(name="seedcore.verification.transfer_review")
+    async def seedcore_verification_transfer_review(
+        ctx: AppContext,
+        source: str = "fixture",
+        fixture_root: str | None = "rust/fixtures/transfers",
+        fixture_dir: str | None = None,
+        audit_id: str | None = None,
+        intent_id: str | None = None,
+        subject_id: str | None = None,
+        status: str | None = None,
+        disposition: str | None = None,
+        facility: str | None = None,
+        zone: str | None = None,
+        approval_state: str | None = None,
+        replay_readiness: str | None = None,
+        trust_alert: str | None = None,
+        approval_envelope_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_verification_transfer_review(
+            _verification(ctx),
+            source=source,
+            fixture_root=fixture_root,
+            fixture_dir=fixture_dir,
+            audit_id=audit_id,
+            intent_id=intent_id,
+            subject_id=subject_id,
+            status=status,
+            disposition=disposition,
+            facility=facility,
+            zone=zone,
+            approval_state=approval_state,
+            replay_readiness=replay_readiness,
+            trust_alert=trust_alert,
+            approval_envelope_id=approval_envelope_id,
+            request_id=request_id,
+        )
+
+
+    @mcp.tool(name="seedcore.verification.workflow_projection")
+    async def seedcore_verification_workflow_projection(
+        ctx: AppContext,
+        workflow_id: str,
+        source: str = "fixture",
+        fixture_root: str | None = "rust/fixtures/transfers",
+        fixture_dir: str | None = None,
+        audit_id: str | None = None,
+        intent_id: str | None = None,
+        subject_id: str | None = None,
+        status: str | None = None,
+        disposition: str | None = None,
+        facility: str | None = None,
+        zone: str | None = None,
+        approval_state: str | None = None,
+        replay_readiness: str | None = None,
+        trust_alert: str | None = None,
+        approval_envelope_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_verification_workflow_projection(
+            _verification(ctx),
+            workflow_id=workflow_id,
+            source=source,
+            fixture_root=fixture_root,
+            fixture_dir=fixture_dir,
+            audit_id=audit_id,
+            intent_id=intent_id,
+            subject_id=subject_id,
+            status=status,
+            disposition=disposition,
+            facility=facility,
+            zone=zone,
+            approval_state=approval_state,
+            replay_readiness=replay_readiness,
+            trust_alert=trust_alert,
+            approval_envelope_id=approval_envelope_id,
+            request_id=request_id,
+        )
+
+
+    @mcp.tool(name="seedcore.verification.workflow_verification_detail")
+    async def seedcore_verification_workflow_verification_detail(
+        ctx: AppContext,
+        workflow_id: str,
+        source: str = "fixture",
+        fixture_root: str | None = "rust/fixtures/transfers",
+        fixture_dir: str | None = None,
+        audit_id: str | None = None,
+        intent_id: str | None = None,
+        subject_id: str | None = None,
+        status: str | None = None,
+        disposition: str | None = None,
+        facility: str | None = None,
+        zone: str | None = None,
+        approval_state: str | None = None,
+        replay_readiness: str | None = None,
+        trust_alert: str | None = None,
+        approval_envelope_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_verification_workflow_detail(
+            _verification(ctx),
+            workflow_id=workflow_id,
+            source=source,
+            fixture_root=fixture_root,
+            fixture_dir=fixture_dir,
+            audit_id=audit_id,
+            intent_id=intent_id,
+            subject_id=subject_id,
+            status=status,
+            disposition=disposition,
+            facility=facility,
+            zone=zone,
+            approval_state=approval_state,
+            replay_readiness=replay_readiness,
+            trust_alert=trust_alert,
+            approval_envelope_id=approval_envelope_id,
+            request_id=request_id,
+        )
+
+
+    @mcp.tool(name="seedcore.verification.workflow_replay")
+    async def seedcore_verification_workflow_replay(
+        ctx: AppContext,
+        workflow_id: str,
+        source: str = "fixture",
+        fixture_root: str | None = "rust/fixtures/transfers",
+        fixture_dir: str | None = None,
+        audit_id: str | None = None,
+        intent_id: str | None = None,
+        subject_id: str | None = None,
+        status: str | None = None,
+        disposition: str | None = None,
+        facility: str | None = None,
+        zone: str | None = None,
+        approval_state: str | None = None,
+        replay_readiness: str | None = None,
+        trust_alert: str | None = None,
+        approval_envelope_id: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_verification_workflow_replay(
+            _verification(ctx),
+            workflow_id=workflow_id,
+            source=source,
+            fixture_root=fixture_root,
+            fixture_dir=fixture_dir,
+            audit_id=audit_id,
+            intent_id=intent_id,
+            subject_id=subject_id,
+            status=status,
+            disposition=disposition,
+            facility=facility,
+            zone=zone,
+            approval_state=approval_state,
+            replay_readiness=replay_readiness,
+            trust_alert=trust_alert,
+            approval_envelope_id=approval_envelope_id,
+            request_id=request_id,
+        )
+
+
+    @mcp.tool(name="seedcore.verification.runbook_lookup")
+    async def seedcore_verification_runbook_lookup(
+        ctx: AppContext,
+        reason_code: str,
+        disposition: str | None = None,
+        business_state: str | None = None,
+    ) -> dict[str, Any]:
+        return await handle_verification_runbook_lookup(
+            _verification(ctx),
+            reason_code=reason_code,
+            disposition=disposition,
+            business_state=business_state,
         )
 
 

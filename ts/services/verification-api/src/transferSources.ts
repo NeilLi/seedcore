@@ -56,6 +56,10 @@ export interface TransferSourceQuery {
   approval_state?: string;
   replay_readiness?: string;
   trust_alert?: string;
+  /** Substring match against transfer audit trail approval envelope id. */
+  approval_envelope_id?: string;
+  /** Substring match against request_id (case-insensitive). */
+  request_id?: string;
 }
 
 export type TrustBucket = "verified" | "quarantined" | "rejected" | "pending" | "review";
@@ -350,6 +354,12 @@ export function buildQueryString(query: TransferSourceQuery): string {
   }
   if (query.trust_alert) {
     params.set("trust_alert", query.trust_alert);
+  }
+  if (query.approval_envelope_id) {
+    params.set("approval_envelope_id", query.approval_envelope_id);
+  }
+  if (query.request_id) {
+    params.set("request_id", query.request_id);
   }
   return params.toString();
 }
@@ -1645,6 +1655,20 @@ function matchesQueueFilters(scenario: TransferScenario, filters: TransferSource
       return false;
     }
   }
+  if (filters.approval_envelope_id) {
+    const needle = filters.approval_envelope_id.trim();
+    const env = scenario.transfer_audit_trail.approvals.approval_envelope_id ?? "";
+    if (!env.includes(needle)) {
+      return false;
+    }
+  }
+  if (filters.request_id) {
+    const needle = filters.request_id.trim().toLowerCase();
+    const rid = (scenario.transfer_audit_trail.request.request_id ?? "").toLowerCase();
+    if (!rid.includes(needle)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -2040,6 +2064,8 @@ export function parseTransferQuery(url: URL): TransferSourceQuery {
     approval_state: url.searchParams.get("approval_state") ?? undefined,
     replay_readiness: url.searchParams.get("replay_readiness") ?? undefined,
     trust_alert: url.searchParams.get("trust_alert") ?? undefined,
+    approval_envelope_id: url.searchParams.get("approval_envelope_id") ?? undefined,
+    request_id: url.searchParams.get("request_id") ?? undefined,
   };
 }
 

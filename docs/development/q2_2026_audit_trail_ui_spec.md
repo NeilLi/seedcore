@@ -8,6 +8,14 @@ Status: Working product spec (Q2 core surfaces implemented; closure sequence act
 This spec now has a concrete implementation baseline in the repository for the
 RCT slice.
 
+Update (2026-04-02, closure pass):
+
+- Screen 1: business-readable **status summary strip** (counts + filter chips), filter form **prefill** from query string, **envelope** / **request id** filters on queue API and console form, trust-alerts panel caption aligned to Q2 categories.
+- Screen 2: **Request / scope / approvals** fields aligned to spec (workflow type, valid until, idempotency, full hardware fingerprint, authority scope block, approvals + co-signed heuristic).
+- Screen 4: **Verification summary** (signature / traces / tamper), **Verification actions** (replay + projection + runbook lookup links).
+- Shared shell: search supports **`envelope:`** / **`approval:`** and **`request:`** prefixes routing to queue filters.
+- Runbooks: three new JSON entries (**stale telemetry**, **authority scope mismatch**, **snapshot not ready**) plus operator **preset lookup** links when `SEEDCORE_VERIFICATION_API_BASE` is set.
+
 Implemented in code:
 
 - `VerificationSurfaceProjection`, `TransferAuditTrail`, and
@@ -51,9 +59,10 @@ Still open for full Q2 closure:
 - deployment-realistic observability and alert validation for the hot-path
   operator story
 - adversarial and degraded-edge-condition acceptance coverage for the Q2
-  verification slice
-- decide which read-only Gemini-visible verification tools should be published
-  as the first narrow external tool bundle
+  verification slice (pytest drill matrix is in repo; broaden to live envs)
+- ~~read-only Gemini-visible verification tools~~ **Initial bundle shipped:** MCP tools
+  `seedcore.verification.*` and `seedcore.hotpath.metrics` (see
+  `skills/using-seedcore/references/gemini-tools.md`)
 
 ## Scheduled Closure Sequence (2026-04-02)
 
@@ -908,8 +917,8 @@ The Audit-Trail UI is successful in Q2 if:
 3. ~~Implement operator status API~~ **Done (verification namespace)**
 4. ~~Implement transfer detail page~~ **Done (Screen 2 side-by-side)**
 5. ~~Implement asset forensic page~~ **Done (Screen 3 contract-driven)**
-6. Implement replay or verification page enhancements and namespace alignment
-7. Add runbooks for lookup and investigation
+6. ~~Implement replay or verification page enhancements and namespace alignment~~ **Done (Screen 4 verification summary + actions; dedicated `/replay` links)**
+7. ~~Add runbooks for lookup and investigation~~ **Done (expanded runbook corpus + preset lookups + `/runbook/lookup`)**
 
 ## 14. Strong recommendation
 

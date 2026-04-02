@@ -21,7 +21,9 @@ import { getRunbook, listRunbookSummaries, lookupRunbooksForQuery } from "../ser
 import {
   renderCatalogPage,
   renderForensicsPage,
+  renderQueuePage,
   renderReplayPage,
+  renderRunbooksPage,
   renderTransferPage,
 } from "../apps/operator-console/src/ui.ts";
 
@@ -109,6 +111,28 @@ test("runbook lookup by reason_code returns contract-shaped links", () => {
   const links = lookupRunbooksForQuery({ reason_code: "policy_denied" });
   assert.ok(links.length >= 1);
   assert.ok(links.some((l) => l.slug === "policy_denied" || l.slug === "operator_transfer_overview"));
+});
+
+test("runbook lookup includes stale telemetry and snapshot runbooks", () => {
+  const stale = lookupRunbooksForQuery({ reason_code: "stale_telemetry" });
+  assert.ok(stale.some((l) => l.slug === "stale_telemetry"));
+  const snap = lookupRunbooksForQuery({ reason_code: "snapshot_not_ready" });
+  assert.ok(snap.some((l) => l.slug === "snapshot_not_ready"));
+});
+
+test("queue API filters by approval envelope and request id substrings", async () => {
+  const byEnv = await listTransferQueue({
+    source: "fixture",
+    root: "rust/fixtures/transfers",
+    approval_envelope_id: "approval-transfer",
+  });
+  assert.ok(byEnv.length >= 1);
+  const byReq = await listTransferQueue({
+    source: "fixture",
+    root: "rust/fixtures/transfers",
+    request_id: "intent",
+  });
+  assert.ok(byReq.length >= 1);
 });
 
 test("queue rows include trust_alerts and product_ref shape", async () => {
@@ -292,12 +316,31 @@ test("operator console renders status-first transfer and forensic pages", async 
 
   assert.match(transferHtml, /Transfer Workflow Review/);
   assert.match(transferHtml, /Request \+ Authority/);
+  assert.match(transferHtml, /idempotency key/);
+  assert.match(transferHtml, /Approvals/);
   assert.match(transferHtml, /Decision \+ Artifacts/);
   assert.match(transferHtml, /Physical Evidence \+ Closure/);
   assert.match(transferHtml, /Governed Timeline/);
   assert.match(forensicHtml, /Asset Forensic View/);
   assert.match(forensicHtml, /Telemetry References/);
   assert.match(forensicHtml, /Signature Provenance/);
+});
+
+test("operator queue page renders business-readable status strip", async () => {
+  const rows = await listTransferQueue({ source: "fixture", root: "rust/fixtures/transfers" });
+  const html = renderQueuePage({ items: rows }, "source=fixture&root=rust/fixtures/transfers");
+  assert.match(html, /Business-readable status/);
+  assert.match(html, /Verified/);
+});
+
+test("operator runbooks page renders preset lookup links when API base is set", () => {
+  const html = renderRunbooksPage(
+    { runbooks: [{ slug: "operator_transfer_overview", title: "Overview" }] },
+    undefined,
+    "http://127.0.0.1:7071",
+  );
+  assert.match(html, /Preset runbook lookups/);
+  assert.match(html, /reason_code=stale_telemetry/);
 });
 
 test("catalog replay links use workflow_id rather than catalog id", () => {
@@ -358,5 +401,8 @@ test("replay page preserves runtime lookup links for transfer and forensics", as
   );
   assert.match(html, /\/transfer\?source=runtime&audit_id=audit-123/);
   assert.match(html, /\/forensics\?source=runtime&audit_id=audit-123/);
-  assert.doesNotMatch(html, /source=fixture/);
+  assert.match(html, /Verification summary/);
+  assert.match(html, /Verification actions/);
+  assert.doesNotMatch(html, /href="\/transfer\?[^"]*source=fixture/);
+  assert.doesNotMatch(html, /href="\/forensics\?[^"]*source=fixture/);
 });

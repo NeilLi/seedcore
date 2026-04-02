@@ -98,6 +98,27 @@ const server = http.createServer(async (req, res) => {
         res.end();
         return;
       }
+      const qLower = q.toLowerCase();
+      if (qLower.startsWith("envelope:") || qLower.startsWith("approval:")) {
+        const raw = q.replace(/^[^:]+:/, "").trim();
+        if (raw) {
+          const p = new URLSearchParams(DEFAULT_LIST_QS);
+          p.set("approval_envelope_id", raw);
+          res.writeHead(302, { Location: `/queue?${p.toString()}` });
+          res.end();
+          return;
+        }
+      }
+      if (qLower.startsWith("request:")) {
+        const raw = q.slice("request:".length).trim();
+        if (raw) {
+          const p = new URLSearchParams(DEFAULT_LIST_QS);
+          p.set("request_id", raw);
+          res.writeHead(302, { Location: `/queue?${p.toString()}` });
+          res.end();
+          return;
+        }
+      }
       if (q.startsWith("asset:")) {
         res.writeHead(302, {
           Location: `/forensics?source=runtime&subject_id=${encodeURIComponent(q)}`,
@@ -143,7 +164,7 @@ const server = http.createServer(async (req, res) => {
       const idx = await fetchJson("/api/v1/verification/runbook");
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderRunbooksPage(idx, operatorShell("runbooks", DEFAULT_LIST_QS, hotPath)));
+      res.end(renderRunbooksPage(idx, operatorShell("runbooks", DEFAULT_LIST_QS, hotPath), apiBase));
       return;
     }
 
