@@ -49,3 +49,6 @@ jobs:
           npm ci
           npm run typecheck
           npm test
+
+      - name: Q2 verification API HTTP fixture matrix
+        run: bash scripts/ci/q2_verification_api_fixture_gate.sh
