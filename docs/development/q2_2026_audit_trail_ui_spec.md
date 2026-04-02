@@ -1,7 +1,7 @@
 # SeedCore Q2 2026 Product Spec
 
 Date: 2026-04-02  
-Status: Working product spec (Q2 freeze pass partially implemented)
+Status: Working product spec (Q2 core surfaces implemented; closure sequence active)
 
 ## Implementation Status Update (2026-04-02)
 
@@ -25,16 +25,45 @@ Implemented in code:
 - workflow-scoped replay detail payload is implemented through
   `GET /api/v1/verification/workflows/{workflow_id}/verification-detail`
   (`seedcore.verification_detail.v1`).
+- dedicated replay contract is implemented through
+  `GET /api/v1/verification/workflows/{workflow_id}/replay`
+  (`seedcore.verification_replay.v1`).
+- runbook index and entry routes are implemented under
+  `/api/v1/verification/runbook` and
+  `/api/v1/verification/runbook/{slug}` and are surfaced on replay failure
+  panels.
+- runtime parity is implemented for
+  `/api/v1/verification/assets/{asset_ref}/forensics` via subject-based runtime
+  lookup.
 - links between status/review/forensics/proof surfaces are projection-derived.
 
 Still open for full Q2 closure:
 
-- dedicated replay route under the verification service namespace
-- runbook endpoint and operator runbook integration
 - CI/CD enforcement for full Q2 acceptance matrix across environments
-- runtime parity for asset-ref REST forensics route
-  (`/api/v1/verification/assets/{asset_ref}/forensics` is currently fixture-first
-  by design; runtime should continue using query-based forensics lookup)
+- deployment-realistic observability and alert validation for the hot-path
+  operator story
+- fuller runbook content for exception handling and investigation, beyond the
+  initial canonical slugs
+- adversarial and degraded-edge-condition acceptance coverage for the Q2
+  verification slice
+
+## Scheduled Closure Sequence (2026-04-02)
+
+The remaining Q2 UI/product work should now run in this order:
+
+1. **2026-04-02 to 2026-04-12: acceptance gate closure**
+   - make queue/detail/replay/runbook/forensics checks mandatory in CI
+   - keep the TS operator verification slice and Python replay/parity checks in
+     the same pass/fail envelope
+2. **2026-04-08 to 2026-04-19: observability closure**
+   - wire deployment role and alert export so the shell banners and failure
+     surfaces reflect deployment-realistic hot-path state
+3. **2026-04-15 to 2026-04-30: adversarial Q2 sign-off**
+   - add replay-injection, stale-graph, and coordinate-tamper scenarios to the
+     operator-facing acceptance matrix
+4. **2026-05-01 onward: Q3 bridge**
+   - keep the four-screen surface stable while external-agent adapters and edge
+     telemetry closure work land behind the same contracts
 
 ## Audit-Trail UI for Restricted Custody Transfer
 

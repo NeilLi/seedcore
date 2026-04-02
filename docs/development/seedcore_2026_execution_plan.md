@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
 Date: 2026-04-02
-Status: Working execution plan (Q2 critical-path freeze pass in progress)
+Status: Working execution plan (Q2 freeze implemented; operational closure next)
 
 ## Purpose
 
@@ -48,6 +48,77 @@ Remaining Q2 emphasis is now operationalization:
 - expand adversarial and degraded-edge-condition coverage
 - stabilize benchmark and observability baselines under deployment-realistic
   topology
+- begin the narrow Q3 bridge work only after the above is green enough to
+  support external-agent debugging without contract churn
+
+## Scheduled Next Execution Windows (2026-04-02)
+
+The next schedule should be treated as the working sequence for the current
+quarter boundary and early Q3 setup.
+
+### Window A: 2026-04-02 to 2026-04-12
+
+Goal:
+
+- close Q2 acceptance gating
+
+Must land:
+
+- required CI coverage for Python parity/replay checks plus TypeScript
+  verification surface tests
+- host verification script parity with CI
+- stable pass/fail contract for queue, verification detail, replay, runbook,
+  and runtime/fixture forensics lookup
+
+### Window B: 2026-04-08 to 2026-04-19
+
+Goal:
+
+- operationalize hot-path observability under real deployment wiring
+
+Must land:
+
+- manifest-backed deployment-role wiring validation
+- JSON-to-metric export path for Prometheus or equivalent telemetry bridge
+- alert-rule verification against live `/api/v1/pdp/hot-path/status` payloads
+
+### Window C: 2026-04-15 to 2026-04-30
+
+Goal:
+
+- harden the slice against degraded and adversarial conditions
+
+Must land:
+
+- intermittent edge-connectivity drills
+- stale-graph and dependency-unavailable drills
+- coordinate tamper / replay injection simulation coverage
+- repeatable evidence bundle export for rollback and quarantine cases
+
+### Window D: 2026-05-01 to 2026-05-21
+
+Goal:
+
+- start Q3 agent-boundary productization without reopening frozen contracts
+
+Must land:
+
+- one reference adapter for a current agent platform
+- one narrow commerce-side adapter for the canonical transaction flow
+- deterministic gateway request -> decision -> replay lookup mapping
+
+### Window E: 2026-05-15 to 2026-06-07
+
+Goal:
+
+- advance Workstream 3 from draft to implementation-grade evidence input
+
+Must land:
+
+- JSON schema export for `EdgeTelemetryEnvelopeV0`
+- persistence of telemetry envelope refs on the governed receipt / forensic
+  path
+- fixture and test expansion for signed edge telemetry in the RCT closure flow
 
 ## 2026 Objective
 

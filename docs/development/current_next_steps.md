@@ -42,6 +42,12 @@ Latest repo-aligned critical-path status:
 - hot-path status now emits additive observability signals for operators and
   scraping (`alert_level`, structured alerts, gauges, optional deployment role)
   to support Kubernetes/Ray operational wiring.
+- dedicated replay and runbook verification routes are now implemented under
+  `/api/v1/verification/*`, and failure panels can surface operator runbook
+  links from the same projection-driven detail/replay payloads.
+- runtime parity is now supported for the asset-ref REST forensics path
+  (`/api/v1/verification/assets/{asset_ref}/forensics`) using subject-based
+  runtime replay lookup.
 - first forensic-block JSON-LD contract freeze pass is implemented with schema
   artifacts, strict runtime validation, explicit `forensic_block_id`, and
   closure/materialization consistency checks.
@@ -311,6 +317,42 @@ Interpretation note:
 - `runtime_ready` wiring work is an environment/integration follow-up and should
   proceed in parallel, but is not a blocker to preserving the frozen sign-off
   artifact in item 1.
+
+### Scheduled Next Key Plans (2026-04-02)
+
+The next execution sequence should now move from contract freeze into
+operational closure and external-boundary productization.
+
+1. **2026-04-02 to 2026-04-12: Q2 acceptance gating**
+   - promote the new verification-service checks into required CI policy
+   - make host verification use the same gate set as CI
+   - treat queue/detail/replay/runbook/forensics checks as a single acceptance
+     matrix for the RCT slice
+2. **2026-04-08 to 2026-04-19: deployment observability closure**
+   - wire `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` through the actual deployment
+     paths already checked into repo
+   - land the JSON-to-metrics bridge needed for Prometheus alerting
+   - verify alert semantics against real status payloads rather than static
+     examples only
+3. **2026-04-15 to 2026-04-30: degraded-edge and adversarial drill matrix**
+   - add intermittent-connectivity, stale-graph, replay-injection, and
+     coordinate-tamper scenarios to the repeatable verification slice
+   - make rollback and quarantine evidence export part of the same drill bundle
+4. **2026-05-01 to 2026-05-21: Agent Action Gateway productization**
+   - add one reference adapter for a current agent platform
+   - add one narrow commerce-side adapter for the canonical transaction story
+   - prove deterministic request -> decision -> replay lookup linkage
+5. **2026-05-15 to 2026-06-07: edge telemetry and closure progression**
+   - export JSON schema for `EdgeTelemetryEnvelopeV0`
+   - persist envelope refs on the governed receipt / forensic path
+   - extend fixtures so Q3 handshake work can rely on signed telemetry inputs
+
+Recommended dependency rule:
+
+- finish item 1 before broadening environment blast radius
+- run items 2 and 3 in parallel once CI gates are stable
+- start item 4 only after the operator and observability surfaces are trusted
+  enough to debug external-agent failures quickly
 
 ### Explicit Sidecar
 

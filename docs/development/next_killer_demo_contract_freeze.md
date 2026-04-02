@@ -21,6 +21,24 @@ Open implementation focus after this freeze pass:
 - CI and deployment-level enforcement of promotion gates
 - deeper adversarial drills and degraded edge-network test matrix
 - benchmark hardening under production-like topology
+- narrow external-agent adapter work only after the above is stable enough to
+  support real debugging against frozen contracts
+
+## Scheduled Next Sequence (2026-04-02)
+
+The next contract-adjacent work should proceed in this order:
+
+1. `2026-04-02` to `2026-04-12`
+   - lock CI/host gates around the already-frozen verification and replay
+     contracts
+2. `2026-04-08` to `2026-04-19`
+   - validate deployment observability and alert semantics under the real
+     Kubernetes/Ray topology
+3. `2026-04-15` to `2026-04-30`
+   - run adversarial and degraded-edge drills against the frozen RCT slice
+4. `2026-05-01` onward
+   - begin the first reference agent/commercial adapters without reopening the
+     core contract surfaces
 
 ## Goal
 
