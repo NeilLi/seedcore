@@ -23,6 +23,7 @@ STATUS_JSON="${STATUS_JSON}" METRICS_TEXT="${METRICS_TEXT}" python - <<'PY'
 import json
 import os
 import re
+from collections import defaultdict
 status = json.loads(os.environ["STATUS_JSON"])
 metrics = os.environ["METRICS_TEXT"]
 
@@ -30,12 +31,45 @@ obs = status.get("observability") or {}
 role = obs.get("deployment_role") or os.getenv("SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE", "unset")
 role = str(role)
 
+metric_line = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)$')
+metrics_by_name_and_role: dict[tuple[str, str | None], float] = {}
+roles_by_metric: dict[str, set[str]] = defaultdict(set)
+raw_lines_by_metric: dict[str, list[str]] = defaultdict(list)
+
+for raw in metrics.splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    parsed = metric_line.match(line)
+    if not parsed:
+        continue
+    name, labels, value = parsed.groups()
+    labels_map: dict[str, str] = {}
+    if labels:
+        for part in labels.split(","):
+            key, _, raw_value = part.partition("=")
+            key = key.strip()
+            if not key:
+                continue
+            label_value = raw_value.strip().strip('"')
+            labels_map[key] = label_value
+    deployment_role = labels_map.get("deployment_role")
+    if deployment_role is not None:
+        roles_by_metric[name].add(deployment_role)
+    raw_lines_by_metric[name].append(line)
+    metrics_by_name_and_role[(name, deployment_role)] = float(value)
+
 def gauge_value(name: str) -> float:
-    pat = rf'^{re.escape(name)}{{deployment_role="{re.escape(role)}"}}\\s+([0-9.]+)\\s*$'
-    m = re.search(pat, metrics, flags=re.MULTILINE)
-    if not m:
-        raise AssertionError(f"missing metrics gauge {name} deployment_role={role}")
-    return float(m.group(1))
+    found = metrics_by_name_and_role.get((name, role))
+    if found is not None:
+        return found
+    roles = sorted(roles_by_metric.get(name) or [])
+    nearby = raw_lines_by_metric.get(name) or []
+    nearby_text = "; ".join(nearby[:3]) if nearby else "none"
+    raise AssertionError(
+        f"missing metrics gauge {name} deployment_role={role}; "
+        f"available_roles={roles}; sample_lines={nearby_text}"
+    )
 
 alert_level = str(obs.get("alert_level") or "ok").strip().lower()
 expected_alert = {"critical": 2, "warning": 1, "ok": 0}.get(alert_level, 0)
@@ -60,4 +94,3 @@ if ga is not None:
 
 print("Hot-path observability OK (status <-> metrics consistent).")
 PY
-
