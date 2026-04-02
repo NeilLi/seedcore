@@ -59,6 +59,8 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.forensic_replay.fetch",
 ]
 
+DEFAULT_TRANSFER_REVIEW_FIXTURE_DIR = "rust/fixtures/transfers/allow_case"
+
 
 class ServiceState:
     def __init__(self, runtime: SeedcoreRuntimeClient, verification: SeedcoreVerificationReadClient):
@@ -333,10 +335,24 @@ async def handle_verification_transfer_review(
     approval_envelope_id: str | None = None,
     request_id: str | None = None,
 ) -> dict[str, Any]:
+    resolved_fixture_dir = fixture_dir
+    if source == "fixture" and not (resolved_fixture_dir and resolved_fixture_dir.strip()):
+        # Keep fixture-mode transfer review usable as a standalone MCP tool.
+        resolved_fixture_dir = DEFAULT_TRANSFER_REVIEW_FIXTURE_DIR
+    if source == "fixture" and resolved_fixture_dir and fixture_root:
+        raw_dir = resolved_fixture_dir.strip()
+        # Accept "allow_case" shorthand by anchoring it to fixture_root.
+        if raw_dir and "/" not in raw_dir and "\\" not in raw_dir:
+            resolved_fixture_dir = f"{fixture_root.rstrip('/')}/{raw_dir}"
+    if source == "runtime":
+        has_audit = bool(audit_id and audit_id.strip())
+        has_intent = bool(intent_id and intent_id.strip())
+        if not (has_audit or has_intent):
+            raise ValueError("transfer_review runtime mode requires audit_id or intent_id")
     params = _verification_filters(
         source=source,
         fixture_root=fixture_root,
-        fixture_dir=fixture_dir,
+        fixture_dir=resolved_fixture_dir,
         audit_id=audit_id,
         intent_id=intent_id,
         subject_id=subject_id,

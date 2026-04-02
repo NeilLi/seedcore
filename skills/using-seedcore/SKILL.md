@@ -25,6 +25,7 @@ Use this skill at the start of SeedCore-specific work.
 - Use `seedcore-forensic-replay` for replaying audit, subject, task, intent, or public trust-page forensic history.
 - Use `seedcore-digital-twin-capture` for draft digital twin capture from public links such as YouTube.
 - Use owner/creator authority tools for DID onboarding, creator profile lifecycle, delegation lifecycle, trust preference lifecycle, consolidated owner-context reads, and governed preflight.
+- For the Q2 fixture-backed verification acceptance run, use [Gemini Q2 Verification Acceptance Check](references/gemini-q2-verification-acceptance.md).
 
 ## Preferred tool order
 

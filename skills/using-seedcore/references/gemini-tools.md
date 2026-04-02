@@ -18,6 +18,7 @@ When Gemini is using the Seedcore extension:
 - Use `seedcore.forensic_replay.fetch` for public trust-page replay or audit-linked forensic playback.
 - Use `seedcore.digital_twin.capture_link` to turn a public media URL into a draft SeedCore digital twin candidate with explicit authority limits.
 - For digital-twin capture requests, call `seedcore.digital_twin.capture_link` first and avoid `ReadFile`/`SearchText` unless the MCP call fails.
+- For the Q2 fixture-backed verification acceptance pass, use [Gemini Q2 Verification Acceptance Check](gemini-q2-verification-acceptance.md).
 
 If the tools are unavailable, treat that as Gemini extension troubleshooting first and only then fall back to:
 

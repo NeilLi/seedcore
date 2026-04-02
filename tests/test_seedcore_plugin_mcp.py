@@ -201,6 +201,54 @@ async def test_handle_verification_transfer_review_calls_read_service():
 
 
 @pytest.mark.asyncio
+async def test_handle_verification_transfer_review_defaults_fixture_dir_when_missing():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.transfer_audit_trail.v1"})
+
+    out = await handle_verification_transfer_review(verification, source="fixture", fixture_root="rust/fixtures/transfers")
+
+    assert out["ok"] is True
+    assert out["read_only"] is True
+    verification.get_json.assert_awaited_once()
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/transfers/review"
+    assert call.kwargs["params"]["source"] == "fixture"
+    assert call.kwargs["params"]["root"] == "rust/fixtures/transfers"
+    assert call.kwargs["params"]["dir"] == "rust/fixtures/transfers/allow_case"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_transfer_review_normalizes_short_fixture_dir():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.transfer_audit_trail.v1"})
+
+    await handle_verification_transfer_review(
+        verification,
+        source="fixture",
+        fixture_root="rust/fixtures/transfers",
+        fixture_dir="allow_case",
+    )
+
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/transfers/review"
+    assert call.kwargs["params"]["dir"] == "rust/fixtures/transfers/allow_case"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_transfer_review_runtime_requires_audit_or_intent():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.transfer_audit_trail.v1"})
+
+    with pytest.raises(ValueError, match="requires audit_id or intent_id"):
+        await handle_verification_transfer_review(verification, source="runtime", subject_id="asset:lot-8841")
+
+    verification.get_json.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_verification_workflow_projection_calls_read_service():
     verification = MagicMock()
     verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
