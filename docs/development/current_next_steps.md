@@ -60,6 +60,10 @@ Latest repo-aligned critical-path status:
 - host benchmark harness now supports configurable request delay and jitter
   (`scripts/host/benchmark_rct_hot_path.py`) to simulate edge-ish timing noise
   during load evidence collection.
+- Window A host-first acceptance closure is now implemented and passing:
+  host verification executes the same fixture + drill acceptance slices as CI,
+  and hot-path observability status/metrics checks are validated by a live host
+  script with hardened metrics parsing diagnostics.
 
 ## Why This Lives Outside The Root README
 
@@ -330,14 +334,14 @@ The next execution sequence should now move from contract freeze into
 operational closure and external-boundary productization.
 
 1. **2026-04-02 to 2026-04-12: Q2 acceptance gating**
-   - promote the verification-api HTTP fixture checks into required CI policy
-     (`scripts/ci/q2_verification_api_fixture_gate.sh`).
-   - make host verification use the same gate set as CI
-     (`scripts/host/verify_q2_verification_api_fixtures.sh`), including:
-     queue + Screen 2 detail (`/transfers/review`) + Screen 4 detail (`/workflows/*/verification-detail`)
-     + replay + runbook lookup + forensics.
-   - treat queue/detail/replay/runbook/forensics checks as a single required
-     acceptance matrix for the RCT slice.
+   - status: **host-first closure complete**.
+   - verification-api HTTP fixture checks are required in CI
+     (`scripts/ci/q2_verification_api_fixture_gate.sh`) and executed in host
+     gate flow (`scripts/host/verify_q2_verification_contracts.sh`).
+   - queue/detail/replay/runbook/forensics now run as one required acceptance
+     matrix for the RCT slice.
+   - remaining: validate the same gate envelope across real deployment
+     topologies (K8s/Ray).
 2. **2026-04-08 to 2026-04-19: deployment observability closure**
    - wire `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` through the actual deployment
      paths already checked into repo.

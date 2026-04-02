@@ -15,6 +15,9 @@ Update (2026-04-02, closure pass):
 - Screen 4: **Verification summary** (signature / traces / tamper), **Verification actions** (replay + projection + runbook lookup links).
 - Shared shell: search supports **`envelope:`** / **`approval:`** and **`request:`** prefixes routing to queue filters.
 - Runbooks: three new JSON entries (**stale telemetry**, **authority scope mismatch**, **snapshot not ready**) plus operator **preset lookup** links when `SEEDCORE_VERIFICATION_API_BASE` is set.
+- Window A host-first closure: local and CI acceptance gates now run the same
+  matrix slices; hot-path observability gate parsing is fixed for labeled
+  Prometheus metrics and verified against live host runtime.
 
 Implemented in code:
 
@@ -55,9 +58,8 @@ Implemented in code:
 
 Still open for full Q2 closure:
 
-- CI/CD enforcement for full Q2 acceptance matrix across environments
-  (implemented as CI + host gates; remaining: validate in each real
-  deployment topology).
+- CI/CD and host acceptance-gate parity is implemented; remaining work is
+  topology validation beyond host mode (K8s/Ray deployment paths).
 - deployment-realistic observability and alert validation for the hot-path
   operator story (unit-validated JSON-to-metrics semantics + live host script
   added; remaining: run in real K8s/Ray deployments).
@@ -73,9 +75,10 @@ Still open for full Q2 closure:
 The remaining Q2 UI/product work should now run in this order:
 
 1. **2026-04-02 to 2026-04-12: acceptance gate closure**
-   - make queue/detail/replay/runbook/forensics checks mandatory in CI
-   - keep the TS operator verification slice and Python replay/parity checks in
-     the same pass/fail envelope
+   - status: **host-first closure complete**
+   - queue/detail/replay/runbook/forensics checks are mandatory in CI and
+     mirrored in host verification
+   - remaining: run the same envelope in deployment-realistic topologies
 2. **2026-04-08 to 2026-04-19: observability closure**
    - wire deployment role and alert export so the shell banners and failure
      surfaces reflect deployment-realistic hot-path state

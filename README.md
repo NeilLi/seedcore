@@ -1,6 +1,6 @@
 # SeedCore
-
-Unit-test workflow is currently set to manual runs only.
+CI is active for `push` to `main`, `pull_request`, and manual dispatch
+(`.github/workflows/unit-tests.yml`).
 
 ## Zero-Trust Runtime for High-Consequence AI Actions
 
@@ -25,6 +25,9 @@ This is now the repository's clearest milestone and roadmap anchor:
 
 - Slice 1 live sign-off for the canonical Restricted Custody Transfer wedge was
   closed on **March 30, 2026**
+- Q2 **Window A host-first closure** was completed on **April 2, 2026**:
+  CI/host verification gates are now aligned and executable as one acceptance
+  path for queue/detail/replay/runbook/forensics plus degraded-edge drills
 - the next upgrade path treats that wedge as a **Forensic Handshake**
 - the first adversarial drill to prove the boundary is a **MITM coordinate
   redirect** against the scoped transfer flow

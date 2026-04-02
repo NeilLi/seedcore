@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
 Date: 2026-04-02
-Status: Working execution plan (Q2 freeze implemented; operational closure next)
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete)
 
 ## Purpose
 
@@ -46,10 +46,16 @@ the codebase for the RCT slice:
 - runbook lookup is available as a contract-shaped read surface for
   verification failures.
 - edge telemetry now has a checked-in JSON Schema export path.
+- Window A host-first closure is now implemented and verified:
+  - host and CI gate components are aligned on the same acceptance slices
+  - `scripts/host/verify_q2_verification_contracts.sh` now executes fixture
+    HTTP matrix + degraded-edge drill matrix by default via CI launcher scripts
+  - hot-path observability gate parsing is hardened for deployment-role labeled
+    Prometheus text and now passes against live host runtime metrics/status
 
 Remaining Q2 emphasis is now operationalization:
 
-- promote full CI/CD gating across environments for parity/replay checks
+- validate the now-aligned gates in each real deployment topology
 - expand adversarial and degraded-edge-condition coverage
 - stabilize benchmark and observability baselines under deployment-realistic
   topology
@@ -68,6 +74,12 @@ quarter boundary and early Q3 setup.
 Goal:
 
 - close Q2 acceptance gating
+
+Status:
+
+- **Implemented (host-first):** acceptance gates are executable and passing in
+  both CI and local host verification paths.
+- **Remaining:** topology-specific validation beyond host mode.
 
 Must land:
 
