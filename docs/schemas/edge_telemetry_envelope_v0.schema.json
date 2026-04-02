@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "EdgeTelemetrySampleV0": {
+      "additionalProperties": false,
+      "properties": {
+        "t_offset_ms": {
+          "default": 0.0,
+          "description": "Milliseconds relative to observed_at.",
+          "title": "T Offset Ms",
+          "type": "number"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "EdgeTelemetrySampleV0",
+      "type": "object"
+    },
+    "EdgeTelemetrySignerV0": {
+      "additionalProperties": false,
+      "properties": {
+        "key_ref": {
+          "title": "Key Ref",
+          "type": "string"
+        },
+        "algorithm": {
+          "default": "ed25519",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "signature_b64": {
+          "title": "Signature B64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_ref",
+        "signature_b64"
+      ],
+      "title": "EdgeTelemetrySignerV0",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Cryptographically signed bundle of edge sensor readings bound to an asset.\n\nIntended to hash into physical-presence fingerprint components at twin closure.",
+  "properties": {
+    "contract_version": {
+      "const": "seedcore.edge_telemetry_envelope.v0",
+      "default": "seedcore.edge_telemetry_envelope.v0",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "telemetry_id": {
+      "title": "Telemetry Id",
+      "type": "string"
+    },
+    "edge_node_ref": {
+      "title": "Edge Node Ref",
+      "type": "string"
+    },
+    "asset_ref": {
+      "title": "Asset Ref",
+      "type": "string"
+    },
+    "observed_at": {
+      "title": "Observed At",
+      "type": "string"
+    },
+    "sensor_kind": {
+      "enum": [
+        "motor_torque",
+        "weight_cell",
+        "temperature",
+        "generic"
+      ],
+      "title": "Sensor Kind",
+      "type": "string"
+    },
+    "samples": {
+      "items": {
+        "$ref": "#/$defs/EdgeTelemetrySampleV0"
+      },
+      "title": "Samples",
+      "type": "array"
+    },
+    "payload_sha256": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional precomputed canonical JSON hash of samples + metadata (excluding signature).",
+      "title": "Payload Sha256"
+    },
+    "nonce": {
+      "title": "Nonce",
+      "type": "string"
+    },
+    "signer": {
+      "$ref": "#/$defs/EdgeTelemetrySignerV0"
+    }
+  },
+  "required": [
+    "telemetry_id",
+    "edge_node_ref",
+    "asset_ref",
+    "observed_at",
+    "sensor_kind",
+    "nonce",
+    "signer"
+  ],
+  "title": "EdgeTelemetryEnvelopeV0",
+  "type": "object"
+}

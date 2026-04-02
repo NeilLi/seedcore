@@ -55,6 +55,7 @@ export interface TransferSourceQuery {
   zone?: string;
   approval_state?: string;
   replay_readiness?: string;
+  trust_alert?: string;
 }
 
 export type TrustBucket = "verified" | "quarantined" | "rejected" | "pending" | "review";
@@ -81,6 +82,9 @@ export interface TransferQueueRow {
   from_zone: string;
   to_zone: string;
   replay_readiness: "pending" | "ready";
+  product_ref: string | null;
+  updated_at: string | null;
+  trust_alerts: string[];
   links: {
     status: string;
     review: string;
@@ -343,6 +347,9 @@ export function buildQueryString(query: TransferSourceQuery): string {
   }
   if (query.replay_readiness) {
     params.set("replay_readiness", query.replay_readiness);
+  }
+  if (query.trust_alert) {
+    params.set("trust_alert", query.trust_alert);
   }
   return params.toString();
 }
@@ -1631,7 +1638,46 @@ function matchesQueueFilters(scenario: TransferScenario, filters: TransferSource
   ) {
     return false;
   }
+  if (filters.trust_alert) {
+    const needle = filters.trust_alert.trim().toLowerCase();
+    const alerts = deriveTrustAlerts(scenario).map((a) => a.toLowerCase());
+    if (!alerts.some((a) => a === needle || a.includes(needle))) {
+      return false;
+    }
+  }
   return true;
+}
+
+function deriveTrustAlerts(scenario: TransferScenario): string[] {
+  const alerts: string[] = [];
+  if (scenario.transfer_audit_trail.physical_evidence.replay_status !== "ready") {
+    alerts.push("replay_not_ready");
+  }
+  if (scenario.asset_forensics.trust_gaps.length > 0) {
+    alerts.push("trust_gaps_present");
+  }
+  if (scenario.status.blocker_codes.includes("missing_dual_approval")) {
+    alerts.push("missing_prerequisite");
+  }
+  const verdict = scenario.transfer_audit_trail.authority_scope.authority_scope_verdict;
+  if (verdict === "mismatch" || verdict === "unverified") {
+    alerts.push("scope_unverified");
+  }
+  if (scenario.summary.verification_error_code) {
+    alerts.push("verification_error");
+  }
+  return alerts;
+}
+
+function queueRowUpdatedAt(scenario: TransferScenario): string | null {
+  const tl = scenario.status.timeline;
+  if (tl.length > 0) {
+    const last = tl[tl.length - 1];
+    if (last?.timestamp) {
+      return last.timestamp;
+    }
+  }
+  return scenario.transfer_audit_trail.request.requested_at ?? null;
 }
 
 function buildAssetForensicsRestPath(assetRef: string, linkQuery: TransferSourceQuery): string {
@@ -1677,6 +1723,9 @@ function buildQueueRow(
     from_zone: scenario.asset_forensics.custody_transition.from_zone,
     to_zone: scenario.asset_forensics.custody_transition.to_zone,
     replay_readiness: scenario.transfer_audit_trail.physical_evidence.replay_status,
+    product_ref: scenario.transfer_audit_trail.authority_scope.product_ref,
+    updated_at: queueRowUpdatedAt(scenario),
+    trust_alerts: deriveTrustAlerts(scenario),
     links: {
       status: `/api/v1/verification/transfers/status?${qs}`,
       review: `/api/v1/verification/transfers/audit-trail?${qs}`,
@@ -1990,6 +2039,7 @@ export function parseTransferQuery(url: URL): TransferSourceQuery {
     zone: url.searchParams.get("zone") ?? undefined,
     approval_state: url.searchParams.get("approval_state") ?? undefined,
     replay_readiness: url.searchParams.get("replay_readiness") ?? undefined,
+    trust_alert: url.searchParams.get("trust_alert") ?? undefined,
   };
 }
 

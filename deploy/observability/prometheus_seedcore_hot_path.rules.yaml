@@ -1,6 +1,6 @@
 # Prometheus alerting examples for PDP hot-path observability (seedcore.observability.hot_path.v1).
-# Wire scrape job to GET /api/v1/pdp/hot-path/status and map JSON fields into metrics, or use
-# json_exporter / recording rules from your telemetry pipeline.
+# Prefer scraping GET /api/v1/pdp/hot-path/metrics (Prometheus text). Fallback: GET /api/v1/pdp/hot-path/status
+# with json_exporter or recording rules.
 #
 # Expected series (after relabel/recording):
 #   seedcore_hot_path_alert_level{deployment_role="kubernetes|ray"}  # 0=ok, 1=warning, 2=critical

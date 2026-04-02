@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query  # pyright: ignore[reportMissingImports]
-from fastapi.responses import StreamingResponse  # pyright: ignore[reportMissingImports]
+from fastapi.responses import PlainTextResponse, StreamingResponse  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
 
 from ...models.pdp_hot_path import HotPathEvaluateRequest, HotPathEvaluateResponse
@@ -25,6 +25,7 @@ from ...ops.pkg.manager import PKGMode
 from ...ops.pkg.manager import PKG_REDIS_CHANNEL
 from ...ops.pdp_hot_path import (
     evaluate_pdp_hot_path,
+    hot_path_prometheus_text,
     hot_path_shadow_status,
     resolve_authoritative_transfer_approval,
 )
@@ -90,6 +91,12 @@ async def pdp_hot_path_evaluate(
 @router.get("/pdp/hot-path/status", response_model=Dict[str, Any])
 async def pdp_hot_path_status() -> Dict[str, Any]:
     return hot_path_shadow_status()
+
+
+@router.get("/pdp/hot-path/metrics")
+async def pdp_hot_path_metrics() -> PlainTextResponse:
+    """Prometheus text exposition derived from the same snapshot as /pdp/hot-path/status."""
+    return PlainTextResponse(hot_path_prometheus_text(), media_type="text/plain; version=0.0.4")
 
 
 async def _resolve_pkg_client() -> PKGClient:

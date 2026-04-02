@@ -93,6 +93,33 @@ function refFor(slug: string): RunbookRef | null {
   return { slug: entry.slug, title: entry.title, href_path: `/api/v1/verification/runbook/${encodeURIComponent(entry.slug)}` };
 }
 
+/** Lookup runbooks by exception fields (Q2 spec: runbooks by status/reason). */
+export function lookupRunbooksForQuery(args: {
+  reason_code?: string;
+  disposition?: string;
+  business_state?: string;
+  blockers?: string[];
+}): RunbookRef[] {
+  const rc = (args.reason_code ?? "").toLowerCase();
+  let disposition = args.disposition ?? "allow";
+  let business_state = args.business_state ?? "verified";
+  if (!args.disposition) {
+    if (rc.includes("quarantine") || rc.includes("trust_gap") || rc.includes("stale")) {
+      disposition = "quarantine";
+      business_state = args.business_state ?? "quarantined";
+    } else if (rc.includes("deny") || rc.includes("policy_denied") || rc.includes("missing")) {
+      disposition = "deny";
+      business_state = args.business_state ?? "rejected";
+    }
+  }
+  return resolveRunbookLinks({
+    reason_code: args.reason_code ?? "",
+    disposition,
+    business_state,
+    blockers: args.blockers ?? [],
+  });
+}
+
 export function resolveRunbookLinks(args: {
   reason_code: string;
   disposition: string;

@@ -823,6 +823,112 @@ def hot_path_shadow_status() -> dict[str, Any]:
     return status
 
 
+def _prometheus_escape_label(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def hot_path_prometheus_text() -> str:
+    """
+    Prometheus text exposition for scrape targets (json_exporter alternative).
+
+    Emits gauges/counters aligned with observability.gauges and alert_level.
+    """
+    s = hot_path_shadow_status()
+    obs = s.get("observability") if isinstance(s.get("observability"), Mapping) else {}
+    gauges = obs.get("gauges") if isinstance(obs.get("gauges"), Mapping) else {}
+    role_raw = obs.get("deployment_role") if obs.get("deployment_role") else os.getenv(
+        "SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE", "unset"
+    )
+    role = _prometheus_escape_label(str(role_raw))
+
+    def alert_level_num() -> int:
+        al = str(obs.get("alert_level") or "ok").strip().lower()
+        if al == "critical":
+            return 2
+        if al == "warning":
+            return 1
+        return 0
+
+    lines: list[str] = []
+
+    def emit_gauge(name: str, help_text: str, value: float | int) -> None:
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        lines.append(f'{name}{{deployment_role="{role}"}} {value}')
+
+    emit_gauge(
+        "seedcore_hot_path_alert_level",
+        "Observability alert level (0=ok, 1=warning, 2=critical).",
+        alert_level_num(),
+    )
+    emit_gauge(
+        "seedcore_hot_path_rollback_triggered",
+        "Whether auto-rollback is active (1=yes).",
+        1 if bool(s.get("rollback_triggered")) else 0,
+    )
+    emit_gauge(
+        "seedcore_hot_path_graph_freshness_ok",
+        "Authz graph freshness check (1=ok).",
+        1 if bool(s.get("graph_freshness_ok")) else 0,
+    )
+    emit_gauge(
+        "seedcore_hot_path_authz_graph_ready",
+        "Compiled authz index readiness (1=ready).",
+        1 if bool(s.get("authz_graph_ready")) else 0,
+    )
+    emit_gauge(
+        "seedcore_hot_path_latency_slo_met",
+        "Latency percentiles within promotion SLO (1=yes).",
+        1 if bool(s.get("latency_slo_met")) else 0,
+    )
+    emit_gauge(
+        "seedcore_hot_path_runtime_ready",
+        "Combined dependency readiness for strict promotion (1=yes).",
+        1 if bool(s.get("runtime_ready")) else 0,
+    )
+    emit_gauge(
+        "seedcore_hot_path_total_runs",
+        "In-process hot-path evaluation count (reset on restart).",
+        int(s.get("total") or 0),
+    )
+    emit_gauge(
+        "seedcore_hot_path_parity_ok_total",
+        "Cumulative parity-ok evaluations in-process.",
+        int(s.get("parity_ok") or 0),
+    )
+    emit_gauge(
+        "seedcore_hot_path_mismatched_total",
+        "Cumulative parity mismatches in-process.",
+        int(s.get("mismatched") or 0),
+    )
+    emit_gauge(
+        "seedcore_hot_path_recent_mismatch_count",
+        "Mismatches in the sliding promotion window.",
+        int(gauges.get("recent_mismatch_count") or 0),
+    )
+    p99 = gauges.get("p99_ms")
+    if p99 is not None:
+        try:
+            emit_gauge(
+                "seedcore_hot_path_latency_p99_ms",
+                "Reported p99 latency of hot-path evaluations (ms).",
+                float(p99),
+            )
+        except (TypeError, ValueError):
+            pass
+    ga = s.get("graph_age_seconds")
+    if ga is not None:
+        try:
+            emit_gauge(
+                "seedcore_hot_path_graph_age_seconds",
+                "Age of compiled authz graph in seconds.",
+                float(ga),
+            )
+        except (TypeError, ValueError):
+            pass
+    return "\n".join(lines) + "\n"
+
+
 def _resolve_compiled_authz_index() -> Any | None:
     return _resolve_hot_path_runtime_status().get("compiled_authz_index")
 

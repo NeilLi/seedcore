@@ -23,6 +23,8 @@ Open implementation focus after this freeze pass:
 - benchmark hardening under production-like topology
 - narrow external-agent adapter work only after the above is stable enough to
   support real debugging against frozen contracts
+- the first Gemini-visible read surface should stay minimal and read-only
+  until the verification contracts stop moving
 
 ## Scheduled Next Sequence (2026-04-02)
 

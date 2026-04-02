@@ -42,12 +42,18 @@ Latest repo-aligned critical-path status:
 - hot-path status now emits additive observability signals for operators and
   scraping (`alert_level`, structured alerts, gauges, optional deployment role)
   to support Kubernetes/Ray operational wiring.
+- hot-path now also exposes Prometheus text at `/api/v1/pdp/hot-path/metrics`
+  for scrape-first deployments.
 - dedicated replay and runbook verification routes are now implemented under
   `/api/v1/verification/*`, and failure panels can surface operator runbook
   links from the same projection-driven detail/replay payloads.
+- queue rows now carry `product_ref`, `updated_at`, and `trust_alerts`, with the
+  `trust_alert` filter preserved through drill-down links.
 - runtime parity is now supported for the asset-ref REST forensics path
   (`/api/v1/verification/assets/{asset_ref}/forensics`) using subject-based
   runtime replay lookup.
+- the edge-telemetry envelope now has an exported JSON Schema artifact at
+  `docs/schemas/edge_telemetry_envelope_v0.schema.json`.
 - first forensic-block JSON-LD contract freeze pass is implemented with schema
   artifacts, strict runtime validation, explicit `forensic_block_id`, and
   closure/materialization consistency checks.
@@ -346,6 +352,14 @@ operational closure and external-boundary productization.
    - export JSON schema for `EdgeTelemetryEnvelopeV0`
    - persist envelope refs on the governed receipt / forensic path
    - extend fixtures so Q3 handshake work can rely on signed telemetry inputs
+   - keep the schema exporter and checked-in schema file in sync as the
+     contract evolves
+
+6. **2026-06-01 onward: Gemini-visible read tools**
+   - publish a minimal read-only tool bundle for verification queue, detail,
+     replay, runbook lookup, and hot-path status/metrics
+   - keep those tools narrow and operator-safe; they should expose the same
+     frozen contracts rather than add new logic
 
 Recommended dependency rule:
 

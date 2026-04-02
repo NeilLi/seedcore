@@ -12,7 +12,7 @@ import {
   parseTransferQuery,
   resolveScenarioByAssetRef,
 } from "./transferSources.js";
-import { getRunbook, listRunbookSummaries } from "./runbooks.js";
+import { getRunbook, listRunbookSummaries, lookupRunbooksForQuery } from "./runbooks.js";
 
 function jsonResponse(
   res: http.ServerResponse,
@@ -140,6 +140,25 @@ export const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/v1/verification/runbook" || url.pathname === "/api/v1/verification/runbook/") {
       jsonResponse(res, 200, { contract_version: "seedcore.verification_runbook_index.v1", runbooks: listRunbookSummaries() });
+      return;
+    }
+
+    if (url.pathname === "/api/v1/verification/runbook/lookup") {
+      const blockersRaw = url.searchParams.get("blockers");
+      jsonResponse(res, 200, {
+        contract_version: "seedcore.verification_runbook_lookup.v1",
+        runbook_links: lookupRunbooksForQuery({
+          reason_code: url.searchParams.get("reason_code") ?? undefined,
+          disposition: url.searchParams.get("disposition") ?? undefined,
+          business_state: url.searchParams.get("business_state") ?? undefined,
+          blockers: blockersRaw
+            ? blockersRaw
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : undefined,
+        }),
+      });
       return;
     }
 

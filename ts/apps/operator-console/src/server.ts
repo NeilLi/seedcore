@@ -3,14 +3,19 @@ import process from "node:process";
 
 import {
   page,
+  type HotPathBanner,
+  type OperatorShellOptions,
   renderCatalogPage,
   renderForensicsPage,
   renderQueuePage,
   renderReplayPage,
+  renderRunbooksPage,
   renderTransferPage,
 } from "./ui.js";
 
 const apiBase = process.env.SEEDCORE_VERIFICATION_API_BASE ?? "http://127.0.0.1:7071";
+const runtimeBase = process.env.SEEDCORE_RUNTIME_API_BASE ?? "http://127.0.0.1:8002/api/v1";
+const DEFAULT_LIST_QS = "source=fixture&root=rust/fixtures/transfers";
 
 async function fetchJson(apiPath: string): Promise<any> {
   const response = await fetch(`${apiBase}${apiPath}`);
@@ -18,6 +23,38 @@ async function fetchJson(apiPath: string): Promise<any> {
     throw new Error(`${response.status}:${response.statusText}`);
   }
   return response.json();
+}
+
+async function fetchHotPathBanner(): Promise<HotPathBanner | null> {
+  if (process.env.SEEDCORE_OPERATOR_SKIP_HOT_PATH_BANNER === "1") {
+    return null;
+  }
+  try {
+    const controller = new AbortController();
+    const kill = setTimeout(() => controller.abort(), 1500);
+    const response = await fetch(`${runtimeBase}/pdp/hot-path/status`, { signal: controller.signal });
+    clearTimeout(kill);
+    if (!response.ok) {
+      return null;
+    }
+    const body = await response.json();
+    const obs = body.observability ?? {};
+    return {
+      resolved_mode: String(body.resolved_mode ?? body.mode ?? "unknown"),
+      graph_freshness_ok: Boolean(body.graph_freshness_ok),
+      alert_level: String(obs.alert_level ?? "unknown"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function operatorShell(
+  nav: OperatorShellOptions["nav"],
+  listQuery: string,
+  hotPath: HotPathBanner | null,
+): OperatorShellOptions {
+  return { nav, listQuery, hotPath };
 }
 
 function queryString(url: URL, mode: "catalog" | "single" | "replay"): string {
@@ -54,19 +91,59 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    if (url.pathname === "/search") {
+      const q = url.searchParams.get("q")?.trim() ?? "";
+      if (!q) {
+        res.writeHead(302, { Location: `/queue?${DEFAULT_LIST_QS}` });
+        res.end();
+        return;
+      }
+      if (q.startsWith("asset:")) {
+        res.writeHead(302, {
+          Location: `/forensics?source=runtime&subject_id=${encodeURIComponent(q)}`,
+        });
+        res.end();
+        return;
+      }
+      const uuidRe =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (uuidRe.test(q)) {
+        res.writeHead(302, {
+          Location: `/transfer?source=runtime&audit_id=${encodeURIComponent(q)}`,
+        });
+        res.end();
+        return;
+      }
+      res.writeHead(302, {
+        Location: `/replay?workflow_id=${encodeURIComponent(q)}&${DEFAULT_LIST_QS}`,
+      });
+      res.end();
+      return;
+    }
+
     if (url.pathname === "/") {
       const qs = queryString(url, "catalog");
       const catalog = await fetchJson(`/api/v1/verification/transfers/catalog?${qs}`);
+      const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderCatalogPage(catalog, qs));
+      res.end(renderCatalogPage(catalog, qs, operatorShell("transfers", qs, hotPath)));
       return;
     }
 
     if (url.pathname === "/queue") {
       const qs = queryString(url, "catalog");
       const queue = await fetchJson(`/api/v1/verification/transfers/queue?${qs}`);
+      const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderQueuePage(queue, qs));
+      res.end(renderQueuePage(queue, qs, operatorShell("verification", qs, hotPath)));
+      return;
+    }
+
+    if (url.pathname === "/runbooks") {
+      const idx = await fetchJson("/api/v1/verification/runbook");
+      const hotPath = await fetchHotPathBanner();
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderRunbooksPage(idx, operatorShell("runbooks", DEFAULT_LIST_QS, hotPath)));
       return;
     }
 
@@ -81,24 +158,27 @@ const server = http.createServer(async (req, res) => {
       const detail = await fetchJson(
         `/api/v1/verification/workflows/${encodeURIComponent(wf)}/verification-detail?${qs}`,
       );
+      const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderReplayPage(detail, qs, wf));
+      res.end(renderReplayPage(detail, qs, wf, operatorShell("verification", qs, hotPath)));
       return;
     }
 
     if (url.pathname === "/transfer") {
       const qs = queryString(url, "single");
       const review = await fetchJson(`/api/v1/verification/transfers/review?${qs}`);
+      const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderTransferPage(review, qs));
+      res.end(renderTransferPage(review, qs, operatorShell("verification", qs, hotPath)));
       return;
     }
 
     if (url.pathname === "/forensics") {
       const qs = queryString(url, "single");
       const forensics = await fetchJson(`/api/v1/verification/assets/forensics?${qs}`);
+      const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderForensicsPage(forensics, qs));
+      res.end(renderForensicsPage(forensics, qs, operatorShell("verification", qs, hotPath)));
       return;
     }
 

@@ -238,6 +238,16 @@ def test_pdp_hot_path_quarantines_when_compiled_graph_is_stale(monkeypatch):
     assert body["decision"]["reason_code"] == "compiled_authz_graph_stale"
 
 
+def test_pdp_hot_path_metrics_exposes_prometheus_text() -> None:
+    response = _make_client().get("/api/v1/pdp/hot-path/metrics")
+    assert response.status_code == 200
+    body = response.text
+    assert "seedcore_hot_path_alert_level" in body
+    assert "seedcore_hot_path_rollback_triggered" in body
+    assert "seedcore_hot_path_graph_freshness_ok" in body
+    assert "text/plain" in (response.headers.get("content-type") or "")
+
+
 def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):
     compiled_at = datetime.now(timezone.utc).isoformat()
     manager = _manager(compiled_at=compiled_at)

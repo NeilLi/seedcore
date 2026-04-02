@@ -69,6 +69,17 @@ echo "== Productized Verification Surface Protocol =="
 echo "Verification API: ${VERIFICATION_API_BASE}"
 echo "Runtime API:      ${RUNTIME_API_BASE}"
 
+if [[ "${SEEDCORE_SKIP_Q2_FIXTURE_GATE:-}" != "1" ]]; then
+  echo "== Q2 verification API fixture gate (queue / replay / runbook / lookup) =="
+  Q2_QUEUE="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/transfers/queue?source=fixture&root=rust/fixtures/transfers")"
+  check "q2 fixture queue has rows" jq -e '.items | length >= 1' <<<"${Q2_QUEUE}" >/dev/null
+  check "q2 queue trust_alerts field" jq -e '.items[0].trust_alerts | type == "array"' <<<"${Q2_QUEUE}" >/dev/null
+  Q2_REP="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/workflows/allow_case/replay?source=fixture&root=rust/fixtures/transfers")"
+  check "q2 fixture replay contract" jq -e '.contract_version == "seedcore.verification_replay.v1"' <<<"${Q2_REP}" >/dev/null
+  Q2_RB="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/runbook/lookup?reason_code=trust_gap_quarantine")"
+  check "q2 runbook lookup" jq -e '.contract_version == "seedcore.verification_runbook_lookup.v1"' <<<"${Q2_RB}" >/dev/null
+fi
+
 AUDIT_ID="$(find_runtime_audit_id || true)"
 if [[ -z "${AUDIT_ID}" ]]; then
   echo "[FAIL] No runtime audit_id discovered. Set SEEDCORE_AUDIT_ID or populate governed_execution_audit before running live sign-off." >&2

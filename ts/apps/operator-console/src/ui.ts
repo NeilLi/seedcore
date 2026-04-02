@@ -17,7 +17,52 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-export function page(title: string, body: string): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export type OperatorNavKey = "transfers" | "verification" | "runbooks";
+
+export type HotPathBanner = {
+  resolved_mode: string;
+  graph_freshness_ok: boolean;
+  alert_level: string;
+};
+
+export type OperatorShellOptions = {
+  nav: OperatorNavKey;
+  listQuery: string;
+  hotPath: HotPathBanner | null;
+};
+
+function renderOperatorShell(nav: OperatorNavKey, listQuery: string, hotPath: HotPathBanner | null): string {
+  const q = escapeHtml(listQuery);
+  const item = (key: OperatorNavKey, label: string, href: string) =>
+    `<a class="topnav-link${nav === key ? " topnav-active" : ""}" href="${href}">${escapeHtml(label)}</a>`;
+  const parts: string[] = [];
+  if (hotPath) {
+    const modeCls = hotPath.alert_level === "critical" ? "bad" : hotPath.alert_level === "warning" ? "warn" : "ok";
+    parts.push(
+      `<span class="status ${modeCls}">hot-path ${escapeHtml(hotPath.resolved_mode)}</span>`,
+      `<span class="status ${hotPath.graph_freshness_ok ? "ok" : "bad"}">graph fresh ${String(hotPath.graph_freshness_ok)}</span>`,
+      `<span class="status">obs ${escapeHtml(hotPath.alert_level)}</span>`,
+    );
+  }
+  return `
+    <nav class="topnav" aria-label="Primary">
+      ${item("transfers", "Transfers", `/?${q}`)}
+      ${item("verification", "Verification", `/queue?${q}`)}
+      ${item("runbooks", "Runbooks", `/runbooks`)}
+      <form class="topnav-search" method="get" action="/search" style="display:inline-flex;gap:6px;align-items:center;margin-left:18px">
+        <input name="q" placeholder="audit UUID · workflow id · asset ref" size="32" aria-label="Search" />
+        <button type="submit">Search</button>
+      </form>
+    </nav>
+    ${parts.length ? `<div class="env-banner" role="status">${parts.join(" ")}</div>` : ""}`;
+}
+
+export function page(title: string, body: string, shell?: OperatorShellOptions): string {
+  const shellBlock = shell ? renderOperatorShell(shell.nav, shell.listQuery, shell.hotPath) : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -45,6 +90,17 @@ export function page(title: string, body: string): string {
         radial-gradient(circle at 85% 10%, #d6efe5 0, transparent 38%),
         radial-gradient(circle at 10% 80%, #f7d7be 0, transparent 45%),
         var(--paper);
+    }
+    .topnav {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+      padding: 12px 16px; margin: 0 0 0; border-bottom: 1px solid var(--edge);
+      background: rgba(255, 253, 249, 0.92);
+    }
+    .topnav-link { font-weight: 600; font-size: 14px; border-bottom: none; }
+    .topnav-active { color: var(--ink); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }
+    .env-banner {
+      padding: 8px 16px; font-size: 13px; border-bottom: 1px solid var(--edge);
+      background: rgba(255, 253, 249, 0.75);
     }
     main { max-width: 1120px; margin: 28px auto; padding: 0 16px 48px; }
     h1, h2, h3 { margin: 0 0 10px; line-height: 1.2; }
@@ -99,6 +155,7 @@ export function page(title: string, body: string): string {
   </style>
 </head>
 <body>
+  ${shellBlock}
   <main>${body}</main>
 </body>
 </html>`;
@@ -151,7 +208,7 @@ function renderApiLinks(entries: Array<[string, string | undefined]>): string {
   return `<ul>${items.join("")}</ul>`;
 }
 
-export function renderCatalogPage(catalog: any, listQuery: string): string {
+export function renderCatalogPage(catalog: any, listQuery: string, shell?: OperatorShellOptions): string {
   const items = Array.isArray(catalog?.items) ? catalog.items : [];
   const cards = items
     .map((item: any) => {
@@ -198,11 +255,26 @@ export function renderCatalogPage(catalog: any, listQuery: string): string {
         ${cards || `<article class="card"><p class="empty">No transfer scenarios found.</p></article>`}
       </section>
     `,
+    shell,
   );
 }
 
-export function renderQueuePage(queuePayload: any, listQuery: string): string {
+export function renderQueuePage(queuePayload: any, listQuery: string, shell?: OperatorShellOptions): string {
   const items = Array.isArray(queuePayload?.items) ? queuePayload.items : [];
+  const alertCounts = new Map<string, number>();
+  for (const row of items) {
+    for (const a of Array.isArray(row.trust_alerts) ? row.trust_alerts : []) {
+      if (typeof a === "string") {
+        alertCounts.set(a, (alertCounts.get(a) ?? 0) + 1);
+      }
+    }
+  }
+  const strip =
+    alertCounts.size > 0
+      ? `<section class="card"><h2>Trust alerts (queue)</h2><div class="row">${[...alertCounts.entries()]
+          .map(([k, v]) => `<span class="status warn">${escapeHtml(k)} (${v})</span>`)
+          .join(" ")}</div></section>`
+      : "";
   const rows = items
     .map((row: any) => {
       const trust = row.trust_summary ?? {};
@@ -224,6 +296,9 @@ export function renderQueuePage(queuePayload: any, listQuery: string): string {
           <td><code>${escapeHtml(row.queue_key ?? "")}</code></td>
           <td><code>${escapeHtml(row.workflow_id ?? "")}</code></td>
           <td><code>${escapeHtml(row.asset_ref ?? "")}</code></td>
+          <td><code>${escapeHtml(row.product_ref != null ? String(row.product_ref) : "—")}</code></td>
+          <td><code>${escapeHtml(row.updated_at != null ? String(row.updated_at) : "—")}</code></td>
+          <td><code>${escapeHtml(Array.isArray(row.trust_alerts) ? row.trust_alerts.join(", ") || "—" : "—")}</code></td>
           <td><span class="status ${bucketCls}">${escapeHtml(trust.trust_bucket ?? "")}</span></td>
           <td><span class="status ${cls}">${escapeHtml(trust.business_state ?? "")}</span></td>
           <td><code>${escapeHtml(String(row.approval_state ?? ""))}</code></td>
@@ -263,9 +338,11 @@ export function renderQueuePage(queuePayload: any, listQuery: string): string {
           <label>zone <input name="zone" /></label>
           <label>approval <input name="approval_state" placeholder="APPROVED, PENDING, …" /></label>
           <label>replay <input name="replay_readiness" placeholder="ready, pending" /></label>
+          <label>trust alert <input name="trust_alert" placeholder="replay_not_ready, …" /></label>
           <button type="submit">Apply</button>
         </form>
       </section>
+      ${strip}
       <section class="card" style="overflow-x:auto">
         <h2>Open transfers</h2>
         <table style="width:100%; border-collapse:collapse; font-size:13px;">
@@ -274,6 +351,9 @@ export function renderQueuePage(queuePayload: any, listQuery: string): string {
               <th align="left">Case</th>
               <th align="left">Workflow</th>
               <th align="left">Asset</th>
+              <th align="left">Product</th>
+              <th align="left">Updated</th>
+              <th align="left">Trust alerts</th>
               <th align="left">Trust bucket</th>
               <th align="left">Business state</th>
               <th align="left">Approval</th>
@@ -284,15 +364,43 @@ export function renderQueuePage(queuePayload: any, listQuery: string): string {
             </tr>
           </thead>
           <tbody>
-            ${rows || `<tr><td colspan="10"><p class="empty">No rows match the current filters.</p></td></tr>`}
+            ${rows || `<tr><td colspan="13"><p class="empty">No rows match the current filters.</p></td></tr>`}
           </tbody>
         </table>
       </section>
     `,
+    shell,
   );
 }
 
-export function renderReplayPage(detail: any, query: string, workflowId: string): string {
+export function renderRunbooksPage(indexPayload: any, shell?: OperatorShellOptions): string {
+  const books = Array.isArray(indexPayload?.runbooks) ? indexPayload.runbooks : [];
+  const cards = books
+    .map(
+      (b: { slug?: string; title?: string }) => `
+      <article class="card">
+        <h3>${escapeHtml(b.title ?? b.slug ?? "runbook")}</h3>
+        <p class="row"><a href="/api/v1/verification/runbook/${encodeURIComponent(b.slug ?? "")}">JSON entry</a> (verification API)</p>
+      </article>`,
+    )
+    .join("");
+  return page(
+    "Operator runbooks",
+    `
+      <h1>Runbooks</h1>
+      <p class="sub">Investigation guides keyed for failure panels and operator drills (read-only JSON under verification API).</p>
+      <section class="grid">${cards || `<article class="card"><p class="empty">No runbooks.</p></article>`}</section>
+    `,
+    shell,
+  );
+}
+
+export function renderReplayPage(
+  detail: any,
+  query: string,
+  workflowId: string,
+  shell?: OperatorShellOptions,
+): string {
   const scenarioQs = new URLSearchParams(query);
   scenarioQs.delete("workflow_id");
   const source = scenarioQs.get("source") ?? "fixture";
@@ -394,10 +502,11 @@ export function renderReplayPage(detail: any, query: string, workflowId: string)
         ])}
       </section>
     `,
+    shell,
   );
 }
 
-export function renderTransferPage(reviewPayload: any, query: string): string {
+export function renderTransferPage(reviewPayload: any, query: string, shell?: OperatorShellOptions): string {
   const projection = parseVerificationSurfaceProjection(reviewPayload?.verification_projection ?? {});
   const auditTrail = parseTransferAuditTrail(reviewPayload?.transfer_audit_trail ?? {});
   const forensics = parseAssetForensicProjection(reviewPayload?.asset_forensic_projection ?? {});
@@ -501,16 +610,18 @@ export function renderTransferPage(reviewPayload: any, query: string): string {
         ${renderTimeline(forensics.timeline)}
       </section>
     `,
+    shell,
   );
 }
 
-export function renderForensicsPage(forensicsPayload: any, query: string): string {
+export function renderForensicsPage(forensicsPayload: any, query: string, shell?: OperatorShellOptions): string {
   const forensics = parseAssetForensicProjection(forensicsPayload);
   const cls = statusClass(forensics.business_state);
+  const settlement = isRecord(forensicsPayload?.settlement) ? (forensicsPayload.settlement as Record<string, unknown>) : null;
   return page(
     "Asset Forensic View",
     `
-      <h1>Asset Forensic View</h1>
+      <h1>Screen 3 — Asset Forensic View</h1>
       <p class="sub">Canonical operator-facing forensic context for the Restricted Custody Transfer wedge.</p>
       <p class="row"><a href="/transfer?${query}">Back to workflow review</a></p>
 
@@ -595,6 +706,18 @@ export function renderForensicsPage(forensicsPayload: any, query: string): strin
           ${renderTimeline(forensics.timeline)}
         </article>
       </section>
+
+      <section class="card">
+        <h2>Settlement + twin (Workstream 3)</h2>
+        ${
+          settlement
+            ? `<div class="row">status: <code>${escapeHtml(String(settlement.status ?? "unknown"))}</code></div>
+          <div class="row">twin mutation ref: <code>${escapeHtml(String(settlement.twin_mutation_ref ?? "none"))}</code></div>
+          <div class="row">physical location: <code>${escapeHtml(String(settlement.physical_location_ref ?? "none"))}</code></div>`
+            : `<p class="sub">Extended settlement and digital-twin linkage will populate this card when the forensic projection carries a <code>settlement</code> object. Closure fields remain on the audit trail today.</p>`
+        }
+      </section>
     `,
+    shell,
   );
 }

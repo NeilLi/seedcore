@@ -41,6 +41,11 @@ the codebase for the RCT slice:
 - first forensic-block JSON-LD contract freeze pass is implemented with strict
   schema validation, explicit `forensic_block_id`, and replay/materialization
   alignment checks.
+- hot-path now exposes Prometheus text metrics in addition to JSON status.
+- queue rows now expose product, update-time, and trust-alert fields.
+- runbook lookup is available as a contract-shaped read surface for
+  verification failures.
+- edge telemetry now has a checked-in JSON Schema export path.
 
 Remaining Q2 emphasis is now operationalization:
 
@@ -50,6 +55,8 @@ Remaining Q2 emphasis is now operationalization:
   topology
 - begin the narrow Q3 bridge work only after the above is green enough to
   support external-agent debugging without contract churn
+- define the smallest safe Gemini-visible read surface once the verification
+  and hot-path read contracts stop shifting
 
 ## Scheduled Next Execution Windows (2026-04-02)
 
@@ -119,6 +126,20 @@ Must land:
 - persistence of telemetry envelope refs on the governed receipt / forensic
   path
 - fixture and test expansion for signed edge telemetry in the RCT closure flow
+
+### Window F: 2026-06-01 onward
+
+Goal:
+
+- publish a minimal Gemini-visible read tool bundle without widening the
+  product boundary
+
+Must land:
+
+- read-only wrappers for verification queue, detail, replay, runbook lookup,
+  and hot-path metrics/status
+- explicit documentation that the Gemini surface is read-only and contract
+  driven
 
 ## 2026 Objective
 

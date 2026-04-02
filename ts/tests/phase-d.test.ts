@@ -17,7 +17,7 @@ import {
   listTransferCatalog,
   listTransferQueue,
 } from "../services/verification-api/src/transferSources.ts";
-import { getRunbook, listRunbookSummaries } from "../services/verification-api/src/runbooks.ts";
+import { getRunbook, listRunbookSummaries, lookupRunbooksForQuery } from "../services/verification-api/src/runbooks.ts";
 import {
   renderCatalogPage,
   renderForensicsPage,
@@ -103,6 +103,40 @@ test("runbook index and entries are stable", () => {
   const rb = getRunbook("trust_gap_quarantine");
   assert.ok(rb);
   assert.ok(rb!.steps.length >= 1);
+});
+
+test("runbook lookup by reason_code returns contract-shaped links", () => {
+  const links = lookupRunbooksForQuery({ reason_code: "policy_denied" });
+  assert.ok(links.length >= 1);
+  assert.ok(links.some((l) => l.slug === "policy_denied" || l.slug === "operator_transfer_overview"));
+});
+
+test("queue rows include trust_alerts and product_ref shape", async () => {
+  const rows = await listTransferQueue({ source: "fixture", root: "rust/fixtures/transfers" });
+  assert.ok(rows.length >= 1);
+  for (const row of rows) {
+    assert.ok(Array.isArray(row.trust_alerts));
+    assert.ok("product_ref" in row);
+    assert.ok("updated_at" in row);
+  }
+  const stale = rows.find((r) => r.queue_key === "quarantine_stale_telemetry");
+  assert.ok(stale);
+  assert.ok(stale!.trust_alerts.includes("trust_gaps_present"));
+  const deny = rows.find((r) => r.queue_key === "deny_missing_approval");
+  assert.ok(deny);
+  assert.ok(deny!.trust_alerts.includes("missing_prerequisite"));
+});
+
+test("queue drill-down links preserve trust alert filters", async () => {
+  const rows = await listTransferQueue({
+    source: "fixture",
+    root: "rust/fixtures/transfers",
+    trust_alert: "missing_prerequisite",
+  });
+  const deny = rows.find((r) => r.queue_key === "deny_missing_approval");
+  assert.ok(deny);
+  assert.ok(deny!.links.replay_verification.includes("trust_alert=missing_prerequisite"));
+  assert.ok(deny!.links.verification_replay.includes("trust_alert=missing_prerequisite"));
 });
 
 test("catalog exposes status preview and forensic links", async () => {

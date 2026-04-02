@@ -20,6 +20,8 @@ Implemented in code:
 - Screen 3 asset forensic view is wired to contract-driven payloads.
 - Screen 1 queue API and console view are implemented through
   `GET /api/v1/verification/transfers/queue` and `/queue`.
+- queue rows now include `product_ref`, `updated_at`, `trust_alerts`, and a
+  `trust_alert` filter that stays intact through drill-down navigation.
 - Screen 4 replay/verification page is implemented in operator console via
   workflow-scoped detail payloads.
 - workflow-scoped replay detail payload is implemented through
@@ -32,9 +34,15 @@ Implemented in code:
   `/api/v1/verification/runbook` and
   `/api/v1/verification/runbook/{slug}` and are surfaced on replay failure
   panels.
+- runbook lookup is implemented under `/api/v1/verification/runbook/lookup`
+  for status/reason-driven assistance links.
 - runtime parity is implemented for
   `/api/v1/verification/assets/{asset_ref}/forensics` via subject-based runtime
   lookup.
+- hot-path operator visibility now has a Prometheus text endpoint at
+  `/api/v1/pdp/hot-path/metrics`.
+- the edge telemetry schema is now exported at
+  `docs/schemas/edge_telemetry_envelope_v0.schema.json`.
 - links between status/review/forensics/proof surfaces are projection-derived.
 
 Still open for full Q2 closure:
@@ -42,10 +50,10 @@ Still open for full Q2 closure:
 - CI/CD enforcement for full Q2 acceptance matrix across environments
 - deployment-realistic observability and alert validation for the hot-path
   operator story
-- fuller runbook content for exception handling and investigation, beyond the
-  initial canonical slugs
 - adversarial and degraded-edge-condition acceptance coverage for the Q2
   verification slice
+- decide which read-only Gemini-visible verification tools should be published
+  as the first narrow external tool bundle
 
 ## Scheduled Closure Sequence (2026-04-02)
 
