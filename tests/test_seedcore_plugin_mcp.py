@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,12 +19,19 @@ from seedcore.plugin.mcp_server import (
     handle_forensic_replay_fetch,
     handle_health,
     handle_hotpath_benchmark,
+    handle_hotpath_metrics,
     handle_hotpath_verify_shadow,
     handle_owner_context_get,
     handle_owner_context_preflight,
     handle_pkg_authz_graph_status,
     handle_pkg_status,
     handle_readyz,
+    handle_verification_queue,
+    handle_verification_runbook_lookup,
+    handle_verification_transfer_review,
+    handle_verification_workflow_detail,
+    handle_verification_workflow_projection,
+    handle_verification_workflow_replay,
 )
 from seedcore.ops.evidence.owner_context import owner_context_hash
 
@@ -41,6 +48,7 @@ class _RuntimeStub:
         self.pkg_status = AsyncMock()
         self.pkg_authz_graph_status = AsyncMock()
         self.hotpath_status = AsyncMock()
+        self.hotpath_metrics_text = AsyncMock(return_value="seedcore_hot_path_alert_level{} 0\n")
         self.evidence_verify = AsyncMock()
         self.replay = AsyncMock()
         self.replay_timeline = AsyncMock()
@@ -69,6 +77,19 @@ def test_plugin_info_lists_seedcore_tools():
     body = response.json()
     assert body["service"] == "seedcore-plugin-mcp"
     assert body["tools"] == PLUGIN_TOOL_NAMES
+
+
+def test_plugin_tool_surface_includes_q2_verification_read_tools():
+    for name in (
+        "seedcore.hotpath.metrics",
+        "seedcore.verification.queue",
+        "seedcore.verification.transfer_review",
+        "seedcore.verification.workflow_projection",
+        "seedcore.verification.workflow_verification_detail",
+        "seedcore.verification.workflow_replay",
+        "seedcore.verification.runbook_lookup",
+    ):
+        assert name in PLUGIN_TOOL_NAMES
 
 
 def test_plugin_tool_surface_includes_owner_creator_parity_set():
@@ -128,6 +149,139 @@ async def test_handle_health_and_readyz_normalize_payloads():
     assert readyz["ok"] is True
     assert readyz["deps"] == {"db": "ok"}
     assert readyz["source_url"].endswith("/readyz")
+
+
+@pytest.mark.asyncio
+async def test_handle_hotpath_metrics_truncates():
+    runtime = _RuntimeStub()
+    runtime.hotpath_metrics_text.return_value = "x" * 3000
+    out = await handle_hotpath_metrics(runtime, max_chars=1000)
+    assert out["truncated"] is True
+    assert out["returned_chars"] == 1024
+    assert len(out["text"]) == 1024
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_queue_calls_read_service():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"items": []})
+    out = await handle_verification_queue(verification, source="fixture", fixture_root="rust/fixtures/transfers")
+    assert out["ok"] is True
+    assert out["read_only"] is True
+    assert "transfers/queue" in out["source_url"]
+    verification.get_json.assert_awaited_once()
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/transfers/queue"
+    assert call.kwargs["params"]["source"] == "fixture"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_transfer_review_calls_read_service():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.transfer_audit_trail.v1"})
+
+    out = await handle_verification_transfer_review(
+        verification,
+        source="runtime",
+        audit_id="audit-123",
+        trust_alert="stale_telemetry",
+    )
+
+    assert out["ok"] is True
+    assert out["read_only"] is True
+    assert "transfers/review" in out["source_url"]
+    verification.get_json.assert_awaited_once()
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/transfers/review"
+    assert call.kwargs["params"]["source"] == "runtime"
+    assert call.kwargs["params"]["audit_id"] == "audit-123"
+    assert call.kwargs["params"]["trust_alert"] == "stale_telemetry"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_workflow_projection_calls_read_service():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.verification_surface_projection.v1"})
+
+    out = await handle_verification_workflow_projection(
+        verification,
+        workflow_id="wf-123",
+        source="fixture",
+        fixture_dir="allow_case",
+    )
+
+    assert out["ok"] is True
+    assert out["read_only"] is True
+    assert "workflows/wf-123/projection" in out["source_url"]
+    verification.get_json.assert_awaited_once()
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/workflows/wf-123/projection"
+    assert call.kwargs["params"]["source"] == "fixture"
+    assert call.kwargs["params"]["dir"] == "allow_case"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_workflow_detail_calls_read_service():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.verification_detail.v1"})
+
+    out = await handle_verification_workflow_detail(
+        verification,
+        workflow_id="wf-123",
+        source="runtime",
+        intent_id="intent-123",
+    )
+
+    assert out["ok"] is True
+    assert out["read_only"] is True
+    assert "workflows/wf-123/verification-detail" in out["source_url"]
+    verification.get_json.assert_awaited_once()
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/workflows/wf-123/verification-detail"
+    assert call.kwargs["params"]["source"] == "runtime"
+    assert call.kwargs["params"]["intent_id"] == "intent-123"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_workflow_replay_calls_read_service():
+    verification = MagicMock()
+    verification.url = MagicMock(side_effect=lambda p: f"http://127.0.0.1:7071{p}")
+    verification.get_json = AsyncMock(return_value={"contract_version": "seedcore.verification_replay.v1"})
+
+    out = await handle_verification_workflow_replay(
+        verification,
+        workflow_id="wf-123",
+        source="runtime",
+        subject_id="subject-123",
+    )
+
+    assert out["ok"] is True
+    assert out["read_only"] is True
+    assert "workflows/wf-123/replay" in out["source_url"]
+    verification.get_json.assert_awaited_once()
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/workflows/wf-123/replay"
+    assert call.kwargs["params"]["source"] == "runtime"
+    assert call.kwargs["params"]["subject_id"] == "subject-123"
+
+
+@pytest.mark.asyncio
+async def test_handle_verification_runbook_lookup():
+    verification = MagicMock()
+    verification.url = MagicMock(return_value="http://127.0.0.1:7071/api/v1/verification/runbook/lookup")
+    verification.get_json = AsyncMock(
+        return_value={"contract_version": "seedcore.verification_runbook_lookup.v1", "runbook_links": []},
+    )
+    out = await handle_verification_runbook_lookup(verification, reason_code="stale_telemetry")
+    assert out["ok"] is True
+    assert out["data"]["contract_version"] == "seedcore.verification_runbook_lookup.v1"
+    call = verification.get_json.await_args
+    assert call.args[0] == "/api/v1/verification/runbook/lookup"
+    assert call.kwargs["params"]["reason_code"] == "stale_telemetry"
 
 
 @pytest.mark.asyncio
