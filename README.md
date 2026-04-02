@@ -6,9 +6,11 @@ CI is active for `push` to `main`, `pull_request`, and manual dispatch
 
 AI agents are becoming operational, but governance has not kept pace. Enterprises are under pressure to automate, yet they still need reliable ways to control what high-consequence AI actions are allowed to do, prove why an action was permitted, and contain failures before they become liabilities.
 
-SeedCore is a deterministic, zero-trust runtime for high-consequence AI actions. It evaluates governed requests in real time using a synchronous Policy Decision Point (PDP) over the active Policy Knowledge Graph; advisory AI can propose, but governance issues a short-lived `ExecutionToken` only when the decision is `allow`.
+SeedCore is a deterministic, zero-trust runtime for high-consequence AI actions. It evaluates governed requests in real time through a synchronous, stateless-at-decision-time Policy Decision Point (PDP) over a pinned PKG snapshot and bounded request context; advisory AI can propose, but governance issues a short-lived `ExecutionToken` only when the decision is `allow`.
 
 All outcomes (`allow` / `deny` / `quarantine` / `escalate`) are recorded with replayable, auditable evidence. SeedCore is not another model layer; it is the runtime that makes high-consequence AI action safe enough to execute.
+
+Decision record: [ADR 0001 - Keep the PDP Stateless and Synchronous at Decision Time](docs/architecture/adr/adr-0001-pdp-hot-path.md).
 
 ## 2026 Product Focus
 
@@ -181,12 +183,13 @@ The target direction for SeedCore is a zero-trust custody runtime built around o
 
 This direction depends on five core contracts.
 
-### 1. Actor Authority and the Stateless PDP
+### 1. Actor Authority and the PDP Decision Boundary
 
-- The **Policy Decision Point (PDP)** should remain stateless and synchronous.
+- The **Policy Decision Point (PDP)** remains stateless at decision time and synchronous for final authorization.
 - `evaluate_intent` should return either a signed `ExecutionToken` or a deny result in one call.
-- The PDP should not store per-intent state.
-- The PDP should validate each `ActionIntent` against the active Policy Knowledge Graph (PKG) snapshot and policy contract.
+- The PDP does not persist per-intent mutable state in the decision function.
+- The PDP validates each `ActionIntent` against an active PKG snapshot and policy contract.
+- Stateful supporting systems assemble and persist surrounding context: approvals, custody/telemetry summaries, snapshot rollout state, and governed receipts.
 - AI remains advisory. In the current baseline, judgment runs in the cognitive and coordinator planning stack, but that layer does not authorize execution.
 - The accountable agent formulates `ActionIntent`, presents evidence, receives `EvidenceBundle`, and closes the custody loop.
 
@@ -298,7 +301,7 @@ The target architecture can reuse most of the current SeedCore building blocks. 
 | --- | --- | --- |
 | Event ingress | `EventizerService`, `OpsGateway` | Normalize telemetry, source claims, and operator input into governed ingress events |
 | Advisory planning | Cognitive services, coordinator planning flow | Keep AI advisory and emit a plan or decision input rather than implicit authority |
-| Stateless PDP | PKG evaluation path, coordinator policy logic, `src/seedcore/coordinator/core/execute.py` | Tighten policy evaluation around a synchronous `evaluate_intent` boundary that returns `ExecutionToken` or deny without persisting intent state |
+| Stateless PDP at decision time | PKG evaluation path, coordinator policy logic, `src/seedcore/coordinator/core/execute.py` | Keep a synchronous `evaluate_intent` boundary that returns `ExecutionToken` or deny while surrounding systems handle snapshot/context assembly and replay persistence |
 | Governed execution | `PlanExecutor`, `OrganismService`, routing layer | Dispatch only tokenized actions to robotic or controlled endpoints |
 | Evidence and custody | `FactManagerService`, `StateService`, telemetry stack | Persist `EvidenceBundle`, enable playback, and update custody ledger only after validation |
 
@@ -405,7 +408,7 @@ Tracking Event -> Policy Decision -> Execution Token -> Edge Actuator -> Signed 
 The current repo baseline fully supports the physical custody chain:
 - **Governed Ingress:** Multi-modal sensor ingestion via `source-registrations` and `tracking-events`.
 - **State Projection:** Projection from append-only tracking events into a live `SourceRegistration` digital twin.
-- **Stateless PDP:** Deterministic `ActionIntent` derivation and Policy Decision Point evaluation.
+- **Stateless-at-decision-time PDP:** Deterministic `ActionIntent` derivation and synchronous final authorization over pinned snapshot + bounded context.
 - **Short-Lived Execution Tokens:** Signed `ExecutionToken` issuance on allow paths, currently capped to a short TTL for endpoint use.
 - **HAL Bridge (`robot_sim`):** Token expiry, revocation, and emergency-stop checks enforced at the simulator/actuator boundary.
 - **Hardware-Attested Execution:** restricted-custody and hardened attested HAL paths use trust-anchor-backed `ecdsa_p256_sha256`; non-restricted development paths can still use Ed25519/HMAC software modes unless hardened mode is enabled.

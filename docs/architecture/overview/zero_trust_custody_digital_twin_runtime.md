@@ -49,6 +49,7 @@ Each owner has a digital twin that defines delegated permissions, purchase polic
 This is the trust and execution control core:
 
 - `Policy Decision Engine (PDP)`: evaluates authority, trust level, provenance requirements, commerce rules, and custody conditions.
+- PDP decision semantics: final authorization is synchronous and stateless at decision time over pinned policy/context inputs; approval/custody/telemetry state and replay evidence are managed by surrounding runtime services.
 - `Execution Token Service`: issues short-lived execution tokens when policy passes; endpoints reject unauthorized calls.
 - `Digital Twin Engine`: keeps governed state for owners, assistants, products, batches, edge nodes, transactions, and assets.
 - `Custody Graph`: records ownership, storage, transfer, release, and handling transitions for provenance and disputes.

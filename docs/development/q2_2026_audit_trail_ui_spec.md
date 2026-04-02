@@ -50,6 +50,7 @@ Implemented in code:
 - runtime parity is implemented for
   `/api/v1/verification/assets/{asset_ref}/forensics` via subject-based runtime
   lookup.
+- PDP runtime contract remains precise and stable for this UI slice: final authorization is synchronous and stateless at decision time, while approvals/snapshot readiness/evidence persistence are handled by surrounding stateful services.
 - hot-path operator visibility now has a Prometheus text endpoint at
   `/api/v1/pdp/hot-path/metrics`.
 - the edge telemetry schema is now exported at

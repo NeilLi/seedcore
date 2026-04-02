@@ -4,6 +4,10 @@
 
 This overview captures the current Q2 “verification-surface” architecture end-to-end: requests are evaluated by the policy decision point (PDP), executed with replay-verifiable authority, and surfaced through a read-only verification API plus hot-path observability so operators (and AI agents) can audit outcomes consistently.
 
+For the decision record behind the current PDP shape, see [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](../adr/adr-0001-pdp-hot-path.md).
+For the ADR index, see [Architecture ADR Index](../adr/README.md).
+In this architecture, "stateless PDP" means stateless at decision time: the final authorization call is synchronous and deterministic over pinned snapshot/context inputs, while surrounding systems manage state assembly and evidence persistence.
+
 ## Primary Flow (Diagram Left → Right)
 1. Human/agent intent is submitted as an action request and routed to the PDP.
 2. The PDP evaluates under a versioned policy snapshot and returns an allow/deny/quarantine decision plus the execution-scoped authority envelope.

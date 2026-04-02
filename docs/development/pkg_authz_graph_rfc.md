@@ -611,7 +611,7 @@ Ray actors are a good fit for:
 - hot subgraph shard caches
 - facility or trade-lane scoped decision neighborhoods
 
-The stateless PDP should ask a local or near-local compiled cache first and only fall back to graph refresh or rebuild workflows outside the synchronous request path.
+The PDP decision function (stateless at decision time) should ask a local or near-local compiled cache first and only fall back to graph refresh or rebuild workflows outside the synchronous request path.
 
 ### Longer Term
 

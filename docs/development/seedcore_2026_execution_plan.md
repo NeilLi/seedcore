@@ -20,6 +20,7 @@ This plan is grounded in the current repo state:
 - the proof / verification surface is the first real product surface
 - the hot path remains in `shadow`
 - the runtime already has a credible governed execution baseline
+- the PDP decision boundary is synchronous and stateless at decision time, with stateful snapshot/context/evidence systems around it
 
 This is not a speculative "future platform" plan. It is a wedge-first
 execution plan.
