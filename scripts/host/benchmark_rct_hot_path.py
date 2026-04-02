@@ -75,6 +75,9 @@ def run_benchmark(
     artifact_root: Path,
     request_delay_ms: float = 0.0,
     jitter_ms_max: float = 0.0,
+    simulated_client_failure_rate: float = 0.0,
+    client_max_retries: int = 3,
+    simulated_retry_backoff_ms: float = 5.0,
 ) -> dict[str, Any]:
     evaluate_url = f"{base_url.rstrip('/')}/pdp/hot-path/evaluate?debug=true"
     status_url = f"{base_url.rstrip('/')}/pdp/hot-path/status"
@@ -87,6 +90,10 @@ def run_benchmark(
     before_mismatched = int(status_before.get("mismatched") or 0)
     before_parity_ok = int(status_before.get("parity_ok") or 0)
 
+    rate = max(0.0, min(1.0, float(simulated_client_failure_rate)))
+    max_transport_attempts = max(1, int(client_max_retries) + 1)
+    backoff_s = max(0.0, float(simulated_retry_backoff_ms)) / 1000.0
+
     def invoke(index: int, *, warmup: bool) -> dict[str, Any]:
         delay_ms = max(0.0, float(request_delay_ms))
         if jitter_ms_max > 0:
@@ -97,11 +104,34 @@ def run_benchmark(
         case_name, template = prepared_cases[index % len(prepared_cases)]
         payload = copy.deepcopy(template)
         payload["request_id"] = f"bench:{case_name}:{'warmup' if warmup else 'run'}:{index}"
+
+        transport_injections = 0
+        for attempt in range(max_transport_attempts):
+            flaky = rate > 0 and random.random() < rate
+            if flaky:
+                transport_injections += 1
+                if attempt >= max_transport_attempts - 1:
+                    return {
+                        "case": case_name,
+                        "request_id": payload["request_id"],
+                        "external_latency_ms": 0.0,
+                        "reported_latency_ms": None,
+                        "disposition": None,
+                        "reason_code": None,
+                        "status": "error",
+                        "error": "simulated_connectivity_exhausted",
+                        "simulated_transport_failures": transport_injections,
+                    }
+                if backoff_s > 0:
+                    time.sleep(backoff_s)
+                continue
+            break
+
         started = time.perf_counter()
         try:
             response = _post_json(evaluate_url, payload)
             elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
-            return {
+            out: dict[str, Any] = {
                 "case": case_name,
                 "request_id": payload["request_id"],
                 "external_latency_ms": elapsed_ms,
@@ -110,9 +140,12 @@ def run_benchmark(
                 "reason_code": response.get("decision", {}).get("reason_code"),
                 "status": "ok",
             }
+            if transport_injections:
+                out["simulated_transport_failures"] = transport_injections
+            return out
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
-            return {
+            err: dict[str, Any] = {
                 "case": case_name,
                 "request_id": payload["request_id"],
                 "external_latency_ms": elapsed_ms,
@@ -122,6 +155,9 @@ def run_benchmark(
                 "status": "error",
                 "error": str(exc),
             }
+            if transport_injections:
+                err["simulated_transport_failures"] = transport_injections
+            return err
 
     for warmup_index in range(max(0, warmup_requests)):
         invoke(warmup_index, warmup=True)
@@ -142,6 +178,12 @@ def run_benchmark(
     reason_counts = Counter(str(item.get("reason_code") or "") for item in results)
     disposition_counts = Counter(str(item.get("disposition") or "") for item in results)
     error_count = sum(1 for item in results if item.get("status") != "ok")
+    exhausted = sum(
+        1 for item in results if item.get("error") == "simulated_connectivity_exhausted"
+    )
+    transport_injections_total = sum(
+        int(item.get("simulated_transport_failures") or 0) for item in results
+    )
 
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -157,6 +199,11 @@ def run_benchmark(
         "concurrency": max(1, concurrency),
         "request_delay_ms": max(0.0, float(request_delay_ms)),
         "jitter_ms_max": max(0.0, float(jitter_ms_max)),
+        "simulated_client_failure_rate": rate,
+        "client_max_retries": int(client_max_retries),
+        "simulated_retry_backoff_ms": max(0.0, float(simulated_retry_backoff_ms)),
+        "simulated_transport_failure_injections": transport_injections_total,
+        "simulated_connectivity_exhausted_count": exhausted,
         "success_count": len(results) - error_count,
         "error_count": error_count,
         "mismatch_count": max(0, int(status_after.get("mismatched") or 0) - before_mismatched),
@@ -208,6 +255,24 @@ def main() -> int:
         default=0.0,
         help="Additional uniform [0, max] ms jitter per request (simulates noisy links).",
     )
+    parser.add_argument(
+        "--simulated-client-failure-rate",
+        type=float,
+        default=0.0,
+        help="Probability [0,1] of a synthetic pre-request transport failure per attempt (intermittent connectivity drill).",
+    )
+    parser.add_argument(
+        "--client-max-retries",
+        type=int,
+        default=3,
+        help="Retries after synthetic transport failures before giving up on a request.",
+    )
+    parser.add_argument(
+        "--simulated-retry-backoff-ms",
+        type=float,
+        default=5.0,
+        help="Sleep between synthetic transport failures (milliseconds).",
+    )
     args = parser.parse_args()
 
     summary = run_benchmark(
@@ -218,6 +283,9 @@ def main() -> int:
         artifact_root=Path(args.artifact_dir),
         request_delay_ms=args.request_delay_ms,
         jitter_ms_max=args.jitter_ms_max,
+        simulated_client_failure_rate=args.simulated_client_failure_rate,
+        client_max_retries=args.client_max_retries,
+        simulated_retry_backoff_ms=args.simulated_retry_backoff_ms,
     )
 
     latency = summary.get("latency_ms") or {}
@@ -243,7 +311,9 @@ def main() -> int:
         f"success={summary.get('success_count')} "
         f"errors={summary.get('error_count')} "
         f"mismatches={summary.get('mismatch_count')} "
-        f"quarantine={summary.get('quarantine_count')}"
+        f"quarantine={summary.get('quarantine_count')} "
+        f"synth_transport_injections={summary.get('simulated_transport_failure_injections')} "
+        f"synth_exhausted={summary.get('simulated_connectivity_exhausted_count')}"
     )
     print(f"artifact: {summary.get('artifact_path')}")
     return 0

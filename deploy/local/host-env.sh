@@ -90,6 +90,7 @@ export SEEDCORE_NS="${SEEDCORE_NS:-${RAY_NAMESPACE}}"
 export SERVE_GATEWAY="${SERVE_GATEWAY:-http://${RAY_HOST}:8000}"
 
 export SEEDCORE_API_URL="${SEEDCORE_API_URL:-http://127.0.0.1:8002}"
+export SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE="${SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE:-host}"
 export HAL_BASE_URL="${HAL_BASE_URL:-http://127.0.0.1:8003}"
 export COG_BASE_URL="${COG_BASE_URL:-${SERVE_GATEWAY}/cognitive}"
 export ORG_BASE_PATH="${ORG_BASE_PATH:-/organism}"
@@ -104,6 +105,15 @@ export DGL_GRAPHBOLT_SKIP="${DGL_GRAPHBOLT_SKIP:-1}"
 export RAY_USAGE_STATS_ENABLED="${RAY_USAGE_STATS_ENABLED:-0}"
 export SEEDCORE_SKIP_EAGER_RAY="${SEEDCORE_SKIP_EAGER_RAY:-1}"
 export SEEDCORE_DISPATCHER_MAIN_INTERVAL_S="${SEEDCORE_DISPATCHER_MAIN_INTERVAL_S:-0.05}"
+
+# External API mock controls (safe local defaults).
+# Set to 1/true/yes/on to use deterministic non-network mock behavior.
+export SEEDCORE_MOCK_EXTERNAL_APIS="${SEEDCORE_MOCK_EXTERNAL_APIS:-0}"
+export SEEDCORE_MOCK_GEMINI_API="${SEEDCORE_MOCK_GEMINI_API:-0}"
+export GOOGLE_API_MOCK="${GOOGLE_API_MOCK:-0}"
+export GEMINI_API_MOCK="${GEMINI_API_MOCK:-0}"
+export SYNOPSIS_EMBEDDING_MOCK="${SYNOPSIS_EMBEDDING_MOCK:-0}"
+export NIM_RETRIEVAL_MOCK="${NIM_RETRIEVAL_MOCK:-0}"
 
 # Local host-mode should prefer a working provider over container defaults.
 # If Gemini credentials are present but OpenAI is unset or clearly placeholder-only,

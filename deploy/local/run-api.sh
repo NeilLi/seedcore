@@ -28,5 +28,7 @@ export POSTGRES_POOL_SIZE="${POSTGRES_POOL_SIZE:-5}"
 export POSTGRES_MAX_OVERFLOW="${POSTGRES_MAX_OVERFLOW:-5}"
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-8002}"
+# Align hot-path status/metrics labels with k8s (`kubernetes`) and Ray (`ray`) deploys.
+export SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE="${SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE:-host}"
 
 exec uvicorn seedcore.main:app --host "${HOST}" --port "${PORT}"

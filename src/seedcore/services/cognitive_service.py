@@ -111,6 +111,7 @@ from __future__ import annotations
 # 1) Standard library
 import asyncio
 import atexit
+import hashlib
 import os
 import threading
 import time
@@ -177,6 +178,26 @@ class LLMEngine(Protocol):
     def configure_for_dspy(self) -> Any: ...
     
     def generate(self, prompt: str, **kwargs) -> str: ...
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.getenv(name)
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+def _provider_mock_enabled(provider: str) -> bool:
+    normalized = provider.strip().lower()
+    if normalized == "gemini":
+        normalized = "google"
+    if _env_truthy("SEEDCORE_MOCK_EXTERNAL_APIS"):
+        return True
+    if normalized == "google":
+        return (
+            _env_truthy("SEEDCORE_MOCK_GEMINI_API")
+            or _env_truthy("GOOGLE_API_MOCK")
+            or _env_truthy("GEMINI_API_MOCK")
+        )
+    return _env_truthy(f"{normalized.upper()}_API_MOCK")
 
 
 class _DSPyEngineShim:
@@ -347,6 +368,26 @@ class NimEngine:
         
         raw_content = completion.choices[0].message.content
         return self._clean_text(raw_content)
+
+
+class MockLLMEngine:
+    """Deterministic non-network engine used for local/mock runs."""
+
+    def __init__(self, model: str, provider: str, max_tokens: int = 1024):
+        self.model = model
+        self.provider = provider
+        self.max_tokens = max_tokens
+        self.temperature = 0.0
+
+    def configure_for_dspy(self):
+        pass
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        digest = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
+        return (
+            f"[mock:{self.provider}] model={self.model} digest={digest} "
+            f"tokens={kwargs.get('max_tokens', self.max_tokens)}"
+        )
 
 # ----------------------------------------------------------------------
 # CONFIGURATION & FACTORY
@@ -650,7 +691,19 @@ class CognitiveOrchestrator:
         Universal Factory: Creates a DSPy-compatible LM object.
         Uses PROVIDER_CONFIG factories via _make_engine logic where possible.
         """
-        provider = provider.lower()
+        provider = _normalize_provider(provider.lower())
+
+        if _provider_mock_enabled(provider):
+            logger.info(f"🧪 LLM API mock enabled for provider={provider}; using MockLLMEngine")
+            shim = _DSPyEngineShim(
+                MockLLMEngine(
+                    model=model,
+                    provider=provider,
+                    max_tokens=_default_max_tokens(profile),
+                )
+            )
+            shim.max_depth = int(os.getenv("DSPY_MAX_DEPTH", "3"))
+            return shim
         
         # 1. Try to use our central factory registry first
         # We manually retrieve the factory here to support 'model' overrides 

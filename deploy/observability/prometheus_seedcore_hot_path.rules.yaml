@@ -3,7 +3,7 @@
 # with json_exporter or recording rules.
 #
 # Expected series (after relabel/recording):
-#   seedcore_hot_path_alert_level{deployment_role="kubernetes|ray"}  # 0=ok, 1=warning, 2=critical
+#   seedcore_hot_path_alert_level{deployment_role="kubernetes|ray|host"}  # 0=ok, 1=warning, 2=critical
 #   seedcore_hot_path_rollback_triggered
 #   seedcore_hot_path_recent_mismatch_count
 #   seedcore_hot_path_graph_freshness_ok

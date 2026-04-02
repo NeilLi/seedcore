@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -24,6 +25,11 @@ except Exception:
     SentenceTransformer = None
 
 
+def _env_truthy(name: str) -> bool:
+    value = os.getenv(name)
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
 class SynopsisEmbedder:
     """
     Core embedding utility for SeedCore.
@@ -46,6 +52,16 @@ class SynopsisEmbedder:
             .lower()
             .replace("_", "-")
         )
+        self.mock_mode = (
+            _env_truthy("SEEDCORE_MOCK_EXTERNAL_APIS")
+            or _env_truthy("SYNOPSIS_EMBEDDING_MOCK")
+        )
+        if self.backend in {"mock", "stub", "fake"}:
+            self.mock_mode = True
+            self.backend = "mock"
+        elif self.mock_mode and self.backend in {"gemini", "nim", "nim-retrieval"}:
+            # Force API-based backends into deterministic local mode.
+            self.backend = "mock"
 
         # 2. Configuration Defaults
         self.api_key = (
@@ -68,6 +84,8 @@ class SynopsisEmbedder:
         if not self.model:
             if self.backend == "gemini":
                 self.model = "models/text-embedding-004"
+            elif self.backend == "mock":
+                self.model = "seedcore/mock-embedding-v1"
             else:
                 self.model = "sentence-transformers/all-mpnet-base-v2"
         
@@ -106,7 +124,10 @@ class SynopsisEmbedder:
                 return self._embedder
 
             try:
-                if self.backend == "gemini":
+                if self.backend == "mock":
+                    self._embedder = "mock"
+
+                elif self.backend == "gemini":
                     if genai is None or not self.api_key:
                         raise ValueError("Gemini dependencies or API key missing.")
                     genai.configure(api_key=self.api_key)
@@ -146,7 +167,10 @@ class SynopsisEmbedder:
 
         try:
             # --- GEMINI LOGIC ---
-            if self.backend == "gemini":
+            if self.backend == "mock":
+                vec = self._mock_embed(text, target_dim)
+
+            elif self.backend == "gemini":
                 # text-embedding-004 supports 'output_dimensionality'
                 result = client.embed_content(
                     model=self.model,
@@ -187,6 +211,15 @@ class SynopsisEmbedder:
         """Converts structured living system data to JSON for embedding."""
         text = json.dumps(synopsis, sort_keys=True)
         return self.embed_text(text, **kwargs)
+
+    @staticmethod
+    def _mock_embed(text: str, target_dim: int) -> np.ndarray:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        required = max(1, target_dim * 4)
+        repeated = (digest * ((required // len(digest)) + 1))[:required]
+        raw = np.frombuffer(repeated, dtype=np.uint32, count=target_dim)
+        # Map to [-1, 1] deterministically.
+        return ((raw.astype(np.float32) % 1_000_000) / 500_000.0) - 1.0
 
     @staticmethod
     def _resize(vec: np.ndarray, target_dim: int) -> np.ndarray:

@@ -6,9 +6,26 @@ Supports NVIDIA NIM embeddings like: nvidia/nv-embedqa-e5-v5
 """
 
 from __future__ import annotations
+import hashlib
 import os
 import httpx
 from typing import List, Optional, Union, Dict, Any
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.getenv(name)
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+def _mock_vector(text: str, dim: int = 768) -> List[float]:
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    needed = max(1, dim * 4)
+    repeated = (digest * ((needed // len(digest)) + 1))[:needed]
+    values: List[float] = []
+    for index in range(0, needed, 4):
+        chunk = int.from_bytes(repeated[index:index + 4], byteorder="big", signed=False)
+        values.append((chunk % 1_000_000) / 500_000.0 - 1.0)
+    return values[:dim]
 
 
 class NimRetrievalHTTP:
@@ -27,6 +44,10 @@ class NimRetrievalHTTP:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or os.getenv("NIM_LLM_API_KEY", "none")
         self.model = model
+        self.mock_mode = (
+            _env_truthy("SEEDCORE_MOCK_EXTERNAL_APIS")
+            or _env_truthy("NIM_RETRIEVAL_MOCK")
+        )
         self.session = httpx.Client(timeout=timeout)
         self.headers = {
             "Content-Type": "application/json",
@@ -48,6 +69,10 @@ class NimRetrievalHTTP:
 
         Returns a list of vectors (one per input). If a single string was passed, still returns [vector].
         """
+        if self.mock_mode:
+            entries = inputs if isinstance(inputs, list) else [inputs]
+            return [_mock_vector(str(entry)) for entry in entries]
+
         payload: Dict[str, Any] = {
             "model": kwargs.get("model", self.model),
             "input": inputs,
@@ -88,4 +113,3 @@ class NimRetrievalHTTP:
         na = math.sqrt(sum(x * x for x in a))
         nb = math.sqrt(sum(y * y for y in b))
         return dot / (na * nb) if na and nb else 0.0
-
