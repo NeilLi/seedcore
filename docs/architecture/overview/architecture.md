@@ -1,6 +1,26 @@
-# Serve ↔ Actor Architecture Overview
+# SeedCore Verifiable Agentic Ledger — Architecture Overview (Q2 2026)
 
-This document provides a comprehensive overview of the SeedCore system architecture, specifically focusing on the mapping between Ray Serve applications and Ray Actors, and how they work together to form a distributed, intelligent organism.
+![SeedCore verifiable agentic ledger architecture](./assets/seedcore_verifiable_agentic_ledger.png)
+
+This overview captures the current Q2 “verification-surface” architecture end-to-end: requests are evaluated by the policy decision point (PDP), executed with replay-verifiable authority, and surfaced through a read-only verification API plus hot-path observability so operators (and AI agents) can audit outcomes consistently.
+
+## Primary Flow (Diagram Left → Right)
+1. Human/agent intent is submitted as an action request and routed to the PDP.
+2. The PDP evaluates under a versioned policy snapshot and returns an allow/deny/quarantine decision plus the execution-scoped authority envelope.
+3. The execution authority produces evidence bundles (fingerprints + replay/audit artifacts) that are persisted into the forensic state store and integrated into verification-ready records.
+4. The verification API exposes projections over that evidence (queue, review, workflow detail, workflow replay, runbook lookup, and forensics). The operator console consumes these read endpoints for transfer/replay/runbook workflows.
+
+## Key Components
+The diagram’s components map to these responsibilities:
+`PDP` (policy decision point) enforces authorization and admission, `Evidence Integrator` normalizes/joins evidence into verification bundles, `Forensic State Store` keeps the replay/verifiability substrate, and the `Verification API` offers deterministic read projections for UI and agent tooling. `Hot-path Observability` closes the loop with deployment-role labeled metrics and a JSON status endpoint designed to match Prometheus text output.
+
+## Observability + Acceptance Contracts
+Hot-path checks validate that JSON status and Prometheus text agree (including `deployment_role` labeling), and Q2 acceptance gating enforces verification-API fixture coverage plus degraded-edge drill matrix scenarios (deny/quarantine behavior, stale telemetry/graphs, replay-tamper injections).
+
+<details>
+<summary>Archive: legacy Ray Serve ↔ Actor deep notes</summary>
+
+# Serve ↔ Actor Architecture Overview
 
 ## Table of Contents
 
@@ -2589,3 +2609,4 @@ The script `scripts/host/verify_seedcore_architecture.py` validates end-to-end h
 - Verifies schema (migrations applied), HGNN graph structure, and facts system.
 - Submits optional HGNN graph task scenario via DB function `create_graph_rag_task_v2`; controlled by `VERIFY_HGNN_TASK`.
 - Enhancements include latency/heartbeat metrics, lease-aware task status checks, and safer coordinator debugging calls.
+</details>
