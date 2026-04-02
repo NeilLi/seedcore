@@ -16,6 +16,13 @@ export {
   toVerificationProjection,
 } from "./trustContracts.js";
 
+export {
+  VERIFICATION_SURFACE_VERSION,
+  parseAssetForensicProjection,
+  parseTransferAuditTrail,
+  parseVerificationSurfaceProjection,
+} from "./verificationSurfaceContracts.js";
+
 export type {
   ApprovalStatus,
   AssetForensicLinks,
@@ -41,3 +48,9 @@ export type {
   TransferTrustSummary,
   TransferVerificationProjection,
 } from "./trustContracts.js";
+
+export type {
+  AssetForensicProjection,
+  TransferAuditTrail,
+  VerificationSurfaceProjection,
+} from "./verificationSurfaceContracts.js";

@@ -1,7 +1,30 @@
 # SeedCore Q2 2026 Product Spec
 
-Date: 2026-04-01  
-Status: Working product spec
+Date: 2026-04-02  
+Status: Working product spec (Q2 freeze pass partially implemented)
+
+## Implementation Status Update (2026-04-02)
+
+This spec now has a concrete implementation baseline in the repository for the
+RCT slice.
+
+Implemented in code:
+
+- `VerificationSurfaceProjection`, `TransferAuditTrail`, and
+  `AssetForensicProjection` are implemented as first-class read contracts.
+- business-readable status vocabulary includes:
+  `verified`, `quarantined`, `rejected`, `review_required`, `pending_approval`.
+- verification service namespace is migrated to `/api/v1/verification/*`.
+- Screen 2 side-by-side, three-column audit trail is implemented and correlated
+  by workflow/audit join key.
+- Screen 3 asset forensic view is wired to contract-driven payloads.
+- links between status/review/forensics/proof surfaces are projection-derived.
+
+Still open for full Q2 closure:
+
+- dedicated replay route under the verification service namespace
+- runbook endpoint and operator runbook integration
+- CI/CD enforcement for full Q2 acceptance matrix across environments
 
 ## Audit-Trail UI for Restricted Custody Transfer
 
@@ -522,7 +545,7 @@ placeholders in Q2.
 
 ### API recommendation
 
-`GET /api/v1/verification/assets/{asset_ref}/forensics`
+`GET /api/v1/verification/assets/forensics?audit_id=...|intent_id=...|subject_id=...`
 
 ## Screen 4 - Replay / Verification View
 
@@ -790,17 +813,29 @@ To support the Q2 UI, backend must expose these fields reliably.
 
 ## 11. Suggested API surface
 
-For Q2, keep it narrow:
+For Q2, keep it narrow and explicitly separate current implementation from
+next additions.
+
+### Implemented in current verification service
 
 - `GET /api/v1/verification/transfers`
+- `GET /api/v1/verification/transfers/catalog`
+- `GET /api/v1/verification/transfers/status`
+- `GET /api/v1/verification/transfers/audit-trail`
 - `GET /api/v1/verification/transfers/{workflow_id}`
 - `GET /api/v1/verification/workflows/{workflow_id}/projection`
-- `GET /api/v1/verification/assets/{asset_ref}/forensics`
-- `GET /api/v1/verification/replay/{audit_id}`
+- `GET /api/v1/verification/assets/forensics`
+- `GET /api/v1/verification/transfers/summary`
+- `GET /api/v1/verification/transfers/proof`
+- `GET /api/v1/verification/assets/proof`
+
+### Deferred or next-step additions
+
+- `GET /api/v1/verification/replay/{audit_id}` (or equivalent projection route)
 - `GET /api/v1/verification/runbooks/{status_or_reason_code}`
 
-These APIs should be read-only projections over existing truth, not new sources
-of truth.
+All endpoints should remain read-only projections over existing sources of
+truth.
 
 ## 12. Q2 success criteria for the UI
 
@@ -817,12 +852,12 @@ The Audit-Trail UI is successful in Q2 if:
 
 ## 13. Recommended build order
 
-1. Freeze `VerificationSurfaceProjection`
-2. Freeze one allow-path payload and two deny/quarantine examples
-3. Implement operator status API
-4. Implement transfer detail page
-5. Implement asset forensic page
-6. Implement replay or verification page
+1. ~~Freeze `VerificationSurfaceProjection`~~ **Done**
+2. ~~Freeze one allow-path payload and two deny/quarantine examples~~ **Done**
+3. ~~Implement operator status API~~ **Done (verification namespace)**
+4. ~~Implement transfer detail page~~ **Done (Screen 2 side-by-side)**
+5. ~~Implement asset forensic page~~ **Done (Screen 3 contract-driven)**
+6. Implement replay or verification page enhancements and namespace alignment
 7. Add runbooks for lookup and investigation
 
 ## 14. Strong recommendation

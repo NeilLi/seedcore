@@ -13,6 +13,30 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-04-02)
+
+Latest repo-aligned critical-path status:
+
+- `VerificationSurfaceProjection` freeze pass is implemented for the Q2
+  verification API and UI surfaces, including explicit versioned projection
+  models and deterministic business-state mapping with `pending_approval`.
+- verification service contract namespace is now `/api/v1/verification/*`
+  (legacy `/api/v1/transfers/*` and `/api/v1/assets/forensics` paths are
+  retired in the TS verification service layer).
+- `AgentActionGateway` request boundary is now strict and externally stable for
+  `seedcore.agent_action_gateway.v1`, with required identity/scope/hardware
+  fields, deterministic schema invariants, canonical request hashing, and 24h+
+  idempotency retention.
+- Screen 2 side-by-side audit trail is now contract-driven (`request/authority`
+  + `decision/artifacts` + `physical/closure`) and correlated through one
+  workflow join key.
+- hot-path semantics have been hardened for production gating:
+  strict parity threshold (`1000/1000`), dependency and latency gates, durable
+  parity evidence persistence, and rollback triggers.
+- first forensic-block JSON-LD contract freeze pass is implemented with schema
+  artifacts, strict runtime validation, explicit `forensic_block_id`, and
+  closure/materialization consistency checks.
+
 ## Why This Lives Outside The Root README
 
 The root README should explain what SeedCore is, how it runs, and why the
@@ -252,15 +276,19 @@ What should be done next:
    with `manifest.json` checksums; machine verification:
    `python scripts/tools/verify_rct_signoff_bundle.py`; release record and tarball:
    `release/rct_slice1_live_signoff_v1/README.md`.
-2. Promote capture verification into a repeatable CI/host gate (shadow parity +
-   runtime matrix + replay-chain verify).
-3. Define explicit criteria for any future `shadow` -> `enforce` hot-path
-   promotion.
-4. Freeze the first forensic-handshake contract additions:
-   - transaction-scoped authority binding
-   - device fingerprint binding
-   - forensic block field set
-   - replay export shape
+2. ~~Promote capture verification into a repeatable CI/host gate (shadow parity +
+   runtime matrix + replay-chain verify).~~ **Partially done (2026-04-02).**
+   Host verification path updated and aligned to `/api/v1/verification/*`;
+   full CI policy gate adoption remains open.
+3. ~~Define explicit criteria for any future `shadow` -> `enforce` hot-path
+   promotion.~~ **Done (2026-04-02).** Promotion semantics now include strict
+   parity, latency SLO, dependency health, and rollback triggers.
+4. ~~Freeze the first forensic-handshake contract additions:~~ **Done
+   (2026-04-02).**
+   - ~~transaction-scoped authority binding~~
+   - ~~device fingerprint binding~~
+   - ~~forensic block field set~~
+   - ~~replay export shape~~
 5. Keep broader signer expansion and non-RCT hardening in later phases
    (outside Slice 1 closure scope).
 

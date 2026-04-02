@@ -85,26 +85,26 @@ check "phase1.1 receipt includes policy snapshot id" \
   jq -e '.view.audit_record.policy_snapshot | type == "string"' <<<"${replay_payload}" >/dev/null
 
 check "phase1.1 signer provenance available in forensic view" \
-  jq -e '.signature_provenance | length > 0' \
-    <<<"$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")" >/dev/null
+  jq -e '.signer_provenance | length > 0' \
+    <<<"$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")" >/dev/null
 
 verify_payload="$(json_post "${RUNTIME_API_BASE}/verify" "{\"audit_id\":\"${AUDIT_ID}\"}")"
 check "phase1.1 runtime verify endpoint executes for receipt id" \
   jq -e '.verified == true or .verified == false' <<<"${verify_payload}" >/dev/null
 
 # Phase 1.2 - Replay accuracy and business-state rendering
-status_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/transfers/status?source=runtime&audit_id=${AUDIT_ID}")"
+status_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/transfers/status?source=runtime&audit_id=${AUDIT_ID}")"
 check "phase1.2 replay status has business-readable state vocabulary" \
-  jq -e '.business_state | IN("verified","quarantined","rejected","review_required","verification_failed")' <<<"${status_payload}" >/dev/null
+  jq -e '.business_state | IN("verified","pending_approval","quarantined","rejected","review_required","verification_failed")' <<<"${status_payload}" >/dev/null
 check "phase1.2 replay status renders non-empty timeline" \
   jq -e '.timeline | length > 0' <<<"${status_payload}" >/dev/null
 
 # Phase 2.1 - Lookup contract enforcement (BFF gate behavior)
 check "phase2.1 transfer status rejects subject-only runtime lookup" \
-  test "$(status_code "${VERIFICATION_API_BASE}/api/v1/transfers/status?source=runtime&subject_id=asset:demo")" = "422"
+  test "$(status_code "${VERIFICATION_API_BASE}/api/v1/verification/transfers/status?source=runtime&subject_id=asset:demo")" = "422"
 
 # Phase 2.2 - Policy snapshot fidelity
-forensic_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")"
+forensic_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/assets/forensics?source=runtime&audit_id=${AUDIT_ID}")"
 replay_payload="$(json_get "${RUNTIME_API_BASE}/replay?audit_id=${AUDIT_ID}&projection=internal")"
 forensic_snapshot="$(jq -r '.policy_snapshot_ref' <<<"${forensic_payload}")"
 replay_snapshot="$(jq -r '.view.audit_record.policy_snapshot' <<<"${replay_payload}")"
@@ -113,15 +113,15 @@ check "phase2.2 forensic policy snapshot matches runtime audit snapshot" \
 
 # Phase 3.1 - Prerequisite chain verification (fixture deny)
 deny_fixture="rust/fixtures/transfers/deny_missing_approval"
-deny_status_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/transfers/status?source=fixture&dir=${deny_fixture}")"
+deny_status_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/transfers/status?source=fixture&dir=${deny_fixture}")"
 check "phase3.1 missing prerequisite keeps transfer blocked" \
   jq -e '.transfer_readiness == "blocked"' <<<"${deny_status_payload}" >/dev/null
 check "phase3.1 blocker includes missing prerequisite code" \
   jq -e '.blocker_codes | index("missing_dual_approval") != null' <<<"${deny_status_payload}" >/dev/null
 
 # Phase 3.2 - Narrow surface visibility split (partner-proof vs operator-forensics)
-proof_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/proof?source=fixture&dir=rust/fixtures/transfers/allow_case")"
-forensic_payload_fixture="$(json_get "${VERIFICATION_API_BASE}/api/v1/assets/forensics?source=fixture&dir=rust/fixtures/transfers/allow_case")"
+proof_payload="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/assets/proof?source=fixture&dir=rust/fixtures/transfers/allow_case")"
+forensic_payload_fixture="$(json_get "${VERIFICATION_API_BASE}/api/v1/verification/assets/forensics?source=fixture&dir=rust/fixtures/transfers/allow_case")"
 
 check "phase3.2 public proof stays narrow (no telemetry refs field)" \
   jq -e 'has("telemetry_refs") | not' <<<"${proof_payload}" >/dev/null

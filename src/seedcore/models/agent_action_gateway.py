@@ -34,20 +34,25 @@ class AgentActionPrincipal(BaseModel):
     role_profile: str
     session_token: Optional[str] = None
     actor_token: Optional[str] = None
-    owner_id: Optional[str] = None
-    delegation_ref: Optional[str] = None
+    owner_id: str
+    delegation_ref: str
     organization_ref: Optional[str] = None
-    hardware_fingerprint: Optional["AgentActionHardwareFingerprint"] = None
+    hardware_fingerprint: "AgentActionHardwareFingerprint"
 
     @field_validator("agent_id", "role_profile")
     @classmethod
     def _validate_required_fields(cls, value: str, info) -> str:
         return _normalize_required_str(value, field_name=info.field_name)
 
-    @field_validator("session_token", "actor_token", "owner_id", "delegation_ref", "organization_ref")
+    @field_validator("session_token", "actor_token", "organization_ref")
     @classmethod
     def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)
+
+    @field_validator("owner_id", "delegation_ref")
+    @classmethod
+    def _validate_binding_fields(cls, value: str, info) -> str:
+        return _normalize_required_str(value, field_name=info.field_name)
 
     @model_validator(mode="after")
     def _require_identity_proof(self) -> "AgentActionPrincipal":
@@ -184,6 +189,14 @@ class AgentActionAuthorityScope(BaseModel):
     def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)
 
+    @model_validator(mode="after")
+    def _require_physical_scope_binding(self) -> "AgentActionAuthorityScope":
+        if not self.expected_to_zone and not self.expected_coordinate_ref:
+            raise ValueError(
+                "authority_scope.expected_to_zone or authority_scope.expected_coordinate_ref is required"
+            )
+        return self
+
 
 class AgentActionFingerprintComponents(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -194,6 +207,39 @@ class AgentActionFingerprintComponents(BaseModel):
     actuator_hash: Optional[str] = None
 
     @field_validator("economic_hash", "physical_presence_hash", "reasoning_hash", "actuator_hash")
+    @classmethod
+    def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_optional_str(value)
+
+
+class AgentActionForensicBlockFingerprintComponents(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    economic_hash: str
+    physical_presence_hash: str
+    reasoning_hash: str
+    actuator_hash: str
+
+    @field_validator("economic_hash", "physical_presence_hash", "reasoning_hash", "actuator_hash")
+    @classmethod
+    def _validate_required_fields(cls, value: str, info) -> str:
+        return _normalize_required_str(value, field_name=info.field_name)
+
+
+class AgentActionForensicBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    forensic_block_id: str
+    fingerprint_components: AgentActionForensicBlockFingerprintComponents
+    current_coordinate_ref: Optional[str] = None
+    current_zone: Optional[str] = None
+
+    @field_validator("forensic_block_id")
+    @classmethod
+    def _validate_forensic_block_id(cls, value: str) -> str:
+        return _normalize_required_str(value, field_name="forensic_block_id")
+
+    @field_validator("current_coordinate_ref", "current_zone")
     @classmethod
     def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)
@@ -242,7 +288,7 @@ class AgentActionEvaluateRequest(BaseModel):
     workflow: AgentActionWorkflow
     asset: AgentActionAsset
     approval: AgentActionApproval
-    authority_scope: Optional[AgentActionAuthorityScope] = None
+    authority_scope: AgentActionAuthorityScope
     telemetry: AgentActionTelemetry
     forensic_context: Optional[AgentActionForensicContext] = None
     security_contract: AgentActionSecurityContract
@@ -257,6 +303,15 @@ class AgentActionEvaluateRequest(BaseModel):
     @classmethod
     def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)
+
+    @model_validator(mode="after")
+    def _validate_scope_invariants(self) -> "AgentActionEvaluateRequest":
+        if self.authority_scope.asset_ref != self.asset.asset_id:
+            raise ValueError("authority_scope.asset_ref must equal asset.asset_id")
+        if self.authority_scope.product_ref and self.asset.product_ref:
+            if self.authority_scope.product_ref != self.asset.product_ref:
+                raise ValueError("authority_scope.product_ref must equal asset.product_ref when both are provided")
+        return self
 
 
 class AgentActionEvaluateResponse(BaseModel):
@@ -319,7 +374,7 @@ class AgentActionClosureRequest(BaseModel):
     evidence_bundle_id: str
     transition_receipt_ids: List[str] = Field(default_factory=list)
     node_id: Optional[str] = None
-    forensic_block: Dict[str, Any] = Field(default_factory=dict)
+    forensic_block: AgentActionForensicBlock
     summary: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("request_id", "closure_id", "idempotency_key", "evidence_bundle_id")

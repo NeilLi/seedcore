@@ -13,6 +13,7 @@ export type ApprovalStatus = (typeof APPROVAL_STATUS_VALUES)[number];
 
 export const BUSINESS_STATE_VALUES = [
   "verified",
+  "pending_approval",
   "rejected",
   "quarantined",
   "review_required",
@@ -633,9 +634,16 @@ export function toVerificationProjection(summary: TransferTrustSummary): Transfe
   };
 }
 
-export function mapBusinessState(verified: boolean, disposition: Disposition): BusinessState {
+export function mapBusinessState(
+  verified: boolean,
+  disposition: Disposition,
+  approvalStatus: ApprovalStatus | null = null,
+): BusinessState {
   if (!verified) {
     return "verification_failed";
+  }
+  if (approvalStatus !== null && approvalStatus !== "APPROVED") {
+    return "pending_approval";
   }
   switch (disposition) {
     case "allow":

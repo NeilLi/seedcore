@@ -35,8 +35,16 @@ def _base_payload() -> dict:
             "agent_id": "agent:custody_runtime_01",
             "role_profile": "TRANSFER_COORDINATOR",
             "session_token": "session-abc",
+            "owner_id": "did:seedcore:owner:acme-001",
             "delegation_ref": "delegation:owner-8841-transfer",
             "organization_ref": "org:warehouse-north",
+            "hardware_fingerprint": {
+                "fingerprint_id": "fp:jetson-orin-01",
+                "node_id": "node:jetson-orin-01",
+                "public_key_fingerprint": "sha256:fingerprint-key",
+                "attestation_type": "tpm",
+                "key_ref": "tpm2:jetson-orin-01-ak",
+            },
         },
         "workflow": {
             "type": "restricted_custody_transfer",
@@ -56,10 +64,19 @@ def _base_payload() -> dict:
             "approval_envelope_id": "approval-transfer-001",
             "expected_envelope_version": "23",
         },
+        "authority_scope": {
+            "scope_id": "scope:rct-2026-0001",
+            "asset_ref": "asset:lot-8841",
+            "expected_from_zone": "vault_a",
+            "expected_to_zone": "handoff_bay_3",
+            "expected_coordinate_ref": "gazebo://warehouse/shelf/A3",
+        },
         "telemetry": {
             "observed_at": "2026-03-31T09:59:58Z",
             "freshness_seconds": 2,
             "max_allowed_age_seconds": 300,
+            "current_zone": "vault_a",
+            "current_coordinate_ref": "gazebo://warehouse/shelf/A3",
             "evidence_refs": ["ev:cam-1", "ev:seal-sensor-7"],
         },
         "security_contract": {
@@ -86,6 +103,17 @@ def _base_closure_payload(
         "evidence_bundle_id": "evidence-bundle-001",
         "transition_receipt_ids": ["transition-receipt-001"],
         "node_id": "node-warehouse-gateway-01",
+        "forensic_block": {
+            "forensic_block_id": "fb-2026-0001",
+            "fingerprint_components": {
+                "economic_hash": "sha256:shopify-order",
+                "physical_presence_hash": "sha256:gazebo-point-cloud",
+                "reasoning_hash": "sha256:reason-trace",
+                "actuator_hash": "sha256:unitree-b2-torque",
+            },
+            "current_coordinate_ref": "gazebo://warehouse-north/shelf/A3",
+            "current_zone": "handoff_bay_3",
+        },
         "summary": {"settlement_target": "asset:lot-8841"},
     }
 
@@ -290,6 +318,34 @@ def test_agent_actions_evaluate_requires_identity_proof():
     assert response.status_code == 422
 
 
+def test_agent_actions_evaluate_requires_hardware_scope_and_owner_binding():
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    payload = _base_payload()
+    payload["principal"].pop("hardware_fingerprint")
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 422
+
+    payload = _base_payload()
+    payload.pop("authority_scope")
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 422
+
+    payload = _base_payload()
+    payload["principal"].pop("owner_id")
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 422
+
+
+def test_agent_actions_evaluate_rejects_scope_asset_mismatch_at_schema_layer():
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    payload = _base_payload()
+    payload["authority_scope"]["asset_ref"] = "asset:other"
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 422
+
+
 def test_agent_actions_get_request_record_returns_stored_response(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()
@@ -346,6 +402,7 @@ def test_agent_actions_idempotency_replay_and_conflict(monkeypatch):
     conflicting_payload = _base_payload()
     conflicting_payload["request_id"] = "req-transfer-2026-0002"
     conflicting_payload["asset"]["asset_id"] = "asset:lot-9000"
+    conflicting_payload["authority_scope"]["asset_ref"] = "asset:lot-9000"
     conflict_response = client.post("/api/v1/agent-actions/evaluate", json=conflicting_payload)
     assert conflict_response.status_code == 409
     detail = conflict_response.json()["detail"]
@@ -698,9 +755,13 @@ def test_build_closure_evidence_bundle_includes_forensic_block():
             "evidence_bundle_id": "evidence-bundle-001",
             "transition_receipt_ids": ["transition-receipt-001"],
             "forensic_block": {
-                "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
-                "@type": "ForensicBlock",
-                "block_header": {"audit_id": "audit-abc"},
+                "forensic_block_id": "fb-2026-0001",
+                "fingerprint_components": {
+                    "economic_hash": "sha256:shopify-order",
+                    "physical_presence_hash": "sha256:gazebo-point-cloud",
+                    "reasoning_hash": "sha256:reason-trace",
+                    "actuator_hash": "sha256:unitree-b2-torque",
+                },
             },
         }
     )
@@ -709,3 +770,4 @@ def test_build_closure_evidence_bundle_includes_forensic_block():
         request_record=request_record,
     )
     assert bundle["forensic_block"]["@type"] == "ForensicBlock"
+    assert bundle["forensic_block"]["forensic_block_id"] == "fb-2026-0001"

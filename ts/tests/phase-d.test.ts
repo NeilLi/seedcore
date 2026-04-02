@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deriveTransferReadiness, parseAssetForensicView, parseTransferStatusView } from "../packages/contracts/src/index.ts";
+import {
+  deriveTransferReadiness,
+  parseAssetForensicProjection,
+  parseTransferAuditTrail,
+  parseTransferStatusView,
+  parseVerificationSurfaceProjection,
+} from "../packages/contracts/src/index.ts";
 import {
   buildRuntimeScenarioFromReplay,
   buildAssetScenario,
@@ -40,9 +46,11 @@ test("fixture scenarios map into Phase D business states and readiness", async (
     assert.equal(scenario.status.transfer_readiness, item.readiness);
     assert.equal(scenario.asset_forensics.asset_ref.startsWith("asset:"), true);
     assert.ok(Array.isArray(scenario.asset_forensics.timeline));
-    assert.ok(scenario.status.links.review.includes("/api/v1/transfers/review"));
+    assert.ok(scenario.status.links.review.includes("/api/v1/verification/transfers/audit-trail"));
     assert.ok(parseTransferStatusView(scenario.status));
-    assert.ok(parseAssetForensicView(scenario.asset_forensics));
+    assert.ok(parseVerificationSurfaceProjection(scenario.verification_projection));
+    assert.ok(parseTransferAuditTrail(scenario.transfer_audit_trail));
+    assert.ok(parseAssetForensicProjection(scenario.asset_forensic_projection));
   }
 });
 
@@ -53,7 +61,7 @@ test("catalog exposes status preview and forensic links", async () => {
   assert.ok(allowItem);
   assert.equal(allowItem.status_preview.transfer_readiness, "ready");
   assert.equal(typeof allowItem.status_preview.current_step, "string");
-  assert.ok(allowItem.links.asset_forensics.includes("/api/v1/assets/forensics"));
+  assert.ok(allowItem.links.asset_forensics.includes("/api/v1/verification/assets/forensics"));
 });
 
 test("runtime replay view maps into the same Phase D scenario shape", () => {
@@ -156,10 +164,10 @@ test("runtime replay view maps into the same Phase D scenario shape", () => {
 
   assert.equal(runtimeScenario.summary.business_state, "verified");
   assert.equal(runtimeScenario.status.transfer_readiness, "ready");
-  assert.ok(runtimeScenario.asset_forensics.telemetry_refs.includes("telemetry_snapshot"));
-  assert.equal(runtimeScenario.asset_forensics.custody_transition.to_zone, "handoff_bay_3");
-  assert.equal(runtimeScenario.asset_forensics.signature_provenance[0]?.signer_id, "seedcore-verify");
-  assert.equal(runtimeScenario.asset_forensics.signature_provenance[0]?.signer_type, "service");
+  assert.ok(runtimeScenario.asset_forensic_projection.telemetry_refs.includes("telemetry_snapshot"));
+  assert.equal(runtimeScenario.asset_forensic_projection.custody_transition.to_zone, "handoff_bay_3");
+  assert.equal(runtimeScenario.asset_forensic_projection.signer_provenance[0]?.signer_id, "seedcore-verify");
+  assert.equal(runtimeScenario.asset_forensic_projection.signer_provenance[0]?.signer_type, "service");
 });
 
 test("fixture workflow requires explicit fixture dir for operator endpoints", async () => {
@@ -195,10 +203,12 @@ test("operator console renders status-first transfer and forensic pages", async 
   const scenario = await buildTransferScenario({ source: "fixture", dir: "rust/fixtures/transfers/allow_case" });
   const query = "source=fixture&dir=rust/fixtures/transfers/allow_case";
   const transferHtml = renderTransferPage(scenario, query);
-  const forensicHtml = renderForensicsPage(scenario.asset_forensics, query);
+  const forensicHtml = renderForensicsPage(scenario.asset_forensic_projection, query);
 
   assert.match(transferHtml, /Transfer Workflow Review/);
-  assert.match(transferHtml, /current step/i);
+  assert.match(transferHtml, /Request \+ Authority/);
+  assert.match(transferHtml, /Decision \+ Artifacts/);
+  assert.match(transferHtml, /Physical Evidence \+ Closure/);
   assert.match(transferHtml, /Governed Timeline/);
   assert.match(forensicHtml, /Asset Forensic View/);
   assert.match(forensicHtml, /Telemetry References/);

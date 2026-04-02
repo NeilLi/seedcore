@@ -40,21 +40,21 @@ const server = http.createServer(async (req, res) => {
   try {
     const qs = queryString(url);
     if (url.pathname === "/") {
-      const catalog = await fetchJson(`/api/v1/transfers/catalog?${qs}`);
+      const catalog = await fetchJson(`/api/v1/verification/transfers/catalog?${qs}`);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(renderCatalogPage(catalog));
       return;
     }
 
     if (url.pathname === "/transfer") {
-      const review = await fetchJson(`/api/v1/transfers/review?${qs}`);
+      const review = await fetchJson(`/api/v1/verification/transfers/review?${qs}`);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(renderTransferPage(review, qs));
       return;
     }
 
     if (url.pathname === "/forensics") {
-      const forensics = await fetchJson(`/api/v1/assets/forensics?${qs}`);
+      const forensics = await fetchJson(`/api/v1/verification/assets/forensics?${qs}`);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(renderForensicsPage(forensics, qs));
       return;

@@ -333,12 +333,19 @@ async def get_materialized_custody_event(
         if exc.code == "ambiguous_task_id":
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        custody_event_jsonld = replay_service.build_jsonld_export(replay)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return MaterializedCustodyEventRead(
         retrieval_key=retrieval_key,
         retrieval_value=retrieval_value,
         audit_record=replay.audit_record,
-        custody_event_jsonld=replay_service.build_jsonld_export(replay),
+        custody_event_jsonld=custody_event_jsonld,
     )
 
 

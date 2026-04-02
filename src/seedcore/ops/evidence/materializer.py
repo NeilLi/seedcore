@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from typing import Any, Dict, Optional
 
 from seedcore.ops.evidence.authority_consistency import (
     authority_consistency_summary,
     operator_actions_for_authority_issues as _build_operator_actions_for_authority_issues,
+)
+from seedcore.ops.evidence.forensic_block_contract import (
+    FORENSIC_BLOCK_CONTEXT,
+    validate_forensic_block_payload,
 )
 
 TRUST_GAP_TAXONOMY: Dict[str, Dict[str, str]] = {
@@ -294,16 +300,18 @@ def _operator_actions_for_authority_issues(issues: list[str]) -> list[Dict[str, 
 
 def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Dict[str, Any]) -> Dict[str, Any]:
     existing = evidence_bundle.get("forensic_block")
-    if isinstance(existing, dict) and existing:
-        return dict(existing)
-
     policy_decision = audit_record.get("policy_decision") if isinstance(audit_record.get("policy_decision"), dict) else {}
     authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
     governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
+    policy_receipt = audit_record.get("policy_receipt") if isinstance(audit_record.get("policy_receipt"), dict) else {}
     action_intent = audit_record.get("action_intent") if isinstance(audit_record.get("action_intent"), dict) else {}
+    action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+    action_parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+    principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
+    resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
     gateway_context = (
-        action_intent.get("action", {}).get("parameters", {}).get("gateway")
-        if isinstance(action_intent.get("action"), dict)
+        action_parameters.get("gateway")
+        if isinstance(action_parameters, dict)
         else {}
     )
     if not isinstance(gateway_context, dict):
@@ -311,62 +319,163 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
     fingerprint_components = gateway_context.get("fingerprint_components")
     if not isinstance(fingerprint_components, dict):
         fingerprint_components = {}
-    return {
-        "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
+    execution_summary = (
+        evidence_bundle.get("evidence_inputs", {}).get("execution_summary")
+        if isinstance(evidence_bundle.get("evidence_inputs"), dict)
+        and isinstance(evidence_bundle.get("evidence_inputs", {}).get("execution_summary"), dict)
+        else {}
+    )
+    derived_components = _derive_forensic_fingerprint_components(
+        fingerprint_components=fingerprint_components,
+        audit_record=audit_record,
+        governed_receipt=governed_receipt,
+        policy_receipt=policy_receipt,
+        execution_summary=execution_summary if isinstance(execution_summary, dict) else {},
+    )
+    forensic_block_id = _derive_forensic_block_id(
+        evidence_bundle=evidence_bundle,
+        governed_receipt=governed_receipt,
+        policy_receipt=policy_receipt,
+    )
+    request_id = (
+        str(action_intent.get("intent_id") or audit_record.get("intent_id") or audit_record.get("task_id") or "").strip()
+        or "unknown_request"
+    )
+    audit_id = (
+        str(audit_record.get("id") or evidence_bundle.get("evidence_bundle_id") or request_id).strip()
+        or "unknown_audit"
+    )
+    timestamp = (
+        str(audit_record.get("recorded_at") or evidence_bundle.get("created_at") or "").strip()
+        or "unknown_timestamp"
+    )
+    disposition = (
+        str(authz_graph.get("disposition") or governed_receipt.get("disposition") or _resolve_platform_state(audit_record)).strip().lower()
+        or "unknown"
+    )
+    decision_hash = (
+        str(governed_receipt.get("decision_hash") or policy_receipt.get("policy_decision_id") or "").strip()
+        or _hash_ref(
+            f"{request_id}:{disposition}:{forensic_block_id}",
+            fallback=f"decision:{request_id}:{forensic_block_id}",
+        )
+    )
+    asset_id = str(resource.get("asset_id") or governed_receipt.get("asset_ref") or "").strip() or "asset:unknown"
+    principal_id = str(principal.get("agent_id") or "").strip() or "unknown_principal"
+    owner_id = str(gateway_context.get("owner_id") or principal.get("owner_id") or "").strip() or None
+    delegation_chain_hash = str(gateway_context.get("delegation_ref") or principal.get("delegation_ref") or "").strip()
+    if not delegation_chain_hash:
+        delegation_chain_hash = _hash_ref(
+            f"{principal_id}:{asset_id}:{forensic_block_id}",
+            fallback=f"delegation:{request_id}:{asset_id}",
+        )
+    hardware_fingerprint = str(
+        gateway_context.get("hardware_public_key_fingerprint")
+        or (
+            evidence_bundle.get("signer_metadata", {}).get("key_ref")
+            if isinstance(evidence_bundle.get("signer_metadata"), dict)
+            else None
+        )
+        or ""
+    ).strip()
+    if not hardware_fingerprint:
+        hardware_fingerprint = _hash_ref(
+            evidence_bundle.get("node_id"),
+            fallback=f"hardware:{request_id}:{forensic_block_id}",
+        )
+    coordinate_ref = str(
+        gateway_context.get("expected_coordinate_ref")
+        or (
+            ((existing.get("spatial_evidence") or {}).get("coordinate_binding", {}).get("coordinate_ref"))
+            if isinstance(existing, dict)
+            and isinstance(existing.get("spatial_evidence"), dict)
+            and isinstance((existing.get("spatial_evidence") or {}).get("coordinate_binding"), dict)
+            else None
+        )
+        or ""
+    ).strip()
+    if not coordinate_ref:
+        coordinate_ref = f"coordinate:unknown:{asset_id}"
+
+    base_block = {
+        "@context": FORENSIC_BLOCK_CONTEXT,
         "@type": "ForensicBlock",
+        "forensic_block_id": forensic_block_id,
         "block_header": {
-            "audit_id": audit_record.get("id"),
-            "timestamp": audit_record.get("recorded_at") or evidence_bundle.get("created_at"),
-            "version": "1.0.0-rc1",
+            "audit_id": audit_id,
+            "timestamp": timestamp,
+            "version": "seedcore.forensic_block.v1",
             "sequence_index": None,
+            "forensic_block_id": forensic_block_id,
+        },
+        "decision_linkage": {
+            "request_id": request_id,
+            "disposition": disposition.upper(),
+            "decision_hash": decision_hash,
+            "policy_receipt_id": str(policy_receipt.get("policy_receipt_id") or "").strip() or None,
+            "policy_snapshot_ref": (
+                str(
+                    governed_receipt.get("snapshot_version")
+                    or authz_graph.get("snapshot_version")
+                    or policy_receipt.get("decision_graph_snapshot_version")
+                    or evidence_bundle.get("decision_graph_snapshot_version")
+                    or ""
+                ).strip()
+                or None
+            ),
+        },
+        "asset_identity": {
+            "asset_id": asset_id,
+            "lot_id": str(resource.get("lot_id") or "").strip() or None,
+            "product_ref": str(resource.get("product_ref") or gateway_context.get("product_ref") or "").strip() or None,
+            "quote_ref": str(resource.get("quote_ref") or "").strip() or None,
         },
         "authority_context": {
             "@type": "DelegatedAuthority",
-            "principal_id": action_intent.get("principal", {}).get("agent_id") if isinstance(action_intent.get("principal"), dict) else None,
-            "hardware_fingerprint": gateway_context.get("hardware_public_key_fingerprint"),
+            "principal_id": principal_id,
+            "owner_id": owner_id,
+            "hardware_fingerprint": hardware_fingerprint,
             "kms_key_ref": evidence_bundle.get("signer_metadata", {}).get("key_ref") if isinstance(evidence_bundle.get("signer_metadata"), dict) else None,
-            "delegation_chain_hash": gateway_context.get("delegation_ref"),
+            "delegation_chain_hash": delegation_chain_hash,
             "execution_token_id": evidence_bundle.get("execution_token_id"),
+            "organization_ref": str(gateway_context.get("organization_ref") or principal.get("organization_ref") or "").strip() or None,
         },
+        "fingerprint_components": derived_components,
         "economic_evidence": {
             "@type": "CommerceTransaction",
-            "platform": "unspecified",
+            "platform": "seedcore_rct",
             "order_id": None,
-            "transaction_hash": fingerprint_components.get("economic_hash"),
+            "transaction_hash": derived_components["economic_hash"],
             "quote_hash": None,
-            "asset_identity": action_intent.get("resource", {}).get("asset_id") if isinstance(action_intent.get("resource"), dict) else None,
+            "asset_identity": asset_id,
         },
         "spatial_evidence": {
             "@type": "PhysicalPresence",
-            "environment": "unspecified",
+            "environment": "seedcore_rct",
             "facility_id": gateway_context.get("facility_ref"),
             "coordinate_binding": {
-                "coordinate_ref": gateway_context.get("expected_coordinate_ref"),
-                "system": "unspecified",
+                "coordinate_ref": coordinate_ref,
+                "system": "seedcore",
             },
-            "presence_proof_hash": fingerprint_components.get("physical_presence_hash"),
+            "presence_proof_hash": derived_components["physical_presence_hash"],
+            "current_zone": str(gateway_context.get("expected_to_zone") or "").strip() or None,
         },
         "cognitive_evidence": {
             "@type": "PolicyReasoning",
             "policy_receipt_id": audit_record.get("policy_receipt", {}).get("policy_receipt_id")
             if isinstance(audit_record.get("policy_receipt"), dict)
             else None,
-            "decision": str(authz_graph.get("disposition") or governed_receipt.get("disposition") or "").upper() or None,
-            "reasoning_trace_hash": fingerprint_components.get("reasoning_hash"),
+            "decision": disposition.upper(),
+            "reasoning_trace_hash": derived_components["reasoning_hash"],
             "matched_policy_refs": list(authz_graph.get("matched_policy_refs") or []),
         },
         "physical_evidence": {
             "@type": "ActuatorProof",
             "device_actor": evidence_bundle.get("node_id"),
             "edge_node": evidence_bundle.get("node_id"),
-            "trajectory_hash": (
-                evidence_bundle.get("evidence_inputs", {}).get("execution_summary", {}).get("actuator_result_hash")
-                if isinstance(evidence_bundle.get("evidence_inputs"), dict)
-                and isinstance(evidence_bundle.get("evidence_inputs", {}).get("execution_summary"), dict)
-                else None
-            ),
+            "trajectory_hash": execution_summary.get("actuator_result_hash") if isinstance(execution_summary, dict) else None,
             "actuator_telemetry": {
-                "motor_torque_hash": fingerprint_components.get("actuator_hash"),
+                "motor_torque_hash": derived_components["actuator_hash"],
             },
             "sensor_signatures": [],
         },
@@ -376,3 +485,116 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
             "forensic_integrity_hash": None,
         },
     }
+    if isinstance(existing, dict) and existing:
+        merged = dict(existing)
+        merged.setdefault("@context", base_block["@context"])
+        merged.setdefault("@type", base_block["@type"])
+        merged.setdefault("forensic_block_id", forensic_block_id)
+        merged.setdefault("block_header", base_block["block_header"])
+        merged.setdefault("decision_linkage", base_block["decision_linkage"])
+        merged.setdefault("asset_identity", base_block["asset_identity"])
+        merged.setdefault("authority_context", base_block["authority_context"])
+        merged.setdefault("fingerprint_components", derived_components)
+        merged.setdefault("economic_evidence", base_block["economic_evidence"])
+        merged.setdefault("spatial_evidence", base_block["spatial_evidence"])
+        merged.setdefault("cognitive_evidence", base_block["cognitive_evidence"])
+        merged.setdefault("physical_evidence", base_block["physical_evidence"])
+        return _normalize_forensic_block_shape(merged)
+    return _normalize_forensic_block_shape(base_block)
+
+
+def _derive_forensic_block_id(
+    *,
+    evidence_bundle: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    policy_receipt: Dict[str, Any],
+) -> str:
+    for candidate in (
+        evidence_bundle.get("forensic_block_id"),
+        governed_receipt.get("forensic_block_id"),
+        policy_receipt.get("policy_receipt_id"),
+        governed_receipt.get("decision_hash"),
+        evidence_bundle.get("evidence_bundle_id"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    raw = json.dumps(
+        {
+            "receipt": policy_receipt.get("policy_receipt_id"),
+            "decision": governed_receipt.get("decision_hash"),
+            "bundle": evidence_bundle.get("evidence_bundle_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"fb:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+
+def _hash_ref(value: Any, *, fallback: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized:
+        if normalized.startswith("sha256:"):
+            return normalized
+        return f"sha256:{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}"
+    return f"sha256:{hashlib.sha256(fallback.encode('utf-8')).hexdigest()}"
+
+
+def _derive_forensic_fingerprint_components(
+    *,
+    fingerprint_components: Dict[str, Any],
+    audit_record: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    policy_receipt: Dict[str, Any],
+    execution_summary: Dict[str, Any],
+) -> Dict[str, str]:
+    decision_ref = str(governed_receipt.get("decision_hash") or policy_receipt.get("policy_receipt_id") or "").strip()
+    execution_ref = str(execution_summary.get("actuator_result_hash") or "").strip()
+    asset_ref = (
+        str(
+            audit_record.get("action_intent", {}).get("resource", {}).get("asset_id")
+            if isinstance(audit_record.get("action_intent"), dict)
+            and isinstance(audit_record.get("action_intent", {}).get("resource"), dict)
+            else ""
+        ).strip()
+    )
+    return {
+        "economic_hash": _hash_ref(
+            fingerprint_components.get("economic_hash") or policy_receipt.get("policy_decision_id"),
+            fallback=f"economic:{decision_ref}:{asset_ref}",
+        ),
+        "physical_presence_hash": _hash_ref(
+            fingerprint_components.get("physical_presence_hash") or execution_ref,
+            fallback=f"presence:{asset_ref}:{execution_ref}",
+        ),
+        "reasoning_hash": _hash_ref(
+            fingerprint_components.get("reasoning_hash") or governed_receipt.get("decision_hash"),
+            fallback=f"reasoning:{decision_ref}",
+        ),
+        "actuator_hash": _hash_ref(
+            fingerprint_components.get("actuator_hash") or execution_ref,
+            fallback=f"actuator:{execution_ref}:{asset_ref}",
+        ),
+    }
+
+
+def _normalize_forensic_block_shape(value: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(value)
+    normalized["@context"] = str(normalized.get("@context") or FORENSIC_BLOCK_CONTEXT)
+    normalized["@type"] = str(normalized.get("@type") or "ForensicBlock")
+    forensic_block_id = str(normalized.get("forensic_block_id") or "").strip()
+    if not forensic_block_id:
+        raise ValueError("forensic_block.forensic_block_id is required")
+    normalized["forensic_block_id"] = forensic_block_id
+
+    fingerprint = normalized.get("fingerprint_components")
+    if not isinstance(fingerprint, dict):
+        fingerprint = {}
+    for key in ("economic_hash", "physical_presence_hash", "reasoning_hash", "actuator_hash"):
+        raw = str(fingerprint.get(key) or "").strip()
+        if not raw:
+            raise ValueError(f"forensic_block.fingerprint_components.{key} is required")
+        fingerprint[key] = raw
+    normalized["fingerprint_components"] = fingerprint
+    validate_forensic_block_payload(normalized)
+    return normalized

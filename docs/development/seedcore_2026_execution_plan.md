@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
-Date: 2026-04-01
-Status: Working execution plan
+Date: 2026-04-02
+Status: Working execution plan (Q2 critical-path freeze pass in progress)
 
 ## Purpose
 
@@ -23,6 +23,31 @@ This plan is grounded in the current repo state:
 
 This is not a speculative "future platform" plan. It is a wedge-first
 execution plan.
+
+## Execution Update (2026-04-02)
+
+The highest-priority Q2 contract hardening sequence has now been implemented in
+the codebase for the RCT slice:
+
+- `VerificationSurfaceProjection` is frozen as the frontend-facing read
+  contract with versioned models and deterministic business-state mapping.
+- verification API routes are migrated to `/api/v1/verification/*`.
+- `AgentActionGateway` request schema is hardened and locked with generated
+  schema artifacts/tests (`seedcore.agent_action_gateway.v1`).
+- Screen 2 side-by-side audit trail is implemented as a contract-driven,
+  three-column correlated view.
+- hot-path `shadow`/`canary`/`enforce` semantics now include strict promotion
+  gates, durable parity evidence persistence, and rollback triggers.
+- first forensic-block JSON-LD contract freeze pass is implemented with strict
+  schema validation, explicit `forensic_block_id`, and replay/materialization
+  alignment checks.
+
+Remaining Q2 emphasis is now operationalization:
+
+- promote full CI/CD gating across environments for parity/replay checks
+- expand adversarial and degraded-edge-condition coverage
+- stabilize benchmark and observability baselines under deployment-realistic
+  topology
 
 ## 2026 Objective
 
@@ -309,23 +334,23 @@ first replay-grade forensic schema.
 
 ### Must-ship items
 
-- freeze and version the current runtime-up RCT sign-off bundle
-- freeze the Q2 Audit-Trail UI contract for the four-screen verification surface
+- ~~freeze and version the current runtime-up RCT sign-off bundle~~
+- ~~freeze the Q2 Audit-Trail UI contract for the four-screen verification surface~~
   (`Transfers`, transfer detail, asset forensics, replay/verification)
-- implement runtime-selectable hot-path mode semantics
-- persist parity events and build `1,000`-run exportable evidence
+- ~~implement runtime-selectable hot-path mode semantics~~
+- ~~persist parity events and build `1,000`-run exportable evidence~~
 - instrument hot-path observability consistently across Kubernetes and host-mode
   environments
-- add graph freshness and dependency-based auto-quarantine
+- ~~add graph freshness and dependency-based auto-quarantine~~
 - add dedicated hot-path benchmark harness coverage for concurrent load
 - promote runtime matrix capture and replay verification into CI / host gates
 - define the deployment topology used by CI / host gates and benchmark the Ray
   coordination path under that topology
-- freeze the first forensic block field set for the canonical workflow
-- choose the schema direction explicitly:
+- ~~freeze the first forensic block field set for the canonical workflow~~
+- ~~choose the schema direction explicitly:~~
   - canonical replay/export shape: JSON-LD
   - optional internal transport mirror later: Protobuf
-- define transaction-specific authority binding inputs:
+- ~~define transaction-specific authority binding inputs:~~
   - asset or product id
   - facility or zone scope
   - policy snapshot or decision hash

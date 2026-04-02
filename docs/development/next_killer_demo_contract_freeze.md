@@ -1,5 +1,27 @@
 # Next Killer Demo Contract Freeze
 
+## Status Update (2026-04-02)
+
+Contract freeze implementation status for the RCT critical path:
+
+- `VerificationSurfaceProjection` freeze pass is implemented in the verification
+  API + operator/proof surfaces using explicit versioned projection models.
+- `AgentActionGateway` v1 boundary is implemented with strict required
+  identity/hardware/scope fields, schema invariants, and canonical request
+  hashing.
+- Screen 2 side-by-side audit trail is implemented as the contract-driven
+  three-column view correlated by workflow/audit key.
+- first forensic block JSON-LD contract freeze pass is implemented with schema
+  artifacts and runtime validation gates.
+- hot-path promotion semantics now include strict parity/latency/dependency
+  gating and rollback triggers.
+
+Open implementation focus after this freeze pass:
+
+- CI and deployment-level enforcement of promotion gates
+- deeper adversarial drills and degraded edge-network test matrix
+- benchmark hardening under production-like topology
+
 ## Goal
 
 Define the next contract freeze that operationalizes the roadmap’s killer

@@ -1,0 +1,1119 @@
+{
+  "$id": "https://seedcore.ai/schemas/seedcore.agent_action_gateway.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "definitions": {
+    "AgentActionClosureRequest": {
+      "$defs": {
+        "AgentActionForensicBlock": {
+          "additionalProperties": false,
+          "properties": {
+            "current_coordinate_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Coordinate Ref"
+            },
+            "current_zone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Zone"
+            },
+            "fingerprint_components": {
+              "$ref": "#/$defs/AgentActionForensicBlockFingerprintComponents"
+            },
+            "forensic_block_id": {
+              "title": "Forensic Block Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "forensic_block_id",
+            "fingerprint_components"
+          ],
+          "title": "AgentActionForensicBlock",
+          "type": "object"
+        },
+        "AgentActionForensicBlockFingerprintComponents": {
+          "additionalProperties": false,
+          "properties": {
+            "actuator_hash": {
+              "title": "Actuator Hash",
+              "type": "string"
+            },
+            "economic_hash": {
+              "title": "Economic Hash",
+              "type": "string"
+            },
+            "physical_presence_hash": {
+              "title": "Physical Presence Hash",
+              "type": "string"
+            },
+            "reasoning_hash": {
+              "title": "Reasoning Hash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "economic_hash",
+            "physical_presence_hash",
+            "reasoning_hash",
+            "actuator_hash"
+          ],
+          "title": "AgentActionForensicBlockFingerprintComponents",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "closed_at": {
+          "format": "date-time",
+          "title": "Closed At",
+          "type": "string"
+        },
+        "closure_id": {
+          "title": "Closure Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "seedcore.agent_action_gateway.v1",
+          "default": "seedcore.agent_action_gateway.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "evidence_bundle_id": {
+          "title": "Evidence Bundle Id",
+          "type": "string"
+        },
+        "forensic_block": {
+          "$ref": "#/$defs/AgentActionForensicBlock"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "node_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Node Id"
+        },
+        "outcome": {
+          "default": "completed",
+          "enum": [
+            "completed",
+            "quarantined",
+            "failed"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "summary": {
+          "additionalProperties": true,
+          "title": "Summary",
+          "type": "object"
+        },
+        "transition_receipt_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Transition Receipt Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "request_id",
+        "closure_id",
+        "idempotency_key",
+        "closed_at",
+        "evidence_bundle_id",
+        "forensic_block"
+      ],
+      "title": "AgentActionClosureRequest",
+      "type": "object"
+    },
+    "AgentActionClosureResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_at": {
+          "format": "date-time",
+          "title": "Accepted At",
+          "type": "string"
+        },
+        "closure_id": {
+          "title": "Closure Id",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "seedcore.agent_action_gateway.v1",
+          "default": "seedcore.agent_action_gateway.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "forensic_block_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Forensic Block Id"
+        },
+        "linked_disposition": {
+          "title": "Linked Disposition",
+          "type": "string"
+        },
+        "next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Next Actions",
+          "type": "array"
+        },
+        "replay_status": {
+          "default": "pending",
+          "enum": [
+            "pending",
+            "ready"
+          ],
+          "title": "Replay Status",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "settlement_result": {
+          "additionalProperties": true,
+          "title": "Settlement Result",
+          "type": "object"
+        },
+        "settlement_status": {
+          "default": "pending",
+          "enum": [
+            "pending",
+            "applied",
+            "rejected"
+          ],
+          "title": "Settlement Status",
+          "type": "string"
+        },
+        "status": {
+          "const": "accepted_pending_settlement",
+          "default": "accepted_pending_settlement",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "closure_id",
+        "accepted_at",
+        "linked_disposition"
+      ],
+      "title": "AgentActionClosureResponse",
+      "type": "object"
+    },
+    "AgentActionEvaluateRequest": {
+      "$defs": {
+        "AgentActionApproval": {
+          "additionalProperties": false,
+          "properties": {
+            "approval_envelope_id": {
+              "title": "Approval Envelope Id",
+              "type": "string"
+            },
+            "expected_envelope_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Envelope Version"
+            }
+          },
+          "required": [
+            "approval_envelope_id"
+          ],
+          "title": "AgentActionApproval",
+          "type": "object"
+        },
+        "AgentActionAsset": {
+          "additionalProperties": false,
+          "properties": {
+            "asset_id": {
+              "title": "Asset Id",
+              "type": "string"
+            },
+            "declared_value_usd": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Declared Value Usd"
+            },
+            "from_custodian_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "From Custodian Ref"
+            },
+            "from_zone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "From Zone"
+            },
+            "lot_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Lot Id"
+            },
+            "product_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Product Ref"
+            },
+            "provenance_hash": {
+              "title": "Provenance Hash",
+              "type": "string"
+            },
+            "quote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote Ref"
+            },
+            "to_custodian_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "To Custodian Ref"
+            },
+            "to_zone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "To Zone"
+            }
+          },
+          "required": [
+            "asset_id",
+            "provenance_hash"
+          ],
+          "title": "AgentActionAsset",
+          "type": "object"
+        },
+        "AgentActionAuthorityScope": {
+          "additionalProperties": false,
+          "properties": {
+            "asset_ref": {
+              "title": "Asset Ref",
+              "type": "string"
+            },
+            "expected_coordinate_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Coordinate Ref"
+            },
+            "expected_from_zone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected From Zone"
+            },
+            "expected_to_zone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected To Zone"
+            },
+            "facility_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Facility Ref"
+            },
+            "max_radius_meters": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Radius Meters"
+            },
+            "product_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Product Ref"
+            },
+            "scope_id": {
+              "title": "Scope Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_id",
+            "asset_ref"
+          ],
+          "title": "AgentActionAuthorityScope",
+          "type": "object"
+        },
+        "AgentActionFingerprintComponents": {
+          "additionalProperties": false,
+          "properties": {
+            "actuator_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Actuator Hash"
+            },
+            "economic_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Economic Hash"
+            },
+            "physical_presence_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Physical Presence Hash"
+            },
+            "reasoning_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Hash"
+            }
+          },
+          "title": "AgentActionFingerprintComponents",
+          "type": "object"
+        },
+        "AgentActionForensicContext": {
+          "additionalProperties": false,
+          "properties": {
+            "fingerprint_components": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentActionFingerprintComponents"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "reason_trace_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason Trace Ref"
+            }
+          },
+          "title": "AgentActionForensicContext",
+          "type": "object"
+        },
+        "AgentActionHardwareFingerprint": {
+          "additionalProperties": false,
+          "properties": {
+            "attestation_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attestation Type"
+            },
+            "fingerprint_id": {
+              "title": "Fingerprint Id",
+              "type": "string"
+            },
+            "hardware_tpm_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hardware Tpm Hash"
+            },
+            "key_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Key Ref"
+            },
+            "node_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Node Id"
+            },
+            "public_key_fingerprint": {
+              "title": "Public Key Fingerprint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fingerprint_id",
+            "public_key_fingerprint"
+          ],
+          "title": "AgentActionHardwareFingerprint",
+          "type": "object"
+        },
+        "AgentActionOptions": {
+          "additionalProperties": false,
+          "properties": {
+            "debug": {
+              "default": false,
+              "title": "Debug",
+              "type": "boolean"
+            },
+            "no_execute": {
+              "default": false,
+              "title": "No Execute",
+              "type": "boolean"
+            }
+          },
+          "title": "AgentActionOptions",
+          "type": "object"
+        },
+        "AgentActionPrincipal": {
+          "additionalProperties": false,
+          "properties": {
+            "actor_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Actor Token"
+            },
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "delegation_ref": {
+              "title": "Delegation Ref",
+              "type": "string"
+            },
+            "hardware_fingerprint": {
+              "$ref": "#/$defs/AgentActionHardwareFingerprint"
+            },
+            "organization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Organization Ref"
+            },
+            "owner_id": {
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "role_profile": {
+              "title": "Role Profile",
+              "type": "string"
+            },
+            "session_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Token"
+            }
+          },
+          "required": [
+            "agent_id",
+            "role_profile",
+            "owner_id",
+            "delegation_ref",
+            "hardware_fingerprint"
+          ],
+          "title": "AgentActionPrincipal",
+          "type": "object"
+        },
+        "AgentActionSecurityContract": {
+          "additionalProperties": false,
+          "properties": {
+            "hash": {
+              "title": "Hash",
+              "type": "string"
+            },
+            "version": {
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hash",
+            "version"
+          ],
+          "title": "AgentActionSecurityContract",
+          "type": "object"
+        },
+        "AgentActionTelemetry": {
+          "additionalProperties": false,
+          "properties": {
+            "current_coordinate_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Coordinate Ref"
+            },
+            "current_zone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Zone"
+            },
+            "evidence_refs": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "freshness_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Freshness Seconds"
+            },
+            "max_allowed_age_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Allowed Age Seconds"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "observed_at"
+          ],
+          "title": "AgentActionTelemetry",
+          "type": "object"
+        },
+        "AgentActionWorkflow": {
+          "additionalProperties": false,
+          "properties": {
+            "action_type": {
+              "default": "TRANSFER_CUSTODY",
+              "title": "Action Type",
+              "type": "string"
+            },
+            "type": {
+              "const": "restricted_custody_transfer",
+              "default": "restricted_custody_transfer",
+              "title": "Type",
+              "type": "string"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            }
+          },
+          "required": [
+            "valid_until"
+          ],
+          "title": "AgentActionWorkflow",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/AgentActionApproval"
+        },
+        "asset": {
+          "$ref": "#/$defs/AgentActionAsset"
+        },
+        "authority_scope": {
+          "$ref": "#/$defs/AgentActionAuthorityScope"
+        },
+        "contract_version": {
+          "const": "seedcore.agent_action_gateway.v1",
+          "default": "seedcore.agent_action_gateway.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "forensic_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActionForensicContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "options": {
+          "$ref": "#/$defs/AgentActionOptions"
+        },
+        "policy_snapshot_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Snapshot Ref"
+        },
+        "principal": {
+          "$ref": "#/$defs/AgentActionPrincipal"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "security_contract": {
+          "$ref": "#/$defs/AgentActionSecurityContract"
+        },
+        "telemetry": {
+          "$ref": "#/$defs/AgentActionTelemetry"
+        },
+        "workflow": {
+          "$ref": "#/$defs/AgentActionWorkflow"
+        }
+      },
+      "required": [
+        "request_id",
+        "requested_at",
+        "idempotency_key",
+        "principal",
+        "workflow",
+        "asset",
+        "approval",
+        "authority_scope",
+        "telemetry",
+        "security_contract"
+      ],
+      "title": "AgentActionEvaluateRequest",
+      "type": "object"
+    },
+    "AgentActionEvaluateResponse": {
+      "$defs": {
+        "ExecutionToken": {
+          "properties": {
+            "artifact_hash": {
+              "additionalProperties": true,
+              "title": "Artifact Hash",
+              "type": "object"
+            },
+            "constraints": {
+              "additionalProperties": true,
+              "title": "Constraints",
+              "type": "object"
+            },
+            "contract_version": {
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "intent_id": {
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "issued_at": {
+              "title": "Issued At",
+              "type": "string"
+            },
+            "signature": {
+              "additionalProperties": true,
+              "title": "Signature",
+              "type": "object"
+            },
+            "token_id": {
+              "title": "Token Id",
+              "type": "string"
+            },
+            "valid_until": {
+              "title": "Valid Until",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token_id",
+            "intent_id",
+            "issued_at",
+            "valid_until",
+            "contract_version"
+          ],
+          "title": "ExecutionToken",
+          "type": "object"
+        },
+        "HotPathDecisionView": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed": {
+              "title": "Allowed",
+              "type": "boolean"
+            },
+            "disposition": {
+              "enum": [
+                "allow",
+                "deny",
+                "quarantine",
+                "escalate"
+              ],
+              "title": "Disposition",
+              "type": "string"
+            },
+            "policy_snapshot_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Snapshot Hash"
+            },
+            "policy_snapshot_ref": {
+              "title": "Policy Snapshot Ref",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "allowed",
+            "disposition",
+            "reason_code",
+            "reason",
+            "policy_snapshot_ref"
+          ],
+          "title": "HotPathDecisionView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "authority_scope_verdict": {
+          "additionalProperties": true,
+          "title": "Authority Scope Verdict",
+          "type": "object"
+        },
+        "contract_version": {
+          "const": "seedcore.agent_action_gateway.v1",
+          "default": "seedcore.agent_action_gateway.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/HotPathDecisionView"
+        },
+        "execution_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionToken"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fingerprint_verdict": {
+          "additionalProperties": true,
+          "title": "Fingerprint Verdict",
+          "type": "object"
+        },
+        "forensic_linkage": {
+          "additionalProperties": true,
+          "title": "Forensic Linkage",
+          "type": "object"
+        },
+        "governed_receipt": {
+          "additionalProperties": true,
+          "title": "Governed Receipt",
+          "type": "object"
+        },
+        "latency_ms": {
+          "minimum": 0,
+          "title": "Latency Ms",
+          "type": "integer"
+        },
+        "minted_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Minted Artifacts",
+          "type": "array"
+        },
+        "obligations": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Obligations",
+          "type": "array"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "required_approvals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Approvals",
+          "type": "array"
+        },
+        "trust_gaps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Trust Gaps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "request_id",
+        "decided_at",
+        "latency_ms",
+        "decision"
+      ],
+      "title": "AgentActionEvaluateResponse",
+      "type": "object"
+    }
+  },
+  "title": "seedcore.agent_action_gateway.v1",
+  "type": "object"
+}

@@ -28,7 +28,7 @@ from seedcore.models.pdp_hot_path import (
     HotPathTelemetryContext,
 )
 from seedcore.ops.pkg.manager import get_global_pkg_manager
-from seedcore.ops.hot_path_parity_log import get_hot_path_parity_logger, parity_log_file_path
+from seedcore.ops.hot_path_parity_log import get_hot_path_parity_logger, parity_db_file_path, parity_log_file_path
 
 HOT_PATH_CONTRACT_VERSION = "pdp.hot_path.asset_transfer.v1"
 HOT_PATH_MODE_ENV = "SEEDCORE_RCT_HOT_PATH_MODE"
@@ -41,8 +41,15 @@ HOT_PATH_STALE_GRAPH_MAX_AGE_SECONDS = int(
 HOT_PATH_SUPPORTED_MODES = frozenset({"shadow", "canary", "enforce"})
 HOT_PATH_PROMOTION_WINDOW_N = int(os.getenv("SEEDCORE_HOT_PATH_PROMOTION_WINDOW_N", "1000"))
 HOT_PATH_PROMOTION_MIN_PARITY_RATIO = float(
-    os.getenv("SEEDCORE_HOT_PATH_PROMOTION_MIN_PARITY_RATIO", "0.999")
+    os.getenv("SEEDCORE_HOT_PATH_PROMOTION_MIN_PARITY_RATIO", "1.0")
 )
+HOT_PATH_PROMOTION_P50_MAX_MS = int(os.getenv("SEEDCORE_HOT_PATH_PROMOTION_P50_MAX_MS", "25"))
+HOT_PATH_PROMOTION_P95_MAX_MS = int(os.getenv("SEEDCORE_HOT_PATH_PROMOTION_P95_MAX_MS", "50"))
+HOT_PATH_PROMOTION_P99_MAX_MS = int(os.getenv("SEEDCORE_HOT_PATH_PROMOTION_P99_MAX_MS", "100"))
+HOT_PATH_ROLLBACK_P99_MAX_MS = int(os.getenv("SEEDCORE_HOT_PATH_ROLLBACK_P99_MAX_MS", "250"))
+HOT_PATH_AUTO_ROLLBACK_ENABLED = str(
+    os.getenv("SEEDCORE_HOT_PATH_AUTO_ROLLBACK_ENABLED", "true")
+).strip().lower() in {"1", "true", "yes", "on"}
 
 REASON_CODE_DEFAULTS = {
     "allow": "restricted_custody_transfer_allowed",
@@ -165,6 +172,56 @@ def resolve_hot_path_canary_percent() -> int:
     return max(0, min(100, pct))
 
 
+def _latency_slo_met(latency: Mapping[str, Any]) -> bool:
+    p50 = latency.get("p50")
+    p95 = latency.get("p95")
+    p99 = latency.get("p99")
+    if p50 is None or p95 is None or p99 is None:
+        return False
+    try:
+        return (
+            int(p50) < HOT_PATH_PROMOTION_P50_MAX_MS
+            and int(p95) < HOT_PATH_PROMOTION_P95_MAX_MS
+            and int(p99) < HOT_PATH_PROMOTION_P99_MAX_MS
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _rollback_reasons(
+    *,
+    status_snapshot: Mapping[str, Any],
+    runtime_status: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if int(status_snapshot.get("false_positive_allow_count") or 0) > 0:
+        reasons.append("false_positive_allow")
+    runtime_ready = bool(
+        runtime_status.get("authz_graph_ready")
+        and runtime_status.get("graph_freshness_ok")
+        and runtime_status.get("restricted_transfer_ready")
+    )
+    if not runtime_ready:
+        reasons.append("dependency_unhealthy")
+    latency = status_snapshot.get("latency_ms")
+    p99 = latency.get("p99") if isinstance(latency, Mapping) else None
+    if p99 is not None:
+        try:
+            if int(p99) > HOT_PATH_ROLLBACK_P99_MAX_MS:
+                reasons.append("p99_latency_exceeded")
+        except (TypeError, ValueError):
+            pass
+    return reasons
+
+
+def _auto_rollback_reasons() -> list[str]:
+    if not HOT_PATH_AUTO_ROLLBACK_ENABLED:
+        return []
+    status_snapshot = _HOT_PATH_SHADOW_STATS.snapshot()
+    runtime_status = _resolve_hot_path_runtime_status()
+    return _rollback_reasons(status_snapshot=status_snapshot, runtime_status=runtime_status)
+
+
 def hot_path_authority_uses_candidate(request_id: str) -> bool:
     """
     PDP authority selection for Restricted Custody Transfer on the coordinator path.
@@ -174,6 +231,14 @@ def hot_path_authority_uses_candidate(request_id: str) -> bool:
     - canary: deterministic per-request mix — a canary_percent slice uses the hot path as authoritative.
     """
     mode = resolve_hot_path_mode()
+    rollback_reasons = _auto_rollback_reasons() if mode in {"enforce", "canary"} else []
+    if rollback_reasons:
+        logger.warning(
+            "RCT hot-path auto-rollback active; forcing baseline-authoritative path (mode=%s reasons=%s)",
+            mode,
+            ",".join(rollback_reasons),
+        )
+        return False
     if mode == "enforce":
         return True
     if mode == "shadow":
@@ -258,6 +323,7 @@ def compute_hot_path_promotion_status() -> dict[str, Any]:
         "promotion_gate_disabled": gate_disabled,
         "promotion_eligible": bool(stats.get("promotion_eligible")),
         "parity_log_path": str(parity_log_file_path()),
+        "parity_db_path": str(parity_db_file_path()),
     }
 
 
@@ -650,10 +716,19 @@ def hot_path_shadow_status() -> dict[str, Any]:
         and runtime_status.get("graph_freshness_ok")
         and runtime_status.get("restricted_transfer_ready")
     )
-    enforce_ready = bool(
+    latency_slo_met = _latency_slo_met(status.get("latency_ms") if isinstance(status.get("latency_ms"), Mapping) else {})
+    strict_promotion_eligible = bool(
         runtime_ready
+        and latency_slo_met
         and (promotion.get("promotion_gate_disabled") or promotion.get("promotion_eligible"))
+        and int(status.get("false_positive_allow_count") or 0) == 0
     )
+    rollback_reasons = _rollback_reasons(
+        status_snapshot=status,
+        runtime_status=runtime_status,
+    )
+    rollback_triggered = bool(HOT_PATH_AUTO_ROLLBACK_ENABLED and rollback_reasons)
+    enforce_ready = bool(strict_promotion_eligible and not rollback_triggered)
     mode = str(status.get("resolved_mode") or "shadow")
     status.update(
         {
@@ -665,6 +740,11 @@ def hot_path_shadow_status() -> dict[str, Any]:
             "restricted_transfer_ready": runtime_status.get("restricted_transfer_ready"),
             "canary_percent": resolve_hot_path_canary_percent() if mode == "canary" else None,
             "runtime_ready": runtime_ready,
+            "latency_slo_met": latency_slo_met,
+            "strict_promotion_eligible": strict_promotion_eligible,
+            "auto_rollback_enabled": HOT_PATH_AUTO_ROLLBACK_ENABLED,
+            "rollback_triggered": rollback_triggered,
+            "rollback_reasons": rollback_reasons,
             "promotion": promotion,
             "enforce_ready": enforce_ready,
         }

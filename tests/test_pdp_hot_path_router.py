@@ -263,7 +263,7 @@ def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):
     assert body["resolved_mode"] == "enforce"
     assert body["authz_graph_ready"] is True
     assert body["graph_freshness_ok"] is True
-    assert body["enforce_ready"] is True
+    assert body["enforce_ready"] is False
     assert body["runtime_ready"] is True
     assert body["promotion"]["promotion_gate_disabled"] is True
     assert body["active_snapshot_version"] == "snapshot:pkg-prod-2026-04-02"
@@ -272,6 +272,8 @@ def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):
     assert body["false_positive_allow_count"] == 1
     assert body["last_false_positive_allow_at"] is not None
     assert body["recent_mismatch_count"] >= 1
+    assert body["rollback_triggered"] is True
+    assert "false_positive_allow" in body["rollback_reasons"]
 
 
 def test_pdp_hot_path_route_resolves_and_forwards_authoritative_approval(monkeypatch):

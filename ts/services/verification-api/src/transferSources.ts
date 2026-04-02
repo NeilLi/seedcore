@@ -6,16 +6,20 @@ import { fileURLToPath } from "node:url";
 
 import {
   ApprovalStatus,
+  AssetForensicProjection,
   AssetForensicView,
   AssetProofView,
   BusinessState,
   Disposition,
   SignatureProvenanceEntry,
+  TransferAuditTrail,
   TransferProofView,
   TransferStatusView,
   TransferTimelineEntry,
   TransferTrustSummary,
   TransferVerificationReport,
+  VERIFICATION_SURFACE_VERSION,
+  VerificationSurfaceProjection,
   mapBusinessState,
   parseTransferTrustSummary,
   parseTransferVerificationReport,
@@ -48,6 +52,7 @@ export interface TransferCatalogItem {
   dir?: string;
   source: TransferSourceMode;
   query: string;
+  workflow_id: string;
   summary: TransferTrustSummary;
   status_preview: {
     transfer_readiness: string;
@@ -62,7 +67,11 @@ export interface TransferCatalogItem {
 }
 
 export interface TransferScenario {
+  workflow_id: string;
   summary: TransferTrustSummary;
+  verification_projection: VerificationSurfaceProjection;
+  transfer_audit_trail: TransferAuditTrail;
+  asset_forensic_projection: AssetForensicProjection;
   transfer_proof: TransferProofView;
   asset_proof: AssetProofView;
   status: TransferStatusView;
@@ -231,15 +240,296 @@ function buildQueryString(query: TransferSourceQuery): string {
 function buildStatusLinks(query: TransferSourceQuery) {
   const qs = buildQueryString(query);
   return {
-    review: `/api/v1/transfers/review?${qs}`,
-    asset_forensics: `/api/v1/assets/forensics?${qs}`,
+    review: `/api/v1/verification/transfers/audit-trail?${qs}`,
+    asset_forensics: `/api/v1/verification/assets/forensics?${qs}`,
   };
 }
 
 function buildForensicLinks(query: TransferSourceQuery) {
   const qs = buildQueryString(query);
   return {
-    transfer_review: `/api/v1/transfers/review?${qs}`,
+    transfer_review: `/api/v1/verification/transfers/audit-trail?${qs}`,
+  };
+}
+
+function workflowIdForQuery(query: TransferSourceQuery): string {
+  if (query.source === "runtime") {
+    if (query.audit_id) {
+      return query.audit_id;
+    }
+    if (query.intent_id) {
+      return `intent:${query.intent_id}`;
+    }
+    if (query.subject_id) {
+      return `subject:${query.subject_id}`;
+    }
+    return "runtime-transfer";
+  }
+  const resolved = resolveFixtureDir(query.dir);
+  return path.basename(resolved);
+}
+
+function buildVerificationSurfaceProjection(args: {
+  workflowId: string;
+  summary: TransferTrustSummary;
+  transferProof: TransferProofView;
+  status: TransferStatusView;
+  forensics: AssetForensicView;
+  trustRef: string | null;
+  replayRef: string;
+  auditTrailRef: string;
+  forensicsRef: string;
+}): VerificationSurfaceProjection {
+  const { workflowId, summary, transferProof, status, forensics, trustRef, replayRef, auditTrailRef, forensicsRef } = args;
+  return {
+    contract_version: VERIFICATION_SURFACE_VERSION,
+    workflow_id: workflowId,
+    workflow_type: "custody_transfer",
+    status: summary.business_state,
+    asset_ref: transferProof.asset_ref,
+    summary: {
+      from_zone: forensics.custody_transition.from_zone,
+      to_zone: forensics.custody_transition.to_zone,
+      current_state: status.current_step,
+      approval_state: summary.approval_status.toLowerCase(),
+      quarantined: summary.business_state === "quarantined",
+    },
+    approvals: {
+      required: status.pending_roles.length > 0 ? status.pending_roles : [],
+      completed_by: forensics.principal_identity.approving_principal_refs,
+      approval_envelope_id: transferProof.approval_envelope_id,
+      approval_envelope_version: transferProof.approval_envelope_version,
+    },
+    authorization: {
+      disposition: summary.disposition,
+      decision_id: transferProof.decision_id,
+      policy_snapshot_ref: forensics.policy_snapshot_ref,
+      policy_receipt_id: transferProof.policy_receipt_id,
+      transition_receipt_ids: transferProof.transition_receipt_ids,
+      execution_token_id: transferProof.execution_token_id,
+      forensic_block_id: null,
+    },
+    verification: {
+      signature_valid: forensics.signature_provenance.length > 0,
+      policy_trace_available: transferProof.policy_receipt_id.length > 0,
+      evidence_trace_available: forensics.telemetry_refs.length > 0,
+      tamper_status: "clear",
+    },
+    links: {
+      replay_ref: replayRef,
+      trust_ref: trustRef,
+      audit_trail_ref: auditTrailRef,
+      forensics_ref: forensicsRef,
+    },
+  };
+}
+
+function buildTransferAuditTrail(args: {
+  workflowId: string;
+  summary: TransferTrustSummary;
+  report: TransferVerificationReport;
+  transferProof: TransferProofView;
+  status: TransferStatusView;
+  forensics: AssetForensicView;
+  requestSummary: string;
+  requestId: string;
+  requestedAt: string;
+  idempotencyKey: string | null;
+  workflowType: string;
+  actionType: string;
+  validUntil: string | null;
+  principal: {
+    agentId: string;
+    roleProfile: string;
+    ownerId: string | null;
+    delegationRef: string | null;
+    organizationRef: string | null;
+    fingerprintId: string | null;
+    nodeId: string | null;
+    publicKeyFingerprint: string | null;
+    attestationType: string | null;
+    keyRef: string | null;
+  };
+  authorityScope: {
+    scopeId: string | null;
+    assetRef: string;
+    productRef: string | null;
+    facilityRef: string | null;
+    expectedFromZone: string | null;
+    expectedToZone: string | null;
+    expectedCoordinateRef: string | null;
+    verdict: "matched" | "mismatch" | "unverified";
+    mismatchKeys: string[];
+  };
+  latencyMs: number | null;
+  replayStatus: "pending" | "ready";
+  settlementStatus: "pending" | "applied" | "rejected" | "unknown";
+  replayArtifactsRef: string | null;
+  trustRef: string | null;
+  workflowProjectionRef: string;
+  forensicsRef: string;
+}): TransferAuditTrail {
+  const {
+    workflowId,
+    summary,
+    report,
+    transferProof,
+    forensics,
+    status,
+    requestSummary,
+    requestId,
+    requestedAt,
+    idempotencyKey,
+    workflowType,
+    actionType,
+    validUntil,
+    principal,
+    authorityScope,
+    latencyMs,
+    replayStatus,
+    settlementStatus,
+    replayArtifactsRef,
+    trustRef,
+    workflowProjectionRef,
+    forensicsRef,
+  } = args;
+  return {
+    contract_version: VERIFICATION_SURFACE_VERSION,
+    workflow_id: workflowId,
+    workflow_type: "custody_transfer",
+    business_state: summary.business_state,
+    request: {
+      request_id: requestId,
+      requested_at: requestedAt,
+      request_summary: requestSummary,
+      idempotency_key: idempotencyKey,
+      workflow_type: workflowType,
+      action_type: actionType,
+      valid_until: validUntil,
+    },
+    principal: {
+      agent_id: principal.agentId,
+      role_profile: principal.roleProfile,
+      owner_id: principal.ownerId,
+      delegation_ref: principal.delegationRef,
+      organization_ref: principal.organizationRef,
+      hardware_fingerprint: {
+        fingerprint_id: principal.fingerprintId,
+        node_id: principal.nodeId,
+        public_key_fingerprint: principal.publicKeyFingerprint,
+        attestation_type: principal.attestationType,
+        key_ref: principal.keyRef,
+      },
+    },
+    authority_scope: {
+      scope_id: authorityScope.scopeId,
+      asset_ref: authorityScope.assetRef,
+      product_ref: authorityScope.productRef,
+      facility_ref: authorityScope.facilityRef,
+      expected_from_zone: authorityScope.expectedFromZone,
+      expected_to_zone: authorityScope.expectedToZone,
+      expected_coordinate_ref: authorityScope.expectedCoordinateRef,
+      authority_scope_verdict: authorityScope.verdict,
+      mismatch_keys: authorityScope.mismatchKeys,
+    },
+    decision: {
+      allowed: summary.disposition === "allow",
+      disposition: summary.disposition,
+      reason_code: report.actual_policy_evaluation.policy_receipt_payload.disposition,
+      reason: summary.verification_error_code ?? "decision_resolved",
+      policy_snapshot_ref: forensics.policy_snapshot_ref,
+      latency_ms: latencyMs,
+    },
+    approvals: {
+      approval_status: transferProof.approval_status,
+      required: status.pending_roles,
+      completed_by: forensics.principal_identity.approving_principal_refs,
+      approval_envelope_id: transferProof.approval_envelope_id,
+      approval_envelope_version: transferProof.approval_envelope_version,
+      approval_binding_hash: transferProof.approval_binding_hash,
+    },
+    artifacts: {
+      decision_id: transferProof.decision_id,
+      policy_receipt_id: transferProof.policy_receipt_id,
+      transition_receipt_ids: transferProof.transition_receipt_ids,
+      execution_token_id: transferProof.execution_token_id,
+      audit_id: workflowId,
+      forensic_block_id: null,
+      minted_artifacts: forensics.minted_artifacts,
+      obligations: forensics.obligations,
+    },
+    physical_evidence: {
+      current_zone: forensics.custody_transition.to_zone,
+      current_coordinate_ref: null,
+      telemetry_refs: forensics.telemetry_refs,
+      fingerprint_components: {
+        economic_hash: null,
+        physical_presence_hash: null,
+        reasoning_hash: null,
+        actuator_hash: null,
+      },
+      replay_status: replayStatus,
+      settlement_status: settlementStatus,
+    },
+    links: {
+      workflow_projection_ref: workflowProjectionRef,
+      asset_forensics_ref: forensicsRef,
+      replay_artifacts_ref: replayArtifactsRef,
+      trust_ref: trustRef,
+    },
+  };
+}
+
+function buildAssetForensicProjection(args: {
+  workflowId: string;
+  forensics: AssetForensicView;
+  transferAuditTrailRef: string;
+  workflowProjectionRef: string;
+  replayArtifactsRef: string | null;
+  trustRef: string | null;
+  fingerprintComponents: {
+    economicHash: string | null;
+    physicalPresenceHash: string | null;
+    reasoningHash: string | null;
+    actuatorHash: string | null;
+  };
+}): AssetForensicProjection {
+  const { workflowId, forensics, transferAuditTrailRef, workflowProjectionRef, replayArtifactsRef, trustRef, fingerprintComponents } = args;
+  return {
+    contract_version: VERIFICATION_SURFACE_VERSION,
+    workflow_id: workflowId,
+    business_state: forensics.business_state,
+    disposition: forensics.disposition,
+    asset_ref: forensics.asset_ref,
+    decision_id: forensics.decision_id,
+    policy_snapshot_ref: forensics.policy_snapshot_ref,
+    approval_envelope_id: forensics.approval_envelope_id,
+    approval_envelope_version: forensics.approval_envelope_version,
+    approval_binding_hash: forensics.approval_binding_hash,
+    policy_receipt_id: forensics.policy_receipt_id,
+    transition_receipt_ids: forensics.transition_receipt_ids,
+    principal_identity: forensics.principal_identity,
+    custody_transition: forensics.custody_transition,
+    asset_custody_state: forensics.asset_custody_state,
+    telemetry_refs: forensics.telemetry_refs,
+    signer_provenance: forensics.signature_provenance,
+    forensic_fingerprint: {
+      economic_hash: fingerprintComponents.economicHash,
+      physical_presence_hash: fingerprintComponents.physicalPresenceHash,
+      reasoning_hash: fingerprintComponents.reasoningHash,
+      actuator_hash: fingerprintComponents.actuatorHash,
+    },
+    trust_gaps: forensics.trust_gaps,
+    missing_prerequisites: forensics.missing_prerequisites,
+    minted_artifacts: forensics.minted_artifacts,
+    obligations: forensics.obligations,
+    timeline: forensics.timeline,
+    links: {
+      workflow_projection_ref: workflowProjectionRef,
+      transfer_audit_trail_ref: transferAuditTrailRef,
+      replay_artifacts_ref: replayArtifactsRef,
+      trust_ref: trustRef,
+    },
   };
 }
 
@@ -347,6 +637,7 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
   const rawSummary = runVerifier("summarize-transfer", dir);
   const rawReport = runVerifier("verify-transfer", dir);
   const rawReportRecord = isRecord(rawReport) ? rawReport : {};
+  const workflowId = workflowIdForQuery(query);
   const summary = parseTransferTrustSummary(rawSummary);
   const report = parseTransferVerificationReport(rawReport);
   const approvalEnvelope = readOptionalJsonFile(dir, "input.approval_envelope.json");
@@ -452,9 +743,86 @@ function buildFixtureScenario(query: TransferSourceQuery): TransferScenario {
     ...assetForensics.links,
     ...forensicLinks,
   };
+  const workflowProjectionRef = `/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/projection?${buildQueryString(query)}`;
+  const auditTrailRef = `/api/v1/verification/transfers/audit-trail?${buildQueryString(query)}`;
+  const forensicsRef = `/api/v1/verification/assets/forensics?${buildQueryString(query)}`;
+  const verificationProjection = buildVerificationSurfaceProjection({
+    workflowId,
+    summary,
+    transferProof,
+    status,
+    forensics: assetForensics,
+    trustRef: status.links.public_trust ?? null,
+    replayRef: auditTrailRef,
+    auditTrailRef,
+    forensicsRef,
+  });
+  const transferAuditTrail = buildTransferAuditTrail({
+    workflowId,
+    summary,
+    report,
+    transferProof,
+    status,
+    forensics: assetForensics,
+    requestSummary: `Fixture ${path.basename(dir)} transfer request`,
+    requestId: transferProof.intent_ref,
+    requestedAt: status.timeline[0]?.timestamp ?? "unknown",
+    idempotencyKey: null,
+    workflowType: "restricted_custody_transfer",
+    actionType: "TRANSFER_CUSTODY",
+    validUntil: null,
+    principal: {
+      agentId: assetForensics.principal_identity.requesting_principal_ref,
+      roleProfile: "TRANSFER_COORDINATOR",
+      ownerId: null,
+      delegationRef: null,
+      organizationRef: null,
+      fingerprintId: null,
+      nodeId: null,
+      publicKeyFingerprint: null,
+      attestationType: null,
+      keyRef: null,
+    },
+    authorityScope: {
+      scopeId: null,
+      assetRef: transferProof.asset_ref,
+      productRef: null,
+      facilityRef: assetForensics.custody_transition.facility_ref,
+      expectedFromZone: assetForensics.custody_transition.from_zone,
+      expectedToZone: assetForensics.custody_transition.to_zone,
+      expectedCoordinateRef: null,
+      verdict: "unverified",
+      mismatchKeys: [],
+    },
+    latencyMs: null,
+    replayStatus: "pending",
+    settlementStatus: "unknown",
+    replayArtifactsRef: null,
+    trustRef: status.links.public_trust ?? null,
+    workflowProjectionRef,
+    forensicsRef,
+  });
+  const assetForensicProjection = buildAssetForensicProjection({
+    workflowId,
+    forensics: assetForensics,
+    transferAuditTrailRef: auditTrailRef,
+    workflowProjectionRef,
+    replayArtifactsRef: null,
+    trustRef: status.links.public_trust ?? null,
+    fingerprintComponents: {
+      economicHash: null,
+      physicalPresenceHash: null,
+      reasoningHash: null,
+      actuatorHash: null,
+    },
+  });
 
   return {
+    workflow_id: workflowId,
     summary,
+    verification_projection: verificationProjection,
+    transfer_audit_trail: transferAuditTrail,
+    asset_forensic_projection: assetForensicProjection,
     transfer_proof: transferProof,
     asset_proof: assetProof,
     status,
@@ -753,14 +1121,15 @@ function buildRuntimeSummary(view: RuntimeReplayView): TransferTrustSummary {
   const verificationStatus = isRecord(view.verification_status) ? view.verification_status : {};
   const disposition = stringValue(policyDecision.disposition, "deny") as Disposition;
   const verified = verificationStatus.verified === true;
+  const approvalStatus = deriveRuntimeApprovalStatus(view);
   const executionTokenPresent =
     Boolean(optionalString((view.evidence_bundle as Record<string, unknown> | undefined)?.execution_token_id)) ||
     Boolean(optionalString(auditRecord.token_id));
   return {
     verified,
-    business_state: mapBusinessState(verified, disposition),
+    business_state: mapBusinessState(verified, disposition, approvalStatus),
     disposition,
-    approval_status: deriveRuntimeApprovalStatus(view),
+    approval_status: approvalStatus,
     execution_token_expected: disposition === "allow",
     execution_token_present: executionTokenPresent,
     verification_error_code:
@@ -814,6 +1183,7 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
       .map((entry) => optionalString(entry.transition_receipt_id))
       .filter((entry): entry is string => Boolean(entry));
   })();
+  const workflowId = optionalString(view.audit_record_id) ?? workflowIdForQuery(query);
   const summary = buildRuntimeSummary(view);
   const report = deriveRuntimeReport(view, summary);
   const transferLookup = deriveRuntimeTransferLookup(view, query);
@@ -927,10 +1297,19 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
 
   status.links = { ...status.links, ...links };
   assetForensics.links = { ...assetForensics.links, ...forensicLinks };
-
-  return {
+  const workflowProjectionRef = `/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/projection?${buildQueryString(transferLookup)}`;
+  const auditTrailRef = `/api/v1/verification/transfers/audit-trail?${buildQueryString(transferLookup)}`;
+  const forensicsRef = `/api/v1/verification/assets/forensics?${buildQueryString(forensicLookup)}`;
+  const actionIntent = isRecord(auditRecord.action_intent) ? auditRecord.action_intent : {};
+  const actionIntentPrincipal = isRecord(actionIntent.principal) ? actionIntent.principal : {};
+  const actionIntentAction = isRecord(actionIntent.action) ? actionIntent.action : {};
+  const actionParameters = isRecord(actionIntentAction.parameters) ? actionIntentAction.parameters : {};
+  const gateway = isRecord(actionParameters.gateway) ? actionParameters.gateway : {};
+  const fingerprintComponentsRaw = isRecord(gateway.fingerprint_components) ? gateway.fingerprint_components : {};
+  const verificationProjection = buildVerificationSurfaceProjection({
+    workflowId,
     summary,
-    transfer_proof: toTransferProofView(report, summary, {
+    transferProof: toTransferProofView(report, summary, {
       approval_envelope_id: approvalEnvelopeId,
       approval_envelope_version: approvalEnvelopeVersion,
       approval_binding_hash: approvalBindingHash,
@@ -938,6 +1317,90 @@ export function buildRuntimeScenarioFromReplay(view: RuntimeReplayView, query: T
         optionalString(policyReceipt.policy_receipt_id) ?? optionalString(evidenceBundle.policy_receipt_id) ?? null,
       transition_receipt_ids: transitionReceiptIds,
     }),
+    status,
+    forensics: assetForensics,
+    trustRef: publicTrustUrl ?? null,
+    replayRef: replayArtifacts,
+    auditTrailRef,
+    forensicsRef,
+  });
+  const transferProof = toTransferProofView(report, summary, {
+    approval_envelope_id: approvalEnvelopeId,
+    approval_envelope_version: approvalEnvelopeVersion,
+    approval_binding_hash: approvalBindingHash,
+    policy_receipt_id:
+      optionalString(policyReceipt.policy_receipt_id) ?? optionalString(evidenceBundle.policy_receipt_id) ?? null,
+    transition_receipt_ids: transitionReceiptIds,
+  });
+  const transferAuditTrail = buildTransferAuditTrail({
+    workflowId,
+    summary,
+    report,
+    transferProof,
+    status,
+    forensics: assetForensics,
+    requestSummary:
+      optionalString(actionParameters.request_summary) ??
+      `Runtime transfer request for ${optionalString(resource.asset_id) ?? "asset:unknown"}`,
+    requestId: optionalString(actionIntent.intent_id) ?? optionalString(view.intent_id) ?? "intent:unknown",
+    requestedAt: optionalString(actionIntent.timestamp) ?? optionalString(auditRecord.recorded_at) ?? "unknown",
+    idempotencyKey: optionalString(gateway.idempotency_key) ?? null,
+    workflowType: optionalString(gateway.workflow_type) ?? "restricted_custody_transfer",
+    actionType: optionalString(actionIntentAction.type) ?? "TRANSFER_CUSTODY",
+    validUntil: optionalString(actionIntent.valid_until) ?? null,
+    principal: {
+      agentId: optionalString(actionIntentPrincipal.agent_id) ?? "unknown",
+      roleProfile: optionalString(actionIntentPrincipal.role_profile) ?? "unknown",
+      ownerId: optionalString(gateway.owner_id) ?? null,
+      delegationRef: optionalString(gateway.delegation_ref) ?? null,
+      organizationRef: optionalString(gateway.organization_ref) ?? null,
+      fingerprintId: optionalString(gateway.hardware_fingerprint_id) ?? null,
+      nodeId: optionalString(gateway.hardware_node_id) ?? null,
+      publicKeyFingerprint: optionalString(gateway.hardware_public_key_fingerprint) ?? null,
+      attestationType: null,
+      keyRef: null,
+    },
+    authorityScope: {
+      scopeId: optionalString(gateway.scope_id) ?? null,
+      assetRef: optionalString(gateway.asset_ref) ?? transferProof.asset_ref,
+      productRef: optionalString(gateway.product_ref) ?? null,
+      facilityRef: optionalString(gateway.facility_ref) ?? null,
+      expectedFromZone: optionalString(gateway.expected_from_zone) ?? null,
+      expectedToZone: optionalString(gateway.expected_to_zone) ?? null,
+      expectedCoordinateRef: optionalString(gateway.expected_coordinate_ref) ?? null,
+      verdict: "unverified",
+      mismatchKeys: [],
+    },
+    latencyMs: optionalNumber((auditRecord.policy_decision as Record<string, unknown> | undefined)?.latency_ms) ?? null,
+    replayStatus: "pending",
+    settlementStatus: "unknown",
+    replayArtifactsRef: replayArtifacts,
+    trustRef: publicTrustUrl ?? null,
+    workflowProjectionRef,
+    forensicsRef,
+  });
+  const assetForensicProjection = buildAssetForensicProjection({
+    workflowId,
+    forensics: assetForensics,
+    transferAuditTrailRef: auditTrailRef,
+    workflowProjectionRef,
+    replayArtifactsRef: replayArtifacts,
+    trustRef: publicTrustUrl ?? null,
+    fingerprintComponents: {
+      economicHash: optionalString(fingerprintComponentsRaw.economic_hash) ?? null,
+      physicalPresenceHash: optionalString(fingerprintComponentsRaw.physical_presence_hash) ?? null,
+      reasoningHash: optionalString(fingerprintComponentsRaw.reasoning_hash) ?? null,
+      actuatorHash: optionalString(fingerprintComponentsRaw.actuator_hash) ?? null,
+    },
+  });
+
+  return {
+    workflow_id: workflowId,
+    summary,
+    verification_projection: verificationProjection,
+    transfer_audit_trail: transferAuditTrail,
+    asset_forensic_projection: assetForensicProjection,
+    transfer_proof: transferProof,
     asset_proof: toAssetProofView(report, summary),
     status,
     asset_forensics: assetForensics,
@@ -984,6 +1447,27 @@ export async function buildAssetScenario(query: TransferSourceQuery): Promise<Tr
   return buildRuntimeScenarioFromReplay(view, query);
 }
 
+export async function buildTransferScenarioByWorkflowId(
+  workflowId: string,
+  query: TransferSourceQuery,
+): Promise<TransferScenario> {
+  const normalized = workflowId.trim();
+  if (!normalized) {
+    throw new Error("invalid_workflow_id");
+  }
+  if (query.source === "runtime") {
+    return buildTransferScenario({
+      ...query,
+      audit_id: normalized,
+      intent_id: undefined,
+      subject_id: undefined,
+    });
+  }
+  const root = resolveTransferRoot(query.root);
+  const dir = path.join(root, normalized);
+  return buildTransferScenario({ ...query, dir, source: "fixture" });
+}
+
 export async function listTransferCatalog(query: TransferSourceQuery): Promise<TransferCatalogItem[]> {
   if (query.source === "runtime") {
     const scenario = await buildTransferScenario(query);
@@ -992,6 +1476,7 @@ export async function listTransferCatalog(query: TransferSourceQuery): Promise<T
         id: query.audit_id ?? query.intent_id ?? "runtime-transfer",
         source: "runtime",
         query: buildQueryString(query),
+        workflow_id: scenario.workflow_id,
         summary: scenario.summary,
         status_preview: {
           transfer_readiness: scenario.status.transfer_readiness,
@@ -999,9 +1484,9 @@ export async function listTransferCatalog(query: TransferSourceQuery): Promise<T
           top_blocker: scenario.status.blocker_codes[0] ?? null,
         },
         links: {
-          status: `/api/v1/transfers/status?${buildQueryString(query)}`,
-          review: `/api/v1/transfers/review?${buildQueryString(query)}`,
-          asset_forensics: `/api/v1/assets/forensics?${buildQueryString(query)}`,
+          status: `/api/v1/verification/transfers/status?${buildQueryString(query)}`,
+          review: `/api/v1/verification/transfers/audit-trail?${buildQueryString(query)}`,
+          asset_forensics: `/api/v1/verification/assets/forensics?${buildQueryString(query)}`,
         },
       },
     ];
@@ -1024,6 +1509,7 @@ export async function listTransferCatalog(query: TransferSourceQuery): Promise<T
         dir,
         source: "fixture" as const,
         query: buildQueryString({ source: "fixture", dir }),
+        workflow_id: scenario.workflow_id,
         summary: scenario.summary,
         status_preview: {
           transfer_readiness: scenario.status.transfer_readiness,
@@ -1031,9 +1517,9 @@ export async function listTransferCatalog(query: TransferSourceQuery): Promise<T
           top_blocker: scenario.status.blocker_codes[0] ?? null,
         },
         links: {
-          status: `/api/v1/transfers/status?${buildQueryString({ source: "fixture", dir })}`,
-          review: `/api/v1/transfers/review?${buildQueryString({ source: "fixture", dir })}`,
-          asset_forensics: `/api/v1/assets/forensics?${buildQueryString({ source: "fixture", dir })}`,
+          status: `/api/v1/verification/transfers/status?${buildQueryString({ source: "fixture", dir })}`,
+          review: `/api/v1/verification/transfers/audit-trail?${buildQueryString({ source: "fixture", dir })}`,
+          asset_forensics: `/api/v1/verification/assets/forensics?${buildQueryString({ source: "fixture", dir })}`,
         },
       };
     });

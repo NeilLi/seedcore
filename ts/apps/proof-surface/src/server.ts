@@ -125,12 +125,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/transfer") {
-      const proof = await fetchJson("/api/v1/transfers/proof", query);
+      const proof = await fetchJson("/api/v1/verification/transfers/proof", query);
       let resolvedPublicTrustUrl = publicTrustUrl;
       if (!resolvedPublicTrustUrl && source === "runtime") {
         try {
-          const review = await fetchJson("/api/v1/transfers/review", query);
-          resolvedPublicTrustUrl = review?.status?.links?.public_trust ?? review?.asset_forensics?.links?.public_trust;
+          const review = await fetchJson("/api/v1/verification/transfers/review", query);
+          resolvedPublicTrustUrl =
+            review?.verification_projection?.links?.trust_ref
+            ?? review?.asset_forensic_projection?.links?.trust_ref;
         } catch {
           resolvedPublicTrustUrl = null;
         }
@@ -168,12 +170,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/asset") {
-      const proof = await fetchJson("/api/v1/assets/proof", query);
+      const proof = await fetchJson("/api/v1/verification/assets/proof", query);
       let resolvedPublicTrustUrl = publicTrustUrl;
       if (!resolvedPublicTrustUrl && source === "runtime") {
         try {
-          const forensics = await fetchJson("/api/v1/assets/forensics", query);
-          resolvedPublicTrustUrl = forensics?.links?.public_trust;
+          const forensics = await fetchJson("/api/v1/verification/assets/forensics", query);
+          resolvedPublicTrustUrl = forensics?.links?.trust_ref;
         } catch {
           resolvedPublicTrustUrl = null;
         }

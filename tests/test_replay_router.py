@@ -683,9 +683,44 @@ def test_materialized_custody_event_includes_forensic_block_when_present() -> No
     record["evidence_bundle"]["forensic_block"] = {
         "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
         "@type": "ForensicBlock",
+        "forensic_block_id": "fb-2026-router-0001",
         "block_header": {
+            "forensic_block_id": "fb-2026-router-0001",
             "audit_id": record["id"],
+            "timestamp": record["recorded_at"],
+            "version": "seedcore.forensic_block.v1",
             "sequence_index": 42,
+        },
+        "decision_linkage": {
+            "request_id": record["intent_id"],
+            "disposition": "ALLOW",
+            "decision_hash": "sha256:router-decision-0001",
+        },
+        "asset_identity": {
+            "asset_id": "asset-fb-1",
+        },
+        "authority_context": {
+            "principal_id": "did:seedcore:assistant:router-agent",
+            "hardware_fingerprint": "sha256:router-hardware-0001",
+            "delegation_chain_hash": "sha256:router-delegation-0001",
+        },
+        "fingerprint_components": {
+            "economic_hash": "sha256:economic-router-0001",
+            "physical_presence_hash": "sha256:physical-router-0001",
+            "reasoning_hash": "sha256:reasoning-router-0001",
+            "actuator_hash": "sha256:actuator-router-0001",
+        },
+        "economic_evidence": {
+            "transaction_hash": "sha256:economic-router-0001",
+            "asset_identity": "asset-fb-1",
+        },
+        "spatial_evidence": {
+            "coordinate_binding": {"coordinate_ref": "coord:router:1"},
+            "presence_proof_hash": "sha256:physical-router-0001",
+        },
+        "cognitive_evidence": {
+            "decision": "ALLOW",
+            "reasoning_trace_hash": "sha256:reasoning-router-0001",
         },
         "physical_evidence": {
             "@type": "ActuatorProof",
@@ -702,6 +737,30 @@ def test_materialized_custody_event_includes_forensic_block_when_present() -> No
     assert forensic_block["@type"] == "ForensicBlock"
     assert forensic_block["block_header"]["audit_id"] == record["id"]
     assert forensic_block["physical_evidence"]["actuator_telemetry"]["motor_torque_hash"] == "torque-sig-9922-881"
+
+
+def test_materialized_custody_event_rejects_invalid_forensic_block_shape() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(task_id="task-router-forensic-invalid", intent_id="intent-router-forensic-invalid", asset_id="asset-fb-2")
+    )
+    record["evidence_bundle"]["forensic_block"] = {
+        "@context": "https://seedcore.ai/contexts/forensic-v1.jsonld",
+        "@type": "ForensicBlock",
+        "forensic_block_id": "fb-2026-router-invalid",
+        "authority_context": {"principal_id": ""},
+        "fingerprint_components": {
+            "economic_hash": "sha256:economic-router-invalid",
+            "physical_presence_hash": "sha256:physical-router-invalid",
+            "reasoning_hash": "sha256:reasoning-router-invalid",
+            "actuator_hash": "sha256:actuator-router-invalid",
+        },
+    }
+    client = _make_client(record)
+
+    response = client.get("/governance/materialized-custody-event", params={"audit_id": record["id"]})
+
+    assert response.status_code == 422
+    assert "forensic_block schema violation" in response.json()["detail"]
 
 
 def test_materialized_custody_event_surfaces_authority_mismatch_actions() -> None:

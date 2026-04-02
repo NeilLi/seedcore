@@ -1,7 +1,13 @@
 import http from "node:http";
 import process from "node:process";
 
-import { buildAssetScenario, buildTransferScenario, listTransferCatalog, parseTransferQuery } from "./transferSources.js";
+import {
+  buildAssetScenario,
+  buildTransferScenario,
+  buildTransferScenarioByWorkflowId,
+  listTransferCatalog,
+  parseTransferQuery,
+} from "./transferSources.js";
 
 function jsonResponse(
   res: http.ServerResponse,
@@ -50,45 +56,76 @@ export const server = http.createServer(async (req, res) => {
     }
 
     const query = parseTransferQuery(url);
-    if (url.pathname === "/api/v1/transfers/summary") {
+    if (url.pathname === "/api/v1/verification/transfers/summary") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario.summary);
       return;
     }
 
-    if (url.pathname === "/api/v1/transfers/proof") {
+    if (url.pathname === "/api/v1/verification/transfers/proof") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario.transfer_proof);
       return;
     }
 
-    if (url.pathname === "/api/v1/assets/proof") {
+    if (url.pathname === "/api/v1/verification/assets/proof") {
       const scenario = await buildAssetScenario(query);
       jsonResponse(res, 200, scenario.asset_proof);
       return;
     }
 
-    if (url.pathname === "/api/v1/transfers/status") {
+    if (url.pathname === "/api/v1/verification/transfers/status") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario.status);
       return;
     }
 
-    if (url.pathname === "/api/v1/assets/forensics") {
+    if (url.pathname === "/api/v1/verification/assets/forensics") {
       const scenario = await buildAssetScenario(query);
-      jsonResponse(res, 200, scenario.asset_forensics);
+      jsonResponse(res, 200, scenario.asset_forensic_projection);
       return;
     }
 
-    if (url.pathname === "/api/v1/transfers/review") {
+    if (url.pathname === "/api/v1/verification/transfers/review") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario);
       return;
     }
 
-    if (url.pathname === "/api/v1/transfers/catalog") {
+    if (url.pathname === "/api/v1/verification/transfers/catalog") {
       const items = await listTransferCatalog(query);
       jsonResponse(res, 200, { root: query.root ?? null, source: query.source, items });
+      return;
+    }
+
+    if (url.pathname === "/api/v1/verification/transfers") {
+      const items = await listTransferCatalog(query);
+      jsonResponse(res, 200, { root: query.root ?? null, source: query.source, items });
+      return;
+    }
+
+    if (url.pathname === "/api/v1/verification/transfers/audit-trail") {
+      const scenario = await buildTransferScenario(query);
+      jsonResponse(res, 200, scenario.transfer_audit_trail);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/v1/verification/workflows/") && url.pathname.endsWith("/projection")) {
+      const workflowId = decodeURIComponent(
+        url.pathname
+          .replace("/api/v1/verification/workflows/", "")
+          .replace("/projection", "")
+          .replace(/\/+$/, ""),
+      );
+      const scenario = await buildTransferScenarioByWorkflowId(workflowId, query);
+      jsonResponse(res, 200, scenario.verification_projection);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/v1/verification/transfers/")) {
+      const workflowId = decodeURIComponent(url.pathname.replace("/api/v1/verification/transfers/", ""));
+      const scenario = await buildTransferScenarioByWorkflowId(workflowId, query);
+      jsonResponse(res, 200, scenario.transfer_audit_trail);
       return;
     }
 

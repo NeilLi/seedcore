@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Mapping, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
+from pydantic import ValidationError
 
 from ...api.external_authority import build_owner_twin_snapshot, get_delegation
 from ...agents.roles.specialization import SpecializationManager
@@ -41,6 +42,7 @@ from ...ops.pdp_hot_path import (
     evaluate_pdp_hot_path,
     resolve_authoritative_transfer_approval,
 )
+from ...ops.evidence.forensic_block_contract import FORENSIC_BLOCK_CONTEXT
 from ...services.digital_twin_service import DigitalTwinService
 from ...serve.organism_client import OrganismServiceClient
 
@@ -86,8 +88,9 @@ _REDIS_CLIENT_INITIALIZED = False
 _DIGITAL_TWIN_SERVICE: DigitalTwinService | None = None
 _DIGITAL_TWIN_SERVICE_LOCK = Lock()
 
-REQUEST_RECORD_TTL_SECONDS = int(
-    os.getenv("SEEDCORE_AGENT_ACTION_REQUEST_RECORD_TTL_SECONDS", "86400")
+REQUEST_RECORD_TTL_SECONDS = max(
+    86400,
+    int(os.getenv("SEEDCORE_AGENT_ACTION_REQUEST_RECORD_TTL_SECONDS", "86400")),
 )
 REDIS_REQUEST_RECORD_KEY_PREFIX = "seedcore:agent_actions:req"
 REDIS_IDEMPOTENCY_KEY_PREFIX = "seedcore:agent_actions:idem"
@@ -474,10 +477,55 @@ def _annotate_owner_context_in_response(
     return response.model_copy(update={"governed_receipt": governed_receipt})
 
 
+def _canonical_gateway_payload_hash(
+    payload: AgentActionEvaluateRequest,
+    *,
+    requested_no_execute: bool,
+) -> str:
+    canonical_payload = {
+        "contract_version": payload.contract_version,
+        "request_id": payload.request_id,
+        "requested_at": _to_utc_iso(payload.requested_at),
+        "idempotency_key": payload.idempotency_key,
+        "policy_snapshot_ref": payload.policy_snapshot_ref,
+        "principal": {
+            "agent_id": payload.principal.agent_id,
+            "role_profile": payload.principal.role_profile,
+            "owner_id": payload.principal.owner_id,
+            "delegation_ref": payload.principal.delegation_ref,
+            "organization_ref": payload.principal.organization_ref,
+            "session_token": payload.principal.session_token,
+            "actor_token": payload.principal.actor_token,
+            "hardware_fingerprint": payload.principal.hardware_fingerprint.model_dump(mode="json"),
+        },
+        "workflow": payload.workflow.model_dump(mode="json"),
+        "asset": payload.asset.model_dump(mode="json"),
+        "approval": payload.approval.model_dump(mode="json"),
+        "authority_scope": payload.authority_scope.model_dump(mode="json"),
+        "telemetry": payload.telemetry.model_dump(mode="json"),
+        "security_contract": payload.security_contract.model_dump(mode="json"),
+        "options": {
+            "no_execute": bool(requested_no_execute),
+            "debug": bool(payload.options.debug),
+        },
+    }
+    if payload.forensic_context is not None:
+        canonical_payload["forensic_context"] = payload.forensic_context.model_dump(mode="json")
+    canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
 def _canonical_payload_hash(payload: Any) -> str:
     canonical_payload = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload or {})
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def _hash_or_passthrough(value: Any, *, fallback: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized:
+        return normalized
+    return f"sha256:{hashlib.sha256(fallback.encode('utf-8')).hexdigest()}"
 
 
 def _request_record_redis_key(request_id: str) -> str:
@@ -967,17 +1015,167 @@ def _build_closure_evidence_bundle(
         if request_record.response.execution_token is not None
         else {}
     )
+    request_payload = (
+        dict(request_record.request_payload)
+        if isinstance(request_record.request_payload, dict)
+        else {}
+    )
+    request_principal = (
+        request_payload.get("principal")
+        if isinstance(request_payload.get("principal"), dict)
+        else {}
+    )
+    request_asset = (
+        request_payload.get("asset")
+        if isinstance(request_payload.get("asset"), dict)
+        else {}
+    )
+    request_authority_scope = (
+        request_payload.get("authority_scope")
+        if isinstance(request_payload.get("authority_scope"), dict)
+        else {}
+    )
+    request_workflow = (
+        request_payload.get("workflow")
+        if isinstance(request_payload.get("workflow"), dict)
+        else {}
+    )
+    hardware = (
+        request_principal.get("hardware_fingerprint")
+        if isinstance(request_principal.get("hardware_fingerprint"), dict)
+        else {}
+    )
+    governed_receipt = (
+        dict(request_record.response.governed_receipt)
+        if isinstance(request_record.response.governed_receipt, dict)
+        else {}
+    )
     endpoint_node_id = str(execution_token_constraints.get("endpoint_id") or "").strip()
     resolved_node_id = str(closure_payload.node_id or "").strip() or endpoint_node_id
+    disposition = str(request_record.response.decision.disposition or "").strip().lower() or "unknown"
+    request_id = str(closure_payload.request_id or "").strip() or "unknown_request"
+    audit_id = (
+        str(governed_receipt.get("audit_id") or request_id).strip()
+        or request_id
+    )
+    decision_hash = _hash_or_passthrough(
+        governed_receipt.get("decision_hash"),
+        fallback=f"decision:{request_id}:{closure_payload.forensic_block.forensic_block_id}",
+    )
+    asset_id = str(request_asset.get("asset_id") or governed_receipt.get("asset_ref") or "").strip() or "asset:unknown"
+    principal_id = str(request_principal.get("agent_id") or "").strip() or "unknown_principal"
+    delegation_ref = str(request_principal.get("delegation_ref") or "").strip()
+    if not delegation_ref:
+        delegation_ref = _hash_or_passthrough(
+            None,
+            fallback=f"delegation:{principal_id}:{asset_id}:{request_id}",
+        )
+    hardware_fingerprint = str(hardware.get("public_key_fingerprint") or "").strip()
+    if not hardware_fingerprint:
+        hardware_fingerprint = _hash_or_passthrough(
+            None,
+            fallback=f"hardware:{principal_id}:{request_id}",
+        )
+    coordinate_ref = str(
+        closure_payload.forensic_block.current_coordinate_ref
+        or request_authority_scope.get("expected_coordinate_ref")
+        or ""
+    ).strip()
+    if not coordinate_ref:
+        coordinate_ref = f"coordinate:unknown:{asset_id}"
+    forensic_block = {
+        "@context": FORENSIC_BLOCK_CONTEXT,
+        "@type": "ForensicBlock",
+        "forensic_block_id": closure_payload.forensic_block.forensic_block_id,
+        "block_header": {
+            "forensic_block_id": closure_payload.forensic_block.forensic_block_id,
+            "audit_id": audit_id,
+            "timestamp": _to_utc_iso(closure_payload.closed_at),
+            "version": "seedcore.forensic_block.v1",
+        },
+        "decision_linkage": {
+            "request_id": request_id,
+            "disposition": disposition.upper(),
+            "decision_hash": decision_hash,
+            "policy_receipt_id": str(governed_receipt.get("policy_receipt_id") or "").strip() or None,
+            "policy_snapshot_ref": str(request_record.response.decision.policy_snapshot_ref or "").strip() or None,
+        },
+        "asset_identity": {
+            "asset_id": asset_id,
+            "lot_id": str(request_asset.get("lot_id") or "").strip() or None,
+            "product_ref": str(request_asset.get("product_ref") or "").strip() or None,
+            "quote_ref": str(request_asset.get("quote_ref") or "").strip() or None,
+        },
+        "authority_context": {
+            "@type": "DelegatedAuthority",
+            "principal_id": principal_id,
+            "owner_id": str(request_principal.get("owner_id") or "").strip() or None,
+            "hardware_fingerprint": hardware_fingerprint,
+            "kms_key_ref": str(hardware.get("key_ref") or "").strip() or None,
+            "delegation_chain_hash": delegation_ref,
+            "execution_token_id": (
+                request_record.response.execution_token.token_id
+                if request_record.response.execution_token is not None
+                else None
+            ),
+            "organization_ref": str(request_principal.get("organization_ref") or "").strip() or None,
+        },
+        "fingerprint_components": closure_payload.forensic_block.fingerprint_components.model_dump(mode="json"),
+        "economic_evidence": {
+            "@type": "CommerceTransaction",
+            "platform": "seedcore_rct",
+            "order_id": None,
+            "transaction_hash": closure_payload.forensic_block.fingerprint_components.economic_hash,
+            "quote_hash": str(request_asset.get("quote_ref") or "").strip() or None,
+            "asset_identity": asset_id,
+        },
+        "spatial_evidence": {
+            "coordinate_binding": {
+                "coordinate_ref": coordinate_ref,
+                "system": "seedcore",
+            },
+            "current_zone": str(
+                closure_payload.forensic_block.current_zone
+                or request_authority_scope.get("expected_to_zone")
+                or ""
+            ).strip()
+            or None,
+            "presence_proof_hash": closure_payload.forensic_block.fingerprint_components.physical_presence_hash,
+        },
+        "cognitive_evidence": {
+            "@type": "PolicyReasoning",
+            "policy_receipt_id": str(governed_receipt.get("policy_receipt_id") or "").strip() or None,
+            "decision": disposition.upper(),
+            "reasoning_trace_hash": closure_payload.forensic_block.fingerprint_components.reasoning_hash,
+            "matched_policy_refs": list(governed_receipt.get("matched_policy_refs") or []),
+        },
+        "physical_evidence": {
+            "@type": "ActuatorProof",
+            "device_actor": resolved_node_id or None,
+            "edge_node": resolved_node_id or None,
+            "trajectory_hash": _hash_or_passthrough(
+                governed_receipt.get("decision_hash"),
+                fallback=f"trajectory:{request_id}:{asset_id}",
+            ),
+            "actuator_telemetry": {
+                "motor_torque_hash": closure_payload.forensic_block.fingerprint_components.actuator_hash,
+            },
+            "sensor_signatures": [],
+        },
+        "settlement_status": {
+            "is_finalized": closure_payload.outcome == "completed",
+            "twin_mutation_id": None,
+            "forensic_integrity_hash": _hash_or_passthrough(
+                governed_receipt.get("decision_hash"),
+                fallback=f"settlement:{request_id}:{closure_payload.closure_id}",
+            ),
+        },
+    }
     return {
         "evidence_bundle_id": closure_payload.evidence_bundle_id,
         "node_id": resolved_node_id or None,
         "execution_receipt": {"node_id": resolved_node_id} if resolved_node_id else {},
-        "forensic_block": (
-            dict(closure_payload.forensic_block)
-            if isinstance(closure_payload.forensic_block, dict)
-            else {}
-        ),
+        "forensic_block": forensic_block,
         "evidence_inputs": {
             "execution_summary": {"node_id": resolved_node_id} if resolved_node_id else {},
             "transition_receipts": transition_receipts,
@@ -1200,20 +1398,74 @@ def _as_closure_record_response(record: _AgentActionClosureStoredRecord) -> Agen
     )
 
 
+def _invalid_request_envelope(
+    *,
+    message: str,
+    request_id: str | None,
+    errors: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "error_code": "request_validation_failed",
+        "message": message,
+    }
+    if request_id:
+        payload["request_id"] = request_id
+    if errors:
+        payload["issues"] = errors
+    return payload
+
+
+def _parse_validate_payload(
+    payload_body: Dict[str, Any],
+    *,
+    model: Any,
+    request_id_hint: str | None = None,
+) -> Any:
+    try:
+        return model.model_validate(payload_body)
+    except ValidationError as exc:
+        issues = []
+        for issue in exc.errors():
+            location = ".".join(str(item) for item in issue.get("loc", []))
+            issues.append(
+                {
+                    "path": location or "$",
+                    "type": issue.get("type"),
+                    "message": issue.get("msg"),
+                }
+            )
+        request_id = request_id_hint or str(payload_body.get("request_id") or "").strip() or None
+        raise HTTPException(
+            status_code=422,
+            detail=_invalid_request_envelope(
+                message="request payload failed schema validation",
+                request_id=request_id,
+                errors=issues,
+            ),
+        ) from exc
+
+
 @router.post("/agent-actions/evaluate", response_model=AgentActionEvaluateResponse)
 async def evaluate_agent_action(
-    payload: AgentActionEvaluateRequest,
+    payload_body: Dict[str, Any] = Body(...),
     debug: bool = Query(default=False, description="Include check-by-check diagnostics."),
     no_execute: bool = Query(
         default=False,
         description="Preflight mode: evaluate policy and trust gaps without minting ExecutionToken.",
     ),
 ) -> AgentActionEvaluateResponse:
+    payload = _parse_validate_payload(payload_body, model=AgentActionEvaluateRequest)
     requested_no_execute = bool(no_execute or payload.options.no_execute)
-    request_hash_base = _canonical_payload_hash(payload)
-    request_hash = hashlib.sha256(
-        f"{request_hash_base}|no_execute={int(requested_no_execute)}".encode("utf-8")
-    ).hexdigest()
+    request_hash = _canonical_gateway_payload_hash(payload, requested_no_execute=requested_no_execute)
+    if get_async_pg_session_factory() is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "dependency_unavailable",
+                "message": "approval_store_unavailable",
+                "request_id": payload.request_id,
+            },
+        )
     claimed, idempotency_entry = await _claim_idempotency_key(
         idempotency_key=payload.idempotency_key,
         request_id=payload.request_id,
@@ -1341,8 +1593,13 @@ async def get_agent_action_request_record(request_id: str) -> AgentActionRequest
 )
 async def close_agent_action(
     request_id: str,
-    payload: AgentActionClosureRequest,
+    payload_body: Dict[str, Any] = Body(...),
 ) -> AgentActionClosureResponse:
+    payload = _parse_validate_payload(
+        payload_body,
+        model=AgentActionClosureRequest,
+        request_id_hint=str(request_id).strip() or None,
+    )
     request_key = str(request_id).strip()
     if request_key != payload.request_id:
         raise HTTPException(
@@ -1412,12 +1669,7 @@ async def close_agent_action(
             closure_id=payload.closure_id,
             accepted_at=datetime.now(timezone.utc),
             linked_disposition=linked_disposition,
-            forensic_block_id=(
-                str(payload.forensic_block.get("block_header", {}).get("audit_id")).strip()
-                if isinstance(payload.forensic_block.get("block_header"), dict)
-                and str(payload.forensic_block.get("block_header", {}).get("audit_id")).strip()
-                else None
-            ),
+            forensic_block_id=payload.forensic_block.forensic_block_id,
             settlement_status=settlement_status,
             replay_status=replay_status,
             settlement_result=settlement_result,

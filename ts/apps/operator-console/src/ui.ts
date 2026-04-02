@@ -1,9 +1,11 @@
 import {
-  AssetForensicView,
+  AssetForensicProjection,
   SignatureProvenanceEntry,
+  TransferAuditTrail,
   TransferTimelineEntry,
-  parseAssetForensicView,
-  parseTransferStatusView,
+  parseAssetForensicProjection,
+  parseTransferAuditTrail,
+  parseVerificationSurfaceProjection,
 } from "@seedcore/contracts";
 
 function escapeHtml(value: string): string {
@@ -106,7 +108,7 @@ export function statusClass(state: string): "ok" | "warn" | "bad" {
   if (state === "verified") {
     return "ok";
   }
-  if (state === "quarantined" || state === "review_required") {
+  if (state === "quarantined" || state === "review_required" || state === "pending_approval") {
     return "warn";
   }
   return "bad";
@@ -194,77 +196,107 @@ export function renderCatalogPage(catalog: any): string {
 }
 
 export function renderTransferPage(reviewPayload: any, query: string): string {
-  const status = parseTransferStatusView(reviewPayload?.status ?? {});
-  const forensics = parseAssetForensicView(reviewPayload?.asset_forensics ?? {});
-  const transfer = reviewPayload?.transfer_proof ?? {};
-  const cls = statusClass(status.business_state);
+  const projection = parseVerificationSurfaceProjection(reviewPayload?.verification_projection ?? {});
+  const auditTrail = parseTransferAuditTrail(reviewPayload?.transfer_audit_trail ?? {});
+  const forensics = parseAssetForensicProjection(reviewPayload?.asset_forensic_projection ?? {});
+  const cls = statusClass(projection.status);
   return page(
     "Transfer Workflow Review",
     `
       <h1>Transfer Workflow Review</h1>
-      <p class="sub">Operator status, readiness, and verifier state for Restricted Custody Transfer.</p>
+      <p class="sub">Side-by-side audit trail: request + authority, decision + artifacts, and physical evidence + closure.</p>
       <p class="row"><a href="/?${query}">Back to scenario list</a></p>
       <p class="row"><a href="/forensics?${query}">Open asset forensic view</a></p>
 
       <section class="card">
-        <h2>Current State</h2>
+        <h2>Workflow Projection</h2>
         <div class="row">
-          <span class="status ${cls}">${escapeHtml(status.business_state)}</span>
-          <span class="status">${escapeHtml(status.disposition)}</span>
-          <span class="status">${escapeHtml(status.approval_status)}</span>
-          <span class="status">${escapeHtml(status.transfer_readiness)}</span>
+          <span class="status ${cls}">${escapeHtml(projection.status)}</span>
+          <span class="status">${escapeHtml(projection.authorization.disposition)}</span>
+          <span class="status">${escapeHtml(projection.summary.approval_state)}</span>
         </div>
-        <div class="row">current step: <code>${escapeHtml(status.current_step)}</code></div>
-        <div class="row">verified: <code>${String(status.verified)}</code></div>
-        <div class="row">verification error: <code>${escapeHtml(status.verification_error_code ?? "none")}</code></div>
-        <div class="row">execution token: <code>${escapeHtml(transfer.execution_token_id ?? "none")}</code></div>
+        <div class="row">workflow id: <code>${escapeHtml(projection.workflow_id)}</code></div>
+        <div class="row">asset: <code>${escapeHtml(projection.asset_ref)}</code></div>
+        <div class="row">from zone: <code>${escapeHtml(projection.summary.from_zone)}</code></div>
+        <div class="row">to zone: <code>${escapeHtml(projection.summary.to_zone)}</code></div>
       </section>
 
       <section class="split">
         <article class="card">
-          <h2>Workflow Identity</h2>
-        <div class="row">asset: <code>${escapeHtml(transfer.asset_ref ?? "unknown")}</code></div>
-        <div class="row">intent: <code>${escapeHtml(transfer.intent_ref ?? "unknown")}</code></div>
-        <div class="row">decision: <code>${escapeHtml(transfer.decision_id ?? "unknown")}</code></div>
-        <div class="row">approval envelope: <code>${escapeHtml(transfer.approval_envelope_id ?? "none")}</code></div>
-        <div class="row">approval version: <code>${escapeHtml(String(transfer.approval_envelope_version ?? "none"))}</code></div>
-        <div class="row">approval binding: <code>${escapeHtml(transfer.approval_binding_hash ?? "none")}</code></div>
-        <div class="row">policy receipt: <code>${escapeHtml(transfer.policy_receipt_id ?? "unknown")}</code></div>
-        <div class="row">transition receipts: <code>${escapeHtml((transfer.transition_receipt_ids ?? []).join(", ") || "none")}</code></div>
-        <h3>Pending Roles</h3>
-        ${renderList(status.pending_roles)}
-          <h3>Blockers</h3>
-          ${renderList(status.blocker_codes)}
+          <h2>Request + Authority</h2>
+          <div class="row">request id: <code>${escapeHtml(auditTrail.request.request_id)}</code></div>
+          <div class="row">requested at: <code>${escapeHtml(auditTrail.request.requested_at)}</code></div>
+          <div class="row">request summary: ${escapeHtml(auditTrail.request.request_summary)}</div>
+          <div class="row">action type: <code>${escapeHtml(auditTrail.request.action_type)}</code></div>
+          <div class="row">agent id: <code>${escapeHtml(auditTrail.principal.agent_id)}</code></div>
+          <div class="row">role profile: <code>${escapeHtml(auditTrail.principal.role_profile)}</code></div>
+          <div class="row">owner id: <code>${escapeHtml(auditTrail.principal.owner_id ?? "none")}</code></div>
+          <div class="row">delegation ref: <code>${escapeHtml(auditTrail.principal.delegation_ref ?? "none")}</code></div>
+          <div class="row">organization ref: <code>${escapeHtml(auditTrail.principal.organization_ref ?? "none")}</code></div>
+          <div class="row">fingerprint id: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.fingerprint_id ?? "none")}</code></div>
+          <div class="row">fingerprint pubkey: <code>${escapeHtml(auditTrail.principal.hardware_fingerprint.public_key_fingerprint ?? "none")}</code></div>
+          <div class="row">scope id: <code>${escapeHtml(auditTrail.authority_scope.scope_id ?? "none")}</code></div>
+          <div class="row">scope verdict: <code>${escapeHtml(auditTrail.authority_scope.authority_scope_verdict)}</code></div>
+          <h3>Scope Mismatch Keys</h3>
+          ${renderList(auditTrail.authority_scope.mismatch_keys)}
         </article>
 
         <article class="card">
-          <h2>Review Signals</h2>
-          <h3>Verifier Checks</h3>
-          ${renderList(status.checks)}
-          <h3>Missing Prerequisites</h3>
-          ${renderList(forensics.missing_prerequisites)}
+          <h2>Decision + Artifacts</h2>
+          <div class="row">allowed: <code>${String(auditTrail.decision.allowed)}</code></div>
+          <div class="row">disposition: <code>${escapeHtml(auditTrail.decision.disposition)}</code></div>
+          <div class="row">reason code: <code>${escapeHtml(auditTrail.decision.reason_code)}</code></div>
+          <div class="row">reason: ${escapeHtml(auditTrail.decision.reason)}</div>
+          <div class="row">policy snapshot: <code>${escapeHtml(auditTrail.decision.policy_snapshot_ref)}</code></div>
+          <div class="row">latency ms: <code>${escapeHtml(String(auditTrail.decision.latency_ms ?? "none"))}</code></div>
+          <div class="row">decision id: <code>${escapeHtml(auditTrail.artifacts.decision_id)}</code></div>
+          <div class="row">policy receipt id: <code>${escapeHtml(auditTrail.artifacts.policy_receipt_id)}</code></div>
+          <div class="row">transition receipt ids: <code>${escapeHtml(auditTrail.artifacts.transition_receipt_ids.join(", ") || "none")}</code></div>
+          <div class="row">execution token id: <code>${escapeHtml(auditTrail.artifacts.execution_token_id ?? "none")}</code></div>
+          <div class="row">audit id: <code>${escapeHtml(auditTrail.artifacts.audit_id)}</code></div>
+          <div class="row">forensic block id: <code>${escapeHtml(auditTrail.artifacts.forensic_block_id ?? "none")}</code></div>
+          <h3>Minted Artifacts</h3>
+          ${renderList(auditTrail.artifacts.minted_artifacts)}
+          <h3>Obligations</h3>
+          ${renderList(auditTrail.artifacts.obligations.map((value: unknown) => JSON.stringify(value)))}
+        </article>
+
+        <article class="card">
+          <h2>Physical Evidence + Closure</h2>
+          <div class="row">current zone: <code>${escapeHtml(auditTrail.physical_evidence.current_zone ?? "none")}</code></div>
+          <div class="row">current coordinate: <code>${escapeHtml(auditTrail.physical_evidence.current_coordinate_ref ?? "none")}</code></div>
+          <div class="row">economic hash: <code>${escapeHtml(auditTrail.physical_evidence.fingerprint_components.economic_hash ?? "none")}</code></div>
+          <div class="row">physical presence hash: <code>${escapeHtml(auditTrail.physical_evidence.fingerprint_components.physical_presence_hash ?? "none")}</code></div>
+          <div class="row">reasoning hash: <code>${escapeHtml(auditTrail.physical_evidence.fingerprint_components.reasoning_hash ?? "none")}</code></div>
+          <div class="row">actuator hash: <code>${escapeHtml(auditTrail.physical_evidence.fingerprint_components.actuator_hash ?? "none")}</code></div>
+          <div class="row">replay status: <code>${escapeHtml(auditTrail.physical_evidence.replay_status)}</code></div>
+          <div class="row">settlement status: <code>${escapeHtml(auditTrail.physical_evidence.settlement_status)}</code></div>
+          <h3>Telemetry References</h3>
+          ${renderList(auditTrail.physical_evidence.telemetry_refs)}
           <h3>Trust Gaps</h3>
           ${renderList(forensics.trust_gaps)}
+          <h3>Missing Prerequisites</h3>
+          ${renderList(forensics.missing_prerequisites)}
           <h3>Transfer Links</h3>
           ${renderApiLinks([
-            ["Review API", status.links.review],
-            ["Asset Forensics API", status.links.asset_forensics],
-            ["Public Trust", status.links.public_trust],
-            ["Verify", status.links.verify],
+            ["Workflow Projection API", projection.links.audit_trail_ref],
+            ["Asset Forensics API", projection.links.forensics_ref],
+            ["Replay Artifacts", auditTrail.links.replay_artifacts_ref ?? undefined],
+            ["Public Trust", projection.links.trust_ref ?? undefined],
           ])}
         </article>
       </section>
 
       <section class="card">
         <h2>Governed Timeline</h2>
-        ${renderTimeline(status.timeline)}
+        ${renderTimeline(forensics.timeline)}
       </section>
     `,
   );
 }
 
 export function renderForensicsPage(forensicsPayload: any, query: string): string {
-  const forensics = parseAssetForensicView(forensicsPayload);
+  const forensics = parseAssetForensicProjection(forensicsPayload);
   const cls = statusClass(forensics.business_state);
   return page(
     "Asset Forensic View",
@@ -313,8 +345,13 @@ export function renderForensicsPage(forensicsPayload: any, query: string): strin
           <h2>Telemetry + Signatures</h2>
           <h3>Telemetry References</h3>
           ${renderList(forensics.telemetry_refs)}
+          <h3>Forensic Fingerprint</h3>
+          <div class="row">economic hash: <code>${escapeHtml(forensics.forensic_fingerprint.economic_hash ?? "none")}</code></div>
+          <div class="row">physical presence hash: <code>${escapeHtml(forensics.forensic_fingerprint.physical_presence_hash ?? "none")}</code></div>
+          <div class="row">reasoning hash: <code>${escapeHtml(forensics.forensic_fingerprint.reasoning_hash ?? "none")}</code></div>
+          <div class="row">actuator hash: <code>${escapeHtml(forensics.forensic_fingerprint.actuator_hash ?? "none")}</code></div>
           <h3>Signature Provenance</h3>
-          <ul>${forensics.signature_provenance
+          <ul>${forensics.signer_provenance
             .map(
               (entry: SignatureProvenanceEntry) =>
                 `<li><code>${escapeHtml(entry.artifact_type)}</code> signed by <code>${escapeHtml(entry.signer_id)}</code> (${escapeHtml(entry.attestation_level)})</li>`,
@@ -340,9 +377,10 @@ export function renderForensicsPage(forensicsPayload: any, query: string): strin
           ${renderList(forensics.obligations.map((value: unknown) => JSON.stringify(value)))}
           <h3>Forensic Links</h3>
           ${renderApiLinks([
-            ["Transfer Review API", forensics.links.transfer_review],
-            ["Public Trust", forensics.links.public_trust],
-            ["Replay Artifacts", forensics.links.replay_artifacts],
+            ["Workflow Projection API", forensics.links.workflow_projection_ref],
+            ["Transfer Audit Trail API", forensics.links.transfer_audit_trail_ref],
+            ["Public Trust", forensics.links.trust_ref ?? undefined],
+            ["Replay Artifacts", forensics.links.replay_artifacts_ref ?? undefined],
           ])}
           <h3>Governed Timeline</h3>
           ${renderTimeline(forensics.timeline)}
