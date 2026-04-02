@@ -214,6 +214,76 @@ def _rollback_reasons(
     return reasons
 
 
+def _build_hot_path_observability(status: Mapping[str, Any]) -> dict[str, Any]:
+    """Cluster/Ray scrape-friendly signals and operator alerting hints (additive contract)."""
+    alerts: list[dict[str, Any]] = []
+
+    def add(severity: str, code: str, message: str) -> None:
+        alerts.append({"severity": severity, "code": code, "message": message})
+
+    if bool(status.get("rollback_triggered")):
+        add(
+            "critical",
+            "rollback_active",
+            "Hot-path auto-rollback is active; do not treat candidate PDP as promotion-eligible.",
+        )
+    if int(status.get("false_positive_allow_count") or 0) > 0:
+        add(
+            "critical",
+            "false_positive_allow",
+            "False-positive allow signals were recorded on the shadow hot path.",
+        )
+    if not bool(status.get("graph_freshness_ok", True)):
+        add("warning", "graph_stale", "Authz graph failed freshness checks.")
+    if not bool(status.get("authz_graph_ready", True)):
+        add("warning", "authz_not_ready", "Compiled authz index is not ready.")
+    if not bool(status.get("latency_slo_met", True)):
+        add("warning", "latency_slo", "Hot-path latency percentiles exceed promotion SLOs.")
+
+    recent_mm = int(status.get("recent_mismatch_count") or 0)
+    total_runs = int(status.get("total") or 0)
+    if recent_mm > 0 and total_runs >= 50:
+        add(
+            "warning",
+            "parity_mismatch_window",
+            f"Sliding promotion window includes {recent_mm} parity mismatches.",
+        )
+
+    critical = any(a["severity"] == "critical" for a in alerts)
+    warning = any(a["severity"] == "warning" for a in alerts)
+    if critical:
+        level = "critical"
+    elif warning:
+        level = "warning"
+    else:
+        level = "ok"
+
+    lat = status.get("latency_ms")
+    p99 = lat.get("p99") if isinstance(lat, Mapping) else None
+    prom = status.get("promotion") if isinstance(status.get("promotion"), Mapping) else {}
+
+    return {
+        "contract_version": "seedcore.observability.hot_path.v1",
+        "deployment_role": (str(os.getenv("SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE", "")).strip() or None),
+        "alert_level": level,
+        "alerts": alerts,
+        "gauges": {
+            "total_runs": total_runs,
+            "recent_mismatch_count": recent_mm,
+            "parity_ok": int(status.get("parity_ok") or 0),
+            "mismatched_total": int(status.get("mismatched") or 0),
+            "p99_ms": p99,
+            "graph_age_seconds": status.get("graph_age_seconds"),
+            "graph_freshness_ok": bool(status.get("graph_freshness_ok")),
+            "authz_graph_ready": bool(status.get("authz_graph_ready")),
+            "latency_slo_met": bool(status.get("latency_slo_met")),
+            "strict_promotion_eligible": bool(status.get("strict_promotion_eligible")),
+            "rollback_triggered": bool(status.get("rollback_triggered")),
+            "promotion_window_healthy": bool(prom.get("promotion_eligible")) if prom else None,
+        },
+    }
+
+
 def _auto_rollback_reasons() -> list[str]:
     if not HOT_PATH_AUTO_ROLLBACK_ENABLED:
         return []
@@ -749,6 +819,7 @@ def hot_path_shadow_status() -> dict[str, Any]:
             "enforce_ready": enforce_ready,
         }
     )
+    status["observability"] = _build_hot_path_observability(status)
     return status
 
 

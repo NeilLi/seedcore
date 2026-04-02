@@ -14,6 +14,7 @@ import {
   SignatureProvenanceEntry,
   TransferAuditTrail,
   TransferProofView,
+  TransferReadiness,
   TransferStatusView,
   TransferTimelineEntry,
   TransferTrustSummary,
@@ -45,6 +46,77 @@ export interface TransferSourceQuery {
   audit_id?: string;
   intent_id?: string;
   subject_id?: string;
+  /** Filter: business_state or trust bucket (verified | quarantined | rejected | pending | review). */
+  status?: string;
+  disposition?: string;
+  facility?: string;
+  zone?: string;
+  approval_state?: string;
+  replay_readiness?: string;
+}
+
+export type TrustBucket = "verified" | "quarantined" | "rejected" | "pending" | "review";
+
+export interface TransferQueueRow {
+  queue_key: string;
+  workflow_id: string;
+  asset_ref: string;
+  trust_summary: {
+    trust_bucket: TrustBucket;
+    business_state: BusinessState;
+    disposition: Disposition;
+    verified: boolean;
+  };
+  prerequisites: {
+    transfer_readiness: TransferReadiness;
+    current_step: string;
+    blocker_codes: string[];
+    missing_prerequisites: string[];
+    top_blocker: string | null;
+  };
+  approval_state: ApprovalStatus | string;
+  facility_ref: string | null;
+  from_zone: string;
+  to_zone: string;
+  replay_readiness: "pending" | "ready";
+  links: {
+    status: string;
+    review: string;
+    asset_forensics: string;
+    asset_forensics_rest: string;
+    replay_verification: string;
+    workflow_projection: string;
+  };
+}
+
+export interface VerificationDetailResponse {
+  contract_version: "seedcore.verification_detail.v1";
+  workflow_id: string;
+  verification_projection: VerificationSurfaceProjection;
+  transfer_audit_trail: TransferAuditTrail;
+  asset_forensic_projection: AssetForensicProjection;
+  receipt_chain: {
+    steps: Array<{
+      id: string;
+      label: string;
+      ref: string | null;
+      ok: boolean;
+      detail?: string;
+    }>;
+    terminal_disposition: Disposition;
+    replay_verifiable: boolean;
+  };
+  failure_panel: {
+    active: boolean;
+    path: Disposition | string;
+    business_state: BusinessState;
+    headline: string;
+    blockers: string[];
+    trust_gaps: string[];
+    missing_prerequisites: string[];
+    reason_code: string;
+    reason: string;
+  };
 }
 
 export interface TransferCatalogItem {
@@ -218,7 +290,7 @@ function objectArray(value: unknown): Array<Record<string, unknown>> {
   return value.filter((entry): entry is Record<string, unknown> => isRecord(entry));
 }
 
-function buildQueryString(query: TransferSourceQuery): string {
+export function buildQueryString(query: TransferSourceQuery): string {
   const params = new URLSearchParams();
   params.set("source", query.source);
   if (query.source === "fixture") {
@@ -1468,6 +1540,277 @@ export async function buildTransferScenarioByWorkflowId(
   return buildTransferScenario({ ...query, dir, source: "fixture" });
 }
 
+function trustBucketForScenario(scenario: TransferScenario): TrustBucket {
+  const { summary } = scenario;
+  if (summary.disposition === "quarantine" || summary.business_state === "quarantined") {
+    return "quarantined";
+  }
+  if (summary.disposition === "deny" || summary.business_state === "rejected") {
+    return "rejected";
+  }
+  if (summary.verified && summary.business_state === "verified" && summary.disposition === "allow") {
+    return "verified";
+  }
+  if (summary.business_state === "pending_approval") {
+    return "pending";
+  }
+  return "review";
+}
+
+function matchesQueueFilters(scenario: TransferScenario, filters: TransferSourceQuery): boolean {
+  const statusFilter = filters.status?.trim().toLowerCase();
+  if (statusFilter) {
+    const bucket = trustBucketForScenario(scenario);
+    const bs = scenario.summary.business_state;
+    if (statusFilter !== bucket && statusFilter !== bs) {
+      return false;
+    }
+  }
+  if (filters.disposition && scenario.summary.disposition !== filters.disposition) {
+    return false;
+  }
+  const facility =
+    scenario.transfer_audit_trail.authority_scope.facility_ref
+    ?? scenario.asset_forensics.custody_transition.facility_ref
+    ?? "";
+  if (filters.facility && !facility.toLowerCase().includes(filters.facility.trim().toLowerCase())) {
+    return false;
+  }
+  if (filters.zone) {
+    const z = filters.zone.trim().toLowerCase();
+    const from = scenario.asset_forensics.custody_transition.from_zone.toLowerCase();
+    const to = scenario.asset_forensics.custody_transition.to_zone.toLowerCase();
+    if (!from.includes(z) && !to.includes(z)) {
+      return false;
+    }
+  }
+  if (filters.approval_state && scenario.summary.approval_status !== filters.approval_state) {
+    return false;
+  }
+  if (
+    filters.replay_readiness
+    && scenario.transfer_audit_trail.physical_evidence.replay_status !== filters.replay_readiness
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function buildAssetForensicsRestPath(assetRef: string, linkQuery: TransferSourceQuery): string {
+  return `/api/v1/verification/assets/${encodeURIComponent(assetRef)}/forensics?${buildQueryString(linkQuery)}`;
+}
+
+function buildQueueRow(
+  scenario: TransferScenario,
+  queueKey: string,
+  fixtureDir: string | undefined,
+  queryForLinks: TransferSourceQuery,
+): TransferQueueRow {
+  const linkQuery: TransferSourceQuery =
+    queryForLinks.source === "fixture" && fixtureDir
+      ? { source: "fixture", dir: fixtureDir }
+      : { ...queryForLinks };
+  const qs = buildQueryString(linkQuery);
+  const wf = encodeURIComponent(scenario.workflow_id);
+  const topBlocker = scenario.status.blocker_codes[0] ?? null;
+  const assetForensicsRest = linkQuery.source === "fixture"
+    ? buildAssetForensicsRestPath(scenario.transfer_proof.asset_ref, linkQuery)
+    : `/api/v1/verification/assets/forensics?${qs}`;
+  return {
+    queue_key: queueKey,
+    workflow_id: scenario.workflow_id,
+    asset_ref: scenario.transfer_proof.asset_ref,
+    trust_summary: {
+      trust_bucket: trustBucketForScenario(scenario),
+      business_state: scenario.summary.business_state,
+      disposition: scenario.summary.disposition,
+      verified: scenario.summary.verified,
+    },
+    prerequisites: {
+      transfer_readiness: scenario.status.transfer_readiness,
+      current_step: scenario.status.current_step,
+      blocker_codes: scenario.status.blocker_codes,
+      missing_prerequisites: scenario.asset_forensics.missing_prerequisites,
+      top_blocker: topBlocker,
+    },
+    approval_state: scenario.summary.approval_status,
+    facility_ref: scenario.transfer_audit_trail.authority_scope.facility_ref,
+    from_zone: scenario.asset_forensics.custody_transition.from_zone,
+    to_zone: scenario.asset_forensics.custody_transition.to_zone,
+    replay_readiness: scenario.transfer_audit_trail.physical_evidence.replay_status,
+    links: {
+      status: `/api/v1/verification/transfers/status?${qs}`,
+      review: `/api/v1/verification/transfers/audit-trail?${qs}`,
+      asset_forensics: `/api/v1/verification/assets/forensics?${qs}`,
+      asset_forensics_rest: assetForensicsRest,
+      replay_verification: `/api/v1/verification/workflows/${wf}/verification-detail?${qs}`,
+      workflow_projection: `/api/v1/verification/workflows/${wf}/projection?${qs}`,
+    },
+  };
+}
+
+function buildFailurePanel(scenario: TransferScenario): VerificationDetailResponse["failure_panel"] {
+  const d = scenario.summary.disposition;
+  const bs = scenario.summary.business_state;
+  const terminalNegative =
+    d === "deny" || d === "quarantine" || bs === "rejected" || bs === "quarantined" || bs === "verification_failed";
+  let headline = "Path clear for replay verification";
+  if (terminalNegative) {
+    if (d === "deny") {
+      headline = "Transfer denied — policy terminal path";
+    } else if (d === "quarantine") {
+      headline = "Transfer quarantined — trust or dependency gap";
+    } else {
+      headline = "Negative or incomplete verification state";
+    }
+  }
+  return {
+    active: terminalNegative,
+    path: d,
+    business_state: bs,
+    headline,
+    blockers: scenario.status.blocker_codes,
+    trust_gaps: scenario.asset_forensics.trust_gaps,
+    missing_prerequisites: scenario.asset_forensics.missing_prerequisites,
+    reason_code: scenario.transfer_audit_trail.decision.reason_code,
+    reason: scenario.transfer_audit_trail.decision.reason,
+  };
+}
+
+function buildReceiptChain(scenario: TransferScenario): VerificationDetailResponse["receipt_chain"] {
+  const t = scenario.transfer_audit_trail;
+  const appr = t.approvals.approval_envelope_id;
+  const steps: VerificationDetailResponse["receipt_chain"]["steps"] = [
+    { id: "intent", label: "Action intent", ref: t.request.request_id, ok: t.request.request_id.length > 0 },
+    {
+      id: "approval",
+      label: "Approval envelope",
+      ref: appr,
+      ok: appr !== null && appr.length > 0,
+      detail: t.approvals.approval_status ?? undefined,
+    },
+    {
+      id: "decision",
+      label: "Governed decision artifact",
+      ref: t.artifacts.decision_id,
+      ok: t.artifacts.decision_id.length > 0,
+    },
+    {
+      id: "policy_receipt",
+      label: "Policy receipt",
+      ref: t.artifacts.policy_receipt_id,
+      ok: t.artifacts.policy_receipt_id.length > 0,
+    },
+    {
+      id: "transition_receipts",
+      label: "Custody transition receipts",
+      ref: t.artifacts.transition_receipt_ids[0] ?? null,
+      ok: t.artifacts.transition_receipt_ids.length > 0,
+    },
+    {
+      id: "forensic_block",
+      label: "Forensic block binding",
+      ref: t.artifacts.forensic_block_id,
+      ok: t.artifacts.forensic_block_id !== null,
+    },
+    {
+      id: "replay",
+      label: "Physical evidence replay",
+      ref: t.physical_evidence.replay_status,
+      ok: t.physical_evidence.replay_status === "ready",
+    },
+  ];
+  return {
+    steps,
+    terminal_disposition: t.decision.disposition,
+    replay_verifiable: t.physical_evidence.replay_status === "ready",
+  };
+}
+
+export function buildVerificationDetailFromScenario(scenario: TransferScenario): VerificationDetailResponse {
+  return {
+    contract_version: "seedcore.verification_detail.v1",
+    workflow_id: scenario.workflow_id,
+    verification_projection: scenario.verification_projection,
+    transfer_audit_trail: scenario.transfer_audit_trail,
+    asset_forensic_projection: scenario.asset_forensic_projection,
+    receipt_chain: buildReceiptChain(scenario),
+    failure_panel: buildFailurePanel(scenario),
+  };
+}
+
+export async function buildVerificationDetailForWorkflow(
+  workflowId: string,
+  query: TransferSourceQuery,
+): Promise<VerificationDetailResponse> {
+  const scenario = await buildTransferScenarioByWorkflowId(workflowId, query);
+  return buildVerificationDetailFromScenario(scenario);
+}
+
+export async function resolveFixtureScenarioByAssetRef(
+  assetRef: string,
+  query: TransferSourceQuery,
+): Promise<TransferScenario> {
+  const normalized = assetRef.trim();
+  if (!normalized) {
+    throw new Error("invalid_asset_ref");
+  }
+  const root = resolveTransferRoot(query.root);
+  if (!existsSync(root)) {
+    throw new Error(`fixture_not_found:root:${root}`);
+  }
+  const dirs = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  for (const id of dirs) {
+    const dir = path.join(root, id);
+    try {
+      const scenario = buildFixtureScenario({ source: "fixture", dir });
+      if (scenario.transfer_proof.asset_ref === normalized) {
+        return scenario;
+      }
+    } catch {
+      /* skip malformed fixture dirs */
+    }
+  }
+  throw new Error(`fixture_not_found:asset_ref:${normalized}`);
+}
+
+export async function listTransferQueue(query: TransferSourceQuery): Promise<TransferQueueRow[]> {
+  if (query.source === "runtime") {
+    const scenario = await buildTransferScenario(query);
+    const key = query.audit_id ?? query.intent_id ?? "runtime-transfer";
+    if (!matchesQueueFilters(scenario, query)) {
+      return [];
+    }
+    return [buildQueueRow(scenario, key, undefined, query)];
+  }
+
+  const root = resolveTransferRoot(query.root);
+  if (!existsSync(root)) {
+    return [];
+  }
+
+  const rows: TransferQueueRow[] = [];
+  for (const id of readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()) {
+    const dir = path.join(root, id);
+    try {
+      const scenario = buildFixtureScenario({ source: "fixture", dir });
+      if (!matchesQueueFilters(scenario, query)) {
+        continue;
+      }
+      rows.push(buildQueueRow(scenario, id, dir, query));
+    } catch {
+      /* skip */
+    }
+  }
+  return rows;
+}
+
 export async function listTransferCatalog(query: TransferSourceQuery): Promise<TransferCatalogItem[]> {
   if (query.source === "runtime") {
     const scenario = await buildTransferScenario(query);
@@ -1537,6 +1880,12 @@ export function parseTransferQuery(url: URL): TransferSourceQuery {
     audit_id: url.searchParams.get("audit_id") ?? undefined,
     intent_id: url.searchParams.get("intent_id") ?? undefined,
     subject_id: url.searchParams.get("subject_id") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined,
+    disposition: url.searchParams.get("disposition") ?? undefined,
+    facility: url.searchParams.get("facility") ?? undefined,
+    zone: url.searchParams.get("zone") ?? undefined,
+    approval_state: url.searchParams.get("approval_state") ?? undefined,
+    replay_readiness: url.searchParams.get("replay_readiness") ?? undefined,
   };
 }
 

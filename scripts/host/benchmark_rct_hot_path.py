@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import random
 import statistics
 import sys
 import time
@@ -72,6 +73,8 @@ def run_benchmark(
     warmup_requests: int,
     concurrency: int,
     artifact_root: Path,
+    request_delay_ms: float = 0.0,
+    jitter_ms_max: float = 0.0,
 ) -> dict[str, Any]:
     evaluate_url = f"{base_url.rstrip('/')}/pdp/hot-path/evaluate?debug=true"
     status_url = f"{base_url.rstrip('/')}/pdp/hot-path/status"
@@ -85,6 +88,12 @@ def run_benchmark(
     before_parity_ok = int(status_before.get("parity_ok") or 0)
 
     def invoke(index: int, *, warmup: bool) -> dict[str, Any]:
+        delay_ms = max(0.0, float(request_delay_ms))
+        if jitter_ms_max > 0:
+            delay_ms += random.uniform(0.0, float(jitter_ms_max))
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+
         case_name, template = prepared_cases[index % len(prepared_cases)]
         payload = copy.deepcopy(template)
         payload["request_id"] = f"bench:{case_name}:{'warmup' if warmup else 'run'}:{index}"
@@ -146,6 +155,8 @@ def run_benchmark(
         "warmup_requests": max(0, warmup_requests),
         "total_requests": max(0, total_requests),
         "concurrency": max(1, concurrency),
+        "request_delay_ms": max(0.0, float(request_delay_ms)),
+        "jitter_ms_max": max(0.0, float(jitter_ms_max)),
         "success_count": len(results) - error_count,
         "error_count": error_count,
         "mismatch_count": max(0, int(status_after.get("mismatched") or 0) - before_mismatched),
@@ -185,6 +196,18 @@ def main() -> int:
         default=str(DEFAULT_ARTIFACT_DIR),
         help="Directory where benchmark artifacts will be written.",
     )
+    parser.add_argument(
+        "--request-delay-ms",
+        type=float,
+        default=0.0,
+        help="Fixed per-request delay before POST (simulates edge / coordination latency).",
+    )
+    parser.add_argument(
+        "--jitter-ms-max",
+        type=float,
+        default=0.0,
+        help="Additional uniform [0, max] ms jitter per request (simulates noisy links).",
+    )
     args = parser.parse_args()
 
     summary = run_benchmark(
@@ -193,6 +216,8 @@ def main() -> int:
         warmup_requests=args.warmup,
         concurrency=args.concurrency,
         artifact_root=Path(args.artifact_dir),
+        request_delay_ms=args.request_delay_ms,
+        jitter_ms_max=args.jitter_ms_max,
     )
 
     latency = summary.get("latency_ms") or {}

@@ -1,6 +1,7 @@
 # Hot-Path Shadow To Enforce Breakdown
 
 Date: 2026-03-31
+Status update: 2026-04-02
 
 ## Purpose
 
@@ -58,19 +59,23 @@ What is still true today:
   execution path still builds a `policy_case` and calls `evaluate_intent(...)`
   directly in
   [coordinator_service.py](/Users/ningli/project/seedcore/src/seedcore/services/coordinator_service.py)
-- `SEEDCORE_RCT_HOT_PATH_MODE` is read once at module import time in
+- hot-path mode resolution is now runtime-dynamic (`shadow` / `canary` /
+  `enforce`) in
   [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py),
-  so the documented rollback requirement of toggling back to `shadow` without a
-  restart is not implemented yet
-- shadow stats are in-memory only, keep only `256` latency samples and `20`
-  recent results, and cannot prove the contract's required last `1,000`
-  production-equivalent runs
+  including rollback-triggered baseline fallback behavior
+- parity evidence now persists in a durable store (SQLite) with JSONL mirror in
+  [hot_path_parity_log.py](/Users/ningli/project/seedcore/src/seedcore/ops/hot_path_parity_log.py),
+  so promotion windows can be audited over `1,000`-run slices
 - the current live sign-off doc shows green parity for the four canonical cases,
   but the recorded latency profile (`p50=52ms`, `p95=130ms`, `p99=146ms`) is
   above the stricter promotion contract threshold
-- the repo has adjacent benchmark scripts, but there is not yet a dedicated
-  load-test harness for `/api/v1/pdp/hot-path/evaluate` under realistic
-  concurrency
+- dedicated benchmark harness support now exists for
+  `/api/v1/pdp/hot-path/evaluate` in
+  [benchmark_rct_hot_path.py](/Users/ningli/project/seedcore/scripts/host/benchmark_rct_hot_path.py),
+  including request delay and jitter controls for edge-ish load timing realism
+- hot-path status now includes additive observability payloads
+  (`alert_level`, structured alerts, gauges, optional deployment role) for
+  K8s/Ray-ready scraping and operator triage
 
 ## Main Gap Categories
 

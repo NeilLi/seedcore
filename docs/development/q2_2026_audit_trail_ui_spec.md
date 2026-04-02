@@ -18,6 +18,13 @@ Implemented in code:
 - Screen 2 side-by-side, three-column audit trail is implemented and correlated
   by workflow/audit join key.
 - Screen 3 asset forensic view is wired to contract-driven payloads.
+- Screen 1 queue API and console view are implemented through
+  `GET /api/v1/verification/transfers/queue` and `/queue`.
+- Screen 4 replay/verification page is implemented in operator console via
+  workflow-scoped detail payloads.
+- workflow-scoped replay detail payload is implemented through
+  `GET /api/v1/verification/workflows/{workflow_id}/verification-detail`
+  (`seedcore.verification_detail.v1`).
 - links between status/review/forensics/proof surfaces are projection-derived.
 
 Still open for full Q2 closure:
@@ -25,6 +32,9 @@ Still open for full Q2 closure:
 - dedicated replay route under the verification service namespace
 - runbook endpoint and operator runbook integration
 - CI/CD enforcement for full Q2 acceptance matrix across environments
+- runtime parity for asset-ref REST forensics route
+  (`/api/v1/verification/assets/{asset_ref}/forensics` is currently fixture-first
+  by design; runtime should continue using query-based forensics lookup)
 
 ## Audit-Trail UI for Restricted Custody Transfer
 
@@ -205,7 +215,7 @@ Provide the operator-facing status API surface for the canonical transfer chain:
 
 ### API recommendation
 
-`GET /api/v1/verification/transfers?status=&facility=&zone=&approval_state=`
+`GET /api/v1/verification/transfers/queue?status=&disposition=&facility=&zone=&approval_state=&replay_readiness=`
 
 ### Q2 acceptance criteria
 
@@ -646,6 +656,7 @@ This should be the frontend's primary read model.
 ### API recommendation
 
 `GET /api/v1/verification/workflows/{workflow_id}/projection`
+`GET /api/v1/verification/workflows/{workflow_id}/verification-detail`
 
 ## 7. Shared backend contract model
 
@@ -820,11 +831,14 @@ next additions.
 
 - `GET /api/v1/verification/transfers`
 - `GET /api/v1/verification/transfers/catalog`
+- `GET /api/v1/verification/transfers/queue`
 - `GET /api/v1/verification/transfers/status`
 - `GET /api/v1/verification/transfers/audit-trail`
 - `GET /api/v1/verification/transfers/{workflow_id}`
 - `GET /api/v1/verification/workflows/{workflow_id}/projection`
+- `GET /api/v1/verification/workflows/{workflow_id}/verification-detail`
 - `GET /api/v1/verification/assets/forensics`
+- `GET /api/v1/verification/assets/{asset_ref}/forensics` (fixture-oriented resolver)
 - `GET /api/v1/verification/transfers/summary`
 - `GET /api/v1/verification/transfers/proof`
 - `GET /api/v1/verification/assets/proof`

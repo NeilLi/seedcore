@@ -30,12 +30,24 @@ Latest repo-aligned critical-path status:
 - Screen 2 side-by-side audit trail is now contract-driven (`request/authority`
   + `decision/artifacts` + `physical/closure`) and correlated through one
   workflow join key.
+- Screen 1 queue surface is now implemented with filterable trust buckets and
+  readiness/blocker views (`/api/v1/verification/transfers/queue` + operator
+  `/queue`).
+- Screen 4 replay/verification detail is now implemented through
+  `seedcore.verification_detail.v1` at
+  `/api/v1/verification/workflows/{workflow_id}/verification-detail`.
 - hot-path semantics have been hardened for production gating:
   strict parity threshold (`1000/1000`), dependency and latency gates, durable
   parity evidence persistence, and rollback triggers.
+- hot-path status now emits additive observability signals for operators and
+  scraping (`alert_level`, structured alerts, gauges, optional deployment role)
+  to support Kubernetes/Ray operational wiring.
 - first forensic-block JSON-LD contract freeze pass is implemented with schema
   artifacts, strict runtime validation, explicit `forensic_block_id`, and
   closure/materialization consistency checks.
+- host benchmark harness now supports configurable request delay and jitter
+  (`scripts/host/benchmark_rct_hot_path.py`) to simulate edge-ish timing noise
+  during load evidence collection.
 
 ## Why This Lives Outside The Root README
 

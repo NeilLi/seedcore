@@ -5,8 +5,11 @@ import {
   buildAssetScenario,
   buildTransferScenario,
   buildTransferScenarioByWorkflowId,
+  buildVerificationDetailForWorkflow,
   listTransferCatalog,
+  listTransferQueue,
   parseTransferQuery,
+  resolveFixtureScenarioByAssetRef,
 } from "./transferSources.js";
 
 function jsonResponse(
@@ -26,6 +29,8 @@ function errorStatus(message: string): number {
     || message.startsWith("fixture_not_found")
     || message.startsWith("invalid_runtime_replay_payload")
     || message.startsWith("invalid_runtime_verify_payload")
+    || message.startsWith("invalid_workflow_id")
+    || message.startsWith("invalid_asset_ref")
   ) {
     return 422;
   }
@@ -86,6 +91,18 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const assetsPrefix = "/api/v1/verification/assets/";
+    const forensicsSuffix = "/forensics";
+    if (url.pathname.startsWith(assetsPrefix) && url.pathname.endsWith(forensicsSuffix)) {
+      const middle = url.pathname.slice(assetsPrefix.length, url.pathname.length - forensicsSuffix.length);
+      if (middle.length > 0 && middle !== "forensics" && !middle.includes("/")) {
+        const assetRef = decodeURIComponent(middle);
+        const scenario = await resolveFixtureScenarioByAssetRef(assetRef, query);
+        jsonResponse(res, 200, scenario.asset_forensic_projection);
+        return;
+      }
+    }
+
     if (url.pathname === "/api/v1/verification/transfers/review") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario);
@@ -98,6 +115,12 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/v1/verification/transfers/queue") {
+      const rows = await listTransferQueue(query);
+      jsonResponse(res, 200, { root: query.root ?? null, source: query.source, items: rows });
+      return;
+    }
+
     if (url.pathname === "/api/v1/verification/transfers") {
       const items = await listTransferCatalog(query);
       jsonResponse(res, 200, { root: query.root ?? null, source: query.source, items });
@@ -107,6 +130,18 @@ export const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/v1/verification/transfers/audit-trail") {
       const scenario = await buildTransferScenario(query);
       jsonResponse(res, 200, scenario.transfer_audit_trail);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/v1/verification/workflows/") && url.pathname.endsWith("/verification-detail")) {
+      const workflowId = decodeURIComponent(
+        url.pathname
+          .replace("/api/v1/verification/workflows/", "")
+          .replace("/verification-detail", "")
+          .replace(/\/+$/, ""),
+      );
+      const detail = await buildVerificationDetailForWorkflow(workflowId, query);
+      jsonResponse(res, 200, detail);
       return;
     }
 

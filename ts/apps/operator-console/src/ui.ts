@@ -151,7 +151,7 @@ function renderApiLinks(entries: Array<[string, string | undefined]>): string {
   return `<ul>${items.join("")}</ul>`;
 }
 
-export function renderCatalogPage(catalog: any): string {
+export function renderCatalogPage(catalog: any, listQuery: string): string {
   const items = Array.isArray(catalog?.items) ? catalog.items : [];
   const cards = items
     .map((item: any) => {
@@ -164,6 +164,7 @@ export function renderCatalogPage(catalog: any): string {
             source: "fixture",
             dir: item.dir ?? "",
           }).toString();
+      const workflowId = String(item.workflow_id ?? item.id ?? "unknown");
       return `
         <article class="card">
           <h3>${escapeHtml(item.id ?? "unknown")}</h3>
@@ -178,6 +179,7 @@ export function renderCatalogPage(catalog: any): string {
           <div class="row">verified: <code>${String(summary.verified)}</code></div>
           <div class="row">token expected/present: <code>${String(summary.execution_token_expected)} / ${String(summary.execution_token_present)}</code></div>
           ${renderActionLinks(query)}
+          <div class="row"><a href="${escapeHtml(`/replay?workflow_id=${encodeURIComponent(workflowId)}&${listQuery}`)}">Screen 4 — Replay / verification</a></div>
         </article>
       `;
     })
@@ -188,8 +190,201 @@ export function renderCatalogPage(catalog: any): string {
     `
       <h1>Restricted Custody Transfer Operator Console</h1>
       <p class="sub">Operator-first status, readiness, and asset forensic workflow for the canonical transfer chain.</p>
+      <p class="row">
+        <a href="/queue?${escapeHtml(listQuery)}">Screen 1 — Transfer queue</a>
+        · <a href="/?${escapeHtml(listQuery)}">Scenario cards</a>
+      </p>
       <section class="grid">
         ${cards || `<article class="card"><p class="empty">No transfer scenarios found.</p></article>`}
+      </section>
+    `,
+  );
+}
+
+export function renderQueuePage(queuePayload: any, listQuery: string): string {
+  const items = Array.isArray(queuePayload?.items) ? queuePayload.items : [];
+  const rows = items
+    .map((row: any) => {
+      const trust = row.trust_summary ?? {};
+      const pre = row.prerequisites ?? {};
+      const cls = statusClass(trust.business_state ?? "verification_failed");
+      const bucketCls =
+        trust.trust_bucket === "verified"
+          ? "ok"
+          : trust.trust_bucket === "quarantined" || trust.trust_bucket === "pending"
+            ? "warn"
+            : "bad";
+      const scenarioQs =
+        typeof row.links?.review === "string" && row.links.review.includes("?")
+          ? row.links.review.split("?")[1] ?? listQuery
+          : listQuery;
+      const wf = encodeURIComponent(row.workflow_id ?? row.queue_key ?? "");
+      return `
+        <tr>
+          <td><code>${escapeHtml(row.queue_key ?? "")}</code></td>
+          <td><code>${escapeHtml(row.workflow_id ?? "")}</code></td>
+          <td><code>${escapeHtml(row.asset_ref ?? "")}</code></td>
+          <td><span class="status ${bucketCls}">${escapeHtml(trust.trust_bucket ?? "")}</span></td>
+          <td><span class="status ${cls}">${escapeHtml(trust.business_state ?? "")}</span></td>
+          <td><code>${escapeHtml(String(row.approval_state ?? ""))}</code></td>
+          <td><code>${escapeHtml(pre.transfer_readiness ?? "")}</code></td>
+          <td><code>${escapeHtml(row.replay_readiness ?? "")}</code></td>
+          <td><code>${escapeHtml(pre.top_blocker ?? "none")}</code></td>
+          <td>
+            <a href="/transfer?${escapeHtml(scenarioQs)}">Review</a>
+            · <a href="/forensics?${escapeHtml(scenarioQs)}">Forensics</a>
+            · <a href="${escapeHtml(`/replay?workflow_id=${wf}&${listQuery}`)}">Replay</a>
+          </td>
+        </tr>`;
+    })
+    .join("");
+
+  const filterBase = escapeHtml(listQuery);
+  const listParams = new URLSearchParams(listQuery);
+  const rootVal = escapeHtml(listParams.get("root") ?? "rust/fixtures/transfers");
+  const sourceVal = escapeHtml(listParams.get("source") ?? "fixture");
+  return page(
+    "Transfer queue",
+    `
+      <h1>Screen 1 — Transfer queue</h1>
+      <p class="sub">Prerequisite blockers, approval posture, trust bucket, and replay readiness across all scenarios under the selected root.</p>
+      <p class="row">
+        <a href="/?${filterBase}">Scenario cards</a>
+        · <a href="/queue?${filterBase}">Refresh queue</a>
+      </p>
+      <section class="card">
+        <h2>Filters</h2>
+        <form method="get" action="/queue" class="row">
+          <input type="hidden" name="source" value="${sourceVal}" />
+          <input type="hidden" name="root" value="${rootVal}" />
+          <label>status / bucket <input name="status" placeholder="verified, quarantined, …" /></label>
+          <label>disposition <input name="disposition" placeholder="allow, deny, …" /></label>
+          <label>facility <input name="facility" /></label>
+          <label>zone <input name="zone" /></label>
+          <label>approval <input name="approval_state" placeholder="APPROVED, PENDING, …" /></label>
+          <label>replay <input name="replay_readiness" placeholder="ready, pending" /></label>
+          <button type="submit">Apply</button>
+        </form>
+      </section>
+      <section class="card" style="overflow-x:auto">
+        <h2>Open transfers</h2>
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr>
+              <th align="left">Case</th>
+              <th align="left">Workflow</th>
+              <th align="left">Asset</th>
+              <th align="left">Trust bucket</th>
+              <th align="left">Business state</th>
+              <th align="left">Approval</th>
+              <th align="left">Readiness</th>
+              <th align="left">Replay</th>
+              <th align="left">Top blocker</th>
+              <th align="left">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || `<tr><td colspan="10"><p class="empty">No rows match the current filters.</p></td></tr>`}
+          </tbody>
+        </table>
+      </section>
+    `,
+  );
+}
+
+export function renderReplayPage(detail: any, query: string, workflowId: string): string {
+  const scenarioQs = new URLSearchParams(query);
+  scenarioQs.delete("workflow_id");
+  const source = scenarioQs.get("source") ?? "fixture";
+  if (source === "runtime") {
+    scenarioQs.set("source", "runtime");
+    if (!scenarioQs.has("audit_id") && !scenarioQs.has("intent_id") && !scenarioQs.has("subject_id")) {
+      scenarioQs.set("audit_id", workflowId);
+    }
+    scenarioQs.delete("dir");
+    scenarioQs.delete("root");
+  } else {
+    scenarioQs.set("source", "fixture");
+    if (!scenarioQs.has("dir")) {
+      const root = scenarioQs.get("root") ?? "rust/fixtures/transfers";
+      scenarioQs.set("dir", `${root.replace(/\/+$/, "")}/${workflowId}`);
+    }
+  }
+  const detailQuery = scenarioQs.toString();
+
+  const projection = parseVerificationSurfaceProjection(detail?.verification_projection ?? {});
+  const failure = detail?.failure_panel ?? {};
+  const chain = detail?.receipt_chain ?? { steps: [], terminal_disposition: "", replay_verifiable: false };
+  const steps = Array.isArray(chain.steps) ? chain.steps : [];
+  const cls = statusClass(projection.status);
+  const failActive = Boolean(failure.active);
+  const failCls = failActive ? "bad" : "ok";
+  const stepRows = steps
+    .map(
+      (s: any) => `
+        <tr>
+          <td><code>${escapeHtml(s.id ?? "")}</code></td>
+          <td>${escapeHtml(s.label ?? "")}</td>
+          <td><code>${escapeHtml(s.ref != null ? String(s.ref) : "none")}</code></td>
+          <td><span class="status ${s.ok ? "ok" : "bad"}">${s.ok ? "ok" : "gap"}</span></td>
+          <td>${escapeHtml(s.detail ?? "")}</td>
+        </tr>`,
+    )
+    .join("");
+  return page(
+    "Replay / verification",
+    `
+      <h1>Screen 4 — Replay / verification</h1>
+      <p class="sub">Receipt-chain checkpoints and explicit failure context for deny or quarantine paths.</p>
+      <p class="row">
+        <a href="/?${query}">Scenarios</a>
+        · <a href="/queue?${query}">Queue</a>
+        · <a href="/transfer?${detailQuery}">Transfer detail</a>
+        · <a href="/forensics?${detailQuery}">Forensics</a>
+      </p>
+
+      <section class="card">
+        <h2>Workflow summary</h2>
+        <div class="row">
+          <span class="status ${cls}">${escapeHtml(projection.status)}</span>
+          <span class="status">${escapeHtml(projection.authorization.disposition)}</span>
+        </div>
+        <div class="row">workflow id: <code>${escapeHtml(workflowId)}</code></div>
+        <div class="row">asset: <code>${escapeHtml(projection.asset_ref)}</code></div>
+        <div class="row">replay verifiable (chain): <code>${String(chain.replay_verifiable)}</code></div>
+        <div class="row">terminal disposition: <code>${escapeHtml(String(chain.terminal_disposition ?? ""))}</code></div>
+      </section>
+
+      <section class="card">
+        <h2>Failure panel</h2>
+        <div class="row"><span class="status ${failCls}">${failActive ? "active" : "clear"}</span> ${escapeHtml(failure.headline ?? "")}</div>
+        <div class="row">path: <code>${escapeHtml(String(failure.path ?? ""))}</code> · business state: <code>${escapeHtml(String(failure.business_state ?? ""))}</code></div>
+        <div class="row">reason code: <code>${escapeHtml(String(failure.reason_code ?? ""))}</code></div>
+        <div class="row">reason: ${escapeHtml(String(failure.reason ?? ""))}</div>
+        <h3>Blockers</h3>
+        ${renderList(Array.isArray(failure.blockers) ? failure.blockers : [])}
+        <h3>Trust gaps</h3>
+        ${renderList(Array.isArray(failure.trust_gaps) ? failure.trust_gaps : [])}
+        <h3>Missing prerequisites</h3>
+        ${renderList(Array.isArray(failure.missing_prerequisites) ? failure.missing_prerequisites : [])}
+      </section>
+
+      <section class="card" style="overflow-x:auto">
+        <h2>Receipt chain</h2>
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr><th align="left">Id</th><th align="left">Step</th><th align="left">Ref</th><th align="left">Status</th><th align="left">Detail</th></tr>
+          </thead>
+          <tbody>${stepRows || `<tr><td colspan="5"><p class="empty">No steps</p></td></tr>`}</tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>API</h2>
+        ${renderApiLinks([
+          ["Verification detail (JSON)", `/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/verification-detail?${query}`],
+          ["Workflow projection", `/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/projection?${query}`],
+        ])}
       </section>
     `,
   );
@@ -200,12 +395,19 @@ export function renderTransferPage(reviewPayload: any, query: string): string {
   const auditTrail = parseTransferAuditTrail(reviewPayload?.transfer_audit_trail ?? {});
   const forensics = parseAssetForensicProjection(reviewPayload?.asset_forensic_projection ?? {});
   const cls = statusClass(projection.status);
+  const qp = new URLSearchParams(query);
+  const replayList = new URLSearchParams({
+    workflow_id: projection.workflow_id,
+    source: qp.get("source") ?? "fixture",
+    root: qp.get("root") ?? "rust/fixtures/transfers",
+  });
+  const replayHref = escapeHtml(`/replay?${replayList.toString()}`);
   return page(
     "Transfer Workflow Review",
     `
       <h1>Transfer Workflow Review</h1>
       <p class="sub">Side-by-side audit trail: request + authority, decision + artifacts, and physical evidence + closure.</p>
-      <p class="row"><a href="/?${query}">Back to scenario list</a></p>
+      <p class="row"><a href="/?${query}">Back to scenario list</a> · <a href="/queue?${query}">Transfer queue</a> · <a href="${replayHref}">Screen 4 — Replay / verification</a></p>
       <p class="row"><a href="/forensics?${query}">Open asset forensic view</a></p>
 
       <section class="card">

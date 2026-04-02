@@ -14,7 +14,12 @@ import {
   buildTransferScenario,
   listTransferCatalog,
 } from "../services/verification-api/src/transferSources.ts";
-import { renderForensicsPage, renderTransferPage } from "../apps/operator-console/src/ui.ts";
+import {
+  renderCatalogPage,
+  renderForensicsPage,
+  renderReplayPage,
+  renderTransferPage,
+} from "../apps/operator-console/src/ui.ts";
 
 test("fixture scenarios map into Phase D business states and readiness", async () => {
   const cases = [
@@ -213,4 +218,64 @@ test("operator console renders status-first transfer and forensic pages", async 
   assert.match(forensicHtml, /Asset Forensic View/);
   assert.match(forensicHtml, /Telemetry References/);
   assert.match(forensicHtml, /Signature Provenance/);
+});
+
+test("catalog replay links use workflow_id rather than catalog id", () => {
+  const html = renderCatalogPage(
+    {
+      items: [
+        {
+          id: "intent-transfer-001",
+          workflow_id: "audit-allow-001",
+          query: "source=runtime&intent_id=intent-transfer-001",
+          summary: {
+            business_state: "verified",
+            disposition: "allow",
+            approval_status: "APPROVED",
+            verified: true,
+            execution_token_expected: true,
+            execution_token_present: true,
+          },
+          status_preview: {
+            transfer_readiness: "ready",
+            current_step: "verification_complete",
+            top_blocker: null,
+          },
+        },
+      ],
+    },
+    "source=runtime&intent_id=intent-transfer-001",
+  );
+  assert.match(html, /workflow_id=audit-allow-001/);
+  assert.doesNotMatch(html, /workflow_id=intent-transfer-001/);
+});
+
+test("replay page preserves runtime lookup links for transfer and forensics", async () => {
+  const scenario = await buildTransferScenario({ source: "fixture", dir: "rust/fixtures/transfers/allow_case" });
+  const html = renderReplayPage(
+    {
+      verification_projection: scenario.verification_projection,
+      receipt_chain: {
+        steps: [],
+        terminal_disposition: "allow",
+        replay_verifiable: false,
+      },
+      failure_panel: {
+        active: false,
+        path: "allow",
+        business_state: "verified",
+        headline: "ok",
+        blockers: [],
+        trust_gaps: [],
+        missing_prerequisites: [],
+        reason_code: "none",
+        reason: "none",
+      },
+    },
+    "source=runtime&workflow_id=audit-123",
+    "audit-123",
+  );
+  assert.match(html, /\/transfer\?source=runtime&audit_id=audit-123/);
+  assert.match(html, /\/forensics\?source=runtime&audit_id=audit-123/);
+  assert.doesNotMatch(html, /source=fixture/);
 });

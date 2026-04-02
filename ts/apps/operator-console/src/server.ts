@@ -1,7 +1,14 @@
 import http from "node:http";
 import process from "node:process";
 
-import { page, renderCatalogPage, renderForensicsPage, renderTransferPage } from "./ui.js";
+import {
+  page,
+  renderCatalogPage,
+  renderForensicsPage,
+  renderQueuePage,
+  renderReplayPage,
+  renderTransferPage,
+} from "./ui.js";
 
 const apiBase = process.env.SEEDCORE_VERIFICATION_API_BASE ?? "http://127.0.0.1:7071";
 
@@ -13,12 +20,21 @@ async function fetchJson(apiPath: string): Promise<any> {
   return response.json();
 }
 
-function queryString(url: URL): string {
+function queryString(url: URL, mode: "catalog" | "single" | "replay"): string {
   const params = new URLSearchParams(url.search);
   if (!params.has("source")) {
     params.set("source", "fixture");
   }
-  if (params.get("source") === "fixture" && !params.has("dir")) {
+  if ((mode === "catalog" || mode === "replay") && !params.has("root") && !params.has("dir")) {
+    params.set("root", "rust/fixtures/transfers");
+  }
+  if (
+    mode === "single"
+    && params.get("source") === "fixture"
+    && !params.has("dir")
+    && !params.has("root")
+    && !params.has("workflow_id")
+  ) {
     params.set("dir", "rust/fixtures/transfers/allow_case");
   }
   return params.toString();
@@ -38,15 +54,40 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    const qs = queryString(url);
     if (url.pathname === "/") {
+      const qs = queryString(url, "catalog");
       const catalog = await fetchJson(`/api/v1/verification/transfers/catalog?${qs}`);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderCatalogPage(catalog));
+      res.end(renderCatalogPage(catalog, qs));
+      return;
+    }
+
+    if (url.pathname === "/queue") {
+      const qs = queryString(url, "catalog");
+      const queue = await fetchJson(`/api/v1/verification/transfers/queue?${qs}`);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderQueuePage(queue, qs));
+      return;
+    }
+
+    if (url.pathname === "/replay") {
+      const wf = url.searchParams.get("workflow_id")?.trim();
+      if (!wf) {
+        res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+        res.end(page("Replay view", "<h1>Replay / verification</h1><p>Missing <code>workflow_id</code> query parameter.</p>"));
+        return;
+      }
+      const qs = queryString(url, "replay");
+      const detail = await fetchJson(
+        `/api/v1/verification/workflows/${encodeURIComponent(wf)}/verification-detail?${qs}`,
+      );
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderReplayPage(detail, qs, wf));
       return;
     }
 
     if (url.pathname === "/transfer") {
+      const qs = queryString(url, "single");
       const review = await fetchJson(`/api/v1/verification/transfers/review?${qs}`);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(renderTransferPage(review, qs));
@@ -54,6 +95,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/forensics") {
+      const qs = queryString(url, "single");
       const forensics = await fetchJson(`/api/v1/verification/assets/forensics?${qs}`);
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(renderForensicsPage(forensics, qs));

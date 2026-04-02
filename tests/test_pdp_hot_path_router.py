@@ -274,6 +274,12 @@ def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):
     assert body["recent_mismatch_count"] >= 1
     assert body["rollback_triggered"] is True
     assert "false_positive_allow" in body["rollback_reasons"]
+    obs = body.get("observability") or {}
+    assert obs.get("contract_version") == "seedcore.observability.hot_path.v1"
+    assert obs.get("alert_level") == "critical"
+    assert any(a.get("code") == "false_positive_allow" for a in obs.get("alerts", []))
+    gauges = obs.get("gauges") or {}
+    assert gauges.get("rollback_triggered") is True
 
 
 def test_pdp_hot_path_route_resolves_and_forwards_authoritative_approval(monkeypatch):
