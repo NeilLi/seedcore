@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-04-02
 - Scope: SeedCore policy decision path for Restricted Custody Transfer and related governed actions
+- Related: [Architecture Overview](../overview/architecture.md), [Asset-Centric PDP Hot Path Contract](../../development/asset_centric_pdp_hot_path_contract.md), [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md)
 
 ## Context
 
@@ -19,7 +20,7 @@ For SeedCore, the competitive question is not whether the PDP is stateless. It i
 
 ## Decision
 
-SeedCore will keep the PDP decision path:
+SeedCore will keep the PDP decision function:
 
 - stateless at request time
 - synchronous for the final decision
@@ -28,7 +29,7 @@ SeedCore will keep the PDP decision path:
 
 SeedCore will not use asynchronous policy evaluation for the final authorization decision in the hot path.
 
-Instead, SeedCore will surround the PDP with stateful supporting systems:
+SeedCore will continue to rely on stateful supporting systems around that decision function:
 
 - versioned policy snapshots and compiled authz artifacts
 - authority, approval, custody, and telemetry context assembled before evaluation
@@ -36,11 +37,21 @@ Instead, SeedCore will surround the PDP with stateful supporting systems:
 - governed receipts and replay evidence after decision and execution
 - shadow/canary/enforce rollout with parity checks and rollback triggers
 
-## Rationale
+## Decision Boundaries
+
+This ADR establishes the shape of the final authorization boundary. It does not require:
+
+- a specific policy engine implementation
+- a specific storage backend for policy snapshots or graph projections
+- a prohibition on asynchronous enrichment, indexing, compilation, or audit processing
+
+This ADR does require that the final governed decision remains a single synchronous, deterministic, fail-closed step over pinned inputs.
+
+## Why
 
 This design is the best balance of feasibility and advantage for the next several years because it matches how modern authorization systems are actually built while staying aligned with SeedCore's custody and replay requirements.
 
-Benefits:
+Benefits of this decision:
 
 - predictable latency on the critical path
 - simpler failure semantics than an async decision pipeline
@@ -48,7 +59,7 @@ Benefits:
 - smaller surface area for policy bypass
 - better fit for short-lived execution tokens and high-consequence actions
 
-Why this is still competitive:
+Why this remains competitive:
 
 - the moat is not "stateless PDP" by itself
 - the moat is the combination of compiled policy, pinned snapshots, strict context typing, evidence binding, and operator-visible parity/rollback control
@@ -68,6 +79,42 @@ Negative:
 - stale telemetry or stale snapshots must be handled explicitly and conservatively
 - any future extension that needs rich sharing or delegation graphs may require a separate graph-backed store, but not as the default hot-path architecture
 
+## Implementation Notes
+
+SeedCore should continue to preserve these properties in code and docs:
+
+- one request-time policy decision
+- one versioned policy snapshot per evaluation
+- one deterministic decision vocabulary
+- one governed receipt chain
+- one hot-path observability contract
+- one promotion gate for shadow to canary to enforce
+
+## Follow-On Work
+
+The items below are important strengthening work implied by this ADR, but they
+are not changes to the core decision itself.
+
+To keep this decision competitive over the next execution windows, prioritize the
+following:
+
+- Add a stronger cross-system freshness and causality contract.
+- Include per-request consistency controls, strict model/version pinning, and
+  explicit protection against stale authorization decisions.
+- Add stricter schema/type validation for policy inputs and request context.
+- Keep asynchronous work for enrichment, indexing, and compilation, not for the
+  final `allow` / `deny` / `quarantine` / `escalate` decision.
+- Keep the authoritative PDP local or near-local to execution boundaries where
+  latency and consistency guarantees are controllable.
+- Treat managed remote authorization services as better suited to admin-plane
+  or moderate-risk SaaS use cases than SeedCore's final hot path.
+- Introduce a Zanzibar-style external ReBAC store only if delegation/sharing
+  graph complexity becomes a dominant driver; for the current wedge, the
+  compiled asset-centric hot path remains the practical default.
+
+Reference direction (informing these priorities): Zanzibar/SpiceDB/OpenFGA
+consistency patterns and Cedar-style schema validation discipline.
+
 ## Alternatives Considered
 
 ### Fully Async PDP
@@ -80,18 +127,4 @@ Rejected as the primary model. Mutable runtime state makes replay, rollout, and 
 
 ### Zanzibar-Style External Graph as the Primary PDP
 
-Useful for large-scale relationship authorization, but not the right primary architecture for SeedCore's current wedge. SeedCore needs custody, evidence, and execution-token semantics first; a graph store can be added later if delegation complexity grows enough to justify it.
-
-## Implementation Notes
-
-SeedCore should continue to preserve these properties in code and docs:
-
-- one request-time policy decision
-- one versioned policy snapshot per evaluation
-- one deterministic decision vocabulary
-- one governed receipt chain
-- one hot-path observability contract
-- one promotion gate for shadow to canary to enforce
-
-This ADR is intentionally aligned with the current architecture overview, the asset-centric PDP hot-path contract, and the Q2 execution plan.
-
+Rejected as the default hot-path architecture for the current wedge. It is useful for large-scale relationship authorization, but SeedCore currently needs custody, evidence, and execution-token semantics first. A graph-backed ReBAC system can be added later if delegation complexity grows enough to justify it.
