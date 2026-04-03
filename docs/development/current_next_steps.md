@@ -365,7 +365,8 @@ operational closure and external-boundary productization.
      against real status payloads:
      `scripts/host/verify_hot_path_observability.sh`.
 3. **Apr 2026 (late): degraded-edge and adversarial drill matrix**
-   - completed: false
+   - completed: true
+   - status: **drill matrix enforced in CI + host mode**.
    - expand the repeatable verification slice to include:
      stale-graph + stale telemetry (RCT hot-path drill matrix),
      intermittent-connectivity (synthetic flaky transport benchmark),
@@ -374,6 +375,7 @@ operational closure and external-boundary productization.
    - enforce the drill bundle explicitly in CI and host mode via:
      `scripts/ci/q2_degraded_edge_drill_matrix.sh` and
      `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
+   - can move toward next check.
 4. **May 2026 (early): Agent Action Gateway productization**
    - completed: false
    - add one reference adapter for a current agent platform
