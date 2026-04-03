@@ -8,6 +8,7 @@ windows, or implementation rewrites.
 ## Index
 
 - [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](./adr-0001-pdp-hot-path.md)
+- [ADR 0002: Use Google IAP as the First-Mile Identity Gate for Non-Public SeedCore Ingress](./adr-0002-iap-edge-identity.md)
 
 ## Conventions
 
