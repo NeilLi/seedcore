@@ -2,7 +2,11 @@
 # Live check: ensure /pdp/hot-path/status and /pdp/hot-path/metrics are consistent.
 #
 # Requires a running SeedCore runtime API (default http://127.0.0.1:8002/api/v1).
-# Optional: SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE should match what the server is wired with.
+# Optional: export SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE if the server omits
+# observability.deployment_role in JSON (otherwise the JSON value is used).
+#
+# Deployment wiring for this label: deploy/k8s (kubernetes), ray-head (ray),
+# host-env/run-api (host), docker/Dockerfile + docker/env.example (docker).
 set -euo pipefail
 
 RUNTIME_API_BASE="${SEEDCORE_RUNTIME_API_BASE:-http://127.0.0.1:8002/api/v1}"
@@ -28,8 +32,11 @@ status = json.loads(os.environ["STATUS_JSON"])
 metrics = os.environ["METRICS_TEXT"]
 
 obs = status.get("observability") or {}
-role = obs.get("deployment_role") or os.getenv("SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE", "unset")
-role = str(role)
+role_raw = obs.get("deployment_role")
+if role_raw is None or str(role_raw).strip() == "":
+    role = str(os.getenv("SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE", "unset"))
+else:
+    role = str(role_raw)
 
 metric_line = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)$')
 metrics_by_name_and_role: dict[tuple[str, str | None], float] = {}
@@ -91,6 +98,21 @@ ga = status.get("graph_age_seconds")
 if ga is not None:
     actual = gauge_value("seedcore_hot_path_graph_age_seconds")
     assert abs(actual - float(ga)) < 1e-6
+
+assert gauge_value("seedcore_hot_path_authz_graph_ready") == (
+    1.0 if bool(status.get("authz_graph_ready")) else 0.0
+)
+assert gauge_value("seedcore_hot_path_latency_slo_met") == (
+    1.0 if bool(status.get("latency_slo_met")) else 0.0
+)
+assert gauge_value("seedcore_hot_path_runtime_ready") == (1.0 if bool(status.get("runtime_ready")) else 0.0)
+assert gauge_value("seedcore_hot_path_parity_ok_total") == float(status.get("parity_ok") or 0)
+assert gauge_value("seedcore_hot_path_mismatched_total") == float(status.get("mismatched") or 0)
+
+lat = status.get("latency_ms") if isinstance(status.get("latency_ms"), dict) else {}
+p99 = lat.get("p99") if isinstance(lat, dict) else None
+if p99 is not None:
+    assert gauge_value("seedcore_hot_path_latency_p99_ms") == float(p99)
 
 print("Hot-path observability OK (status <-> metrics consistent).")
 PY

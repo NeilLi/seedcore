@@ -346,6 +346,7 @@ def test_pdp_hot_path_metrics_exposes_prometheus_text(monkeypatch) -> None:
     status = client.get("/api/v1/pdp/hot-path/status")
     assert status.status_code == 200
     status_body = status.json()
+    assert (status_body.get("observability") or {}).get("deployment_role") == role
 
     response = client.get("/api/v1/pdp/hot-path/metrics")
     assert response.status_code == 200
@@ -380,6 +381,21 @@ def test_pdp_hot_path_metrics_exposes_prometheus_text(monkeypatch) -> None:
     )
     assert gauge_value("seedcore_hot_path_total_runs") == float(status_body.get("total") or 0)
     assert gauge_value("seedcore_hot_path_recent_mismatch_count") == float(status_body.get("recent_mismatch_count") or 0)
+
+    assert gauge_value("seedcore_hot_path_authz_graph_ready") == (
+        1.0 if bool(status_body.get("authz_graph_ready")) else 0.0
+    )
+    assert gauge_value("seedcore_hot_path_latency_slo_met") == (
+        1.0 if bool(status_body.get("latency_slo_met")) else 0.0
+    )
+    assert gauge_value("seedcore_hot_path_runtime_ready") == (1.0 if bool(status_body.get("runtime_ready")) else 0.0)
+    assert gauge_value("seedcore_hot_path_parity_ok_total") == float(status_body.get("parity_ok") or 0)
+    assert gauge_value("seedcore_hot_path_mismatched_total") == float(status_body.get("mismatched") or 0)
+
+    lat = status_body.get("latency_ms") if isinstance(status_body.get("latency_ms"), dict) else {}
+    p99 = lat.get("p99") if isinstance(lat, dict) else None
+    if p99 is not None:
+        assert gauge_value("seedcore_hot_path_latency_p99_ms") == float(p99)
 
     ga = status_body.get("graph_age_seconds")
     if ga is not None:

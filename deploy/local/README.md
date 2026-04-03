@@ -32,6 +32,8 @@ These scripts are intentionally separate from the main `deploy/` entrypoints bec
 - best-effort developer workflows
 - not the canonical Kubernetes deployment path
 
+`host-env.sh` and `run-api.sh` set `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` to **`host`** by default so `/api/v1/pdp/hot-path/status` and `/api/v1/pdp/hot-path/metrics` agree on the `deployment_role` label (see `scripts/host/verify_hot_path_observability.sh`). Kubernetes and Helm use **`kubernetes`**, Ray head **`ray`**, Docker image / `docker/env.example` **`docker`**.
+
 ## Restart Sequence
 
 ### Lean local mode

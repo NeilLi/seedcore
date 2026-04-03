@@ -16,6 +16,7 @@ services:
       API_PORT: 8002
       SEEDCORE_NS: seedcore
       SEEDCORE_STAGE: dev
+      SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE: docker
       # Database connections
       PG_DSN: postgresql://postgres:password@postgresql-pgbouncer:6432/postgres
       MYSQL_DATABASE_URL: mysql+mysqlconnector://seedcore:password@mysql:3306/seedcore

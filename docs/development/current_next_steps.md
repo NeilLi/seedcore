@@ -65,6 +65,17 @@ Latest repo-aligned critical-path status:
   and hot-path observability status/metrics checks are validated by a live host
   script with hardened metrics parsing diagnostics.
 
+## Status Update (2026-04-03)
+
+- Deployment observability closure for hot-path metrics/status:
+  - wired `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` through the checked-in deployment
+    paths (host/docker/k8s/ray) and added default Docker labeling (`docker`).
+  - extended CI contract test to assert full JSON status <-> Prometheus text
+    gauge alignment (including `*_authz_graph_ready`, `*_latency_slo_met`,
+    `*_runtime_ready`, parity counters, and `*_latency_p99_ms` when present).
+  - updated `scripts/host/verify_hot_path_observability.sh` to validate
+    status/metrics consistency against real status payloads.
+
 ## Why This Lives Outside The Root README
 
 The root README should explain what SeedCore is, how it runs, and why the
@@ -328,12 +339,13 @@ Interpretation note:
   proceed in parallel, but is not a blocker to preserving the frozen sign-off
   artifact in item 1.
 
-### Scheduled Next Key Plans (2026-04-02)
+### Scheduled Next Key Plans (Apr 2026)
 
 The next execution sequence should now move from contract freeze into
 operational closure and external-boundary productization.
 
-1. **2026-04-02 to 2026-04-12: Q2 acceptance gating**
+1. **Apr 2026 (early): Q2 acceptance gating**
+   - completed: true
    - status: **host-first closure complete**.
    - verification-api HTTP fixture checks are required in CI
      (`scripts/ci/q2_verification_api_fixture_gate.sh`) and executed in host
@@ -342,7 +354,8 @@ operational closure and external-boundary productization.
      matrix for the RCT slice.
    - remaining: validate the same gate envelope across real deployment
      topologies (K8s/Ray).
-2. **2026-04-08 to 2026-04-19: deployment observability closure**
+2. **Apr 2026 (mid): deployment observability closure**
+   - completed: true
    - wire `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` through the actual deployment
      paths already checked into repo.
    - verify JSON-to-metrics export semantics by matching `/pdp/hot-path/status`
@@ -351,7 +364,8 @@ operational closure and external-boundary productization.
    - add a live host verification script to validate status <-> metrics consistency
      against real status payloads:
      `scripts/host/verify_hot_path_observability.sh`.
-3. **2026-04-15 to 2026-04-30: degraded-edge and adversarial drill matrix**
+3. **Apr 2026 (late): degraded-edge and adversarial drill matrix**
+   - completed: false
    - expand the repeatable verification slice to include:
      stale-graph + stale telemetry (RCT hot-path drill matrix),
      intermittent-connectivity (synthetic flaky transport benchmark),
@@ -360,18 +374,21 @@ operational closure and external-boundary productization.
    - enforce the drill bundle explicitly in CI and host mode via:
      `scripts/ci/q2_degraded_edge_drill_matrix.sh` and
      `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
-4. **2026-05-01 to 2026-05-21: Agent Action Gateway productization**
+4. **May 2026 (early): Agent Action Gateway productization**
+   - completed: false
    - add one reference adapter for a current agent platform
    - add one narrow commerce-side adapter for the canonical transaction story
    - prove deterministic request -> decision -> replay lookup linkage
-5. **2026-05-15 to 2026-06-07: edge telemetry and closure progression**
+5. **May-Jun 2026: edge telemetry and closure progression**
+   - completed: false
    - export JSON schema for `EdgeTelemetryEnvelopeV0`
    - persist envelope refs on the governed receipt / forensic path
    - extend fixtures so Q3 handshake work can rely on signed telemetry inputs
    - keep the schema exporter and checked-in schema file in sync as the
      contract evolves
 
-6. **2026-06-01 onward: Gemini-visible read tools**
+6. **Jun 2026 onward: Gemini-visible read tools**
+   - completed: false
    - publish a minimal read-only tool bundle for verification queue, detail,
      replay, runbook lookup, and hot-path status/metrics
    - keep those tools narrow and operator-safe; they should expose the same
