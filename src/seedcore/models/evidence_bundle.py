@@ -134,6 +134,7 @@ class PolicyReceipt(BaseModel):
     asset_ref: Optional[str] = None
     authz_disposition: Optional[str] = None
     governed_receipt_hash: Optional[str] = None
+    policy_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
     state_binding_hash: Optional[str] = None
@@ -183,6 +184,7 @@ class EvidenceBundle(BaseModel):
     intent_ref: Optional[str] = None
     execution_token_id: Optional[str] = None
     policy_receipt_id: Optional[str] = None
+    policy_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
     state_binding_hash: Optional[str] = None

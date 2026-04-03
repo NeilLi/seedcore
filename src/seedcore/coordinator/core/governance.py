@@ -37,6 +37,7 @@ from seedcore.models.action_intent import (
 )
 from seedcore.models.task_payload import TaskPayload
 from seedcore.ops.evidence.builder import build_policy_receipt_artifact
+from seedcore.ops.evidence.rct_replay_verification import apply_rct_triple_hash_fields
 from seedcore.ops.evidence.state_binding import compute_authority_state_binding_hash
 from seedcore.ops.pkg.authz_graph.compiler import (
     AuthzDecisionDisposition,
@@ -3452,6 +3453,13 @@ def _finalize_policy_decision_contract(
                 if binding_ref not in provenance_sources:
                     provenance_sources.append(binding_ref)
                 governed_receipt["provenance_sources"] = provenance_sources
+
+    compiled_for_hashes = _resolve_compiled_authz_index(None)
+    apply_rct_triple_hash_fields(
+        authz_graph,
+        governed_receipt,
+        compiled_authz_index=compiled_for_hashes,
+    )
 
     active_contract_artifacts = _resolve_active_contract_artifacts(
         policy_case=policy_case,

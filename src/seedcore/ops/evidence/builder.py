@@ -95,10 +95,23 @@ def build_policy_receipt_artifact(
             if governed_receipt.get("decision_hash") is not None
             else None
         ),
+        "policy_snapshot_hash": (
+            str(
+                governed_receipt.get("policy_snapshot_hash")
+                or authz_graph.get("policy_snapshot_hash")
+                or ""
+            ).strip()
+            or None
+        ),
         "decision_graph_snapshot_hash": (
-            str(governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash"))
-            if (governed_receipt.get("snapshot_hash") is not None or authz_graph.get("snapshot_hash") is not None)
-            else None
+            str(
+                governed_receipt.get("decision_graph_snapshot_hash")
+                or authz_graph.get("decision_graph_snapshot_hash")
+                or governed_receipt.get("snapshot_hash")
+                or authz_graph.get("snapshot_hash")
+                or ""
+            ).strip()
+            or None
         ),
         "decision_graph_snapshot_version": (
             str(governed_receipt.get("snapshot_version") or authz_graph.get("snapshot_version"))
@@ -242,10 +255,33 @@ def build_evidence_bundle(
             if policy_receipt is not None
             else None
         ),
+        "policy_snapshot_hash": (
+            str(
+                governed_receipt.get("policy_snapshot_hash")
+                or authz_graph.get("policy_snapshot_hash")
+                or (
+                    policy_receipt.policy_snapshot_hash
+                    if policy_receipt is not None and policy_receipt.policy_snapshot_hash
+                    else ""
+                )
+                or ""
+            ).strip()
+            or None
+        ),
         "decision_graph_snapshot_hash": (
-            str(governed_receipt.get("snapshot_hash") or authz_graph.get("snapshot_hash"))
-            if (governed_receipt.get("snapshot_hash") is not None or authz_graph.get("snapshot_hash") is not None)
-            else None
+            str(
+                governed_receipt.get("decision_graph_snapshot_hash")
+                or authz_graph.get("decision_graph_snapshot_hash")
+                or governed_receipt.get("snapshot_hash")
+                or authz_graph.get("snapshot_hash")
+                or (
+                    policy_receipt.decision_graph_snapshot_hash
+                    if policy_receipt is not None and policy_receipt.decision_graph_snapshot_hash
+                    else ""
+                )
+                or ""
+            ).strip()
+            or None
         ),
         "decision_graph_snapshot_version": (
             str(governed_receipt.get("snapshot_version") or authz_graph.get("snapshot_version"))

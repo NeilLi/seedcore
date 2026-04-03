@@ -27,6 +27,7 @@ from seedcore.models.pdp_hot_path import (
     HotPathSignerProvenance,
     HotPathTelemetryContext,
 )
+from seedcore.ops.evidence.rct_replay_verification import apply_rct_triple_hash_fields
 from seedcore.ops.pkg.manager import get_global_pkg_manager
 from seedcore.ops.hot_path_parity_log import get_hot_path_parity_logger, parity_db_file_path, parity_log_file_path
 
@@ -487,8 +488,6 @@ def hot_path_response_to_policy_decision(
     governed_receipt = dict(response.governed_receipt or {})
     if response.trust_gaps and not isinstance(governed_receipt.get("trust_gap_codes"), list):
         governed_receipt["trust_gap_codes"] = list(response.trust_gaps)
-    if response.decision.policy_snapshot_hash and not governed_receipt.get("snapshot_hash"):
-        governed_receipt["snapshot_hash"] = response.decision.policy_snapshot_hash
     if response.decision.policy_snapshot_ref and not governed_receipt.get("snapshot_version"):
         governed_receipt["snapshot_version"] = response.decision.policy_snapshot_ref
     if response.decision.reason and not governed_receipt.get("reason"):
@@ -500,8 +499,8 @@ def hot_path_response_to_policy_decision(
         "disposition": disposition,
         "reason": response.decision.reason,
         "trust_gap_codes": list(response.trust_gaps),
-        "snapshot_hash": response.decision.policy_snapshot_hash,
-        "snapshot_version": response.decision.policy_snapshot_ref,
+        "snapshot_hash": governed_receipt.get("snapshot_hash") or response.decision.policy_snapshot_hash,
+        "snapshot_version": governed_receipt.get("snapshot_version") or response.decision.policy_snapshot_ref,
         "minted_artifacts": [
             {"kind": kind}
             for kind in _response_minted_artifact_kinds(response)
@@ -511,6 +510,10 @@ def hot_path_response_to_policy_decision(
             for item in response.signer_provenance
         ],
     }
+    if governed_receipt.get("policy_snapshot_hash"):
+        authz_graph["policy_snapshot_hash"] = governed_receipt["policy_snapshot_hash"]
+    if governed_receipt.get("decision_graph_snapshot_hash"):
+        authz_graph["decision_graph_snapshot_hash"] = governed_receipt["decision_graph_snapshot_hash"]
     if isinstance(response.request_schema_bundle, Mapping) and response.request_schema_bundle:
         authz_graph["request_schema_bundle"] = dict(response.request_schema_bundle)
     if isinstance(response.taxonomy_bundle, Mapping) and response.taxonomy_bundle:
@@ -780,6 +783,11 @@ def evaluate_pdp_hot_path(
         policy_case.model_copy(deep=True),
         compiled_authz_index=compiled_authz_index,
     )
+    _ag = dict(decision.authz_graph or {})
+    _gr = dict(decision.governed_receipt or {})
+    apply_rct_triple_hash_fields(_ag, _gr, compiled_authz_index=compiled_authz_index)
+    decision.authz_graph = _ag
+    decision.governed_receipt = _gr
 
     checks.extend(_decision_checks(decision))
     trust_gaps = _extract_trust_gaps(decision)

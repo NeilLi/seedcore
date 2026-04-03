@@ -1,7 +1,7 @@
 # PKG Snapshot Alignment with Agent-Governed Restricted Custody Transfer
 
 Date: 2026-04-02
-Status: Research note, design recommendation, and Phase 1–3 status update
+Status: Research note, design recommendation, and Phase 1–4 status update
 
 ## Why this note exists
 
@@ -67,12 +67,27 @@ What is now in place:
   `pkg_snapshot_manifests` row and non-empty taxonomy lists from
   `get_taxonomy_bundle`. Failures block `activate_snapshot_version` before the
   DB activation call.
+- **Phase 4:** RCT replay hardening — explicit **triple hash** on receipts and
+  strict verification:
+  - `apply_rct_triple_hash_fields` (in `ops/evidence/rct_replay_verification.py`)
+    sets `policy_snapshot_hash` (active PKG evaluator snapshot checksum) and
+    `decision_graph_snapshot_hash` (compiled decision graph) on `authz_graph`
+    and `governed_receipt` during `_finalize_policy_decision_contract` and the
+    PDP hot path after `evaluate_intent`.
+  - `PolicyReceipt` / `EvidenceBundle` carry `policy_snapshot_hash`; builders and
+    materialized `policy_verification` include it alongside decision-graph and
+    state-binding hashes.
+  - When `SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH` is truthy, `ReplayService`
+    runs `evaluate_strict_rct_replay_triple_hash`, which **rejects policy-only**
+    replay if any of the three hashes is missing on `policy_receipt` or
+    `evidence_bundle`, or if interior `policy_decision` hashes disagree with
+    signed artifacts.
+  - Host helper: `scripts/host/verify_rct_replay_strict.py` (stdin JSON record).
 
 What remains for later phases:
 
 - optional request-schema bundle shape checks at publish (beyond taxonomy/manifest)
-- replay hardening that makes policy hash + graph hash + state binding
-  mandatory
+- optional threading of explicit `compiled_authz_index` into `_finalize_policy_decision_contract` for tests without active PKG manager
 
 ## Current repo state
 
@@ -491,10 +506,15 @@ Implemented in additive, shadow-safe form:
 
 ### Phase 4: Replay hardening
 
+**Status:** Implemented (opt-in strict replay via `SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH`).
+
 - require policy hash + decision-graph hash + state-binding hash on every
-  governed RCT receipt
+  governed RCT receipt (emitted on `authz_graph` / `governed_receipt` and
+  signed `policy_receipt` / `evidence_bundle` when builders run on enriched
+  governance)
 - add verification tooling that refuses "policy-only" replay when state binding
-  is absent
+  (or any triple component) is absent on signed artifacts — `ReplayService` +
+  `scripts/host/verify_rct_replay_strict.py`
 
 ## External design references
 

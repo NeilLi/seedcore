@@ -39,6 +39,10 @@ from seedcore.models.replay import (
     VerificationResult,
 )
 from seedcore.ops.evidence.materializer import materialize_seedcore_custody_event_payload
+from seedcore.ops.evidence.rct_replay_verification import (
+    evaluate_strict_rct_replay_triple_hash,
+    strict_rct_replay_triple_hash_enabled,
+)
 from seedcore.ops.evidence.authority_consistency import (
     authority_consistency_summary,
     operator_actions_for_authority_issues,
@@ -1265,6 +1269,16 @@ class ReplayService:
         artifact_results["authority_state_binding"] = state_binding_result
         if state_binding_result.get("error_code") is not None:
             issues.append(f"authority_state_binding:{state_binding_result['error_code']}")
+        if strict_rct_replay_triple_hash_enabled():
+            strict_triple = evaluate_strict_rct_replay_triple_hash(
+                record=record,
+                policy_receipt=policy_receipt,
+                evidence_bundle=evidence_bundle,
+            )
+            artifact_results["rct_triple_hash_strict"] = strict_triple["artifact"]
+            if not strict_triple["verified"]:
+                for item in strict_triple["issues"]:
+                    issues.append(f"rct_triple_hash_strict:{item}")
         if not policy_receipt:
             issues.append("missing_policy_receipt")
             artifact_results["policy_receipt"] = {
