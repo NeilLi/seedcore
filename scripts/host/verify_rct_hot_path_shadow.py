@@ -137,6 +137,7 @@ def _build_request(
     case_dir: Path,
     *,
     persisted_approval: dict[str, Any],
+    active_contract_bundles: dict[str, Any] | None = None,
     request_id_suffix: str | None = None,
 ) -> dict[str, Any]:
     action_intent_input = _read_json(case_dir / "input.action_intent.json")
@@ -276,6 +277,18 @@ def _build_request(
             "max_allowed_age_seconds": max_allowed_age_seconds,
             "evidence_refs": asset_state.get("evidence_refs") or telemetry.get("evidence_refs") or [],
         },
+        "request_schema_bundle": (
+            dict(active_contract_bundles.get("request_schema_bundle"))
+            if isinstance(active_contract_bundles, dict)
+            and isinstance(active_contract_bundles.get("request_schema_bundle"), dict)
+            else None
+        ),
+        "taxonomy_bundle": (
+            dict(active_contract_bundles.get("taxonomy_bundle"))
+            if isinstance(active_contract_bundles, dict)
+            and isinstance(active_contract_bundles.get("taxonomy_bundle"), dict)
+            else None
+        ),
     }
 
 
@@ -290,6 +303,12 @@ def run_verification(
     status_url = f"{base_url.rstrip('/')}/pdp/hot-path/status"
     active_snapshot = _resolve_active_snapshot(base_url)
     status_before = _get_json(status_url)
+    pkg_status = _get_json(f"{base_url.rstrip('/')}/pkg/status")
+    active_contract_bundles = (
+        pkg_status.get("active_contract_artifacts")
+        if isinstance(pkg_status.get("active_contract_artifacts"), dict)
+        else {}
+    )
     before_total = int(status_before.get("total") or 0)
     before_parity_ok = int(status_before.get("parity_ok") or 0)
     before_mismatched = int(status_before.get("mismatched") or 0)
@@ -302,6 +321,7 @@ def run_verification(
         payload = _build_request(
             case_dir,
             persisted_approval=persisted_approval,
+            active_contract_bundles=active_contract_bundles,
             request_id_suffix=request_id_suffix,
         )
         if active_snapshot:

@@ -6,12 +6,25 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
         "id": "6f68f1dd-3f84-4f63-95c7-ab154a8c87f1",
         "intent_id": "intent-mat-1",
         "recorded_at": "2026-03-19T12:00:00+00:00",
-        "policy_decision": {"allowed": True, "disposition": "allow"},
+        "policy_decision": {
+            "allowed": True,
+            "disposition": "allow",
+            "authz_graph": {
+                "trust_gaps": [
+                    {
+                        "code": "stale_telemetry",
+                        "message": "Gap detected: stale_telemetry",
+                        "details": {},
+                    }
+                ]
+            },
+        },
         "policy_receipt": {
             "policy_receipt_id": "policy-r-1",
             "policy_decision_id": "policy-decision-hash-1",
             "decision_graph_snapshot_hash": "snapshot-hash-1",
             "decision_graph_snapshot_version": "snapshot:1",
+            "state_binding_hash": "sha256:state-binding-hash-1",
         },
         "evidence_bundle": {
             "evidence_bundle_id": "bundle-1",
@@ -19,6 +32,7 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
             "node_id": "robot_sim://reachy/grasp#sim-1",
             "decision_graph_snapshot_hash": "snapshot-hash-1",
             "decision_graph_snapshot_version": "snapshot:1",
+            "state_binding_hash": "sha256:state-binding-hash-1",
             "created_at": "2026-03-19T11:59:55+00:00",
             "signer_metadata": {"signer_id": "seedcore-evidence-service", "signing_scheme": "hmac_sha256"},
             "signature": "sig-1",
@@ -35,6 +49,16 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
                 "modality_map": {"provenance": "prov-hash-1", "visual_hash": "vision-hash-1"}
             },
             "evidence_inputs": {
+                "taxonomy_bundle": {
+                    "trust_gap_codes": [
+                        {
+                            "code": "stale_telemetry",
+                            "operator_message": "Telemetry freshness exceeded policy threshold.",
+                            "machine_category": "telemetry",
+                            "severity": "critical",
+                        }
+                    ]
+                },
                 "execution_summary": {
                     "actuator_result_hash": "traj-hash-1",
                     "node_id": "robot_sim://reachy/grasp#sim-1",
@@ -52,5 +76,7 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
     assert payload["platform_state"] == "allow"
     assert payload["policy_verification"]["policy_hash"] == "policy-decision-hash-1"
     assert payload["policy_verification"]["decision_graph_snapshot_hash"] == "snapshot-hash-1"
+    assert payload["policy_verification"]["state_binding_hash"] == "sha256:state-binding-hash-1"
+    assert payload["policy_verification"]["trust_gap_details"][0]["message"] == "Telemetry freshness exceeded policy threshold."
     assert payload["custody_transition"]["to"] == "vault-a"
     assert payload["custody_transition"]["from"] == "staging-a"

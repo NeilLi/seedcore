@@ -14,6 +14,7 @@ from seedcore.models.evidence_bundle import (
     PolicyReceipt,
     TransitionReceipt,
 )
+from seedcore.ops.evidence.state_binding import compute_authority_state_binding_hash
 from seedcore.ops.evidence.verification import build_signed_artifact, verify_policy_receipt
 
 
@@ -51,6 +52,13 @@ def build_policy_receipt_artifact(
     )
     resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
     principal = action_intent.get("principal") if isinstance(action_intent.get("principal"), dict) else {}
+    state_binding_hash = _resolve_state_binding_hash(
+        action_intent=action_intent,
+        approval_context=approval_context if isinstance(approval_context, dict) else {},
+        policy_case=policy_case if isinstance(policy_case, dict) else {},
+        governed_receipt=governed_receipt,
+        authz_graph=authz_graph,
+    )
 
     if not policy_decision and not execution_token:
         return None
@@ -97,6 +105,7 @@ def build_policy_receipt_artifact(
             if (governed_receipt.get("snapshot_version") is not None or authz_graph.get("snapshot_version") is not None)
             else None
         ),
+        "state_binding_hash": state_binding_hash,
         "co_sign_required": co_sign_contract["co_sign_required"],
         "co_sign_status": co_sign_contract["co_sign_status"],
         "transfer_outcome": co_sign_contract["transfer_outcome"],
@@ -182,6 +191,38 @@ def build_evidence_bundle(
         node_id=node_id,
         executed_at=executed_at,
     )
+    policy_case = governance.get("policy_case") if isinstance(governance.get("policy_case"), dict) else {}
+    governance_request_schema_bundle = governance.get("request_schema_bundle") if isinstance(governance.get("request_schema_bundle"), dict) else {}
+    governance_taxonomy_bundle = governance.get("taxonomy_bundle") if isinstance(governance.get("taxonomy_bundle"), dict) else {}
+    request_schema_bundle = _resolve_request_schema_bundle(
+        authz_graph=authz_graph,
+        governed_receipt=governed_receipt,
+        policy_receipt=existing_policy_receipt,
+    )
+    if not request_schema_bundle and governance_request_schema_bundle:
+        request_schema_bundle = dict(governance_request_schema_bundle)
+    taxonomy_bundle = _resolve_taxonomy_bundle(
+        authz_graph=authz_graph,
+        governed_receipt=governed_receipt,
+        policy_receipt=existing_policy_receipt,
+    )
+    if not taxonomy_bundle and governance_taxonomy_bundle:
+        taxonomy_bundle = dict(governance_taxonomy_bundle)
+    state_binding_hash = _resolve_state_binding_hash(
+        action_intent=action_intent,
+        approval_context=approval_context if isinstance(approval_context, dict) else {},
+        policy_case=policy_case if isinstance(policy_case, dict) else {},
+        governed_receipt=governed_receipt,
+        authz_graph=authz_graph,
+        telemetry_summary={
+            "observed_at": telemetry_snapshot.get("captured_at"),
+            "evidence_refs": [
+                item.get("hash")
+                for item in (media_refs or [])
+                if isinstance(item, dict) and item.get("hash") is not None
+            ],
+        },
+    )
     payload = {
         "evidence_bundle_id": str(uuid.uuid4()),
         "task_id": str(task_dict.get("task_id") or task_dict.get("id") or "unknown_task"),
@@ -211,6 +252,7 @@ def build_evidence_bundle(
             if (governed_receipt.get("snapshot_version") is not None or authz_graph.get("snapshot_version") is not None)
             else None
         ),
+        "state_binding_hash": state_binding_hash,
         "co_sign_required": co_sign_contract["co_sign_required"],
         "co_sign_status": co_sign_contract["co_sign_status"],
         "transfer_outcome": co_sign_contract["transfer_outcome"],
@@ -233,6 +275,8 @@ def build_evidence_bundle(
                 if policy_receipt is not None
                 else None
             ),
+            "request_schema_bundle": request_schema_bundle,
+            "taxonomy_bundle": taxonomy_bundle,
             "transition_receipts": [
                 receipt.model_dump(mode="json")
                 for receipt in transition_receipts
@@ -333,6 +377,73 @@ def _extract_trust_gap_codes(
                 codes.append(str(item.get("code")))
         return codes
     return []
+
+
+def _resolve_request_schema_bundle(
+    *,
+    authz_graph: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    policy_receipt: Dict[str, Any],
+) -> Dict[str, Any]:
+    candidates = [
+        governed_receipt.get("request_schema_bundle"),
+        authz_graph.get("request_schema_bundle"),
+        policy_receipt.get("request_schema_bundle"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
+    return {}
+
+
+def _resolve_taxonomy_bundle(
+    *,
+    authz_graph: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    policy_receipt: Dict[str, Any],
+) -> Dict[str, Any]:
+    candidates = [
+        governed_receipt.get("taxonomy_bundle"),
+        authz_graph.get("taxonomy_bundle"),
+        policy_receipt.get("taxonomy_bundle"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
+    return {}
+
+
+def _resolve_state_binding_hash(
+    *,
+    action_intent: Dict[str, Any],
+    approval_context: Dict[str, Any],
+    policy_case: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    authz_graph: Dict[str, Any],
+    telemetry_summary: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    existing = governed_receipt.get("state_binding_hash") or authz_graph.get("state_binding_hash")
+    if existing is not None and str(existing).strip():
+        return str(existing).strip()
+    resolved_telemetry_summary = telemetry_summary
+    if resolved_telemetry_summary is None:
+        resolved_telemetry_summary = (
+            policy_case.get("telemetry_summary")
+            if isinstance(policy_case.get("telemetry_summary"), dict)
+            else {}
+        )
+    return compute_authority_state_binding_hash(
+        action_intent=action_intent,
+        approval_context=approval_context,
+        governed_receipt=governed_receipt,
+        authz_graph=authz_graph,
+        telemetry_summary=resolved_telemetry_summary if isinstance(resolved_telemetry_summary, dict) else {},
+        relevant_twin_snapshot=(
+            policy_case.get("relevant_twin_snapshot")
+            if isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        ),
+    )
 
 
 def _co_sign_contract(

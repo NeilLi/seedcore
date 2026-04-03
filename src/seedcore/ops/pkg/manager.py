@@ -19,6 +19,7 @@ Control PKG Compliance:
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -114,6 +115,7 @@ class PKGManager:
         # Async task tracking
         self._redis_task: Optional[asyncio.Task] = None
         self._status = {"healthy": False, "error": None, "version": None}
+        self._active_contract_artifacts: Dict[str, Any] = {}
 
     async def start(self):
         """Initialize state and start listeners."""
@@ -226,8 +228,9 @@ class PKGManager:
                     e,
                 )
 
+            compiled_authz_index = None
             try:
-                await self.authz_graph.activate_snapshot(
+                compiled_authz_index = await self.authz_graph.activate_snapshot(
                     snapshot_id=snapshot.id,
                     snapshot_version=snapshot.version,
                     snapshot_ref=f"authz_graph@{snapshot.version}",
@@ -240,6 +243,15 @@ class PKGManager:
                     e,
                     exc_info=True,
                 )
+            if compiled_authz_index is not None:
+                active_contract_artifacts = await self._persist_compiled_authz_artifacts(
+                    snapshot_id=snapshot.id,
+                    snapshot_version=snapshot.version,
+                    compiled_authz_index=compiled_authz_index,
+                )
+                if isinstance(active_contract_artifacts, dict):
+                    with self._swap_lock:
+                        self._active_contract_artifacts = copy.deepcopy(active_contract_artifacts)
             
             duration = (time.perf_counter() - start) * 1000
             logger.info(f"Activated PKG {version} (src={source}, mode={self._mode.value}) with Cortex-support in {duration:.1f}ms")
@@ -442,6 +454,21 @@ class PKGManager:
                 "authz_graph": self.authz_graph.get_status(),
             }
 
+    def get_active_contract_artifacts(self) -> Dict[str, Any]:
+        """Return the active snapshot contract artifacts cached during activation."""
+        with self._swap_lock:
+            return copy.deepcopy(self._active_contract_artifacts)
+
+    def get_active_request_schema_bundle(self) -> Dict[str, Any]:
+        """Return the active request schema bundle if it has been published."""
+        bundle = self.get_active_contract_artifacts().get("request_schema_bundle")
+        return bundle if isinstance(bundle, dict) else {}
+
+    def get_active_taxonomy_bundle(self) -> Dict[str, Any]:
+        """Return the active taxonomy bundle if it has been published."""
+        bundle = self.get_active_contract_artifacts().get("taxonomy_bundle")
+        return bundle if isinstance(bundle, dict) else {}
+
     def get_active_compiled_authz_index(self):
         return self.authz_graph.get_active_compiled_index()
 
@@ -470,6 +497,14 @@ class PKGManager:
                 snapshot_version=active_version,
                 snapshot_ref=f"authz_graph@{active_version}",
             )
+            active_contract_artifacts = await self._persist_compiled_authz_artifacts(
+                snapshot_id=snapshot_id,
+                snapshot_version=active_version,
+                compiled_authz_index=compiled,
+            )
+            if isinstance(active_contract_artifacts, dict):
+                with self._swap_lock:
+                    self._active_contract_artifacts = copy.deepcopy(active_contract_artifacts)
             return {
                 "success": True,
                 "message": f"Successfully refreshed authz graph for {active_version}",
@@ -488,6 +523,245 @@ class PKGManager:
                 "version": active_version,
                 "snapshot_id": snapshot_id,
             }
+
+    async def _persist_compiled_authz_artifacts(
+        self,
+        *,
+        snapshot_id: int,
+        snapshot_version: str,
+        compiled_authz_index: Any,
+    ) -> Dict[str, Any]:
+        """
+        Additive Phase 1 persistence: store compiled decision graph artifacts
+        without changing activation/decision behavior.
+        """
+        try:
+            decision_graph_snapshot = getattr(compiled_authz_index, "decision_graph_snapshot", None)
+            if decision_graph_snapshot is None:
+                return {}
+            decision_graph_payload = (
+                decision_graph_snapshot.to_dict()
+                if hasattr(decision_graph_snapshot, "to_dict")
+                else dict(decision_graph_snapshot)
+            )
+            decision_graph_artifact = await self._client.store_snapshot_artifact_json(
+                snapshot_id=snapshot_id,
+                artifact_type="decision_graph_snapshot",
+                payload=decision_graph_payload,
+                created_by="pkg_manager",
+            )
+            request_schema_payload = await self._build_request_schema_bundle(
+                snapshot_id=snapshot_id,
+                snapshot_version=snapshot_version,
+            )
+            request_schema_artifact = await self._client.store_snapshot_artifact_json(
+                snapshot_id=snapshot_id,
+                artifact_type="request_schema_bundle",
+                payload=request_schema_payload,
+                created_by="pkg_manager",
+            )
+            taxonomy_payload = await self._build_taxonomy_bundle(
+                snapshot_id=snapshot_id,
+                snapshot_version=snapshot_version,
+                decision_graph_payload=decision_graph_payload,
+            )
+            taxonomy_artifact = await self._client.store_snapshot_artifact_json(
+                snapshot_id=snapshot_id,
+                artifact_type="taxonomy_bundle",
+                payload=taxonomy_payload,
+                created_by="pkg_manager",
+            )
+            activation_payload = {
+                "snapshot_id": snapshot_id,
+                "snapshot_version": snapshot_version,
+                "compiled_at": getattr(compiled_authz_index, "compiled_at", None),
+                "snapshot_hash": getattr(compiled_authz_index, "snapshot_hash", None),
+                "restricted_transfer_ready": bool(
+                    getattr(compiled_authz_index, "restricted_transfer_ready", False)
+                ),
+                "hot_path_workflow": decision_graph_payload.get("hot_path_workflow"),
+                "trust_gap_taxonomy": list(decision_graph_payload.get("trust_gap_taxonomy") or []),
+                "decision_graph_snapshot": {
+                    "artifact_type": "decision_graph_snapshot",
+                    "sha256": decision_graph_artifact.get("sha256"),
+                    "size_bytes": decision_graph_artifact.get("size_bytes"),
+                },
+                "request_schema_bundle": {
+                    "artifact_type": "request_schema_bundle",
+                    "sha256": request_schema_artifact.get("sha256"),
+                    "size_bytes": request_schema_artifact.get("size_bytes"),
+                },
+                "taxonomy_bundle": {
+                    "artifact_type": "taxonomy_bundle",
+                    "sha256": taxonomy_artifact.get("sha256"),
+                    "size_bytes": taxonomy_artifact.get("size_bytes"),
+                },
+                "shadow_only": True,
+            }
+            activation_artifact = await self._client.store_snapshot_artifact_json(
+                snapshot_id=snapshot_id,
+                artifact_type="activation_manifest",
+                payload=activation_payload,
+                created_by="pkg_manager",
+            )
+            manifest_payload = {
+                "snapshot_id": snapshot_id,
+                "snapshot_version": snapshot_version,
+                "workflow_type": "restricted_custody_transfer",
+                "decision_contract_version": snapshot_version,
+                "request_schema_version": snapshot_version,
+                "evidence_contract_version": snapshot_version,
+                "reason_code_taxonomy_version": snapshot_version,
+                "trust_gap_taxonomy_version": snapshot_version,
+                "obligation_taxonomy_version": snapshot_version,
+                "consistency_contract_version": snapshot_version,
+                "safety_profile": "shadow_only_phase1",
+                "requires_signed_bundle": False,
+                "requires_compiled_decision_graph": bool(decision_graph_payload),
+                "requires_authority_state_binding": False,
+                "activation_requirements": {
+                    "shadow_only": True,
+                    "compiled_authz_snapshot_hash": getattr(compiled_authz_index, "snapshot_hash", None),
+                    "decision_graph_snapshot_sha256": decision_graph_artifact.get("sha256"),
+                    "request_schema_bundle_sha256": request_schema_artifact.get("sha256"),
+                    "taxonomy_bundle_sha256": taxonomy_artifact.get("sha256"),
+                    "activation_manifest_sha256": activation_artifact.get("sha256"),
+                },
+                "manifest_json": {
+                    "activation_manifest": activation_payload,
+                    "artifacts": {
+                        "decision_graph_snapshot": decision_graph_artifact,
+                        "request_schema_bundle": request_schema_artifact,
+                        "taxonomy_bundle": taxonomy_artifact,
+                        "activation_manifest": activation_artifact,
+                    },
+                },
+            }
+            await self._client.upsert_snapshot_manifest(
+                snapshot_id=snapshot_id,
+                workflow_type="restricted_custody_transfer",
+                decision_contract_version=snapshot_version,
+                request_schema_version=snapshot_version,
+                evidence_contract_version=snapshot_version,
+                reason_code_taxonomy_version=snapshot_version,
+                trust_gap_taxonomy_version=snapshot_version,
+                obligation_taxonomy_version=snapshot_version,
+                consistency_contract_version=snapshot_version,
+                safety_profile="shadow_only_phase1",
+                requires_signed_bundle=False,
+                requires_compiled_decision_graph=True,
+                requires_authority_state_binding=False,
+                activation_requirements=manifest_payload["activation_requirements"],
+                manifest_json=manifest_payload,
+            )
+            return {
+                "decision_graph_snapshot": decision_graph_payload,
+                "request_schema_bundle": request_schema_payload,
+                "taxonomy_bundle": taxonomy_payload,
+                "activation_manifest": activation_payload,
+            }
+        except Exception as e:
+            logger.warning(
+                "Failed to persist compiled authz artifacts for snapshot_id=%s version=%s: %s",
+                snapshot_id,
+                snapshot_version,
+                e,
+                exc_info=True,
+            )
+            return {}
+
+    async def _build_request_schema_bundle(
+        self,
+        *,
+        snapshot_id: int,
+        snapshot_version: str,
+    ) -> Dict[str, Any]:
+        capabilities = list(self.capabilities.list_capabilities())
+        if not capabilities and hasattr(self._client, "get_subtask_types"):
+            try:
+                rows = await self._client.get_subtask_types(snapshot_id)
+            except Exception:
+                rows = []
+            if not isinstance(rows, list):
+                rows = []
+            capabilities = [
+                {
+                    "id": row.get("id"),
+                    "name": row.get("name"),
+                    "snapshot_id": row.get("snapshot_id", snapshot_id),
+                    "default_params": row.get("default_params") or {},
+                }
+                for row in rows or []
+                if isinstance(row, dict) and str(row.get("name") or "").strip()
+            ]
+        normalized_caps: List[Dict[str, Any]] = []
+        for cap in capabilities:
+            if isinstance(cap, dict):
+                name = str(cap.get("name") or "").strip()
+                cap_id = cap.get("subtask_type_id") or cap.get("id")
+                default_params = dict(cap.get("default_params") or {})
+                cap_snapshot_id = cap.get("snapshot_id") or snapshot_id
+            else:
+                name = str(getattr(cap, "name", "") or "").strip()
+                cap_id = getattr(cap, "subtask_type_id", None)
+                default_params = dict(getattr(cap, "default_params", {}) or {})
+                cap_snapshot_id = getattr(cap, "snapshot_id", snapshot_id)
+            if not name:
+                continue
+            normalized_caps.append(
+                {
+                    "id": str(cap_id) if cap_id is not None else None,
+                    "name": name,
+                    "snapshot_id": cap_snapshot_id,
+                    "default_params": default_params,
+                    "routing_hints": self.capabilities.get_routing_hints(name),
+                    "executor_config": self.capabilities.get_executor_config(name),
+                }
+            )
+        return {
+            "artifact_type": "request_schema_bundle",
+            "snapshot_id": snapshot_id,
+            "snapshot_version": snapshot_version,
+            "workflow_type": "restricted_custody_transfer",
+            "request_shape": {
+                "required_task_fact_keys": sorted(ALLOWED_TASK_FACTS_KEYS),
+                "injected_task_fact_keys": ["semantic_context"],
+            },
+            "capabilities": normalized_caps,
+            "capability_count": len(normalized_caps),
+            "shadow_only": True,
+        }
+
+    async def _build_taxonomy_bundle(
+        self,
+        *,
+        snapshot_id: int,
+        snapshot_version: str,
+        decision_graph_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        taxonomy_rows: Dict[str, List[Dict[str, Any]]] = {}
+        if hasattr(self._client, "get_taxonomy_bundle"):
+            try:
+                raw_bundle = await self._client.get_taxonomy_bundle(snapshot_id=snapshot_id)
+            except Exception:
+                raw_bundle = {}
+            if isinstance(raw_bundle, dict):
+                taxonomy_rows = raw_bundle
+        return {
+            "artifact_type": "taxonomy_bundle",
+            "snapshot_id": snapshot_id,
+            "snapshot_version": snapshot_version,
+            "workflow_type": "restricted_custody_transfer",
+            "decision_graph_snapshot": {
+                "snapshot_hash": decision_graph_payload.get("snapshot_hash"),
+                "hot_path_workflow": decision_graph_payload.get("hot_path_workflow"),
+                "trust_gap_taxonomy": list(decision_graph_payload.get("trust_gap_taxonomy") or []),
+            },
+            "reason_codes": list(taxonomy_rows.get("reason_codes") or []),
+            "trust_gap_codes": list(taxonomy_rows.get("trust_gap_codes") or []),
+            "obligation_codes": list(taxonomy_rows.get("obligation_codes") or []),
+            "shadow_only": True,
+        }
     
     async def reload_active_snapshot(self) -> Dict[str, Any]:
         """
@@ -905,9 +1179,10 @@ class PKGManager:
             return f"task_facts must be a dict, got {type(task_facts).__name__}"
         
         # Check for unknown keys (closed-world enforcement)
-        unknown_keys = set(task_facts.keys()) - ALLOWED_TASK_FACTS_KEYS
+        allowed_keys = self._resolve_task_fact_keys()
+        unknown_keys = set(task_facts.keys()) - allowed_keys
         if unknown_keys:
-            return f"Unknown keys in task_facts: {unknown_keys}. Allowed keys: {ALLOWED_TASK_FACTS_KEYS}"
+            return f"Unknown keys in task_facts: {unknown_keys}. Allowed keys: {allowed_keys}"
         
         # Validate tags
         if "tags" in task_facts:
@@ -930,6 +1205,25 @@ class PKGManager:
                 return f"context must be a dict, got {type(task_facts['context']).__name__}"
         
         return None  # Valid
+
+    def _resolve_task_fact_keys(self) -> set[str]:
+        """Resolve the closed-world task fact allowlist from the active request schema bundle when present."""
+        bundle = self.get_active_request_schema_bundle()
+        request_shape = bundle.get("request_shape") if isinstance(bundle.get("request_shape"), dict) else {}
+        allowed_keys = (
+            request_shape.get("required_task_fact_keys")
+            if isinstance(request_shape.get("required_task_fact_keys"), list)
+            else None
+        )
+        if isinstance(allowed_keys, list):
+            normalized = {
+                str(key).strip()
+                for key in allowed_keys
+                if isinstance(key, str) and str(key).strip()
+            }
+            if normalized:
+                return normalized
+        return set(ALLOWED_TASK_FACTS_KEYS)
     
     # --- P2: Integrity Validation ---
     

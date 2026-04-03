@@ -50,6 +50,7 @@ def _build_policy_receipt(*, task_id: str, intent_id: str, asset_id: str | None 
         "governed_receipt_hash": None,
         "decision_graph_snapshot_hash": None,
         "decision_graph_snapshot_version": None,
+        "state_binding_hash": None,
         "trust_gap_codes": [],
         "timestamp": "2026-03-20T10:00:00+00:00",
     }
@@ -81,6 +82,7 @@ def _build_evidence_bundle(
         "policy_receipt_id": f"policy-{intent_id}",
         "decision_graph_snapshot_hash": None,
         "decision_graph_snapshot_version": None,
+        "state_binding_hash": None,
         "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
         "asset_fingerprint": {
             "fingerprint_id": f"fingerprint-{intent_id}",
@@ -182,6 +184,7 @@ def _apply_transition_metadata(
     trust_gap_codes: List[str] | None = None,
 ) -> Dict[str, Any]:
     codes = list(trust_gap_codes or ["stale_telemetry"])
+    state_binding_hash = f"sha256:state-binding-{record['intent_id']}"
     record["policy_decision"] = {
         **dict(record.get("policy_decision") or {}),
         "allowed": disposition != "deny",
@@ -198,6 +201,7 @@ def _apply_transition_metadata(
             "resource_ref": f"seedcore://zones/vault-a/assets/{record.get('policy_receipt', {}).get('asset_ref')}",
             "current_custodian": "principal:agent:test",
             "restricted_token_recommended": disposition == "quarantine",
+            "state_binding_hash": state_binding_hash,
             "trust_gaps": [
                 {
                     "code": code,
@@ -224,12 +228,16 @@ def _apply_transition_metadata(
                 else None
             ),
             "reason": reason,
+            "state_binding_hash": state_binding_hash,
             "generated_at": "2026-03-20T10:00:00+00:00",
             "custody_proof": ["custody:handoff-1", "custody:handoff-2"],
             "evidence_refs": ["telemetry:temp-1"],
             "trust_gap_codes": codes,
             "provenance_sources": ["tracking_event:telemetry-1"],
-            "advisory": {"evidence_quality_score": 0.73},
+            "advisory": {
+                "evidence_quality_score": 0.73,
+                "state_binding_hash": state_binding_hash,
+            },
         },
     }
     return record
@@ -368,6 +376,8 @@ async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified
     assert replay.subject_id == "asset-1"
     assert replay.verification_status.verified is True
     assert replay.verification_status.artifact_results["decision_graph_snapshot"]["verified"] is True
+    assert replay.verification_status.artifact_results["authority_state_binding"]["verified"] is True
+    assert replay.verification_status.artifact_results["authority_state_binding"]["available"] is False
     assert replay.verification_status.artifact_results["policy_receipt"]["verified"] is True
     assert replay.verification_status.artifact_results["evidence_bundle"]["verified"] is True
     assert replay.verification_status.artifact_results["rust_replay_chain"]["verified"] is True
@@ -459,8 +469,10 @@ async def test_replay_surfaces_authz_transition_metadata_for_quarantine() -> Non
     assert replay.internal_projection["authz_graph"]["current_custodian"] == "principal:agent:test"
     assert replay.public_projection["policy_summary"]["governed_receipt_hash"] == "receipt-intent-graph-1"
     assert replay.public_projection["policy_summary"]["decision_graph_snapshot_hash"] == "snapshot-hash-1"
+    assert replay.public_projection["policy_summary"]["state_binding_hash"] == "sha256:state-binding-intent-graph-1"
     assert replay.public_projection["policy_summary"]["trust_gap_codes"] == ["stale_telemetry"]
     assert replay.public_projection["custody_summary"]["quarantined"] is True
+    assert replay.public_projection["custody_summary"]["state_binding_hash"] == "sha256:state-binding-intent-graph-1"
     assert replay.public_projection["custody_summary"]["custody_proof_count"] == 2
     assert any(item.event_type == "authz_transition_evaluated" for item in replay.replay_timeline)
 
@@ -570,6 +582,44 @@ async def test_replay_surfaces_owner_trust_gap_details_and_owner_context_refs() 
     assert certificate.owner_context["trust_preferences_ref"]["trust_version"] == "v3"
     assert certificate.owner_context["creator_profile_ref"]["updated_by"] == "identity_router"
     assert certificate.owner_context["trust_preferences_ref"]["signer_key_ref"] == "owner-k1"
+
+
+@pytest.mark.asyncio
+async def test_replay_uses_taxonomy_bundle_for_trust_gap_details_when_present() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-taxonomy-1",
+            intent_id="intent-taxonomy-1",
+            asset_id="asset-taxonomy-1",
+        ),
+        disposition="quarantine",
+        reason="stale_telemetry",
+        trust_gap_codes=["stale_telemetry"],
+    )
+    record["evidence_bundle"]["evidence_inputs"]["taxonomy_bundle"] = {
+        "trust_gap_codes": [
+            {
+                "code": "stale_telemetry",
+                "operator_message": "Telemetry freshness exceeded policy threshold.",
+                "machine_category": "telemetry",
+                "severity": "critical",
+            }
+        ]
+    }
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-taxonomy-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    detail = replay.public_projection["policy_summary"]["trust_gap_details"][0]
+    assert detail["code"] == "stale_telemetry"
+    assert detail["message"] == "Telemetry freshness exceeded policy threshold."
+    assert detail["category"] == "telemetry"
+    assert detail["severity"] == "critical"
 
 
 @pytest.mark.asyncio
@@ -1049,3 +1099,35 @@ async def test_replay_verification_fails_on_decision_graph_snapshot_hash_mismatc
     assert replay.verification_status.artifact_results["decision_graph_snapshot"]["verified"] is False
     assert replay.verification_status.artifact_results["decision_graph_snapshot"]["error_code"] == "snapshot_hash_mismatch"
     assert "decision_graph_snapshot:snapshot_hash_mismatch" in replay.verification_status.issues
+
+
+@pytest.mark.asyncio
+async def test_replay_verification_fails_on_authority_state_binding_hash_mismatch() -> None:
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-transfer-state-binding-mismatch-1",
+            intent_id="intent-transfer-state-binding-mismatch-1",
+            asset_id="asset-transfer-state-binding-mismatch-1",
+        )
+    )
+    record["policy_decision"]["authz_graph"]["state_binding_hash"] = "sha256:state-binding-authz"
+    record["policy_decision"]["governed_receipt"]["state_binding_hash"] = "sha256:state-binding-receipt"
+    record["policy_decision"]["governed_receipt"]["advisory"]["state_binding_hash"] = "sha256:state-binding-receipt"
+    record["policy_receipt"]["state_binding_hash"] = "sha256:state-binding-receipt"
+    record["evidence_bundle"]["state_binding_hash"] = "sha256:state-binding-receipt"
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-transfer-state-binding-mismatch-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.verification_status.verified is False
+    assert replay.verification_status.artifact_results["authority_state_binding"]["verified"] is False
+    assert (
+        replay.verification_status.artifact_results["authority_state_binding"]["error_code"]
+        == "state_binding_hash_mismatch"
+    )
+    assert "authority_state_binding:state_binding_hash_mismatch" in replay.verification_status.issues

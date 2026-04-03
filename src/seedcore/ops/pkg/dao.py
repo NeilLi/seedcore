@@ -16,6 +16,7 @@ testability, and maintainability.
 import json
 import logging
 import inspect
+import hashlib
 from typing import Optional, List, Dict, Any, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -91,6 +92,8 @@ __all__ = [
     "PKGValidationDAO",
     "PKGPromotionsDAO",
     "PKGDevicesDAO",
+    "PKGSnapshotData",
+    "PKGSnapshotManifestData",
 ]
 
 
@@ -110,6 +113,26 @@ class PKGSnapshotData:
     checksum: Optional[str]
     rules: List[Dict[str, Any]]  # For the 'native' engine [cite: 93]
     graph_manifests: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PKGSnapshotManifestData:
+    snapshot_id: int
+    workflow_type: str
+    decision_contract_version: Optional[str] = None
+    request_schema_version: Optional[str] = None
+    evidence_contract_version: Optional[str] = None
+    reason_code_taxonomy_version: Optional[str] = None
+    trust_gap_taxonomy_version: Optional[str] = None
+    obligation_taxonomy_version: Optional[str] = None
+    consistency_contract_version: Optional[str] = None
+    safety_profile: Optional[str] = None
+    requires_signed_bundle: bool = False
+    requires_compiled_decision_graph: bool = False
+    requires_authority_state_binding: bool = False
+    activation_requirements: Dict[str, Any] = field(default_factory=dict)
+    manifest_json: Dict[str, Any] = field(default_factory=dict)
+    manifest_hash: Optional[str] = None
 
 
 # =========================
@@ -304,6 +327,141 @@ class PKGSnapshotsDAO:
 
                 return activated_mapping if activated_mapping is not None else None
     
+    async def store_snapshot_artifact(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+        artifact_bytes: bytes,
+        sha256: str,
+        created_by: str = "system",
+    ) -> None:
+        """
+        Store a snapshot artifact with per-type upsert semantics.
+        """
+        sql = text("""
+            INSERT INTO pkg_snapshot_artifacts
+                (snapshot_id, artifact_type, artifact_bytes, sha256, created_by)
+            VALUES
+                (:snapshot_id, CAST(:artifact_type AS pkg_artifact_type), :artifact_bytes, :sha256, :created_by)
+            ON CONFLICT (snapshot_id, artifact_type)
+            DO UPDATE SET
+                artifact_bytes = EXCLUDED.artifact_bytes,
+                sha256 = EXCLUDED.sha256,
+                created_by = EXCLUDED.created_by,
+                created_at = NOW()
+        """)
+        async with self._sf() as session:
+            async with session.begin():
+                await session.execute(
+                    sql,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "artifact_type": artifact_type,
+                        "artifact_bytes": artifact_bytes,
+                        "sha256": sha256,
+                        "created_by": created_by,
+                    },
+                )
+
+    async def store_snapshot_artifact_json(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+        payload: Mapping[str, Any],
+        created_by: str = "system",
+    ) -> Dict[str, Any]:
+        """
+        Serialize and store a JSON artifact, returning basic storage metadata.
+        """
+        artifact_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        digest = hashlib.sha256(artifact_bytes).hexdigest()
+        await self.store_snapshot_artifact(
+            snapshot_id=snapshot_id,
+            artifact_type=artifact_type,
+            artifact_bytes=artifact_bytes,
+            sha256=digest,
+            created_by=created_by,
+        )
+        return {
+            "snapshot_id": snapshot_id,
+            "artifact_type": artifact_type,
+            "sha256": digest,
+            "size_bytes": len(artifact_bytes),
+        }
+
+    async def get_snapshot_artifact(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        sql = text("""
+            SELECT
+                snapshot_id,
+                artifact_type,
+                artifact_bytes,
+                size_bytes,
+                sha256,
+                created_at,
+                created_by
+            FROM pkg_snapshot_artifacts
+            WHERE snapshot_id = :snapshot_id
+              AND artifact_type = CAST(:artifact_type AS pkg_artifact_type)
+            LIMIT 1
+        """)
+        async with self._sf() as session:
+            res = await session.execute(
+                sql,
+                {
+                    "snapshot_id": snapshot_id,
+                    "artifact_type": artifact_type,
+                },
+            )
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            return mapping if mapping is not None else None
+
+    async def get_snapshot_artifact_payload(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        artifact = await self.get_snapshot_artifact(snapshot_id=snapshot_id, artifact_type=artifact_type)
+        if not isinstance(artifact, dict):
+            return None
+        artifact_bytes = artifact.get("artifact_bytes")
+        if artifact_bytes is None:
+            return None
+        if isinstance(artifact_bytes, memoryview):
+            artifact_bytes = artifact_bytes.tobytes()
+        if not isinstance(artifact_bytes, (bytes, bytearray)):
+            return None
+        try:
+            payload = json.loads(bytes(artifact_bytes).decode("utf-8"))
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    async def list_snapshot_artifacts(self, snapshot_id: int) -> List[Dict[str, Any]]:
+        sql = text("""
+            SELECT
+                snapshot_id,
+                artifact_type,
+                size_bytes,
+                sha256,
+                created_at,
+                created_by
+            FROM pkg_snapshot_artifacts
+            WHERE snapshot_id = :snapshot_id
+            ORDER BY created_at DESC, artifact_type ASC
+        """)
+        async with self._sf() as session:
+            res = await session.execute(sql, {"snapshot_id": snapshot_id})
+            return [dict(r._mapping) for r in res]
+
     async def store_wasm_artifact(
         self,
         snapshot_id: int,
@@ -312,43 +470,19 @@ class PKGSnapshotsDAO:
         created_by: str = "system"
     ) -> None:
         """
-        Store WASM artifact in pkg_snapshot_artifacts table.
-        
-        Args:
-            snapshot_id: Snapshot ID
-            wasm_bytes: WASM binary bytes
-            sha256: SHA256 checksum (64 hex chars)
-            created_by: Creator identifier (default: "system")
+        Backward-compatible helper for storing `wasm_pack` artifacts.
         """
-        sql = text("""
-            INSERT INTO pkg_snapshot_artifacts 
-                (snapshot_id, artifact_type, artifact_bytes, sha256, created_by)
-            VALUES 
-                (:snapshot_id, 'wasm_pack', :artifact_bytes, :sha256, :created_by)
-            ON CONFLICT (snapshot_id) 
-            DO UPDATE SET
-                artifact_type = 'wasm_pack',
-                artifact_bytes = EXCLUDED.artifact_bytes,
-                sha256 = EXCLUDED.sha256,
-                created_by = EXCLUDED.created_by,
-                created_at = NOW()
-        """)
-        
-        async with self._sf() as session:
-            async with session.begin():
-                await session.execute(
-                    sql,
-                    {
-                        "snapshot_id": snapshot_id,
-                        "artifact_bytes": wasm_bytes,
-                        "sha256": sha256,
-                        "created_by": created_by
-                    }
-                )
-                logger.info(
-                    f"Stored WASM artifact for snapshot {snapshot_id}: "
-                    f"{len(wasm_bytes)} bytes, checksum: {sha256[:16]}..."
-                )
+        await self.store_snapshot_artifact(
+            snapshot_id=snapshot_id,
+            artifact_type="wasm_pack",
+            artifact_bytes=wasm_bytes,
+            sha256=sha256,
+            created_by=created_by,
+        )
+        logger.info(
+            f"Stored WASM artifact for snapshot {snapshot_id}: "
+            f"{len(wasm_bytes)} bytes, checksum: {sha256[:16]}..."
+        )
     
     async def update_snapshot_checksum(
         self,
@@ -378,6 +512,352 @@ class PKGSnapshotsDAO:
                     }
                 )
                 logger.info(f"Updated checksum for snapshot {snapshot_id}: {checksum[:16]}...")
+
+    async def upsert_snapshot_manifest(
+        self,
+        *,
+        snapshot_id: int,
+        workflow_type: str = "restricted_custody_transfer",
+        decision_contract_version: Optional[str] = None,
+        request_schema_version: Optional[str] = None,
+        evidence_contract_version: Optional[str] = None,
+        reason_code_taxonomy_version: Optional[str] = None,
+        trust_gap_taxonomy_version: Optional[str] = None,
+        obligation_taxonomy_version: Optional[str] = None,
+        consistency_contract_version: Optional[str] = None,
+        safety_profile: Optional[str] = None,
+        requires_signed_bundle: bool = False,
+        requires_compiled_decision_graph: bool = False,
+        requires_authority_state_binding: bool = False,
+        activation_requirements: Optional[Mapping[str, Any]] = None,
+        manifest_json: Optional[Mapping[str, Any]] = None,
+        manifest_hash: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        activation_requirements = dict(activation_requirements or {})
+        manifest_payload = dict(manifest_json or {})
+        if manifest_hash is None:
+            manifest_bytes = json.dumps(manifest_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            manifest_hash = hashlib.sha256(manifest_bytes).hexdigest() if manifest_bytes else None
+        sql = text("""
+            INSERT INTO pkg_snapshot_manifests (
+                snapshot_id,
+                workflow_type,
+                decision_contract_version,
+                request_schema_version,
+                evidence_contract_version,
+                reason_code_taxonomy_version,
+                trust_gap_taxonomy_version,
+                obligation_taxonomy_version,
+                consistency_contract_version,
+                safety_profile,
+                requires_signed_bundle,
+                requires_compiled_decision_graph,
+                requires_authority_state_binding,
+                activation_requirements,
+                manifest_json,
+                manifest_hash,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                :snapshot_id,
+                :workflow_type,
+                :decision_contract_version,
+                :request_schema_version,
+                :evidence_contract_version,
+                :reason_code_taxonomy_version,
+                :trust_gap_taxonomy_version,
+                :obligation_taxonomy_version,
+                :consistency_contract_version,
+                :safety_profile,
+                :requires_signed_bundle,
+                :requires_compiled_decision_graph,
+                :requires_authority_state_binding,
+                CAST(:activation_requirements AS JSONB),
+                CAST(:manifest_json AS JSONB),
+                :manifest_hash,
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT (snapshot_id)
+            DO UPDATE SET
+                workflow_type = EXCLUDED.workflow_type,
+                decision_contract_version = EXCLUDED.decision_contract_version,
+                request_schema_version = EXCLUDED.request_schema_version,
+                evidence_contract_version = EXCLUDED.evidence_contract_version,
+                reason_code_taxonomy_version = EXCLUDED.reason_code_taxonomy_version,
+                trust_gap_taxonomy_version = EXCLUDED.trust_gap_taxonomy_version,
+                obligation_taxonomy_version = EXCLUDED.obligation_taxonomy_version,
+                consistency_contract_version = EXCLUDED.consistency_contract_version,
+                safety_profile = EXCLUDED.safety_profile,
+                requires_signed_bundle = EXCLUDED.requires_signed_bundle,
+                requires_compiled_decision_graph = EXCLUDED.requires_compiled_decision_graph,
+                requires_authority_state_binding = EXCLUDED.requires_authority_state_binding,
+                activation_requirements = EXCLUDED.activation_requirements,
+                manifest_json = EXCLUDED.manifest_json,
+                manifest_hash = EXCLUDED.manifest_hash,
+                updated_at = NOW()
+            RETURNING *
+        """)
+        async with self._sf() as session:
+            async with session.begin():
+                res = await session.execute(
+                    sql,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "workflow_type": workflow_type,
+                        "decision_contract_version": decision_contract_version,
+                        "request_schema_version": request_schema_version,
+                        "evidence_contract_version": evidence_contract_version,
+                        "reason_code_taxonomy_version": reason_code_taxonomy_version,
+                        "trust_gap_taxonomy_version": trust_gap_taxonomy_version,
+                        "obligation_taxonomy_version": obligation_taxonomy_version,
+                        "consistency_contract_version": consistency_contract_version,
+                        "safety_profile": safety_profile,
+                        "requires_signed_bundle": bool(requires_signed_bundle),
+                        "requires_compiled_decision_graph": bool(requires_compiled_decision_graph),
+                        "requires_authority_state_binding": bool(requires_authority_state_binding),
+                        "activation_requirements": json.dumps(activation_requirements),
+                        "manifest_json": json.dumps(manifest_payload),
+                        "manifest_hash": manifest_hash,
+                    },
+                )
+                row = await _maybe_await(res.first())
+                mapping = await _row_mapping(row)
+                if not mapping:
+                    raise RuntimeError("Failed to upsert snapshot manifest")
+                return mapping
+
+    async def get_snapshot_manifest(self, snapshot_id: int) -> Optional[Dict[str, Any]]:
+        sql = text("""
+            SELECT *
+            FROM pkg_snapshot_manifests
+            WHERE snapshot_id = :snapshot_id
+            LIMIT 1
+        """)
+        async with self._sf() as session:
+            res = await session.execute(sql, {"snapshot_id": snapshot_id})
+            row = await _maybe_await(res.first())
+            mapping = await _row_mapping(row)
+            return mapping if mapping is not None else None
+
+    async def upsert_reason_code(
+        self,
+        *,
+        snapshot_id: int,
+        taxonomy_version: str,
+        code: str,
+        disposition_family: str,
+        severity: str,
+        operator_message: str,
+        machine_category: str = "general",
+        metadata: Optional[Mapping[str, Any]] = None,
+        deprecated: bool = False,
+    ) -> Dict[str, Any]:
+        return await self._upsert_taxonomy_code(
+            table_name="pkg_reason_codes",
+            snapshot_id=snapshot_id,
+            taxonomy_version=taxonomy_version,
+            code=code,
+            disposition_family=disposition_family,
+            severity=severity,
+            operator_message=operator_message,
+            machine_category=machine_category,
+            metadata=metadata,
+            deprecated=deprecated,
+        )
+
+    async def upsert_trust_gap_code(
+        self,
+        *,
+        snapshot_id: int,
+        taxonomy_version: str,
+        code: str,
+        disposition_family: str,
+        severity: str,
+        operator_message: str,
+        machine_category: str = "trust_gap",
+        metadata: Optional[Mapping[str, Any]] = None,
+        deprecated: bool = False,
+    ) -> Dict[str, Any]:
+        return await self._upsert_taxonomy_code(
+            table_name="pkg_trust_gap_codes",
+            snapshot_id=snapshot_id,
+            taxonomy_version=taxonomy_version,
+            code=code,
+            disposition_family=disposition_family,
+            severity=severity,
+            operator_message=operator_message,
+            machine_category=machine_category,
+            metadata=metadata,
+            deprecated=deprecated,
+        )
+
+    async def upsert_obligation_code(
+        self,
+        *,
+        snapshot_id: int,
+        taxonomy_version: str,
+        code: str,
+        disposition_family: str,
+        severity: str,
+        operator_message: str,
+        machine_category: str = "obligation",
+        metadata: Optional[Mapping[str, Any]] = None,
+        deprecated: bool = False,
+    ) -> Dict[str, Any]:
+        return await self._upsert_taxonomy_code(
+            table_name="pkg_obligation_codes",
+            snapshot_id=snapshot_id,
+            taxonomy_version=taxonomy_version,
+            code=code,
+            disposition_family=disposition_family,
+            severity=severity,
+            operator_message=operator_message,
+            machine_category=machine_category,
+            metadata=metadata,
+            deprecated=deprecated,
+        )
+
+    async def list_reason_codes(
+        self,
+        *,
+        snapshot_id: int,
+        taxonomy_version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return await self._list_taxonomy_codes(
+            table_name="pkg_reason_codes",
+            snapshot_id=snapshot_id,
+            taxonomy_version=taxonomy_version,
+        )
+
+    async def list_trust_gap_codes(
+        self,
+        *,
+        snapshot_id: int,
+        taxonomy_version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return await self._list_taxonomy_codes(
+            table_name="pkg_trust_gap_codes",
+            snapshot_id=snapshot_id,
+            taxonomy_version=taxonomy_version,
+        )
+
+    async def list_obligation_codes(
+        self,
+        *,
+        snapshot_id: int,
+        taxonomy_version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return await self._list_taxonomy_codes(
+            table_name="pkg_obligation_codes",
+            snapshot_id=snapshot_id,
+            taxonomy_version=taxonomy_version,
+        )
+
+    async def get_taxonomy_bundle(
+        self,
+        *,
+        snapshot_id: int,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "reason_codes": await self.list_reason_codes(snapshot_id=snapshot_id),
+            "trust_gap_codes": await self.list_trust_gap_codes(snapshot_id=snapshot_id),
+            "obligation_codes": await self.list_obligation_codes(snapshot_id=snapshot_id),
+        }
+
+    async def _upsert_taxonomy_code(
+        self,
+        *,
+        table_name: str,
+        snapshot_id: int,
+        taxonomy_version: str,
+        code: str,
+        disposition_family: str,
+        severity: str,
+        operator_message: str,
+        machine_category: str,
+        metadata: Optional[Mapping[str, Any]],
+        deprecated: bool,
+    ) -> Dict[str, Any]:
+        sql = text(f"""
+            INSERT INTO {table_name} (
+                snapshot_id,
+                taxonomy_version,
+                code,
+                disposition_family,
+                severity,
+                operator_message,
+                machine_category,
+                metadata,
+                deprecated,
+                created_at
+            )
+            VALUES (
+                :snapshot_id,
+                :taxonomy_version,
+                :code,
+                :disposition_family,
+                :severity,
+                :operator_message,
+                :machine_category,
+                CAST(:metadata AS JSONB),
+                :deprecated,
+                NOW()
+            )
+            ON CONFLICT (snapshot_id, taxonomy_version, code)
+            DO UPDATE SET
+                disposition_family = EXCLUDED.disposition_family,
+                severity = EXCLUDED.severity,
+                operator_message = EXCLUDED.operator_message,
+                machine_category = EXCLUDED.machine_category,
+                metadata = EXCLUDED.metadata,
+                deprecated = EXCLUDED.deprecated
+            RETURNING *
+        """)
+        async with self._sf() as session:
+            async with session.begin():
+                res = await session.execute(
+                    sql,
+                    {
+                        "snapshot_id": snapshot_id,
+                        "taxonomy_version": taxonomy_version,
+                        "code": code,
+                        "disposition_family": disposition_family,
+                        "severity": severity,
+                        "operator_message": operator_message,
+                        "machine_category": machine_category,
+                        "metadata": json.dumps(dict(metadata or {})),
+                        "deprecated": bool(deprecated),
+                    },
+                )
+                row = await _maybe_await(res.first())
+                mapping = await _row_mapping(row)
+                if not mapping:
+                    raise RuntimeError(f"Failed to upsert taxonomy code for {table_name}")
+                return mapping
+
+    async def _list_taxonomy_codes(
+        self,
+        *,
+        table_name: str,
+        snapshot_id: int,
+        taxonomy_version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        where = "snapshot_id = :snapshot_id"
+        params: Dict[str, Any] = {"snapshot_id": snapshot_id}
+        if taxonomy_version is not None and str(taxonomy_version).strip():
+            where += " AND taxonomy_version = :taxonomy_version"
+            params["taxonomy_version"] = str(taxonomy_version).strip()
+        sql = text(f"""
+            SELECT *
+            FROM {table_name}
+            WHERE {where}
+            ORDER BY taxonomy_version, code
+        """)
+        async with self._sf() as session:
+            res = await session.execute(sql, params)
+            return [dict(r._mapping) for r in res]
 
     async def list_subtask_types(self, snapshot_id: int) -> List[Dict[str, Any]]:
         """
@@ -961,6 +1441,7 @@ class PKGSnapshotsDAO:
             SELECT artifact_bytes, artifact_type
             FROM pkg_snapshot_artifacts
             WHERE snapshot_id = :snapshot_id
+              AND artifact_type = 'wasm_pack'
             LIMIT 1
         """)
         artifact_res = await session.execute(artifact_sql, {"snapshot_id": snapshot_id})

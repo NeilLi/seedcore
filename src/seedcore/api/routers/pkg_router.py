@@ -363,6 +363,8 @@ async def pkg_status() -> Dict[str, Any]:
                        sha256
                 FROM pkg_snapshot_artifacts
                 WHERE snapshot_id = :snapshot_id
+                  AND artifact_type IN ('wasm_pack', 'rego_bundle')
+                ORDER BY CASE WHEN artifact_type = 'wasm_pack' THEN 0 ELSE 1 END, created_at DESC
                 LIMIT 1
             """)
             result = await session.execute(artifact_sql, {"snapshot_id": evaluator.snapshot_id})
@@ -391,6 +393,11 @@ async def pkg_status() -> Dict[str, Any]:
         "cortex_enabled": metadata.get("cortex_enabled", False),
         "authz_graph": metadata.get("authz_graph", {}),
         "artifact_info": artifact_info,  # Diagnostic info about artifact
+        "active_contract_artifacts": (
+            pkg_mgr.get_active_contract_artifacts()
+            if hasattr(pkg_mgr, "get_active_contract_artifacts")
+            else {}
+        ),
     }
 
 

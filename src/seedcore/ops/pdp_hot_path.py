@@ -444,6 +444,7 @@ def build_hot_path_request(
         if request_id is not None and str(request_id).strip()
         else str(action_intent.intent_id).strip()
     )
+    request_schema_bundle, taxonomy_bundle = _resolve_active_hot_path_contract_bundles(policy_case)
     return HotPathEvaluateRequest(
         contract_version=HOT_PATH_CONTRACT_VERSION,
         request_id=resolved_request_id,
@@ -473,6 +474,8 @@ def build_hot_path_request(
             max_allowed_age_seconds=max_allowed_age_seconds,
             evidence_refs=evidence_refs,
         ),
+        request_schema_bundle=request_schema_bundle,
+        taxonomy_bundle=taxonomy_bundle,
     )
 
 
@@ -508,6 +511,13 @@ def hot_path_response_to_policy_decision(
             for item in response.signer_provenance
         ],
     }
+    if isinstance(response.request_schema_bundle, Mapping) and response.request_schema_bundle:
+        authz_graph["request_schema_bundle"] = dict(response.request_schema_bundle)
+    if isinstance(response.taxonomy_bundle, Mapping) and response.taxonomy_bundle:
+        authz_graph["taxonomy_bundle"] = dict(response.taxonomy_bundle)
+        governed_receipt["taxonomy_bundle"] = dict(response.taxonomy_bundle)
+    if isinstance(response.request_schema_bundle, Mapping) and response.request_schema_bundle:
+        governed_receipt["request_schema_bundle"] = dict(response.request_schema_bundle)
     return PolicyDecision(
         allowed=allowed,
         execution_token=response.execution_token,
@@ -535,6 +545,45 @@ def build_governance_context_from_hot_path_response(
         policy_case,
         policy_decision=policy_decision,
     )
+
+
+def _resolve_active_hot_path_contract_bundles(
+    policy_case: PolicyCase,
+) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+    manager = get_global_pkg_manager()
+    if manager is None:
+        return None, None
+
+    metadata = {}
+    metadata_getter = getattr(manager, "get_metadata", None)
+    if callable(metadata_getter):
+        metadata = metadata_getter() or {}
+    active_version = None
+    if isinstance(metadata, Mapping):
+        active_version = (
+            metadata.get("active_version")
+            or (metadata.get("authz_graph") or {}).get("active_snapshot_version")
+        )
+    policy_snapshot = str(policy_case.policy_snapshot or "").strip()
+    if policy_snapshot and active_version and policy_snapshot != str(active_version).strip():
+        return None, None
+
+    request_schema_getter = getattr(manager, "get_active_request_schema_bundle", None)
+    taxonomy_getter = getattr(manager, "get_active_taxonomy_bundle", None)
+    request_schema_bundle = request_schema_getter() if callable(request_schema_getter) else None
+    taxonomy_bundle = taxonomy_getter() if callable(taxonomy_getter) else None
+
+    resolved_request_schema_bundle = (
+        dict(request_schema_bundle)
+        if isinstance(request_schema_bundle, Mapping) and request_schema_bundle
+        else None
+    )
+    resolved_taxonomy_bundle = (
+        dict(taxonomy_bundle)
+        if isinstance(taxonomy_bundle, Mapping) and taxonomy_bundle
+        else None
+    )
+    return resolved_request_schema_bundle, resolved_taxonomy_bundle
 
 
 def record_false_positive_hot_path_signal(
@@ -765,6 +814,16 @@ def evaluate_pdp_hot_path(
         execution_token=decision.execution_token if isinstance(decision.execution_token, ExecutionToken) else None,
         governed_receipt=dict(decision.governed_receipt or {}),
         signer_provenance=signer_provenance,
+        request_schema_bundle=(
+            dict(request.request_schema_bundle)
+            if isinstance(request.request_schema_bundle, Mapping) and request.request_schema_bundle
+            else None
+        ),
+        taxonomy_bundle=(
+            dict(request.taxonomy_bundle)
+            if isinstance(request.taxonomy_bundle, Mapping) and request.taxonomy_bundle
+            else None
+        ),
     )
     _HOT_PATH_SHADOW_STATS.record(
         latency_ms=response.latency_ms,

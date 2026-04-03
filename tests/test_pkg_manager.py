@@ -42,7 +42,15 @@ from seedcore.ops.pkg.dao import PKGSnapshotData
 
 @pytest.fixture
 def mock_pkg_client():
-    return AsyncMock(spec=PKGClient)
+    client = AsyncMock(spec=PKGClient)
+    client.get_taxonomy_bundle = AsyncMock(return_value={
+        "reason_codes": [],
+        "trust_gap_codes": [],
+        "obligation_codes": [],
+    })
+    client.get_subtask_types = AsyncMock(return_value=[])
+    client.upsert_snapshot_manifest = AsyncMock(return_value={})
+    return client
 
 
 @pytest.fixture
@@ -222,6 +230,38 @@ async def test_validate_snapshot_native_ok(manager):
     assert err is None
 
 
+@pytest.mark.asyncio
+async def test_validate_task_facts_prefers_active_request_schema_bundle(manager):
+    manager._active_contract_artifacts = {
+        "request_schema_bundle": {
+            "request_shape": {
+                "required_task_fact_keys": ["tags", "signals", "context", "extra"],
+                "injected_task_fact_keys": ["semantic_context"],
+            }
+        }
+    }
+
+    assert manager._validate_task_facts(
+        {
+            "tags": ["urgent"],
+            "signals": {"load": 0.5},
+            "context": {"domain": "warehouse"},
+            "extra": {"note": "allowed by active bundle"},
+        }
+    ) is None
+
+    err = manager._validate_task_facts(
+        {
+            "tags": ["urgent"],
+            "signals": {"load": 0.5},
+            "context": {"domain": "warehouse"},
+            "unexpected": True,
+        }
+    )
+    assert err is not None
+    assert "unexpected" in err
+
+
 # ---------------------------------------------------------------------
 # Redis Hot Swap
 # ---------------------------------------------------------------------
@@ -281,13 +321,84 @@ async def test_parse_pkg_update_message_supports_legacy_and_json(manager):
 @pytest.mark.asyncio
 async def test_refresh_active_authz_graph_uses_active_snapshot(manager):
     snap = make_native_snapshot("rules@1.0.0")
-    manager.authz_graph.activate_snapshot = AsyncMock()
+    compiled = type(
+        "CompiledAuthzIndex",
+        (),
+        {
+            "snapshot_hash": "snapshot-refresh-1",
+            "compiled_at": "2026-04-03T00:00:00+00:00",
+            "restricted_transfer_ready": False,
+            "decision_graph_snapshot": None,
+        },
+    )()
+    manager.authz_graph.activate_snapshot = AsyncMock(return_value=compiled)
     await manager._load_and_activate_snapshot(snap, source="test")
 
     result = await manager.refresh_active_authz_graph()
 
     assert result["success"] is True
     manager.authz_graph.activate_snapshot.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_persist_compiled_authz_artifacts_stores_phase1_artifacts(manager, mock_pkg_client):
+    class _DecisionGraphSnapshot:
+        def to_dict(self):
+            return {
+                "snapshot_hash": "snapshot-hash-xyz",
+                "hot_path_workflow": "restricted_custody_transfer",
+                "trust_gap_taxonomy": ["stale_telemetry"],
+            }
+
+    class _CompiledAuthzIndex:
+        decision_graph_snapshot = _DecisionGraphSnapshot()
+        compiled_at = "2026-04-03T00:00:00+00:00"
+        snapshot_hash = "snapshot-hash-xyz"
+        restricted_transfer_ready = True
+
+    mock_pkg_client.get_taxonomy_bundle.return_value = {
+        "reason_codes": [{"code": "reason_a"}],
+        "trust_gap_codes": [{"code": "stale_telemetry"}],
+        "obligation_codes": [{"code": "attach_telemetry_proof"}],
+    }
+    mock_pkg_client.get_subtask_types.return_value = [
+        {
+            "id": "cap-1",
+            "name": "reachy_actuator",
+            "snapshot_id": 17,
+            "default_params": {"executor": {"specialization": "reachy"}},
+        }
+    ]
+
+    await manager._persist_compiled_authz_artifacts(
+        snapshot_id=17,
+        snapshot_version="rules@phase1",
+        compiled_authz_index=_CompiledAuthzIndex(),
+    )
+
+    assert mock_pkg_client.store_snapshot_artifact_json.await_count == 4
+    artifact_types = [
+        call.kwargs.get("artifact_type")
+        for call in mock_pkg_client.store_snapshot_artifact_json.await_args_list
+    ]
+    assert artifact_types == [
+        "decision_graph_snapshot",
+        "request_schema_bundle",
+        "taxonomy_bundle",
+        "activation_manifest",
+    ]
+    assert mock_pkg_client.upsert_snapshot_manifest.await_count == 1
+
+    request_schema_payload = mock_pkg_client.store_snapshot_artifact_json.await_args_list[1].kwargs["payload"]
+    taxonomy_payload = mock_pkg_client.store_snapshot_artifact_json.await_args_list[2].kwargs["payload"]
+    activation_payload = mock_pkg_client.store_snapshot_artifact_json.await_args_list[3].kwargs["payload"]
+
+    assert request_schema_payload["request_shape"]["required_task_fact_keys"] == ["context", "signals", "tags"]
+    assert request_schema_payload["capability_count"] == 1
+    assert request_schema_payload["capabilities"][0]["name"] == "reachy_actuator"
+    assert taxonomy_payload["reason_codes"] == [{"code": "reason_a"}]
+    assert taxonomy_payload["trust_gap_codes"] == [{"code": "stale_telemetry"}]
+    assert activation_payload["shadow_only"] is True
 
 
 @pytest.mark.asyncio

@@ -349,6 +349,8 @@ class AgentActionEvaluateResponse(BaseModel):
             "public_replay_ready": False,
         }
     )
+    request_schema_bundle: Optional[Dict[str, Any]] = None
+    taxonomy_bundle: Optional[Dict[str, Any]] = None
 
 
 class AgentActionRequestRecordResponse(BaseModel):

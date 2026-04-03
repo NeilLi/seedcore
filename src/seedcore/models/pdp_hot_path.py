@@ -41,6 +41,8 @@ class HotPathEvaluateRequest(BaseModel):
     action_intent: ActionIntent
     asset_context: HotPathAssetContext
     telemetry_context: HotPathTelemetryContext
+    request_schema_bundle: Optional[Dict[str, Any]] = None
+    taxonomy_bundle: Optional[Dict[str, Any]] = None
 
 
 class HotPathDecisionView(BaseModel):
@@ -87,3 +89,5 @@ class HotPathEvaluateResponse(BaseModel):
     execution_token: Optional[ExecutionToken] = None
     governed_receipt: Dict[str, Any] = Field(default_factory=dict)
     signer_provenance: List[HotPathSignerProvenance] = Field(default_factory=list)
+    request_schema_bundle: Optional[Dict[str, Any]] = None
+    taxonomy_bundle: Optional[Dict[str, Any]] = None

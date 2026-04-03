@@ -37,6 +37,7 @@ from seedcore.models.action_intent import (
 )
 from seedcore.models.task_payload import TaskPayload
 from seedcore.ops.evidence.builder import build_policy_receipt_artifact
+from seedcore.ops.evidence.state_binding import compute_authority_state_binding_hash
 from seedcore.ops.pkg.authz_graph.compiler import (
     AuthzDecisionDisposition,
     AuthzTransitionRequest,
@@ -1387,6 +1388,30 @@ def build_governance_context_from_policy_case(
         "policy_decision": policy_decision.model_dump(mode="json"),
         "policy_receipt": policy_receipt,
     }
+    request_schema_bundle = None
+    if isinstance(policy_decision.authz_graph, Mapping):
+        bundle = policy_decision.authz_graph.get("request_schema_bundle")
+        if isinstance(bundle, Mapping):
+            request_schema_bundle = dict(bundle)
+    if request_schema_bundle is None and isinstance(policy_decision.governed_receipt, Mapping):
+        bundle = policy_decision.governed_receipt.get("request_schema_bundle")
+        if isinstance(bundle, Mapping):
+            request_schema_bundle = dict(bundle)
+
+    taxonomy_bundle = None
+    if isinstance(policy_decision.authz_graph, Mapping):
+        bundle = policy_decision.authz_graph.get("taxonomy_bundle")
+        if isinstance(bundle, Mapping):
+            taxonomy_bundle = dict(bundle)
+    if taxonomy_bundle is None and isinstance(policy_decision.governed_receipt, Mapping):
+        bundle = policy_decision.governed_receipt.get("taxonomy_bundle")
+        if isinstance(bundle, Mapping):
+            taxonomy_bundle = dict(bundle)
+
+    if request_schema_bundle is not None:
+        context["request_schema_bundle"] = request_schema_bundle
+    if taxonomy_bundle is not None:
+        context["taxonomy_bundle"] = taxonomy_bundle
     if policy_decision.execution_token is not None:
         context["execution_token"] = policy_decision.execution_token.model_dump(mode="json")
     return context
@@ -2173,6 +2198,75 @@ def _resolve_compiled_authz_index(
     if getter is None:
         return None
     return getter()
+
+
+def _resolve_active_contract_artifacts(
+    *,
+    policy_case: PolicyCase,
+    compiled_authz_index: CompiledAuthzIndex | None,
+) -> Dict[str, Dict[str, Any]]:
+    try:
+        from seedcore.ops.pkg.manager import get_global_pkg_manager
+    except Exception:
+        return {}
+
+    manager = get_global_pkg_manager()
+    if manager is None:
+        return {}
+
+    artifacts_getter = getattr(manager, "get_active_contract_artifacts", None)
+    metadata_getter = getattr(manager, "get_metadata", None)
+    evaluator_getter = getattr(manager, "get_active_evaluator", None)
+    if not callable(artifacts_getter):
+        return {}
+
+    active_artifacts = artifacts_getter()
+    if not isinstance(active_artifacts, Mapping):
+        return {}
+
+    active_version = None
+    active_snapshot_id = None
+    if callable(metadata_getter):
+        metadata = metadata_getter()
+        if isinstance(metadata, Mapping):
+            active_version = metadata.get("active_version")
+    if callable(evaluator_getter):
+        evaluator = evaluator_getter()
+        active_snapshot_id = getattr(evaluator, "snapshot_id", None)
+        if active_version is None:
+            active_version = getattr(evaluator, "version", None)
+
+    compiled_snapshot_id = getattr(compiled_authz_index, "snapshot_id", None) if compiled_authz_index is not None else None
+    compiled_snapshot_version = (
+        getattr(compiled_authz_index, "snapshot_version", None)
+        if compiled_authz_index is not None
+        else None
+    )
+    policy_snapshot = (policy_case.policy_snapshot or "").strip()
+
+    if compiled_authz_index is not None:
+        if (
+            compiled_snapshot_id is not None
+            and active_snapshot_id is not None
+            and compiled_snapshot_id != active_snapshot_id
+        ):
+            return {}
+        if (
+            compiled_snapshot_version is not None
+            and str(compiled_snapshot_version).strip()
+            and active_version is not None
+            and str(compiled_snapshot_version).strip() != str(active_version).strip()
+        ):
+            return {}
+    elif policy_snapshot and active_version is not None and policy_snapshot != str(active_version).strip():
+        return {}
+
+    resolved: Dict[str, Dict[str, Any]] = {}
+    for key in ("request_schema_bundle", "taxonomy_bundle"):
+        value = active_artifacts.get(key)
+        if isinstance(value, Mapping):
+            resolved[key] = dict(value)
+    return resolved
 
 
 def _evaluate_compiled_authz_graph_with_ray(
@@ -3352,12 +3446,43 @@ def _finalize_policy_decision_contract(
             if approval_ref not in evidence_refs:
                 evidence_refs.append(approval_ref)
             governed_receipt["evidence_refs"] = evidence_refs
-        if approval_context.get("approval_binding_hash") is not None and str(approval_context.get("approval_binding_hash")).strip():
-            provenance_sources = list(governed_receipt.get("provenance_sources") or [])
-            binding_ref = f"approval_binding:{str(approval_context.get('approval_binding_hash')).strip()}"
-            if binding_ref not in provenance_sources:
-                provenance_sources.append(binding_ref)
-            governed_receipt["provenance_sources"] = provenance_sources
+            if approval_context.get("approval_binding_hash") is not None and str(approval_context.get("approval_binding_hash")).strip():
+                provenance_sources = list(governed_receipt.get("provenance_sources") or [])
+                binding_ref = f"approval_binding:{str(approval_context.get('approval_binding_hash')).strip()}"
+                if binding_ref not in provenance_sources:
+                    provenance_sources.append(binding_ref)
+                governed_receipt["provenance_sources"] = provenance_sources
+
+    active_contract_artifacts = _resolve_active_contract_artifacts(
+        policy_case=policy_case,
+        compiled_authz_index=None,
+    )
+    if active_contract_artifacts:
+        request_schema_bundle = active_contract_artifacts.get("request_schema_bundle")
+        taxonomy_bundle = active_contract_artifacts.get("taxonomy_bundle")
+        if isinstance(request_schema_bundle, Mapping):
+            authz_graph["request_schema_bundle"] = dict(request_schema_bundle)
+            governed_receipt["request_schema_bundle"] = dict(request_schema_bundle)
+        if isinstance(taxonomy_bundle, Mapping):
+            authz_graph["taxonomy_bundle"] = dict(taxonomy_bundle)
+            governed_receipt["taxonomy_bundle"] = dict(taxonomy_bundle)
+
+    approval_context = _approval_context(action_intent)
+    state_binding_hash = compute_authority_state_binding_hash(
+        action_intent=action_intent,
+        approval_context=approval_context,
+        governed_receipt=governed_receipt,
+        authz_graph=authz_graph,
+        telemetry_summary=policy_case.telemetry_summary if isinstance(policy_case.telemetry_summary, Mapping) else {},
+        relevant_twin_snapshot=policy_case.relevant_twin_snapshot if isinstance(policy_case.relevant_twin_snapshot, Mapping) else {},
+    )
+    if state_binding_hash is not None:
+        authz_graph["state_binding_hash"] = state_binding_hash
+        if governed_receipt:
+            governed_receipt["state_binding_hash"] = state_binding_hash
+            advisory = dict(governed_receipt.get("advisory") or {})
+            advisory["state_binding_hash"] = state_binding_hash
+            governed_receipt["advisory"] = advisory
 
     policy_decision.authz_graph = authz_graph
     policy_decision.governed_receipt = governed_receipt
@@ -3853,6 +3978,13 @@ def _serialize_governed_receipt(
         "evidence_refs": list(receipt.evidence_refs),
         "trust_gap_codes": list(receipt.trust_gap_codes),
         "provenance_sources": list(receipt.provenance_sources),
+        "state_binding_hash": (
+            str(receipt.advisory.get("state_binding_hash")).strip()
+            if isinstance(receipt.advisory, Mapping)
+            and receipt.advisory.get("state_binding_hash") is not None
+            and str(receipt.advisory.get("state_binding_hash")).strip()
+            else None
+        ),
         "advisory": dict(receipt.advisory),
     }
 

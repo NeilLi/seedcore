@@ -367,6 +367,7 @@ class ReplayService:
             replay_governed_receipt=replay.governed_receipt,
             trust_gap_codes=trust_gap_codes,
         )
+        trust_gap_taxonomy = self._resolve_trust_gap_taxonomy(replay)
         proof_payload = {
             "type": "SeedCoreReplayProof",
             "verification_status": replay.verification_status.model_dump(mode="json"),
@@ -376,7 +377,11 @@ class ReplayService:
                 for item in replay.signer_chain
             ],
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
+            "trust_gap_details": self._trust_gap_details(
+                trust_gap_codes,
+                reason_codes=trust_gap_reason_codes,
+                taxonomy=trust_gap_taxonomy,
+            ),
             "authority_consistency": authority_consistency,
             "authority_consistency_hash": authority_consistency.get("hash"),
             "owner_context_hash": owner_context_hash,
@@ -827,6 +832,7 @@ class ReplayService:
             replay_governed_receipt=replay.governed_receipt,
             trust_gap_codes=trust_gap_codes,
         )
+        trust_gap_taxonomy = self._resolve_trust_gap_taxonomy(replay)
         owner_context = self._owner_context_summary(replay)
         owner_context_hash = self._owner_context_hash(owner_context)
         certificate_payload = {
@@ -842,7 +848,11 @@ class ReplayService:
             "owner_context_hash": owner_context_hash,
             "operator_actions": list(projection.operator_actions),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
+            "trust_gap_details": self._trust_gap_details(
+                trust_gap_codes,
+                reason_codes=trust_gap_reason_codes,
+                taxonomy=trust_gap_taxonomy,
+            ),
             "owner_context": owner_context,
             "issued_at": issued_at,
             "expires_at": expires_at,
@@ -1246,6 +1256,15 @@ class ReplayService:
         artifact_results["decision_graph_snapshot"] = snapshot_result
         if snapshot_result.get("error_code") is not None:
             issues.append(f"decision_graph_snapshot:{snapshot_result['error_code']}")
+        state_binding_result = self._verify_authority_state_binding(
+            authz_graph=authz_graph,
+            governed_receipt=governed_receipt,
+            policy_receipt=policy_receipt,
+            evidence_bundle=evidence_bundle,
+        )
+        artifact_results["authority_state_binding"] = state_binding_result
+        if state_binding_result.get("error_code") is not None:
+            issues.append(f"authority_state_binding:{state_binding_result['error_code']}")
         if not policy_receipt:
             issues.append("missing_policy_receipt")
             artifact_results["policy_receipt"] = {
@@ -1466,6 +1485,59 @@ class ReplayService:
         if receipt_version is not None and bundle_version is not None and receipt_version != bundle_version:
             result["verified"] = False
             result["error_code"] = "evidence_bundle_snapshot_version_mismatch"
+            return result
+        return result
+
+    def _verify_authority_state_binding(
+        self,
+        *,
+        authz_graph: Mapping[str, Any],
+        governed_receipt: Mapping[str, Any],
+        policy_receipt: Mapping[str, Any],
+        evidence_bundle: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        def _normalized(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            normalized = str(value).strip()
+            return normalized or None
+
+        advisory = (
+            governed_receipt.get("advisory")
+            if isinstance(governed_receipt.get("advisory"), Mapping)
+            else {}
+        )
+        authz_hash = _normalized(authz_graph.get("state_binding_hash"))
+        receipt_hash = _normalized(governed_receipt.get("state_binding_hash")) or _normalized(advisory.get("state_binding_hash"))
+        policy_hash = _normalized(policy_receipt.get("state_binding_hash"))
+        bundle_hash = _normalized(evidence_bundle.get("state_binding_hash"))
+
+        result = {
+            "artifact_type": "authority_state_binding",
+            "verified": True,
+            "available": any(value is not None for value in (authz_hash, receipt_hash, policy_hash, bundle_hash)),
+            "error_code": None,
+            "state_binding_hash": receipt_hash or authz_hash or policy_hash or bundle_hash,
+            "sources": {
+                "authz_graph_state_binding_hash": authz_hash,
+                "governed_receipt_state_binding_hash": receipt_hash,
+                "policy_receipt_state_binding_hash": policy_hash,
+                "evidence_bundle_state_binding_hash": bundle_hash,
+            },
+        }
+        if not result["available"]:
+            return result
+        if authz_hash is not None and receipt_hash is not None and authz_hash != receipt_hash:
+            result["verified"] = False
+            result["error_code"] = "state_binding_hash_mismatch"
+            return result
+        if receipt_hash is not None and policy_hash is not None and receipt_hash != policy_hash:
+            result["verified"] = False
+            result["error_code"] = "policy_receipt_state_binding_hash_mismatch"
+            return result
+        if receipt_hash is not None and bundle_hash is not None and receipt_hash != bundle_hash:
+            result["verified"] = False
+            result["error_code"] = "evidence_bundle_state_binding_hash_mismatch"
             return result
         return result
 
@@ -1717,11 +1789,6 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
-        trust_gap_reason_codes = self._trust_gap_reason_codes(
-            replay_authz_graph=replay.authz_graph,
-            replay_governed_receipt=replay.governed_receipt,
-            trust_gap_codes=trust_gap_codes,
-        )
         return {
             "current_zone": asset_state.get("current_zone") or transition.get("to_zone") or transition.get("target_zone"),
             "previous_zone": transition.get("from_zone"),
@@ -1732,6 +1799,7 @@ class ReplayService:
             "linked_disputes": len(replay.dispute_refs),
             "current_custodian": replay.authz_graph.get("current_custodian"),
             "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
+            "state_binding_hash": self._resolve_state_binding_hash(replay),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
             "trust_gap_codes": trust_gap_codes,
         }
@@ -1752,6 +1820,7 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_taxonomy = self._resolve_trust_gap_taxonomy(replay)
         trust_gap_reason_codes = self._trust_gap_reason_codes(
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
@@ -1778,8 +1847,13 @@ class ReplayService:
                 or receipt.get("decision_graph_snapshot_version")
                 or replay.evidence_bundle.get("decision_graph_snapshot_version")
             ),
+            "state_binding_hash": self._resolve_state_binding_hash(replay),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
+            "trust_gap_details": self._trust_gap_details(
+                trust_gap_codes,
+                reason_codes=trust_gap_reason_codes,
+                taxonomy=trust_gap_taxonomy,
+            ),
             "restricted_token_recommended": bool(replay.authz_graph.get("restricted_token_recommended")),
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
             "workflow_status": self._workflow_status(replay),
@@ -2778,6 +2852,7 @@ class ReplayService:
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
         )
+        trust_gap_taxonomy = self._resolve_trust_gap_taxonomy(replay)
         trust_gap_reason_codes = self._trust_gap_reason_codes(
             replay_authz_graph=replay.authz_graph,
             replay_governed_receipt=replay.governed_receipt,
@@ -2787,6 +2862,7 @@ class ReplayService:
             "disposition": replay.authz_graph.get("disposition") or replay.governed_receipt.get("disposition"),
             "governed_receipt_hash": replay.governed_receipt.get("decision_hash"),
             "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
+            "state_binding_hash": self._resolve_state_binding_hash(replay),
             "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
             "approval_envelope_id": replay.governed_receipt.get("approval_envelope_id") or replay.authz_graph.get("approval_envelope_id"),
             "approval_envelope_version": replay.governed_receipt.get("approval_envelope_version") or replay.authz_graph.get("approval_envelope_version"),
@@ -2818,7 +2894,11 @@ class ReplayService:
                 else None
             ) or replay.evidence_bundle.get("execution_token_id"),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": self._trust_gap_details(trust_gap_codes, reason_codes=trust_gap_reason_codes),
+            "trust_gap_details": self._trust_gap_details(
+                trust_gap_codes,
+                reason_codes=trust_gap_reason_codes,
+                taxonomy=trust_gap_taxonomy,
+            ),
             "owner_context": self._owner_context_summary(replay),
             "owner_context_hash": self._owner_context_hash(self._owner_context_summary(replay)),
             "authority_consistency": self._authority_consistency_summary(replay),
@@ -2874,6 +2954,15 @@ class ReplayService:
                     "claim": "decision_graph_snapshot_bound",
                     "value": True,
                     "source": decision_graph_snapshot_hash,
+                }
+            )
+        state_binding_hash = self._resolve_state_binding_hash(replay)
+        if state_binding_hash:
+            claims.append(
+                {
+                    "claim": "authority_state_binding_bound",
+                    "value": True,
+                    "source": state_binding_hash,
                 }
             )
         if replay.subject_type == "asset":
@@ -2948,19 +3037,88 @@ class ReplayService:
                 )
         return claims
 
+    def _resolve_state_binding_hash(self, replay: ReplayRecord) -> Optional[str]:
+        advisory = (
+            replay.governed_receipt.get("advisory")
+            if isinstance(replay.governed_receipt.get("advisory"), Mapping)
+            else {}
+        )
+        return (
+            self._optional_str(replay.governed_receipt.get("state_binding_hash"))
+            or self._optional_str(advisory.get("state_binding_hash"))
+            or self._optional_str(replay.authz_graph.get("state_binding_hash"))
+            or self._optional_str(replay.policy_receipt.get("state_binding_hash"))
+            or self._optional_str(replay.evidence_bundle.get("state_binding_hash"))
+        )
+
+    def _resolve_trust_gap_taxonomy(self, replay: ReplayRecord) -> Dict[str, Dict[str, str]]:
+        taxonomy = dict(TRUST_GAP_TAXONOMY)
+        advisory = (
+            replay.governed_receipt.get("advisory")
+            if isinstance(replay.governed_receipt.get("advisory"), Mapping)
+            else {}
+        )
+        candidates = [
+            advisory,
+            replay.authz_graph.get("taxonomy_bundle"),
+            replay.policy_receipt.get("taxonomy_bundle"),
+            replay.evidence_bundle.get("taxonomy_bundle"),
+            replay.evidence_bundle.get("evidence_inputs"),
+        ]
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            bundle = (
+                candidate.get("taxonomy_bundle")
+                if isinstance(candidate.get("taxonomy_bundle"), Mapping)
+                else candidate
+            )
+            trust_gap_codes = bundle.get("trust_gap_codes") if isinstance(bundle, Mapping) else None
+            if isinstance(trust_gap_codes, Mapping):
+                for code, payload in trust_gap_codes.items():
+                    if not isinstance(payload, Mapping):
+                        continue
+                    normalized_code = str(code).strip()
+                    if not normalized_code:
+                        continue
+                    taxonomy[normalized_code] = {
+                        "category": str(payload.get("machine_category") or payload.get("category") or "general"),
+                        "severity": str(payload.get("severity") or "medium"),
+                        "message": str(
+                            payload.get("operator_message")
+                            or payload.get("message")
+                            or normalized_code.replace("_", " ")
+                        ),
+                    }
+            elif isinstance(trust_gap_codes, list):
+                for item in trust_gap_codes:
+                    if not isinstance(item, Mapping):
+                        continue
+                    code = str(item.get("code") or "").strip()
+                    if not code:
+                        continue
+                    taxonomy[code] = {
+                        "category": str(item.get("machine_category") or item.get("category") or "general"),
+                        "severity": str(item.get("severity") or "medium"),
+                        "message": str(item.get("operator_message") or item.get("message") or code.replace("_", " ")),
+                    }
+        return taxonomy
+
     def _trust_gap_details(
         self,
         trust_gap_codes: Sequence[str],
         *,
         reason_codes: Mapping[str, str] | None = None,
+        taxonomy: Mapping[str, Mapping[str, str]] | None = None,
     ) -> List[Dict[str, Any]]:
         details: List[Dict[str, Any]] = []
         reason_codes = reason_codes or {}
+        taxonomy_map = taxonomy or TRUST_GAP_TAXONOMY
         for code in trust_gap_codes:
             normalized = str(code).strip()
             if not normalized:
                 continue
-            entry = dict(TRUST_GAP_TAXONOMY.get(normalized) or {})
+            entry = dict(taxonomy_map.get(normalized) or {})
             item = {
                 "code": normalized,
                 "category": entry.get("category", "general"),

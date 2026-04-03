@@ -17,7 +17,7 @@ import mock_eventizer_dependencies  # noqa: F401
 
 import seedcore.api.routers.pkg_router as pkg_router
 import seedcore.ops.pdp_hot_path as pdp_hot_path
-from seedcore.models.action_intent import ExecutionToken, PolicyDecision
+from seedcore.models.action_intent import ActionIntent, ExecutionToken, PolicyCase, PolicyDecision
 from seedcore.models.pdp_hot_path import HotPathDecisionView, HotPathEvaluateResponse
 from seedcore.ops.hot_path_parity_log import parity_log_file_path, reset_hot_path_parity_logger_for_tests
 import pytest
@@ -108,6 +108,23 @@ def _manager(*, snapshot_version: str = "snapshot:pkg-prod-2026-04-02", compiled
         "restricted_transfer_ready": True,
     }
     return SimpleNamespace(
+        get_active_request_schema_bundle=lambda: {
+            "artifact_type": "request_schema_bundle",
+            "snapshot_version": snapshot_version,
+            "request_shape": {"required_task_fact_keys": ["tags", "signals", "context"]},
+        },
+        get_active_taxonomy_bundle=lambda: {
+            "artifact_type": "taxonomy_bundle",
+            "snapshot_version": snapshot_version,
+            "trust_gap_codes": [
+                {
+                    "code": "stale_telemetry",
+                    "operator_message": "Telemetry freshness exceeded policy threshold.",
+                    "machine_category": "telemetry",
+                    "severity": "critical",
+                }
+            ],
+        },
         get_active_compiled_authz_index=lambda: SimpleNamespace(
             snapshot_version=snapshot_version,
             compiled_at=compiled_at,
@@ -223,6 +240,73 @@ def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monke
     assert body["execution_token"]["token_id"] == "token-transfer-001"
     assert body["signer_provenance"][0]["artifact_type"] == "execution_token"
     assert body["signer_provenance"][0]["signer_id"] == "seedcore-verify"
+
+
+def test_pdp_hot_path_request_includes_active_contract_bundles(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+
+    payload = _base_payload()
+    action_intent = ActionIntent.model_validate(payload["action_intent"])
+    policy_case = PolicyCase.model_validate(
+        {
+            "action_intent": action_intent.model_dump(mode="json"),
+            "policy_snapshot": payload["policy_snapshot_ref"],
+            "relevant_twin_snapshot": {
+                "asset": {
+                    "twin_kind": "asset",
+                    "twin_id": "asset:lot-8841",
+                    "custody": {
+                        "current_custodian_id": "principal:facility_mgr_001",
+                        "current_zone": "vault_a",
+                    },
+                }
+            },
+            "telemetry_summary": {"observed_at": payload["telemetry_context"]["observed_at"]},
+            "evidence_summary": {"evidence_refs": payload["telemetry_context"]["evidence_refs"]},
+        }
+    )
+
+    request = pdp_hot_path.build_hot_path_request(policy_case)
+
+    assert request.request_schema_bundle["artifact_type"] == "request_schema_bundle"
+    assert request.request_schema_bundle["request_shape"]["required_task_fact_keys"] == [
+        "tags",
+        "signals",
+        "context",
+    ]
+    assert request.taxonomy_bundle["artifact_type"] == "taxonomy_bundle"
+    assert request.taxonomy_bundle["trust_gap_codes"][0]["code"] == "stale_telemetry"
+
+
+def test_pdp_hot_path_response_propagates_active_contract_bundles() -> None:
+    response = HotPathEvaluateResponse(
+        request_id="req-1",
+        decided_at=datetime.now(timezone.utc),
+        latency_ms=7,
+        decision=HotPathDecisionView(
+            allowed=True,
+            disposition="allow",
+            reason_code="restricted_custody_transfer_allowed",
+            reason="restricted_custody_transfer_allowed",
+            policy_snapshot_ref="snapshot:pkg-prod-2026-04-02",
+        ),
+        request_schema_bundle={
+            "artifact_type": "request_schema_bundle",
+            "request_shape": {"required_task_fact_keys": ["tags", "signals", "context"]},
+        },
+        taxonomy_bundle={
+            "artifact_type": "taxonomy_bundle",
+            "trust_gap_codes": [{"code": "stale_telemetry"}],
+        },
+    )
+
+    decision = pdp_hot_path.hot_path_response_to_policy_decision(response)
+
+    assert decision.authz_graph["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
+    assert decision.authz_graph["taxonomy_bundle"]["artifact_type"] == "taxonomy_bundle"
+    assert decision.governed_receipt["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
+    assert decision.governed_receipt["taxonomy_bundle"]["trust_gap_codes"][0]["code"] == "stale_telemetry"
 
 
 def test_pdp_hot_path_quarantines_when_compiled_graph_is_stale(monkeypatch):

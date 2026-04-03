@@ -63,6 +63,8 @@ def test_attach_evidence_bundle_uses_new_canonical_fields():
     assert isinstance(bundle["telemetry_refs"], list)
     assert isinstance(bundle["asset_fingerprint"]["modality_map"], dict)
     assert bundle["decision_graph_snapshot_hash"] == "hash-e-1"
+    assert isinstance(bundle.get("state_binding_hash"), str)
+    assert bundle["state_binding_hash"].startswith("sha256:")
     assert bundle["signer_metadata"]["signing_scheme"] == "hmac_sha256"
 
 

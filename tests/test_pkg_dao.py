@@ -7,6 +7,8 @@ Tests all DAO classes with mocked database connections.
 
 import os
 import sys
+import hashlib
+import json
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_database_dependencies
 
@@ -259,6 +261,111 @@ class TestPKGSnapshotsDAO:
         assert artifact is not None
         assert artifact['version'] == 'rules@1.4.0'
         assert artifact['artifact_type'] == 'wasm_pack'
+
+    @pytest.mark.asyncio
+    async def test_store_snapshot_artifact_json_hashes_payload(self, dao, mock_session_factory):
+        session = mock_session_factory()
+        dao._sf = lambda: session
+        tx = AsyncMock()
+        tx.__aenter__.return_value = session
+        tx.__aexit__.return_value = None
+        session.begin = Mock(return_value=tx)
+        session.execute = AsyncMock()
+
+        payload = {"b": 2, "a": 1}
+        stored = await dao.store_snapshot_artifact_json(
+            snapshot_id=42,
+            artifact_type="activation_manifest",
+            payload=payload,
+            created_by="unit-test",
+        )
+
+        expected_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        expected_sha = hashlib.sha256(expected_bytes).hexdigest()
+        assert stored["snapshot_id"] == 42
+        assert stored["artifact_type"] == "activation_manifest"
+        assert stored["sha256"] == expected_sha
+        assert stored["size_bytes"] == len(expected_bytes)
+        session.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_snapshot_artifact_payload_decodes_json(self, dao, mock_session_factory):
+        session = mock_session_factory()
+        dao._sf = lambda: session
+
+        artifact_row = Mock()
+        artifact_row._mapping = {
+            "snapshot_id": 11,
+            "artifact_type": "request_schema_bundle",
+            "artifact_bytes": json.dumps({"request_shape": {"required_task_fact_keys": ["tags"]}}).encode("utf-8"),
+            "size_bytes": 51,
+            "sha256": "sha256:test",
+            "created_at": "2026-03-19T12:00:00+00:00",
+            "created_by": "pkg_manager",
+        }
+        result = AsyncMock()
+        result.first.return_value = artifact_row
+        session.execute = AsyncMock(return_value=result)
+
+        payload = await dao.get_snapshot_artifact_payload(
+            snapshot_id=11,
+            artifact_type="request_schema_bundle",
+        )
+
+        assert payload == {"request_shape": {"required_task_fact_keys": ["tags"]}}
+
+    @pytest.mark.asyncio
+    async def test_upsert_snapshot_manifest_roundtrip(self, dao, mock_session_factory):
+        session = mock_session_factory()
+        dao._sf = lambda: session
+        tx = AsyncMock()
+        tx.__aenter__.return_value = session
+        tx.__aexit__.return_value = None
+        session.begin = Mock(return_value=tx)
+
+        upsert_result = AsyncMock()
+        upsert_row = Mock()
+        upsert_row._mapping = {
+            "snapshot_id": 7,
+            "workflow_type": "restricted_custody_transfer",
+            "decision_contract_version": "rct@v1",
+            "requires_authority_state_binding": True,
+            "manifest_hash": "sha256:manifest",
+        }
+        upsert_result.first.return_value = upsert_row
+
+        get_result = AsyncMock()
+        get_row = Mock()
+        get_row._mapping = dict(upsert_row._mapping)
+        get_result.first.return_value = get_row
+
+        session.execute.side_effect = [upsert_result, get_result]
+
+        upserted = await dao.upsert_snapshot_manifest(
+            snapshot_id=7,
+            decision_contract_version="rct@v1",
+            requires_authority_state_binding=True,
+            manifest_json={"contract": "rct@v1"},
+        )
+        fetched = await dao.get_snapshot_manifest(snapshot_id=7)
+
+        assert upserted["snapshot_id"] == 7
+        assert upserted["decision_contract_version"] == "rct@v1"
+        assert upserted["requires_authority_state_binding"] is True
+        assert fetched is not None
+        assert fetched["workflow_type"] == "restricted_custody_transfer"
+
+    @pytest.mark.asyncio
+    async def test_get_taxonomy_bundle_aggregates_code_tables(self, dao):
+        dao.list_reason_codes = AsyncMock(return_value=[{"code": "reason_a"}])
+        dao.list_trust_gap_codes = AsyncMock(return_value=[{"code": "gap_a"}])
+        dao.list_obligation_codes = AsyncMock(return_value=[{"code": "obl_a"}])
+
+        bundle = await dao.get_taxonomy_bundle(snapshot_id=3)
+
+        assert bundle["reason_codes"] == [{"code": "reason_a"}]
+        assert bundle["trust_gap_codes"] == [{"code": "gap_a"}]
+        assert bundle["obligation_codes"] == [{"code": "obl_a"}]
 
 
 class TestPKGDeploymentsDAO:

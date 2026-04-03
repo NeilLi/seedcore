@@ -42,6 +42,7 @@ from ...ops.pdp_hot_path import (
     evaluate_pdp_hot_path,
     resolve_authoritative_transfer_approval,
 )
+from ...ops.pkg import get_global_pkg_manager
 from ...ops.evidence.forensic_block_contract import FORENSIC_BLOCK_CONTEXT
 from ...services.digital_twin_service import DigitalTwinService
 from ...serve.organism_client import OrganismServiceClient
@@ -197,6 +198,7 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
     if payload.asset.declared_value_usd is not None:
         action_intent.action.parameters["value_usd"] = float(payload.asset.declared_value_usd)
     policy_snapshot_ref = payload.policy_snapshot_ref or payload.security_contract.version
+    request_schema_bundle, taxonomy_bundle = _resolve_active_contract_bundles(policy_snapshot_ref)
     return HotPathEvaluateRequest(
         contract_version=HOT_PATH_CONTRACT_VERSION,
         request_id=payload.request_id,
@@ -214,6 +216,38 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
             max_allowed_age_seconds=payload.telemetry.max_allowed_age_seconds,
             evidence_refs=list(payload.telemetry.evidence_refs),
         ),
+        request_schema_bundle=request_schema_bundle,
+        taxonomy_bundle=taxonomy_bundle,
+    )
+
+
+def _resolve_active_contract_bundles(
+    policy_snapshot_ref: str | None,
+) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+    manager = get_global_pkg_manager()
+    if manager is None:
+        return None, None
+
+    metadata_getter = getattr(manager, "get_metadata", None)
+    active_version = None
+    if callable(metadata_getter):
+        metadata = metadata_getter() or {}
+        if isinstance(metadata, dict):
+            active_version = metadata.get("active_version")
+    if policy_snapshot_ref and active_version and str(policy_snapshot_ref).strip() != str(active_version).strip():
+        return None, None
+
+    request_schema_getter = getattr(manager, "get_active_request_schema_bundle", None)
+    taxonomy_getter = getattr(manager, "get_active_taxonomy_bundle", None)
+    request_schema_bundle = request_schema_getter() if callable(request_schema_getter) else None
+    taxonomy_bundle = taxonomy_getter() if callable(taxonomy_getter) else None
+    return (
+        dict(request_schema_bundle)
+        if isinstance(request_schema_bundle, dict) and request_schema_bundle
+        else None,
+        dict(taxonomy_bundle)
+        if isinstance(taxonomy_bundle, dict) and taxonomy_bundle
+        else None,
     )
 
 
@@ -1546,6 +1580,8 @@ async def evaluate_agent_action(
             execution_token=hot_path_result.execution_token,
             governed_receipt=dict(hot_path_result.governed_receipt),
             forensic_linkage={},
+            request_schema_bundle=hot_path_result.request_schema_bundle,
+            taxonomy_bundle=hot_path_result.taxonomy_bundle,
         )
         response = _apply_forensic_scope_guards(payload=payload, response=response)
         response = await _apply_organism_preflight(payload=payload, response=response)

@@ -208,6 +208,97 @@ class PKGClient:
     async def get_active_artifact(self, env: str = "prod") -> Optional[Dict[str, Any]]:
         """Get active artifact information using the view."""
         return await self.snapshots.get_active_artifact(env)
+
+    async def store_snapshot_artifact(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+        artifact_bytes: bytes,
+        sha256: str,
+        created_by: str = "system",
+    ) -> None:
+        await self.snapshots.store_snapshot_artifact(
+            snapshot_id=snapshot_id,
+            artifact_type=artifact_type,
+            artifact_bytes=artifact_bytes,
+            sha256=sha256,
+            created_by=created_by,
+        )
+
+    async def store_snapshot_artifact_json(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+        payload: Dict[str, Any],
+        created_by: str = "system",
+    ) -> Dict[str, Any]:
+        return await self.snapshots.store_snapshot_artifact_json(
+            snapshot_id=snapshot_id,
+            artifact_type=artifact_type,
+            payload=payload,
+            created_by=created_by,
+        )
+
+    async def list_snapshot_artifacts(self, snapshot_id: int) -> List[Dict[str, Any]]:
+        return await self.snapshots.list_snapshot_artifacts(snapshot_id)
+
+    async def get_snapshot_artifact_payload(
+        self,
+        *,
+        snapshot_id: int,
+        artifact_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        return await self.snapshots.get_snapshot_artifact_payload(
+            snapshot_id=snapshot_id,
+            artifact_type=artifact_type,
+        )
+
+    async def get_snapshot_manifest(self, snapshot_id: int) -> Optional[Dict[str, Any]]:
+        return await self.snapshots.get_snapshot_manifest(snapshot_id)
+
+    async def upsert_snapshot_manifest(
+        self,
+        *,
+        snapshot_id: int,
+        workflow_type: str = "restricted_custody_transfer",
+        decision_contract_version: Optional[str] = None,
+        request_schema_version: Optional[str] = None,
+        evidence_contract_version: Optional[str] = None,
+        reason_code_taxonomy_version: Optional[str] = None,
+        trust_gap_taxonomy_version: Optional[str] = None,
+        obligation_taxonomy_version: Optional[str] = None,
+        consistency_contract_version: Optional[str] = None,
+        safety_profile: Optional[str] = None,
+        requires_signed_bundle: bool = False,
+        requires_compiled_decision_graph: bool = False,
+        requires_authority_state_binding: bool = False,
+        activation_requirements: Optional[Dict[str, Any]] = None,
+        manifest_json: Optional[Dict[str, Any]] = None,
+        manifest_hash: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self.snapshots.upsert_snapshot_manifest(
+            snapshot_id=snapshot_id,
+            workflow_type=workflow_type,
+            decision_contract_version=decision_contract_version,
+            request_schema_version=request_schema_version,
+            evidence_contract_version=evidence_contract_version,
+            reason_code_taxonomy_version=reason_code_taxonomy_version,
+            trust_gap_taxonomy_version=trust_gap_taxonomy_version,
+            obligation_taxonomy_version=obligation_taxonomy_version,
+            consistency_contract_version=consistency_contract_version,
+            safety_profile=safety_profile,
+            requires_signed_bundle=requires_signed_bundle,
+            requires_compiled_decision_graph=requires_compiled_decision_graph,
+            requires_authority_state_binding=requires_authority_state_binding,
+            activation_requirements=activation_requirements,
+            manifest_json=manifest_json,
+            manifest_hash=manifest_hash,
+        )
+
+    async def get_taxonomy_bundle(self, snapshot_id: int) -> Dict[str, List[Dict[str, Any]]]:
+        return await self.snapshots.get_taxonomy_bundle(snapshot_id=snapshot_id)
     
     # =========================
     # Deployments (delegate to DAO)

@@ -121,6 +121,10 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
                 "error": None,
             },
         },
+        get_active_contract_artifacts=lambda: {
+            "request_schema_bundle": {"artifact_type": "request_schema_bundle"},
+            "taxonomy_bundle": {"artifact_type": "taxonomy_bundle"},
+        },
     )
     monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
 
@@ -135,6 +139,7 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
     assert result["authz_graph_ready"] is True
     assert result["authz_graph"]["active_snapshot_version"] == "rules@7.0.0"
     assert result["authz_graph"]["snapshot_hash"] == "hash-7"
+    assert result["active_contract_artifacts"]["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
 
 
 @pytest.mark.asyncio

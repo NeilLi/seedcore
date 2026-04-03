@@ -136,6 +136,7 @@ class PolicyReceipt(BaseModel):
     governed_receipt_hash: Optional[str] = None
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
+    state_binding_hash: Optional[str] = None
     co_sign_required: bool = False
     co_sign_status: Optional[str] = None
     transfer_outcome: Optional[str] = None
@@ -184,6 +185,7 @@ class EvidenceBundle(BaseModel):
     policy_receipt_id: Optional[str] = None
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
+    state_binding_hash: Optional[str] = None
     co_sign_required: bool = False
     co_sign_status: Optional[str] = None
     transfer_outcome: Optional[str] = None

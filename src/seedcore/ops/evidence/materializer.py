@@ -81,6 +81,12 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
     authz_graph = policy_decision.get("authz_graph") if isinstance(policy_decision.get("authz_graph"), dict) else {}
     governed_receipt = policy_decision.get("governed_receipt") if isinstance(policy_decision.get("governed_receipt"), dict) else {}
     trust_gap_codes = _resolve_trust_gap_codes(authz_graph=authz_graph, governed_receipt=governed_receipt)
+    trust_gap_taxonomy = _resolve_trust_gap_taxonomy(
+        authz_graph=authz_graph,
+        governed_receipt=governed_receipt,
+        policy_receipt=policy_receipt,
+        evidence_bundle=evidence_bundle,
+    )
     owner_context = _owner_context(governed_receipt)
     authority_consistency = _authority_consistency_summary(audit_record=audit_record, governed_receipt=governed_receipt)
     forensic_block = _resolve_forensic_block(audit_record=audit_record, evidence_bundle=evidence_bundle)
@@ -124,8 +130,14 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
                 or policy_receipt.get("decision_graph_snapshot_version")
                 or evidence_bundle.get("decision_graph_snapshot_version")
             ),
+            "state_binding_hash": (
+                governed_receipt.get("state_binding_hash")
+                or authz_graph.get("state_binding_hash")
+                or policy_receipt.get("state_binding_hash")
+                or evidence_bundle.get("state_binding_hash")
+            ),
             "trust_gap_codes": trust_gap_codes,
-            "trust_gap_details": _trust_gap_details(trust_gap_codes),
+            "trust_gap_details": _trust_gap_details(trust_gap_codes, taxonomy=trust_gap_taxonomy),
             "authority_consistency": authority_consistency,
             "authority_consistency_hash": authority_consistency.get("hash"),
             "operator_actions": _operator_actions_for_authority_issues(authority_consistency.get("issues") or []),
@@ -253,13 +265,14 @@ def _resolve_trust_gap_codes(*, authz_graph: Dict[str, Any], governed_receipt: D
     return codes
 
 
-def _trust_gap_details(codes: list[str]) -> list[Dict[str, Any]]:
+def _trust_gap_details(codes: list[str], *, taxonomy: Optional[Dict[str, Dict[str, str]]] = None) -> list[Dict[str, Any]]:
     details: list[Dict[str, Any]] = []
+    taxonomy_map = taxonomy if isinstance(taxonomy, dict) and taxonomy else TRUST_GAP_TAXONOMY
     for code in codes:
         normalized = str(code).strip()
         if not normalized:
             continue
-        entry = TRUST_GAP_TAXONOMY.get(normalized, {})
+        entry = taxonomy_map.get(normalized, {})
         details.append(
             {
                 "code": normalized,
@@ -269,6 +282,53 @@ def _trust_gap_details(codes: list[str]) -> list[Dict[str, Any]]:
             }
         )
     return details
+
+
+def _resolve_trust_gap_taxonomy(
+    *,
+    authz_graph: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+    policy_receipt: Dict[str, Any],
+    evidence_bundle: Dict[str, Any],
+) -> Dict[str, Dict[str, str]]:
+    taxonomy = dict(TRUST_GAP_TAXONOMY)
+    candidates = [
+        governed_receipt.get("advisory"),
+        authz_graph.get("taxonomy_bundle"),
+        policy_receipt.get("taxonomy_bundle"),
+        evidence_bundle.get("taxonomy_bundle"),
+        evidence_bundle.get("evidence_inputs"),
+    ]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        bundle = candidate.get("taxonomy_bundle") if isinstance(candidate.get("taxonomy_bundle"), dict) else candidate
+        trust_gap_codes = bundle.get("trust_gap_codes") if isinstance(bundle, dict) else None
+        if isinstance(trust_gap_codes, dict):
+            for code, payload in trust_gap_codes.items():
+                if not isinstance(payload, dict):
+                    continue
+                normalized_code = str(code).strip()
+                if not normalized_code:
+                    continue
+                taxonomy[normalized_code] = {
+                    "category": str(payload.get("machine_category") or payload.get("category") or "general"),
+                    "severity": str(payload.get("severity") or "medium"),
+                    "message": str(payload.get("operator_message") or payload.get("message") or normalized_code.replace("_", " ")),
+                }
+        elif isinstance(trust_gap_codes, list):
+            for item in trust_gap_codes:
+                if not isinstance(item, dict):
+                    continue
+                code = str(item.get("code") or "").strip()
+                if not code:
+                    continue
+                taxonomy[code] = {
+                    "category": str(item.get("machine_category") or item.get("category") or "general"),
+                    "severity": str(item.get("severity") or "medium"),
+                    "message": str(item.get("operator_message") or item.get("message") or code.replace("_", " ")),
+                }
+    return taxonomy
 
 
 def _owner_context(governed_receipt: Dict[str, Any]) -> Dict[str, Any]:

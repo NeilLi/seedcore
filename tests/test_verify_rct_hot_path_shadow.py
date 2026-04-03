@@ -37,3 +37,26 @@ def test_shadow_builder_produces_valid_hot_path_requests() -> None:
         assert request.policy_snapshot_ref == approval_envelope["policy_snapshot_ref"]
         assert "approval_envelope" not in approval_context
         assert "approval_transition" not in approval_context
+
+
+def test_shadow_builder_can_attach_active_contract_bundles() -> None:
+    case_dir = FIXTURE_ROOT / CANONICAL_CASES[0]
+    approval_envelope = _read_json(case_dir / "input.approval_envelope.json")
+    persisted_approval = {
+        "approval_envelope_id": approval_envelope["approval_envelope_id"],
+        "version": approval_envelope.get("version", 1),
+        "approval_binding_hash": approval_envelope.get("approval_binding_hash"),
+        "envelope": approval_envelope,
+    }
+    payload = _build_request(
+        case_dir,
+        persisted_approval=persisted_approval,
+        active_contract_bundles={
+            "request_schema_bundle": {"artifact_type": "request_schema_bundle"},
+            "taxonomy_bundle": {"artifact_type": "taxonomy_bundle"},
+        },
+    )
+    request = HotPathEvaluateRequest.model_validate(payload)
+
+    assert request.request_schema_bundle["artifact_type"] == "request_schema_bundle"
+    assert request.taxonomy_bundle["artifact_type"] == "taxonomy_bundle"

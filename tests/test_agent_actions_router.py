@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -144,6 +145,22 @@ def _allow_hot_path_response() -> HotPathEvaluateResponse:
     )
 
 
+def _bundle_manager(*, snapshot_version: str = "rules@8.0.0"):
+    return SimpleNamespace(
+        get_metadata=lambda: {"active_version": snapshot_version},
+        get_active_request_schema_bundle=lambda: {
+            "artifact_type": "request_schema_bundle",
+            "snapshot_version": snapshot_version,
+            "request_shape": {"required_task_fact_keys": ["tags", "signals", "context"]},
+        },
+        get_active_taxonomy_bundle=lambda: {
+            "artifact_type": "taxonomy_bundle",
+            "snapshot_version": snapshot_version,
+            "trust_gap_codes": [{"code": "stale_telemetry"}],
+        },
+    )
+
+
 async def _empty_authoritative_approval(*args, **kwargs):
     return {}
 
@@ -197,6 +214,7 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
         "resolve_authoritative_transfer_approval",
         _empty_authoritative_approval,
     )
+    monkeypatch.setattr(agent_actions_router, "get_global_pkg_manager", lambda: _bundle_manager())
     monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
     monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
 
@@ -218,6 +236,48 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
     assert mapped_request.action_intent.resource.lot_id == "lot-8841"
     assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
     assert mapped_request.action_intent.action.parameters["value_usd"] == 1500.0
+    assert mapped_request.request_schema_bundle["artifact_type"] == "request_schema_bundle"
+    assert mapped_request.taxonomy_bundle["artifact_type"] == "taxonomy_bundle"
+
+
+def test_agent_actions_evaluate_propagates_bundle_fields_on_response(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    def _fake_evaluate(request, **kwargs):
+        return HotPathEvaluateResponse(
+            request_id=request.request_id,
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=41,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="restricted_custody_transfer_allowed",
+                reason="all mandatory checks passed",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            ),
+            request_schema_bundle=request.request_schema_bundle,
+            taxonomy_bundle=request.taxonomy_bundle,
+        )
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "get_global_pkg_manager",
+        lambda: _bundle_manager(snapshot_version="snapshot:pkg-prod-2026-03-31"),
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
+    assert body["taxonomy_bundle"]["artifact_type"] == "taxonomy_bundle"
 
 
 def test_agent_actions_evaluate_maps_scope_and_fingerprint_fields(monkeypatch):
