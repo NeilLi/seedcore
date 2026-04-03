@@ -93,6 +93,24 @@ class AuthzGraphManager:
         )
         return compiled
 
+    async def compile_snapshot_index(
+        self,
+        *,
+        snapshot_id: int,
+        snapshot_version: str,
+        snapshot_ref: Optional[str] = None,
+    ) -> tuple[CompiledAuthzIndex, AuthzProjectionResult]:
+        """
+        Build a compiled index without mutating the active authz graph (publish dry-run).
+        """
+        ref = snapshot_ref or f"authz_graph@{snapshot_version}"
+        return await self._projection_service.build_compiled_index(
+            snapshot_ref=ref,
+            snapshot_id=snapshot_id,
+            snapshot_version=snapshot_version,
+            include_registration_decisions=True,
+        )
+
     def get_active_compiled_index(self) -> Optional[CompiledAuthzIndex]:
         with self._lock:
             return self._active_compiled_index

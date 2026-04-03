@@ -43,6 +43,7 @@ from .client import PKGClient
 from .dao import PKGSnapshotData  # Assuming legacy DAO mapped to new models
 from .capability_registry import CapabilityRegistry
 from .authz_graph import AuthzGraphManager, AuthzGraphProjectionService
+from .rct_publish_validation import gather_rct_publish_validation_errors
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,10 @@ MAX_RECONNECT_BACKOFF = 60
 REDIS_RECONNECT_BASE_DELAY = 1.0
 REDIS_RECONNECT_MAX_DELAY = 60.0
 REDIS_RECONNECT_MULTIPLIER = 2.0
+
+# Phase 3 (RCT publish-time validation): set SEEDCORE_PKG_RCT_PUBLISH_VALIDATE=1 to block
+# activate_snapshot_version until compiled graph, manifest row, taxonomies, and typed
+# transition_requirements pass authoring checks (dry-run compile; does not swap runtime).
 
 # Phase 2 (RCT activation hardening): set SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE=1 to fail closed
 # when the compiled graph is not RCT-ready, contract artifacts are incomplete, the snapshot
@@ -133,6 +138,9 @@ class PKGManager:
 
     def _rct_activation_preflight_manifest_enabled(self) -> bool:
         return _pkg_env_truthy("SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT")
+
+    def _rct_publish_validate_enabled(self) -> bool:
+        return _pkg_env_truthy("SEEDCORE_PKG_RCT_PUBLISH_VALIDATE")
 
     def _rollback_pkg_activation_swap(
         self, version: str, prior_active_version: Optional[str]
@@ -1014,6 +1022,37 @@ class PKGManager:
                     "error": "snapshot_not_found",
                     "message": f"Snapshot version '{requested_version}' was not found.",
                 }
+
+            if self._rct_publish_validate_enabled():
+                try:
+                    compiled_preview, _ = await self.authz_graph.compile_snapshot_index(
+                        snapshot_id=snapshot.id,
+                        snapshot_version=snapshot.version,
+                        snapshot_ref=f"authz_graph@{snapshot.version}",
+                    )
+                    publish_errors = await gather_rct_publish_validation_errors(
+                        self._client,
+                        snapshot_id=snapshot.id,
+                        compiled=compiled_preview,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "RCT publish validation compile failed for %s: %s",
+                        snapshot.version,
+                        exc,
+                        exc_info=True,
+                    )
+                    publish_errors = [f"publish_compile_failed:{exc}"]
+                if publish_errors:
+                    return {
+                        "success": False,
+                        "error": "publish_validation_failed",
+                        "message": "RCT publish-time validation failed: "
+                        + "; ".join(publish_errors),
+                        "validation_errors": publish_errors,
+                        "snapshot_id": snapshot.id,
+                        "version": snapshot.version,
+                    }
 
             activated = await self._client.activate_snapshot(snapshot.id)
             if activated is None:

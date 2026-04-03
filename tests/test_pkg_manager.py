@@ -469,6 +469,34 @@ async def test_activate_snapshot_version_publishes_update_event(manager, mock_pk
     assert mock_pkg_client.activate_snapshot.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_activate_snapshot_version_blocked_by_publish_validation(
+    manager, mock_pkg_client, mock_redis_client, monkeypatch
+):
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_PUBLISH_VALIDATE", "1")
+    snap = make_wasm_snapshot("rules@publish-gate")
+    mock_pkg_client.get_snapshot_by_version.return_value = snap
+
+    class _BadCompiled:
+        restricted_transfer_ready = False
+        decision_graph_snapshot = None
+
+    manager.authz_graph.compile_snapshot_index = AsyncMock(
+        return_value=(_BadCompiled(), MagicMock())
+    )
+
+    result = await manager.activate_snapshot_version(
+        version=snap.version,
+        actor="ops",
+        publish_update=False,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "publish_validation_failed"
+    assert "validation_errors" in result
+    mock_pkg_client.activate_snapshot.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------
 # RCT Phase-2 activation hardening
 # ---------------------------------------------------------------------

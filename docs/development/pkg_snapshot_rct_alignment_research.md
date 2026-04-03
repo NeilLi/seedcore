@@ -1,7 +1,7 @@
 # PKG Snapshot Alignment with Agent-Governed Restricted Custody Transfer
 
 Date: 2026-04-02
-Status: Research note, design recommendation, and Phase 1–2 status update
+Status: Research note, design recommendation, and Phase 1–3 status update
 
 ## Why this note exists
 
@@ -58,11 +58,19 @@ What is now in place:
 - **Phase 2 preflight:** optional `SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT=1`
   requires an existing `pkg_snapshot_manifests` row **before** authz graph
   compilation (strict publish-time contract).
+- **Phase 3:** optional publish-time validation when
+  `SEEDCORE_PKG_RCT_PUBLISH_VALIDATE=1`: dry-run compile via
+  `AuthzGraphManager.compile_snapshot_index` (no active-graph swap), then
+  `rct_publish_validation` checks `restricted_transfer_ready`, typed
+  `transition_requirements` rows (keys, effect, lists, booleans, ints),
+  canonical `trust_gap_taxonomy` codes, non-empty transition graph, plus
+  `pkg_snapshot_manifests` row and non-empty taxonomy lists from
+  `get_taxonomy_bundle`. Failures block `activate_snapshot_version` before the
+  DB activation call.
 
 What remains for later phases:
 
-- typed authoring structures for RCT transition requirements
-- publish-time validation for request schemas and taxonomies (beyond activation gates)
+- optional request-schema bundle shape checks at publish (beyond taxonomy/manifest)
 - replay hardening that makes policy hash + graph hash + state binding
   mandatory
 
@@ -470,10 +478,16 @@ Implemented in additive, shadow-safe form:
 
 ### Phase 3: Authoring hardening
 
+**Status:** Partially implemented (publish gate + typed transition row checks).
+
 - introduce typed authoring structures for RCT transition requirements
+  (**implemented** as `rct_publish_validation` field checks on compiled
+  `transition_requirements` payloads; PKG rules remain compiler inputs)
 - keep generic PKG rule authoring as a compiler input, not the only source of
   truth
 - add publish-time validation for request schemas and taxonomies
+  (**taxonomy + manifest** enforced when `SEEDCORE_PKG_RCT_PUBLISH_VALIDATE=1`;
+  optional future: validate persisted `request_schema_bundle` JSON shape)
 
 ### Phase 4: Replay hardening
 
