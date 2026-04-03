@@ -63,6 +63,15 @@ def _resolve_active_snapshot(base_url: str) -> str | None:
     return version or None
 
 
+def _resolve_active_contract_bundles(base_url: str) -> dict[str, Any]:
+    try:
+        status = _get_json(f"{base_url.rstrip('/')}/pkg/status")
+    except Exception:
+        return {}
+    bundles = status.get("active_contract_artifacts")
+    return bundles if isinstance(bundles, dict) else {}
+
+
 def _build_break_glass_token(
     *,
     secret: str,
@@ -303,12 +312,7 @@ def run_verification(
     status_url = f"{base_url.rstrip('/')}/pdp/hot-path/status"
     active_snapshot = _resolve_active_snapshot(base_url)
     status_before = _get_json(status_url)
-    pkg_status = _get_json(f"{base_url.rstrip('/')}/pkg/status")
-    active_contract_bundles = (
-        pkg_status.get("active_contract_artifacts")
-        if isinstance(pkg_status.get("active_contract_artifacts"), dict)
-        else {}
-    )
+    active_contract_bundles = _resolve_active_contract_bundles(base_url)
     before_total = int(status_before.get("total") or 0)
     before_parity_ok = int(status_before.get("parity_ok") or 0)
     before_mismatched = int(status_before.get("mismatched") or 0)

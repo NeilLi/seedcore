@@ -25,6 +25,7 @@ from verify_rct_hot_path_shadow import (
     _build_request,
     _get_json,
     _persist_authoritative_approval,
+    _resolve_active_contract_bundles,
     _resolve_active_snapshot,
 )
 
@@ -46,11 +47,16 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _prepare_case_payloads(base_url: str) -> tuple[str | None, list[tuple[str, dict[str, Any]]]]:
     active_snapshot = _resolve_active_snapshot(base_url)
+    active_contract_bundles = _resolve_active_contract_bundles(base_url)
     prepared: list[tuple[str, dict[str, Any]]] = []
     for case_name in CANONICAL_CASES:
         case_dir = FIXTURE_ROOT / case_name
         persisted_approval = _persist_authoritative_approval(base_url, case_dir)
-        payload = _build_request(case_dir, persisted_approval=persisted_approval)
+        payload = _build_request(
+            case_dir,
+            persisted_approval=persisted_approval,
+            active_contract_bundles=active_contract_bundles,
+        )
         if active_snapshot:
             payload["policy_snapshot_ref"] = active_snapshot
             payload["action_intent"]["action"]["security_contract"]["version"] = active_snapshot

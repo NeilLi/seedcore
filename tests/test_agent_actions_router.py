@@ -138,6 +138,16 @@ def _allow_hot_path_response() -> HotPathEvaluateResponse:
             valid_until="2026-03-31T10:00:06Z",
             contract_version="rules@8.0.0",
         ),
+        request_schema_bundle={
+            "artifact_type": "request_schema_bundle",
+            "snapshot_version": "rules@8.0.0",
+            "request_shape": {"required_task_fact_keys": ["tags", "signals", "context"]},
+        },
+        taxonomy_bundle={
+            "artifact_type": "taxonomy_bundle",
+            "snapshot_version": "rules@8.0.0",
+            "trust_gap_codes": [{"code": "stale_telemetry"}],
+        },
         governed_receipt={
             "audit_id": "audit-abc",
             "policy_receipt_id": "receipt-policy-1",

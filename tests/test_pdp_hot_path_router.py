@@ -471,6 +471,16 @@ def test_pdp_hot_path_route_resolves_and_forwards_authoritative_approval(monkeyp
                 policy_snapshot_ref=request.policy_snapshot_ref,
             ),
             required_approvals=["FACILITY_MANAGER", "QUALITY_INSPECTOR"],
+            request_schema_bundle={
+                "artifact_type": "request_schema_bundle",
+                "snapshot_version": request.policy_snapshot_ref,
+                "request_shape": {"required_task_fact_keys": ["tags", "signals", "context"]},
+            },
+            taxonomy_bundle={
+                "artifact_type": "taxonomy_bundle",
+                "snapshot_version": request.policy_snapshot_ref,
+                "trust_gap_codes": [{"code": "stale_telemetry"}],
+            },
         )
 
     monkeypatch.setattr(pkg_router, "resolve_authoritative_transfer_approval", fake_resolve)

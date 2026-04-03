@@ -119,6 +119,44 @@ def test_run_benchmark_accepts_delay_and_jitter_metadata(tmp_path, monkeypatch) 
     assert summary["jitter_ms_max"] == 1.0
 
 
+def test_prepare_case_payloads_attaches_active_contract_bundles(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(_MODULE, "CANONICAL_CASES", ("allow_case",))
+    monkeypatch.setattr(_MODULE, "_resolve_active_snapshot", lambda base_url: "snapshot:test")
+    monkeypatch.setattr(
+        _MODULE,
+        "_resolve_active_contract_bundles",
+        lambda base_url: {
+            "request_schema_bundle": {"artifact_type": "request_schema_bundle"},
+            "taxonomy_bundle": {"artifact_type": "taxonomy_bundle"},
+        },
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "_persist_authoritative_approval",
+        lambda base_url, case_dir: {"approval_envelope_id": "approval-1", "version": 1},
+    )
+
+    def _fake_build_request(case_dir, *, persisted_approval, active_contract_bundles=None, request_id_suffix=None):
+        captured["bundles"] = active_contract_bundles
+        return {
+            "request_id": "template",
+            "action_intent": {"action": {"security_contract": {"version": "snapshot:initial"}}},
+            "request_schema_bundle": active_contract_bundles.get("request_schema_bundle"),
+            "taxonomy_bundle": active_contract_bundles.get("taxonomy_bundle"),
+        }
+
+    monkeypatch.setattr(_MODULE, "_build_request", _fake_build_request)
+
+    active_snapshot, prepared = _MODULE._prepare_case_payloads("http://127.0.0.1:8002/api/v1")
+
+    assert active_snapshot == "snapshot:test"
+    assert captured["bundles"]["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
+    assert captured["bundles"]["taxonomy_bundle"]["artifact_type"] == "taxonomy_bundle"
+    assert prepared[0][1]["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
+    assert prepared[0][1]["taxonomy_bundle"]["artifact_type"] == "taxonomy_bundle"
+
+
 def test_run_benchmark_concurrent_requests_complete(tmp_path, monkeypatch) -> None:
     cases = [("allow_case", {"request_id": "a"}), ("deny_case", {"request_id": "b"})]
     monkeypatch.setattr(_MODULE, "_prepare_case_payloads", lambda base_url: ("snapshot:test", cases))

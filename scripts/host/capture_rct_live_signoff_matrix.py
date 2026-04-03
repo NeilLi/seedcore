@@ -28,6 +28,7 @@ from scripts.host.verify_rct_hot_path_shadow import (  # noqa: E402
     EXPECTED_DISPOSITIONS,
     _build_request,
     _persist_authoritative_approval,
+    _resolve_active_contract_bundles,
     _resolve_active_snapshot,
 )
 from seedcore.coordinator.dao import AssetCustodyStateDAO, GovernedExecutionAuditDAO  # noqa: E402
@@ -473,6 +474,7 @@ def main() -> int:
     output_root.mkdir(parents=True, exist_ok=True)
 
     active_snapshot = _resolve_active_snapshot(runtime_base)
+    active_contract_bundles = _resolve_active_contract_bundles(runtime_base)
     case_rows: list[dict[str, Any]] = []
     allow_audit_id: str | None = None
     loop = asyncio.new_event_loop()
@@ -490,7 +492,11 @@ def main() -> int:
         approval_envelope_id = str(persisted_approval.get("approval_envelope_id") or "")
         approval_current = _json_get(f"{runtime_base}/transfer-approvals/{approval_envelope_id}")
 
-        request_payload = _build_request(case_dir, persisted_approval=persisted_approval)
+        request_payload = _build_request(
+            case_dir,
+            persisted_approval=persisted_approval,
+            active_contract_bundles=active_contract_bundles,
+        )
         if active_snapshot:
             request_payload["policy_snapshot_ref"] = active_snapshot
             request_payload["action_intent"]["action"]["security_contract"]["version"] = active_snapshot

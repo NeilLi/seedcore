@@ -200,6 +200,16 @@ def _hot_path_response(disposition: str = "allow") -> HotPathEvaluateResponse:
             ),
             policy_snapshot_ref="snapshot:1",
         ),
+        request_schema_bundle={
+            "artifact_type": "request_schema_bundle",
+            "snapshot_version": "snapshot:1",
+            "request_shape": {"required_task_fact_keys": ["tags", "signals", "context"]},
+        },
+        taxonomy_bundle={
+            "artifact_type": "taxonomy_bundle",
+            "snapshot_version": "snapshot:1",
+            "trust_gap_codes": [{"code": "stale_telemetry"}],
+        },
     )
 
 

@@ -1,7 +1,7 @@
 # PKG Snapshot Alignment with Agent-Governed Restricted Custody Transfer
 
 Date: 2026-04-02
-Status: Research note and design recommendation
+Status: Research note, design recommendation, and Phase 1 status update
 
 ## Why this note exists
 
@@ -26,6 +26,30 @@ The goal of this note is to define how PKG snapshots should evolve so that:
 3. evidence and replay remain cryptographically and semantically tied to the
    same policy world.
 4. capability evolution does not accidentally become authority drift.
+
+## Milestone update
+
+As of 2026-04-03, the codebase has landed Phase 1 of the PKG RCT contract
+alignment work in additive, shadow-safe form.
+
+What is now in place:
+
+- snapshot manifests and snapshot-scoped taxonomy tables
+- persisted `request_schema_bundle`, `taxonomy_bundle`,
+  `decision_graph_snapshot`, and `activation_manifest` artifacts
+- `state_binding_hash` plumbing through governed receipts, policy receipts,
+  evidence bundles, materializers, and replay verification
+- runtime preference for the persisted contract bundles when they are present
+- bundle-aware hot-path request assembly, shadow verification, and capture
+  scripts
+
+What remains for later phases:
+
+- activation fail-closed enforcement for missing/invalid manifests
+- stronger activation completeness checks for RCT readiness
+- typed authoring structures for RCT transition requirements
+- replay hardening that makes policy hash + graph hash + state binding
+  mandatory
 
 ## Current repo state
 
@@ -60,8 +84,8 @@ versions:
 
 ### Where the model is still too loose
 
-The important gap is not missing infrastructure. The gap is that the
-authoritative RCT contract is still spread across:
+The important gap was not missing infrastructure. The gap was that the
+authoritative RCT contract was still spread across:
 
 - generic PKG rule tables
 - task capability definitions in `pkg_subtask_types`
@@ -76,6 +100,11 @@ In other words:
 - the actual RCT decision kernel is partly implicit in Python code.
 
 That is workable, but it is not yet the cleanest possible authority model.
+
+Phase 1 narrows that gap substantially, but it does not fully eliminate the
+implicit decision semantics yet. The remaining work is mostly about activation
+hardening and making the authority contract fail closed instead of only
+shadow-validating.
 
 ## Core conclusion
 
@@ -408,6 +437,8 @@ fallback.
 
 ### Phase 1: Contract hardening without changing decisions
 
+Implemented in additive, shadow-safe form:
+
 - add `pkg_snapshot_manifests`
 - add taxonomy/version bundles
 - add `state_binding_hash` into governed receipt and policy receipt
@@ -458,8 +489,9 @@ If we want PKG snapshots to "seriously and precisely" match
 Agent-Governed Restricted Custody Transfer, the most important change is not
 adding more generic rules.
 
-The important change is making each RCT-governing snapshot an explicit,
-versioned authority contract with:
+That first milestone is now complete in shadow-safe form. The next important
+change is making each RCT-governing snapshot an explicit, versioned authority
+contract with:
 
 - a frozen schema
 - a frozen taxonomy
