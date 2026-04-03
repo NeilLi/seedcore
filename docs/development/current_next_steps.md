@@ -75,6 +75,24 @@ Latest repo-aligned critical-path status:
     `*_runtime_ready`, parity counters, and `*_latency_p99_ms` when present).
   - updated `scripts/host/verify_hot_path_observability.sh` to validate
     status/metrics consistency against real status payloads.
+- Agent Action Gateway productization (May slice; implemented 2026-04-03):
+  - reference adapter builds strict `seedcore.agent_action_gateway.v1` evaluate
+    requests from simplified inputs:
+    `src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py`
+  - Shopify-Sandbox-shaped commerce mapping into `asset.product_ref`,
+    `asset.quote_ref`, `asset.declared_value_usd`, and
+    `forensic_context.fingerprint_components.economic_hash`:
+    `src/seedcore/adapters/shopify_sandbox_commerce_adapter.py`
+  - deterministic RCT correlation for replay lookup, including UUID-safe
+    `audit_id` fallback when `governed_receipt.audit_id` is absent and explicit
+    `replay_state` / `replay_lookup.preferred_key` semantics:
+    `src/seedcore/adapters/rct_gateway_correlation.py`
+  - MCP tool `seedcore.agent_action.evaluate` (adapter input -> gateway call ->
+    correlation) in `src/seedcore/plugin/mcp_server.py`
+  - contract and E2E tests: `tests/test_agent_action_gateway_productization.py`
+  - host real-call verifier:
+    `scripts/host/verify_agent_action_gateway_productization_real_calls.py` and
+    `scripts/host/verify_agent_action_gateway_productization_real_calls.sh`
 
 ## Why This Lives Outside The Root README
 
@@ -377,10 +395,22 @@ operational closure and external-boundary productization.
      `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
    - can move toward next check.
 4. **May 2026 (early): Agent Action Gateway productization**
-   - completed: false
-   - add one reference adapter for a current agent platform
-   - add one narrow commerce-side adapter for the canonical transaction story
-   - prove deterministic request -> decision -> replay lookup linkage
+   - completed: true
+   - status: **reference + commerce adapters, correlation contract, MCP evaluate
+     tool, tests, and host verifier are in-repo** (2026-04-03).
+   - reference adapter for the existing SeedCore MCP/plugin surface: builds v1
+     gateway evaluate payloads without exposing internal coordinator schemas
+     (`rct_agent_action_gateway_reference_adapter.py` + MCP
+     `seedcore.agent_action.evaluate`).
+   - narrow Shopify-Sandbox-shaped commerce adapter maps the canonical transaction
+     story into `asset.product_ref`, `asset.quote_ref`,
+     `asset.declared_value_usd`, and `forensic_context.fingerprint_components.economic_hash`
+     (`shopify_sandbox_commerce_adapter.py`).
+   - deterministic request -> decision -> replay linkage: correlation helper ties
+     `request_id` to `intent_id`, UUID-safe `audit_id` when needed, and
+     `replay_lookup` / `replay_state` for pending vs governed-audit-backed replay
+     (`rct_gateway_correlation.py`); validated in unit tests and
+     `verify_agent_action_gateway_productization_real_calls.*`.
 5. **May-Jun 2026: edge telemetry and closure progression**
    - completed: false
    - export JSON schema for `EdgeTelemetryEnvelopeV0`
@@ -400,8 +430,9 @@ Recommended dependency rule:
 
 - finish item 1 before broadening environment blast radius
 - run items 2 and 3 in parallel once CI gates are stable
-- start item 4 only after the operator and observability surfaces are trusted
-  enough to debug external-agent failures quickly
+- item 4 is complete; next sequencing focus is item 5 (edge telemetry progression)
+  and item 6 (Gemini-visible read tools), assuming operator and observability
+  surfaces remain the first line of defense for external-agent failures
 
 ### Explicit Sidecar
 
