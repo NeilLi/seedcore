@@ -33,6 +33,7 @@ For the live roadmap and closure details, see:
 - [current next steps](docs/development/current_next_steps.md)
 - [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
 - [Q2 product spec](docs/development/q2_2026_audit_trail_ui_spec.md)
+- [development docs index](docs/development/README.md)
 
 That means the near-term product boundary is:
 
@@ -48,9 +49,8 @@ governed admissibility and proof, not generalized model intelligence.
 
 Supporting documents:
 
-- [current next steps](docs/development/current_next_steps.md)
-- [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
-- [positioning narrative](docs/development/seedcore_positioning_narrative.md)
+- [development docs index](docs/development/README.md)
+- [canonical 2026 positioning](docs/development/seedcore_2026_execution_plan.md)
 - [agent action gateway contract (v1 draft)](docs/development/agent_action_gateway_contract.md)
 
 ## Current Codebase Snapshot

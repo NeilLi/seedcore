@@ -4,6 +4,12 @@
 
 Working execution spine for the next 90-day contract-and-proof phase.
 
+Historical note:
+
+- this file tracks the closed Slice 1 execution spine and its contract order
+- live planning has moved into [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+  and the Q2 product spec
+
 Current repo state on 2026-03-30:
 
 - the Restricted Custody Transfer Slice 1 authority boundary is implemented

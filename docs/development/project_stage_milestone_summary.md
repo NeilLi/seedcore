@@ -7,6 +7,13 @@ Date: 2026-03-27
 This document summarizes SeedCore's stage milestones based on a serious
 repository-level review of the codebase as it exists today.
 
+Historical note:
+
+- this is a milestone summary, not the active planning source of truth
+- use [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+  and [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md)
+  for live planning and status
+
 It is not a marketing roadmap.
 
 It is intended to answer a more practical question:

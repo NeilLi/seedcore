@@ -17,6 +17,9 @@ Update (2026-04-02, closure pass):
 - Screen 4: **Verification summary** (signature / traces / tamper), **Verification actions** (replay + projection + runbook lookup links).
 - Shared shell: search supports **`envelope:`** / **`approval:`** and **`request:`** prefixes routing to queue filters.
 - Runbooks: three new JSON entries (**stale telemetry**, **authority scope mismatch**, **snapshot not ready**) plus operator **preset lookup** links when `SEEDCORE_VERIFICATION_API_BASE` is set.
+- Operator legibility overlay is implemented for deterministic anomaly-first
+  queue ordering, verdict strips, replay consistency verdicts, and read-only
+  copilot brief generation with fallback-safe LLM integration.
 - Window A host-first closure: local and CI acceptance gates now run the same
   matrix slices; hot-path observability gate parsing is fixed for labeled
   Prometheus metrics and verified against live host runtime.
@@ -163,6 +166,75 @@ reading source code.
    UI is a visibility layer over governed receipts and replay-verifiable chains.
 4. Every screen must map to a frozen contract  
    Freeze the verification projection before broad UI wiring.
+
+## 4.1 Operator legibility and read-only copilot overlay (canonical)
+
+This section is the canonical source for the operator-legibility layer and
+copilot behavior for the Q2 verification surface.
+
+### Purpose
+
+Keep the operator console legible without weakening the evidence model.
+The auditable UI remains the system of record; legibility adds deterministic
+summaries, anomaly cues, and read-only copilot output on top.
+
+### Deterministic legibility layer
+
+- Queue (`operator_signals`) includes `priority_score` and
+  `correlation_flags`.
+- Default queue ordering is anomaly-first (highest priority, then
+  `updated_at`); `queue_sort=chron` restores newest-first.
+- Transfer, forensics, and replay views expose a fixed case-verdict strip:
+  decision, risk, confidence, and next action.
+- Replay includes a verdict card (`consistent`, `inconsistent`, `incomplete`)
+  derived from receipt chain + traces + signature/tamper checks + failure panel.
+- Replay surfaces include cross-surface mismatch flags (for example projection
+  vs terminal disposition).
+- "What changed since last load" uses client-side `sessionStorage` snapshots
+  scoped to the browser tab and view key.
+
+### Read-only copilot contract
+
+- Three-level UX:
+  - one-line summary
+  - up to five bullets
+  - drill-down split into facts vs inferences with citations
+- Deterministic builders:
+  `buildDeterministicCopilotBrief*` in `@seedcore/contracts`.
+- Canonical schema:
+  `docs/schemas/operator_copilot_brief_v0.schema.json`.
+
+### Guardrails
+
+- Copilot is read-only and cannot invoke write APIs.
+- Facts must bind to literal fields; inferences must be explicitly labeled
+  heuristic statements.
+- If replay HTML is partial, fallback is projection-only verdict and copilot
+  output until full `verification-detail` is present.
+
+### LLM-backed path and fallback behavior
+
+- Endpoint:
+  `GET /api/v1/verification/operator/copilot-brief`
+- Input query shape:
+  same parameters as transfer review (`source`, `dir`, `root`, `workflow_id`,
+  runtime `audit_id`, related filters).
+- Response contract:
+  `seedcore.verification_operator_copilot_response.v0` with
+  `brief` (`OperatorCopilotBriefV1`) and `meta`
+  (`used_llm`, optional `validation_errors`, optional `llm_error`).
+- Prompts:
+  `ts/services/verification-api/prompts/operator_copilot_system.md`,
+  `operator_copilot_user.md`.
+- Feature flags:
+  `SEEDCORE_OPERATOR_COPILOT_LLM=1`, `OPENAI_API_KEY`,
+  optional `SEEDCORE_OPERATOR_COPILOT_MODEL`
+  (default `gpt-4o-mini`), optional `SEEDCORE_OPENAI_BASE_URL`.
+- Validation and fail-safe:
+  `validateOperatorCopilotBriefForLlm` rejects malformed LLM JSON and
+  automatically falls back to deterministic brief generation, recording failure
+  details in `audit_note`, `uncertainty_notes`, `meta.validation_errors`, or
+  `meta.llm_error`.
 
 ### UI spec conventions (for implementers)
 

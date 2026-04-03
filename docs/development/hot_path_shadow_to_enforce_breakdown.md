@@ -26,7 +26,7 @@ Program alignment:
   [agent_action_gateway_contract.md](/Users/ningli/project/seedcore/docs/development/agent_action_gateway_contract.md):
   expose a stable external agent boundary over a trustworthy decision path
 - product narrative in
-  [seedcore_positioning_narrative.md](/Users/ningli/project/seedcore/docs/development/seedcore_positioning_narrative.md):
+  [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md):
   SeedCore owns admissibility and proof, so the decision path must be
   operationally defensible
 

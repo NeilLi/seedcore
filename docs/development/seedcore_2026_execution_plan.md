@@ -173,6 +173,54 @@ In practice, that means:
 
 Everything else is secondary.
 
+## Canonical 2026 Positioning
+
+For 2026 messaging, use this document as the canonical positioning source for
+the active wedge.
+
+Core position:
+
+- SeedCore is the zero-trust execution and proof layer for
+  high-consequence agent actions.
+- In deployment terms for this phase, SeedCore is the verifiable agentic
+  ledger and trust-anchor service for the trust slice.
+- Short form: SeedCore makes AI actions governable, custody-aware, and
+  replay-verifiable.
+
+Category to own:
+
+- zero-trust execution runtime for custody-aware agent operations
+
+What SeedCore is not:
+
+- another model provider
+- a generic agent framework
+- a chatbot orchestration tool
+- a broad workflow automation suite
+- an observability dashboard wrapped in AI language
+
+Canonical one-sentence pitch:
+
+> SeedCore is the runtime that decides whether an AI agent may act in the real
+> world, issues bounded execution authority when allowed, and proves what
+> happened afterward.
+
+Canonical mental model:
+
+```text
+The model decides what to try.
+SeedCore decides what is admissible.
+The execution layer performs the action.
+The evidence layer proves what happened.
+```
+
+Messaging guardrails:
+
+- prefer "productizing irrefutable governed execution and forensic replay"
+- avoid "full autonomous commerce stack" claims for the current phase
+- keep claims tied to the must-win `Restricted Custody Transfer` workflow and
+  replay-verifiable evidence surface
+
 ## Product Definition For 2026
 
 The product to ship this year is:

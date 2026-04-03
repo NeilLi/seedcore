@@ -4,6 +4,13 @@
 
 Contract freeze implementation status for the RCT critical path:
 
+Historical note:
+
+- this memo documents the frozen contract pass that closed the Slice 1 RCT
+  boundary
+- live operational tracking now sits in [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+  and [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
+
 - `VerificationSurfaceProjection` freeze pass is implemented in the verification
   API + operator/proof surfaces using explicit versioned projection models.
 - `AgentActionGateway` v1 boundary is implemented with strict required
