@@ -28,6 +28,8 @@ import {
   toAssetProofView,
   toTransferProofView,
   toTransferStatusView,
+  computeQueueCorrelationFlags,
+  computeQueuePriorityScore,
 } from "@seedcore/contracts";
 
 import { resolveRunbookLinks, type RunbookRef } from "./runbooks.js";
@@ -60,6 +62,10 @@ export interface TransferSourceQuery {
   approval_envelope_id?: string;
   /** Substring match against request_id (case-insensitive). */
   request_id?: string;
+  /** Queue ordering: anomaly-first (default) or chronological by updated_at. */
+  queue_sort?: "anomaly" | "chron";
+  /** Shorthand: resolve fixture/runtime scenario by workflow id (with root or audit context). */
+  workflow_id?: string;
 }
 
 export type TrustBucket = "verified" | "quarantined" | "rejected" | "pending" | "review";
@@ -98,6 +104,11 @@ export interface TransferQueueRow {
     /** Dedicated replay contract (receipt chain + failure panel + links). */
     verification_replay: string;
     workflow_projection: string;
+  };
+  /** Deterministic triage: higher score = needs operator attention sooner. */
+  operator_signals: {
+    priority_score: number;
+    correlation_flags: string[];
   };
 }
 
@@ -360,6 +371,15 @@ export function buildQueryString(query: TransferSourceQuery): string {
   }
   if (query.request_id) {
     params.set("request_id", query.request_id);
+  }
+  if (query.root) {
+    params.set("root", query.root);
+  }
+  if (query.queue_sort === "chron" || query.queue_sort === "anomaly") {
+    params.set("queue_sort", query.queue_sort);
+  }
+  if (query.workflow_id) {
+    params.set("workflow_id", query.workflow_id);
   }
   return params.toString();
 }
@@ -1721,6 +1741,22 @@ function buildQueueRow(
   const qs = buildQueryString(linkQuery);
   const wf = encodeURIComponent(scenario.workflow_id);
   const topBlocker = scenario.status.blocker_codes[0] ?? null;
+  const trustAlerts = deriveTrustAlerts(scenario);
+  const trustBucket = trustBucketForScenario(scenario);
+  const correlation_flags = computeQueueCorrelationFlags({
+    business_state: scenario.summary.business_state,
+    disposition: scenario.summary.disposition,
+    trust_bucket: trustBucket,
+    replay_readiness: scenario.transfer_audit_trail.physical_evidence.replay_status,
+    trust_alerts: trustAlerts,
+  });
+  const priority_score = computeQueuePriorityScore({
+    business_state: scenario.summary.business_state,
+    transfer_readiness: scenario.status.transfer_readiness,
+    trust_alerts: trustAlerts,
+    correlation_flags,
+    top_blocker: topBlocker,
+  });
   const assetForensicsRest = buildAssetForensicsRestPath(
     scenario.transfer_proof.asset_ref,
     linkQuery.source === "fixture" ? linkQuery : { source: "runtime" },
@@ -1749,7 +1785,11 @@ function buildQueueRow(
     replay_readiness: scenario.transfer_audit_trail.physical_evidence.replay_status,
     product_ref: scenario.transfer_audit_trail.authority_scope.product_ref,
     updated_at: queueRowUpdatedAt(scenario),
-    trust_alerts: deriveTrustAlerts(scenario),
+    trust_alerts: trustAlerts,
+    operator_signals: {
+      priority_score,
+      correlation_flags,
+    },
     links: {
       status: `/api/v1/verification/transfers/status?${qs}`,
       review: `/api/v1/verification/transfers/audit-trail?${qs}`,
@@ -1985,6 +2025,18 @@ export async function listTransferQueue(query: TransferSourceQuery): Promise<Tra
       /* skip */
     }
   }
+  const sortMode = query.queue_sort === "chron" ? "chron" : "anomaly";
+  if (sortMode === "anomaly") {
+    rows.sort((a, b) => {
+      const d = b.operator_signals.priority_score - a.operator_signals.priority_score;
+      if (d !== 0) {
+        return d;
+      }
+      return String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? ""));
+    });
+  } else {
+    rows.sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
+  }
   return rows;
 }
 
@@ -2066,6 +2118,11 @@ export function parseTransferQuery(url: URL): TransferSourceQuery {
     trust_alert: url.searchParams.get("trust_alert") ?? undefined,
     approval_envelope_id: url.searchParams.get("approval_envelope_id") ?? undefined,
     request_id: url.searchParams.get("request_id") ?? undefined,
+    queue_sort: (() => {
+      const v = url.searchParams.get("queue_sort");
+      return v === "chron" || v === "anomaly" ? v : undefined;
+    })(),
+    workflow_id: url.searchParams.get("workflow_id") ?? undefined,
   };
 }
 

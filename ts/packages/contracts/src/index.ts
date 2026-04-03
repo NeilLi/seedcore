@@ -54,3 +54,24 @@ export type {
   TransferAuditTrail,
   VerificationSurfaceProjection,
 } from "./verificationSurfaceContracts.js";
+
+export type {
+  CaseVerdictHeader,
+  OperatorCopilotBriefV1,
+  OperatorQueueSignals,
+  ReplayVerdict,
+} from "./operatorLegibility.js";
+
+export {
+  buildDeterministicCopilotBrief,
+  buildDeterministicCopilotBriefFromForensics,
+  buildDeterministicCopilotBriefFromProjectionOnly,
+  computeQueueCorrelationFlags,
+  computeQueuePriorityScore,
+  deriveCaseVerdictFromForensicsOnly,
+  deriveCaseVerdictFromProjectionOnly,
+  deriveCaseVerdictHeader,
+  deriveReplayCorrelationFlags,
+  deriveReplayVerdict,
+  validateOperatorCopilotBriefForLlm,
+} from "./operatorLegibility.js";

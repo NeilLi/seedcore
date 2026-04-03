@@ -164,7 +164,7 @@ const server = http.createServer(async (req, res) => {
       const idx = await fetchJson("/api/v1/verification/runbook");
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderRunbooksPage(idx, operatorShell("runbooks", DEFAULT_LIST_QS, hotPath), apiBase));
+      res.end(renderRunbooksPage(idx, operatorShell("runbooks", DEFAULT_LIST_QS, hotPath), apiBase, DEFAULT_LIST_QS));
       return;
     }
 

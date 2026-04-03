@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seedcore.local/schemas/verification_operator_copilot_response_v0.schema.json",
+  "title": "Verification API operator copilot response",
+  "description": "Envelope for GET /api/v1/verification/operator/copilot-brief. `brief` matches operator_copilot_brief_v0.schema.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "brief", "meta"],
+  "properties": {
+    "contract_version": { "const": "seedcore.verification_operator_copilot_response.v0" },
+    "brief": { "type": "object" },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["used_llm"],
+      "properties": {
+        "used_llm": { "type": "boolean" },
+        "validation_errors": { "type": "array", "items": { "type": "string" } },
+        "llm_error": { "type": "string" }
+      }
+    }
+  }
+}

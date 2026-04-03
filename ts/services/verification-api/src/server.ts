@@ -12,6 +12,7 @@ import {
   parseTransferQuery,
   resolveScenarioByAssetRef,
 } from "./transferSources.js";
+import { buildScenarioForOperatorCopilot, resolveOperatorCopilotBrief } from "./operatorCopilot.js";
 import { getRunbook, listRunbookSummaries, lookupRunbooksForQuery } from "./runbooks.js";
 
 function jsonResponse(
@@ -106,6 +107,17 @@ export const server = http.createServer(async (req, res) => {
         jsonResponse(res, 200, scenario.asset_forensic_projection);
         return;
       }
+    }
+
+    if (url.pathname === "/api/v1/verification/operator/copilot-brief") {
+      const scenario = await buildScenarioForOperatorCopilot(query);
+      const { brief, meta } = await resolveOperatorCopilotBrief(scenario);
+      jsonResponse(res, 200, {
+        contract_version: "seedcore.verification_operator_copilot_response.v0",
+        brief,
+        meta,
+      });
+      return;
     }
 
     if (url.pathname === "/api/v1/verification/transfers/review") {

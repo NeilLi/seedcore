@@ -7,6 +7,7 @@ import {
   parseTransferAuditTrail,
   parseTransferStatusView,
   parseVerificationSurfaceProjection,
+  validateOperatorCopilotBriefForLlm,
 } from "../packages/contracts/src/index.ts";
 import {
   buildRuntimeScenarioFromReplay,
@@ -18,6 +19,7 @@ import {
   listTransferQueue,
 } from "../services/verification-api/src/transferSources.ts";
 import { getRunbook, listRunbookSummaries, lookupRunbooksForQuery } from "../services/verification-api/src/runbooks.ts";
+import { resolveOperatorCopilotBrief } from "../services/verification-api/src/operatorCopilot.ts";
 import {
   renderCatalogPage,
   renderForensicsPage,
@@ -314,16 +316,30 @@ test("operator console renders status-first transfer and forensic pages", async 
   const transferHtml = renderTransferPage(scenario, query);
   const forensicHtml = renderForensicsPage(scenario.asset_forensic_projection, query);
 
-  assert.match(transferHtml, /Transfer Workflow Review/);
-  assert.match(transferHtml, /Request \+ Authority/);
+  assert.match(transferHtml, /Screen 2 — Transfer detail/);
+  assert.match(transferHtml, /Request and authority/);
   assert.match(transferHtml, /idempotency key/);
   assert.match(transferHtml, /Approvals/);
-  assert.match(transferHtml, /Decision \+ Artifacts/);
-  assert.match(transferHtml, /Physical Evidence \+ Closure/);
-  assert.match(transferHtml, /Governed Timeline/);
-  assert.match(forensicHtml, /Asset Forensic View/);
-  assert.match(forensicHtml, /Telemetry References/);
-  assert.match(forensicHtml, /Signature Provenance/);
+  assert.match(transferHtml, /Decision and artifacts/);
+  assert.match(transferHtml, /Physical evidence and closure/);
+  assert.match(transferHtml, /Governed timeline/);
+  assert.match(forensicHtml, /Screen 3 — Asset forensics/);
+  assert.match(forensicHtml, /Telemetry references/);
+  assert.match(forensicHtml, /Signature provenance/);
+  assert.match(forensicHtml, /Case verdict/);
+  assert.match(forensicHtml, /Copilot \(read-only, MVP\)/);
+  assert.match(transferHtml, /Case verdict/);
+  assert.match(transferHtml, /Copilot \(read-only, MVP\)/);
+  assert.match(transferHtml, /Uncertainty/);
+});
+
+test("transfer queue API exposes operator_signals for anomaly-first triage", async () => {
+  const rows = await listTransferQueue({ source: "fixture", root: "rust/fixtures/transfers" });
+  assert.ok(rows.length > 0);
+  for (const r of rows) {
+    assert.equal(typeof r.operator_signals?.priority_score, "number");
+    assert.ok(Array.isArray(r.operator_signals?.correlation_flags));
+  }
 });
 
 test("operator queue page renders business-readable status strip", async () => {
@@ -331,6 +347,8 @@ test("operator queue page renders business-readable status strip", async () => {
   const html = renderQueuePage({ items: rows }, "source=fixture&root=rust/fixtures/transfers");
   assert.match(html, /Business-readable status/);
   assert.match(html, /Verified/);
+  assert.match(html, />Priority</);
+  assert.match(html, /sort order/);
 });
 
 test("operator runbooks page renders preset lookup links when API base is set", () => {
@@ -399,10 +417,83 @@ test("replay page preserves runtime lookup links for transfer and forensics", as
     "source=runtime&workflow_id=audit-123",
     "audit-123",
   );
-  assert.match(html, /\/transfer\?source=runtime&audit_id=audit-123/);
-  assert.match(html, /\/forensics\?source=runtime&audit_id=audit-123/);
+  assert.match(html, /\/transfer\?source=runtime(&amp;|&)audit_id=audit-123/);
+  assert.match(html, /\/forensics\?source=runtime(&amp;|&)audit_id=audit-123/);
   assert.match(html, /Verification summary/);
   assert.match(html, /Verification actions/);
+  assert.match(html, /Replay verdict/);
+  assert.match(html, /Case verdict/);
   assert.doesNotMatch(html, /href="\/transfer\?[^"]*source=fixture/);
   assert.doesNotMatch(html, /href="\/forensics\?[^"]*source=fixture/);
+});
+
+test("replay page renders replay verdict from full verification-detail payload", async () => {
+  const scenario = await buildTransferScenario({ source: "fixture", dir: "rust/fixtures/transfers/allow_case" });
+  const detail = buildVerificationDetailFromScenario(scenario);
+  const html = renderReplayPage(
+    detail,
+    "source=fixture&dir=rust/fixtures/transfers/allow_case",
+    scenario.workflow_id,
+  );
+  assert.match(html, /Replay verdict/);
+  assert.match(html, /consistent|inconsistent|incomplete/);
+  assert.match(html, /Copilot \(read-only, MVP\)/);
+});
+
+test("validateOperatorCopilotBriefForLlm requires citations and uncertainty", () => {
+  const base = {
+    contract_version: "seedcore.operator_copilot_brief.v0",
+    generation_mode: "llm",
+    case_id: "wf-1",
+    decision: "allow",
+    current_status: "verified",
+    why: "test",
+    evidence_completeness: "partial",
+    verification_status: "clear",
+    anomalies: [],
+    recommended_action: "none",
+    audit_note: "test",
+    confidence: "medium",
+    uncertainty_notes: ["Model may omit runtime-only fields."],
+    one_line_summary: "VERIFIED · allow",
+    operator_brief_bullets: ["Bullet one"],
+    facts: ["verification_projection.status=verified"],
+    inferences: ["Heuristic only"],
+    citations: [] as Array<{ path: string; value: string }>,
+  };
+  assert.equal(validateOperatorCopilotBriefForLlm(base).ok, false);
+  const ok = validateOperatorCopilotBriefForLlm({
+    ...base,
+    citations: [{ path: "verification_projection.status", value: "verified" }],
+  });
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.equal(ok.brief.generation_mode, "llm");
+  }
+});
+
+test("resolveOperatorCopilotBrief uses deterministic path when LLM disabled", async () => {
+  const scenario = await buildTransferScenario({ source: "fixture", dir: "rust/fixtures/transfers/allow_case" });
+  const prevLlm = process.env.SEEDCORE_OPERATOR_COPILOT_LLM;
+  const prevKey = process.env.OPENAI_API_KEY;
+  process.env.SEEDCORE_OPERATOR_COPILOT_LLM = "0";
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const { brief, meta } = await resolveOperatorCopilotBrief(scenario);
+    assert.equal(meta.used_llm, false);
+    assert.equal(brief.generation_mode, "deterministic");
+    assert.ok(brief.uncertainty_notes.length >= 1);
+    assert.ok(brief.citations.length >= 1);
+  } finally {
+    if (prevLlm === undefined) {
+      delete process.env.SEEDCORE_OPERATOR_COPILOT_LLM;
+    } else {
+      process.env.SEEDCORE_OPERATOR_COPILOT_LLM = prevLlm;
+    }
+    if (prevKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = prevKey;
+    }
+  }
 });

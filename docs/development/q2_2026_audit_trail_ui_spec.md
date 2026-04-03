@@ -1,5 +1,7 @@
 # SeedCore Q2 2026 Product Spec
 
+**Focus:** Audit-trail and verification console (Restricted Custody Transfer).
+
 Date: 2026-04-02  
 Status: Working product spec (Q2 core surfaces implemented; closure sequence active)
 
@@ -90,9 +92,10 @@ The remaining Q2 UI/product work should now run in this order:
    - keep the four-screen surface stable while external-agent adapters and edge
      telemetry closure work land behind the same contracts
 
-## Audit-Trail UI for Restricted Custody Transfer
-
 ## 1. Product goal
+
+This document specifies the **audit-trail operator UI** for the canonical
+**Restricted Custody Transfer (RCT)** workflow.
 
 Build the first operator-facing verification surface for SeedCore's canonical
 workflow so an operator, partner, or evaluator can inspect one governed
@@ -161,36 +164,46 @@ reading source code.
 4. Every screen must map to a frozen contract  
    Freeze the verification projection before broad UI wiring.
 
+### UI spec conventions (for implementers)
+
+Use these patterns consistently across console pages and this document:
+
+- **Screen titles** use an em dash: `Screen N — …` (not a hyphen or colon in headings).
+- **Surfaces** in prose: *queue*, *detail*, *forensics*, *replay* (lowercase when naming a view); **Screen N** when referring to the numbered spec section.
+- **Cards and columns** are titled in **sentence case** (for example **Request card**, **Left column: Request and authority**).
+- **Trust alert** and **status** rows match the frozen business vocabulary (`verified`, `quarantined`, …) and use **sentence case** in bullet lists.
+- **API** subsections list each endpoint on its own bullet; query parameters stay on the same line as the `GET`/`POST` path.
+
 ## 5. Information architecture
 
 Q2 should ship 4 screens and 1 shared shell.
 
 ### Shared shell
 
-- top nav: `Transfers`, `Verification`, `Runbooks`
-- search by:
+- **Top navigation:** `Transfers`, `Verification`, `Runbooks`
+- **Global search** accepts:
   - `audit_id`
   - `workflow_id`
   - `asset_ref`
   - `request_id`
   - `approval_envelope_id`
-- global status badge using business-readable vocabulary
-- environment banner: `shadow`, later `canary`, `enforce`
-- freshness banner for graph and telemetry readiness
+- **Global status badge** using business-readable vocabulary
+- **Environment banner:** `shadow`, later `canary`, `enforce`
+- **Freshness banner** for graph and telemetry readiness
 
-### Screen 1: Transfer Queue / Workflow Status
+### Screen 1 — Transfer queue / workflow status
 
-### Screen 2: Transfer Detail / Audit-Trail View
+### Screen 2 — Transfer detail / audit-trail view
 
-### Screen 3: Asset-Centric Forensic View
+### Screen 3 — Asset-centric forensic view
 
-### Screen 4: Replay / Verification View
+### Screen 4 — Replay / verification view
 
 ## 6. Screen-by-screen spec
 
-## Screen 1 - Transfer Queue / Workflow Status
+### Screen 1 — Transfer queue / workflow status
 
-### Purpose
+#### Purpose
 
 Provide the operator-facing status API surface for the canonical transfer chain:
 
@@ -199,9 +212,9 @@ Provide the operator-facing status API surface for the canonical transfer chain:
 - transfer readiness
 - governed timeline
 
-### Primary modules
+#### Primary modules
 
-1. Transfer list table
+1. **Transfer list** table
    - workflow ID
    - asset ref
    - product ref
@@ -210,19 +223,19 @@ Provide the operator-facing status API surface for the canonical transfer chain:
    - disposition
    - transfer readiness
    - updated at
-2. Status summary strip
+2. **Status summary** strip
    - pending approval
    - verified
    - quarantined
    - rejected
    - review required
-3. Trust alerts panel
-   - stale telemetry
-   - scope unverified
-   - freshness violation
-   - replay not ready
-   - missing audit ID
-4. Filter bar
+3. **Trust alerts** panel  
+   - Stale telemetry  
+   - Scope unverified  
+   - Freshness violation  
+   - Replay not ready  
+   - Missing audit ID  
+4. **Filter** bar
    - status
    - disposition
    - facility
@@ -230,12 +243,12 @@ Provide the operator-facing status API surface for the canonical transfer chain:
    - approval completeness
    - replay readiness
 
-### Required backend fields
+#### Required backend fields
 
 ```json
 {
   "workflow_id": "transfer-demo-001",
-  "workflow_type": "custody_transfer",
+  "workflow_type": "restricted_custody_transfer",
   "asset_ref": "asset:lot-8841",
   "product_ref": "shopify:gid://shopify/Product/1234567890",
   "status": "pending_approval",
@@ -267,19 +280,19 @@ Provide the operator-facing status API surface for the canonical transfer chain:
 }
 ```
 
-### API recommendation
+#### API
 
-`GET /api/v1/verification/transfers/queue?status=&disposition=&facility=&zone=&approval_state=&replay_readiness=`
+- `GET /api/v1/verification/transfers/queue?status=&disposition=&facility=&zone=&approval_state=&replay_readiness=&approval_envelope_id=&request_id=`
 
-### Q2 acceptance criteria
+#### Q2 acceptance criteria
 
 - operator can identify all transfers by business-readable state
 - operator can distinguish `pending_approval` vs `quarantined` vs `rejected`
 - queue fails closed when no `audit_id` or replay join key is available
 
-## Screen 2 - Transfer Detail / Audit-Trail View
+### Screen 2 — Transfer detail / audit-trail view
 
-### Purpose
+#### Purpose
 
 This is the centerpiece screen. It must correlate:
 
@@ -287,11 +300,11 @@ This is the centerpiece screen. It must correlate:
 - digital transaction trail
 - physical replay or evidence timeline
 
-### Layout
+#### Layout
 
 Three-column structure:
 
-#### Left column: Request and authority
+##### Left column: Request and authority
 
 - request summary
 - principal identity
@@ -299,7 +312,7 @@ Three-column structure:
 - authority scope
 - hardware fingerprint
 
-#### Center column: Decision and artifacts
+##### Center column: Decision and artifacts
 
 - SeedCore disposition
 - explanation
@@ -307,7 +320,7 @@ Three-column structure:
 - minted artifacts
 - receipt lineage
 
-#### Right column: Physical evidence and closure
+##### Right column: Physical evidence and closure
 
 - current zone or coordinate
 - evidence refs
@@ -315,9 +328,9 @@ Three-column structure:
 - settlement status
 - replay readiness
 
-### Modules
+#### Modules
 
-#### 2.1 Request card
+##### 2.1 Request card
 
 Show:
 
@@ -334,7 +347,7 @@ Fields source:
 - gateway request shape
 - workflow projection
 
-#### 2.2 Principal and authority card
+##### 2.2 Principal and authority card
 
 Show:
 
@@ -351,7 +364,7 @@ Show:
 
 These are explicit parts of the Agent Action Gateway contract.
 
-#### 2.3 Scope card
+##### 2.3 Scope card
 
 Show:
 
@@ -364,7 +377,7 @@ Show:
 - max radius meters
 - authority scope verdict
 
-#### 2.4 Decision card
+##### 2.4 Decision card
 
 Show:
 
@@ -377,7 +390,7 @@ Show:
 
 These are required response fields.
 
-#### 2.5 Approvals card
+##### 2.5 Approvals card
 
 Show:
 
@@ -390,7 +403,7 @@ Show:
 Aligned with approval projection and transfer envelope contract-freeze
 direction.
 
-#### 2.6 Minted artifacts card
+##### 2.6 Minted artifacts card
 
 Show:
 
@@ -401,7 +414,7 @@ Show:
 - audit ID
 - forensic block ID
 
-#### 2.7 Evidence or closure card
+##### 2.7 Evidence or closure card
 
 Show:
 
@@ -417,7 +430,7 @@ Show:
 
 These map to closure scaffold and forensic linkage.
 
-### Required backend fields
+#### Required backend fields
 
 ```json
 {
@@ -493,13 +506,13 @@ These map to closure scaffold and forensic linkage.
 }
 ```
 
-### API recommendation
+#### API
 
-`GET /api/v1/verification/transfers/{workflow_id}`
+- `GET /api/v1/verification/transfers/{workflow_id}`
 
-## Screen 3 - Asset-Centric Forensic View
+### Screen 3 — Asset-centric forensic view
 
-### Purpose
+#### Purpose
 
 Deliver the single forensic view that binds:
 
@@ -511,9 +524,9 @@ Deliver the single forensic view that binds:
 - signature provenance
 - economic settlement status
 
-### Modules
+#### Modules
 
-#### 3.1 Asset identity card
+##### 3.1 Asset identity card
 
 - asset ref
 - lot ID
@@ -522,7 +535,7 @@ Deliver the single forensic view that binds:
 - provenance hash
 - declared value
 
-#### 3.2 Custody chain card
+##### 3.2 Custody chain card
 
 - from custodian
 - to custodian
@@ -531,7 +544,7 @@ Deliver the single forensic view that binds:
 - custody proof refs
 - transition events
 
-#### 3.3 Forensic fingerprint card
+##### 3.3 Forensic fingerprint card
 
 Show the canonical four evidence classes:
 
@@ -540,7 +553,7 @@ Show the canonical four evidence classes:
 - reasoning hash
 - actuator hash
 
-#### 3.4 Signer provenance card
+##### 3.4 Signer provenance card
 
 - policy receipt signer
 - transition receipt signer
@@ -549,7 +562,7 @@ Show the canonical four evidence classes:
 - signature validity
 - tamper status
 
-#### 3.5 Settlement and twin card
+##### 3.5 Settlement and twin card
 
 - settlement status
 - twin mutation ref
@@ -561,7 +574,7 @@ Show the canonical four evidence classes:
 These are required directionally by Workstream 3 and 4, even if some fields are
 placeholders in Q2.
 
-### Required backend fields
+#### Required backend fields
 
 ```json
 {
@@ -607,20 +620,21 @@ placeholders in Q2.
 }
 ```
 
-### API recommendation
+#### API
 
-`GET /api/v1/verification/assets/forensics?audit_id=...|intent_id=...|subject_id=...`
+- `GET /api/v1/verification/assets/forensics?audit_id=...|intent_id=...|subject_id=...`
+- `GET /api/v1/verification/assets/{asset_ref}/forensics` (subject-oriented resolver when deployed)
 
-## Screen 4 - Replay / Verification View
+### Screen 4 — Replay / verification view
 
-### Purpose
+#### Purpose
 
 Expose the replay-verifiable receipt chain and trust-page style verification for
 approved stakeholders.
 
-### Modules
+#### Modules
 
-#### 4.1 Verification summary
+##### 4.1 Verification summary
 
 - workflow ID
 - status
@@ -631,7 +645,7 @@ approved stakeholders.
 - evidence trace available
 - tamper status
 
-#### 4.2 Receipt chain timeline
+##### 4.2 Receipt chain timeline
 
 - approval envelope
 - governed receipt
@@ -641,7 +655,7 @@ approved stakeholders.
 - replay ref
 - trust ref
 
-#### 4.3 Verification actions
+##### 4.3 Verification actions
 
 - verify signatures
 - open replay artifact
@@ -649,7 +663,7 @@ approved stakeholders.
 - inspect signer provenance
 - inspect trust gaps
 
-#### 4.4 Failure or contradiction panel
+##### 4.4 Failure or contradiction panel
 
 For deny or quarantine paths:
 
@@ -661,14 +675,14 @@ For deny or quarantine paths:
   - quarantine asset
   - review forensic block
 
-### Required backend fields
+#### Required backend fields
 
 Use `VerificationSurfaceProjection` as the core contract.
 
 ```json
 {
   "workflow_id": "transfer-demo-001",
-  "workflow_type": "custody_transfer",
+  "workflow_type": "restricted_custody_transfer",
   "status": "verified",
   "asset_ref": "asset:lot-8841",
   "summary": {
@@ -707,10 +721,11 @@ Use `VerificationSurfaceProjection` as the core contract.
 
 This should be the frontend's primary read model.
 
-### API recommendation
+#### API
 
-`GET /api/v1/verification/workflows/{workflow_id}/projection`
-`GET /api/v1/verification/workflows/{workflow_id}/verification-detail`
+- `GET /api/v1/verification/workflows/{workflow_id}/projection`
+- `GET /api/v1/verification/workflows/{workflow_id}/verification-detail`
+- `GET /api/v1/verification/workflows/{workflow_id}/replay` (dedicated replay payload; link from verification actions)
 
 ## 7. Shared backend contract model
 
@@ -759,7 +774,7 @@ The demo should use the captured RCT sign-off bundle and the four canonical
 outcomes present in runtime evidence: `allow`, `deny`, `quarantine`,
 `escalate`.
 
-### Demo 1 - Happy path: verified transfer
+### Demo 1 — Happy path: verified transfer
 
 1. Open Transfer Queue
 2. Filter to `verified`
@@ -783,7 +798,7 @@ outcomes present in runtime evidence: `allow`, `deny`, `quarantine`,
 Point to make: SeedCore proves not just authorization, but converged digital
 and physical evidence.
 
-### Demo 2 - Quarantine path: stale or incomplete proof
+### Demo 2 — Quarantine path: stale or incomplete proof
 
 1. Return to queue
 2. Filter to `quarantined`
@@ -797,7 +812,7 @@ and physical evidence.
 Point to make: missing or stale proof becomes governed business state, not
 silent failure.
 
-### Demo 3 - Rejected path: scope contradiction
+### Demo 3 — Rejected path: scope contradiction
 
 1. Filter to `rejected`
 2. Show coordinate or asset/product mismatch
@@ -809,7 +824,7 @@ silent failure.
 
 Point to make: contradiction leads to `deny`, not ambiguity.
 
-### Demo 4 - Review required
+### Demo 4 — Review required
 
 1. Filter to `review_required`
 2. Show missing human/governance release path
@@ -899,8 +914,8 @@ next additions.
 
 ### Deferred or next-step additions
 
-- `GET /api/v1/verification/replay/{audit_id}` (or equivalent projection route)
-- `GET /api/v1/verification/runbooks/{status_or_reason_code}`
+- Optional alias: `GET /api/v1/verification/replay/{audit_id}` (canonical Q2 replay remains `GET /api/v1/verification/workflows/{workflow_id}/replay`)
+- Runbook surface extensions beyond the shipped index, entry, and lookup routes (for example partner packs or richer slug taxonomy)
 
 All endpoints should remain read-only projections over existing sources of
 truth.
