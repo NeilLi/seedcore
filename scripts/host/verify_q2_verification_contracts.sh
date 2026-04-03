@@ -19,6 +19,6 @@ npm test
 cd "${ROOT}"
 
 bash "${ROOT}/scripts/ci/q2_verification_api_fixture_gate.sh"
-bash "${ROOT}/scripts/ci/q2_degraded_edge_drill_matrix.sh"
+bash "${ROOT}/scripts/host/verify_q2_degraded_edge_drill_matrix.sh"
 
 echo "Q2 verification contract checks passed."
