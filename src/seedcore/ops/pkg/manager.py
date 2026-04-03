@@ -23,6 +23,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import time
 import threading
 from datetime import datetime, timezone
@@ -54,6 +55,16 @@ MAX_RECONNECT_BACKOFF = 60
 REDIS_RECONNECT_BASE_DELAY = 1.0
 REDIS_RECONNECT_MAX_DELAY = 60.0
 REDIS_RECONNECT_MULTIPLIER = 2.0
+
+# Phase 2 (RCT activation hardening): set SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE=1 to fail closed
+# when the compiled graph is not RCT-ready, contract artifacts are incomplete, the snapshot
+# manifest row is missing, or snapshot-scoped taxonomies are empty. Optional
+# SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT=1 requires an existing pkg_snapshot_manifests row
+# before authz graph compilation (strict publish-time contract).
+
+def _pkg_env_truthy(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
 
 # P0: Control PKG Mode
 class PKGMode(str, Enum):
@@ -116,6 +127,81 @@ class PKGManager:
         self._redis_task: Optional[asyncio.Task] = None
         self._status = {"healthy": False, "error": None, "version": None}
         self._active_contract_artifacts: Dict[str, Any] = {}
+
+    def _rct_activation_enforce_enabled(self) -> bool:
+        return _pkg_env_truthy("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE")
+
+    def _rct_activation_preflight_manifest_enabled(self) -> bool:
+        return _pkg_env_truthy("SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT")
+
+    def _rollback_pkg_activation_swap(
+        self, version: str, prior_active_version: Optional[str]
+    ) -> None:
+        """Revert active evaluator swap (Phase-2 hardening failure path)."""
+        with self._swap_lock:
+            self._evaluators.pop(version, None)
+            self._active_version = prior_active_version
+            self._active_contract_artifacts = {}
+
+    async def _validate_rct_activation_phase2_postflight(
+        self,
+        *,
+        snapshot_id: int,
+        compiled_authz_index: Optional[Any],
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Phase-2 activation checks (pkg_snapshot_rct_alignment_research.md):
+        compiled graph RCT-ready, contract artifacts persisted, manifest row present,
+        snapshot-scoped taxonomies non-empty.
+        """
+        if not self._rct_activation_enforce_enabled():
+            return True, None
+        errors: List[str] = []
+        if compiled_authz_index is None:
+            errors.append("compiled_authz_index_missing")
+        else:
+            if not bool(getattr(compiled_authz_index, "restricted_transfer_ready", False)):
+                errors.append("restricted_transfer_ready_false")
+            if getattr(compiled_authz_index, "decision_graph_snapshot", None) is None:
+                errors.append("decision_graph_snapshot_missing")
+        try:
+            rows = await self._client.list_snapshot_artifacts(snapshot_id)
+        except Exception as e:
+            errors.append(f"list_snapshot_artifacts_error:{e}")
+            rows = []
+        types_found = {str(r.get("artifact_type") or "") for r in (rows or [])}
+        required_types = {
+            "decision_graph_snapshot",
+            "request_schema_bundle",
+            "taxonomy_bundle",
+            "activation_manifest",
+        }
+        missing = required_types - types_found
+        if missing:
+            errors.append(f"missing_artifacts:{sorted(missing)}")
+        try:
+            manifest_row = await self._client.get_snapshot_manifest(snapshot_id)
+        except Exception as e:
+            errors.append(f"get_snapshot_manifest_error:{e}")
+            manifest_row = None
+        if not manifest_row:
+            errors.append("snapshot_manifest_missing")
+        try:
+            tax = await self._client.get_taxonomy_bundle(snapshot_id)
+        except Exception as e:
+            errors.append(f"get_taxonomy_bundle_error:{e}")
+            tax = {}
+        if not isinstance(tax, dict):
+            tax = {}
+        if not (tax.get("reason_codes") or []):
+            errors.append("taxonomy_reason_codes_empty")
+        if not (tax.get("trust_gap_codes") or []):
+            errors.append("taxonomy_trust_gap_codes_empty")
+        if not (tax.get("obligation_codes") or []):
+            errors.append("taxonomy_obligation_codes_empty")
+        if errors:
+            return False, "; ".join(errors)
+        return True, None
 
     async def start(self):
         """Initialize state and start listeners."""
@@ -191,6 +277,7 @@ class PKGManager:
             
             # 2. Atomic Swap
             with self._swap_lock:
+                prior_active_version = self._active_version
                 # P2: Update LRU cache - move to end if exists, else add
                 if version in self._evaluators:
                     # Move to end (most recently used)
@@ -228,6 +315,35 @@ class PKGManager:
                     e,
                 )
 
+            if self._rct_activation_preflight_manifest_enabled():
+                preflight_manifest: Optional[Dict[str, Any]] = None
+                preflight_err: Optional[Exception] = None
+                try:
+                    preflight_manifest = await self._client.get_snapshot_manifest(snapshot.id)
+                except Exception as e:
+                    preflight_err = e
+                if preflight_err is not None:
+                    if self._mode == PKGMode.CONTROL:
+                        self._rollback_pkg_activation_swap(version, prior_active_version)
+                        raise ValueError(
+                            f"PKG RCT activation preflight failed for {version}: "
+                            f"could not load pkg_snapshot_manifests ({preflight_err})"
+                        ) from preflight_err
+                    logger.warning(
+                        "PKG RCT preflight: get_snapshot_manifest failed (ADVISORY): %s",
+                        preflight_err,
+                    )
+                elif not preflight_manifest:
+                    msg = (
+                        f"PKG RCT activation preflight failed for {version}: "
+                        "pkg_snapshot_manifests row required when "
+                        "SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT is enabled"
+                    )
+                    if self._mode == PKGMode.CONTROL:
+                        self._rollback_pkg_activation_swap(version, prior_active_version)
+                        raise ValueError(msg)
+                    logger.warning("%s (ADVISORY mode: continuing)", msg)
+
             compiled_authz_index = None
             try:
                 compiled_authz_index = await self.authz_graph.activate_snapshot(
@@ -243,13 +359,37 @@ class PKGManager:
                     e,
                     exc_info=True,
                 )
+            active_contract_artifacts: Dict[str, Any] = {}
             if compiled_authz_index is not None:
-                active_contract_artifacts = await self._persist_compiled_authz_artifacts(
+                persisted = await self._persist_compiled_authz_artifacts(
                     snapshot_id=snapshot.id,
                     snapshot_version=snapshot.version,
                     compiled_authz_index=compiled_authz_index,
                 )
-                if isinstance(active_contract_artifacts, dict):
+                if isinstance(persisted, dict):
+                    active_contract_artifacts = persisted
+
+            ok_phase2, err_phase2 = await self._validate_rct_activation_phase2_postflight(
+                snapshot_id=snapshot.id,
+                compiled_authz_index=compiled_authz_index,
+            )
+            if self._rct_activation_enforce_enabled():
+                if self._mode == PKGMode.CONTROL and not ok_phase2:
+                    self._rollback_pkg_activation_swap(version, prior_active_version)
+                    raise ValueError(
+                        f"PKG RCT Phase-2 activation hardening failed: {err_phase2}"
+                    )
+                if self._mode == PKGMode.ADVISORY and not ok_phase2:
+                    logger.warning(
+                        "PKG RCT Phase-2 activation hardening (ADVISORY): %s", err_phase2
+                    )
+            if isinstance(active_contract_artifacts, dict):
+                should_cache_contracts = (
+                    not self._rct_activation_enforce_enabled()
+                    or ok_phase2
+                    or self._mode == PKGMode.ADVISORY
+                )
+                if should_cache_contracts:
                     with self._swap_lock:
                         self._active_contract_artifacts = copy.deepcopy(active_contract_artifacts)
             
@@ -502,7 +642,35 @@ class PKGManager:
                 snapshot_version=active_version,
                 compiled_authz_index=compiled,
             )
-            if isinstance(active_contract_artifacts, dict):
+            if not isinstance(active_contract_artifacts, dict):
+                active_contract_artifacts = {}
+            ok_phase2, err_phase2 = await self._validate_rct_activation_phase2_postflight(
+                snapshot_id=snapshot_id,
+                compiled_authz_index=compiled,
+            )
+            if self._rct_activation_enforce_enabled():
+                if self._mode == PKGMode.CONTROL and not ok_phase2:
+                    logger.error(
+                        "Authz graph refresh rejected by RCT Phase-2 hardening: %s",
+                        err_phase2,
+                    )
+                    return {
+                        "success": False,
+                        "message": f"RCT Phase-2 activation hardening failed for {active_version}",
+                        "error": err_phase2 or "phase2_activation_failed",
+                        "version": active_version,
+                        "snapshot_id": snapshot_id,
+                    }
+                if self._mode == PKGMode.ADVISORY and not ok_phase2:
+                    logger.warning(
+                        "Authz graph refresh: RCT Phase-2 hardening (ADVISORY): %s", err_phase2
+                    )
+            should_cache = (
+                not self._rct_activation_enforce_enabled()
+                or ok_phase2
+                or self._mode == PKGMode.ADVISORY
+            )
+            if should_cache and isinstance(active_contract_artifacts, dict):
                 with self._swap_lock:
                     self._active_contract_artifacts = copy.deepcopy(active_contract_artifacts)
             return {

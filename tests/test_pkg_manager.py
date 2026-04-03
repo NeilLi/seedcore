@@ -26,6 +26,7 @@ import mock_database_dependencies  # noqa
 
 from seedcore.ops.pkg.manager import (
     PKGManager,
+    PKGMode,
     initialize_global_pkg_manager,
     get_global_pkg_manager,
     PKG_REDIS_CHANNEL,
@@ -50,6 +51,10 @@ def mock_pkg_client():
     })
     client.get_subtask_types = AsyncMock(return_value=[])
     client.upsert_snapshot_manifest = AsyncMock(return_value={})
+    client.list_snapshot_artifacts = AsyncMock(return_value=[])
+    client.store_snapshot_artifact_json = AsyncMock(
+        return_value={"sha256": "a" * 64, "size_bytes": 12}
+    )
     return client
 
 
@@ -462,6 +467,123 @@ async def test_activate_snapshot_version_publishes_update_event(manager, mock_pk
     assert result["version"] == "rules@activate"
     assert result["publish"]["published"] is True
     assert mock_pkg_client.activate_snapshot.await_count == 1
+
+
+# ---------------------------------------------------------------------
+# RCT Phase-2 activation hardening
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rct_phase2_enforce_rolls_back_when_not_ready(mock_pkg_client, monkeypatch):
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE", "1")
+    mock_pkg_client.get_taxonomy_bundle = AsyncMock(
+        return_value={
+            "reason_codes": [{"code": "r"}],
+            "trust_gap_codes": [{"code": "t"}],
+            "obligation_codes": [{"code": "o"}],
+        }
+    )
+    mock_pkg_client.list_snapshot_artifacts = AsyncMock(
+        return_value=[
+            {"artifact_type": t}
+            for t in (
+                "decision_graph_snapshot",
+                "request_schema_bundle",
+                "taxonomy_bundle",
+                "activation_manifest",
+            )
+        ]
+    )
+    mock_pkg_client.get_snapshot_manifest = AsyncMock(return_value={"snapshot_id": 1})
+
+    class _Dgs:
+        def to_dict(self):
+            return {
+                "snapshot_hash": "sh",
+                "hot_path_workflow": "restricted_custody_transfer",
+                "trust_gap_taxonomy": ["tg"],
+            }
+
+    class _Compiled:
+        decision_graph_snapshot = _Dgs()
+        compiled_at = "2026-04-03T00:00:00Z"
+        snapshot_hash = "sh"
+        restricted_transfer_ready = False
+
+    mgr = PKGManager(mock_pkg_client, redis_client=None, mode=PKGMode.CONTROL)
+    mgr.authz_graph.activate_snapshot = AsyncMock(return_value=_Compiled())
+
+    snap = make_wasm_snapshot("rules@phase2-fail")
+    await mgr._load_and_activate_snapshot(snap, source="test")
+
+    assert mgr.get_active_evaluator() is None
+    assert mgr.get_metadata()["status"]["healthy"] is False
+
+
+@pytest.mark.asyncio
+async def test_rct_phase2_enforce_passes_when_ready(mock_pkg_client, monkeypatch):
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE", "1")
+    mock_pkg_client.get_taxonomy_bundle = AsyncMock(
+        return_value={
+            "reason_codes": [{"code": "r"}],
+            "trust_gap_codes": [{"code": "t"}],
+            "obligation_codes": [{"code": "o"}],
+        }
+    )
+    mock_pkg_client.list_snapshot_artifacts = AsyncMock(
+        return_value=[
+            {"artifact_type": t}
+            for t in (
+                "decision_graph_snapshot",
+                "request_schema_bundle",
+                "taxonomy_bundle",
+                "activation_manifest",
+            )
+        ]
+    )
+    mock_pkg_client.get_snapshot_manifest = AsyncMock(return_value={"snapshot_id": 1})
+
+    class _Dgs:
+        def to_dict(self):
+            return {
+                "snapshot_hash": "sh",
+                "hot_path_workflow": "restricted_custody_transfer",
+                "trust_gap_taxonomy": ["tg"],
+            }
+
+    class _Compiled:
+        decision_graph_snapshot = _Dgs()
+        compiled_at = "2026-04-03T00:00:00Z"
+        snapshot_hash = "sh"
+        restricted_transfer_ready = True
+
+    mgr = PKGManager(mock_pkg_client, redis_client=None, mode=PKGMode.CONTROL)
+    mgr.authz_graph.activate_snapshot = AsyncMock(return_value=_Compiled())
+
+    snap = make_wasm_snapshot("rules@phase2-ok")
+    await mgr._load_and_activate_snapshot(snap, source="test")
+
+    assert mgr.get_active_evaluator() is not None
+    assert mgr.get_active_evaluator().version == snap.version
+    assert mgr.get_metadata()["status"]["healthy"] is True
+
+
+@pytest.mark.asyncio
+async def test_rct_preflight_skips_authz_when_manifest_missing(mock_pkg_client, monkeypatch):
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT", "1")
+    monkeypatch.delenv("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE", raising=False)
+    mock_pkg_client.get_snapshot_manifest = AsyncMock(return_value=None)
+
+    mgr = PKGManager(mock_pkg_client, redis_client=None, mode=PKGMode.CONTROL)
+    mgr.authz_graph.activate_snapshot = AsyncMock()
+
+    snap = make_wasm_snapshot("rules@preflight-fail")
+    await mgr._load_and_activate_snapshot(snap, source="test")
+
+    assert mgr.get_active_evaluator() is None
+    mgr.authz_graph.activate_snapshot.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------
 # Stop Logic

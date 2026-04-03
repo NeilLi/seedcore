@@ -1,7 +1,7 @@
 # PKG Snapshot Alignment with Agent-Governed Restricted Custody Transfer
 
 Date: 2026-04-02
-Status: Research note, design recommendation, and Phase 1 status update
+Status: Research note, design recommendation, and Phase 1–2 status update
 
 ## Why this note exists
 
@@ -32,6 +32,10 @@ The goal of this note is to define how PKG snapshots should evolve so that:
 As of 2026-04-03, the codebase has landed Phase 1 of the PKG RCT contract
 alignment work in additive, shadow-safe form.
 
+As of 2026-04-04, Phase 2 (activation hardening) is implemented in
+`PKGManager` behind explicit environment flags so default/dev behavior stays
+unchanged.
+
 What is now in place:
 
 - snapshot manifests and snapshot-scoped taxonomy tables
@@ -42,12 +46,23 @@ What is now in place:
 - runtime preference for the persisted contract bundles when they are present
 - bundle-aware hot-path request assembly, shadow verification, and capture
   scripts
+- **Phase 2:** optional fail-closed activation when
+  `SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE=1` (truthy): requires compiled graph
+  `restricted_transfer_ready`, a present `decision_graph_snapshot`, all four
+  contract artifact types in `pkg_snapshot_artifacts`, a
+  `pkg_snapshot_manifests` row, and non-empty snapshot-scoped taxonomy lists
+  from `get_taxonomy_bundle`. In **CONTROL** mode, failure rolls back the
+  evaluator swap; **ADVISORY** logs a warning and continues. The same checks
+  run after `refresh_active_authz_graph` persistence; in CONTROL + enforce,
+  refresh returns `success: false` without updating cached contract artifacts.
+- **Phase 2 preflight:** optional `SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT=1`
+  requires an existing `pkg_snapshot_manifests` row **before** authz graph
+  compilation (strict publish-time contract).
 
 What remains for later phases:
 
-- activation fail-closed enforcement for missing/invalid manifests
-- stronger activation completeness checks for RCT readiness
 - typed authoring structures for RCT transition requirements
+- publish-time validation for request schemas and taxonomies (beyond activation gates)
 - replay hardening that makes policy hash + graph hash + state binding
   mandatory
 
@@ -102,9 +117,8 @@ In other words:
 That is workable, but it is not yet the cleanest possible authority model.
 
 Phase 1 narrows that gap substantially, but it does not fully eliminate the
-implicit decision semantics yet. The remaining work is mostly about activation
-hardening and making the authority contract fail closed instead of only
-shadow-validating.
+implicit decision semantics yet. Phase 2 adds opt-in fail-closed activation
+hardening (see env flags above); broader authoring and replay milestones remain.
 
 ## Core conclusion
 
@@ -446,9 +460,13 @@ Implemented in additive, shadow-safe form:
 
 ### Phase 2: Activation hardening
 
-- fail snapshot activation if the manifest is missing
-- fail activation if required artifacts or taxonomies are missing
-- require compiled graph `restricted_transfer_ready=true` for RCT snapshots
+**Status:** Implemented (opt-in via `SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE` and
+`SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT` in `PKGManager`).
+
+- fail snapshot activation if the manifest is missing (preflight flag) or after
+  persistence if the manifest row is still absent (enforce flag)
+- fail activation if required artifacts or taxonomies are missing (enforce flag)
+- require compiled graph `restricted_transfer_ready=true` for RCT snapshots (enforce flag)
 
 ### Phase 3: Authoring hardening
 
