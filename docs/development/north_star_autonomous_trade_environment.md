@@ -85,6 +85,8 @@ service and integrate with the surrounding stack as follows:
 | :--- | :--- |
 | Confluent Kafka | transport for intent, telemetry, and policy outcome streams |
 | Ray / Kubernetes | distributed compute for compiled decision graph hot-path evaluation |
+
+For a **local** phased schedule (broker compose, topics, and producer order), see [local_kafka_streams_schedule.md](local_kafka_streams_schedule.md).
 | Redis | revocation and emergency cutoff propagation |
 | Cloud KMS | hardware-backed signing for receipts and transition artifacts |
 | Durable forensic store | long-term persistence for signed forensic blocks and replay trails |

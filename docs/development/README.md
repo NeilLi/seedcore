@@ -21,6 +21,7 @@ that can survive adversarial review.
 Canonical north-star references:
 
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
+  (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 
@@ -40,6 +41,8 @@ Start here for the active spine:
    goals, workstreams, sequencing, and canonical positioning.
 3. [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) - current
    verification/operator product surface and contract-level UX behavior.
+4. [`operator_legibility_mvp.md`](operator_legibility_mvp.md) - operator legibility
+   layer (queue signals, replay verdict, deterministic + optional LLM copilot API).
 
 ## 3. Stage Goals And Status Map
 
@@ -55,7 +58,7 @@ This table is the shortest answer to "what stage are we in?"
 | 5. Trust hardening | Prove signer provenance, TPM/KMS policies, and operational drills | Checkpoint crossed, not fully closed | [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md), [`tpm_fleet_rollout_maturity_decision_memo.md`](tpm_fleet_rollout_maturity_decision_memo.md) |
 | 6. Multi-party governance | Make approval envelopes and dual-control workflows authoritative end to end | Partially implemented | [`next_killer_demo_contract_freeze.md`](next_killer_demo_contract_freeze.md), [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md) |
 | 7. Hot-path operability | Promote `shadow -> canary -> enforce` with parity, latency, and rollback evidence | Implemented in contract, still needs topology-real validation | [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md), [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md), [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md) |
-| 8. Verification product surface | Make operator/replay UX contract-driven and legible without weakening proof | Advanced and active | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) |
+| 8. Verification product surface | Make operator/replay UX contract-driven and legible without weakening proof | Advanced and active | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md), [`operator_legibility_mvp.md`](operator_legibility_mvp.md) |
 | 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
 | 10. External agent boundary | Expose one narrow stable gateway for agent-originated requests | v1 contract drafted and being productized | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md) |
 | 11. Sidecar innovation tracks | Preserve robotics/VLA and source-registration ideas without distracting from the RCT wedge | Sidecar, not current center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
@@ -76,6 +79,12 @@ Treat these as real repo capabilities, not aspirational roadmap items:
 - Agent Action Gateway v1 schema hardening and idempotency behavior
 - PKG/RCT contract alignment through manifest, taxonomy, decision-graph, and
   triple-hash replay binding
+- operator console **legibility layer**: case verdict strip, replay verdict,
+  anomaly-first queue (`operator_signals`), deterministic copilot panel, and
+  optional **`GET /api/v1/verification/operator/copilot-brief`** (stored
+  prompts + strict LLM validation with citations / `uncertainty_notes`; see
+  [`operator_legibility_mvp.md`](operator_legibility_mvp.md) and
+  `docs/schemas/operator_copilot_brief_v0.schema.json`)
 
 Primary proof docs:
 
@@ -110,6 +119,10 @@ Near-term execution order:
 4. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
 5. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
+6. Introduce **local Kafka** for intent, telemetry, and policy-outcome streams
+   per [north_star_autonomous_trade_environment.md](north_star_autonomous_trade_environment.md)
+   — follow the phased schedule in [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
+   (compose, topics, flagged producers, degradation semantics).
 
 Primary planning docs:
 
@@ -117,6 +130,7 @@ Primary planning docs:
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`edge_telemetry_evidence_closure_draft.md`](edge_telemetry_evidence_closure_draft.md)
+- [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
 
 ## 7. How To Read The Rest Of This Directory
 
@@ -125,6 +139,8 @@ Primary planning docs:
 - [`current_next_steps.md`](current_next_steps.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
+- [`operator_legibility_mvp.md`](operator_legibility_mvp.md) — deterministic +
+  optional LLM copilot brief; links verification API and UI guardrails
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
@@ -144,6 +160,9 @@ Primary planning docs:
 ### Architecture companion notes
 
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
+  (cluster posture includes Kafka; local rollout → [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
+- [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md) — phased
+  local broker, topics, and producer order for intent / telemetry / policy outcomes
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`language_evolution_map.md`](language_evolution_map.md)
 - [`rust_workspace_proposal.md`](rust_workspace_proposal.md)
@@ -172,7 +191,6 @@ Primary planning docs:
 ### Archived redirect notes
 
 - [`seedcore_positioning_narrative.md`](seedcore_positioning_narrative.md)
-- [`operator_legibility_mvp.md`](operator_legibility_mvp.md)
 
 ## 8. Maintenance Rule
 
@@ -185,6 +203,10 @@ there is a strong reason. Prefer this ownership split:
 - `q2_2026_audit_trail_ui_spec.md` = product surface and operator UX contract
 - `north_star_autonomous_trade_environment.md` = final ambition and long-range
   architecture reference
+- `local_kafka_streams_schedule.md` = local Kafka transport rollout (intent,
+  telemetry, policy outcomes) aligned to the north-star cluster table
+- `operator_legibility_mvp.md` = operator legibility + copilot API contract and
+  env flags (keep in sync with `ts/services/verification-api` and operator console)
 
 If a doc becomes historical, mark it explicitly and point back to one of the
 canonical files above.
