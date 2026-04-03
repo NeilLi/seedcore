@@ -24,6 +24,14 @@ from seedcore.models.evidence_bundle import (
     TransparencyProof,
     TrustProof,
 )
+from seedcore.ops.evidence.kms_sign_rpc import (
+    KmsRpcP256Backend,
+    RecordingPemKmsBackend,
+    try_build_google_cloud_kms_backend,
+    kms_api_endpoint_from_env,
+    kms_contract_private_key_pem_from_env,
+    kms_crypto_key_version_from_env,
+)
 from seedcore.ops.evidence.transparency import anchor_receipt_hash
 
 
@@ -326,6 +334,103 @@ class KmsP256SignerProvider:
         )
 
 
+class CloudKmsRpcP256SignerProvider:
+    """Path 2: RPC-shaped asymmetric sign (fake PEM, emulator, or sandbox) with Path 1 artifact shape."""
+
+    provider_name = "cloud_kms_rpc_p256"
+
+    def __init__(
+        self,
+        *,
+        backend: KmsRpcP256Backend,
+        signer_id: Optional[str] = None,
+        key_ref: Optional[str] = None,
+        signer_type: str = "service",
+        config_profile: Optional[str] = None,
+        trust_anchor_type: str = "kms",
+    ) -> None:
+        self._backend = backend
+        self._signer_id = signer_id or os.getenv(
+            "SEEDCORE_ECDSA_P256_SIGNER_ID",
+            os.getenv("SEEDCORE_EVIDENCE_SIGNER_ID", "seedcore-cloud-kms-signer"),
+        )
+        self._key_ref = key_ref or os.getenv("SEEDCORE_ECDSA_P256_KEY_ID")
+        self._signer_type = signer_type
+        self._config_profile = config_profile or "kms_cloud_rpc_p256"
+        self._trust_anchor_type = trust_anchor_type
+
+    @property
+    def trust_anchor_type(self) -> str:
+        return self._trust_anchor_type
+
+    def is_available(self) -> bool:
+        return self._backend is not None
+
+    def sign_hash(self, request: SignerRequest) -> SigningResult:
+        if not self.is_available():
+            raise ValueError("cloud_kms_rpc_p256_signer_not_configured")
+        message = request.payload_hash.encode("utf-8")
+        signature_bytes, public_key_material = self._backend.asymmetric_sign_ecdsa_sha256(message)
+        key_ref = self._key_ref
+        if key_ref is None and public_key_material:
+            try:
+                key_ref = _derive_key_ref(base64.b64decode(public_key_material, validate=True))
+            except Exception:
+                key_ref = None
+        if key_ref is None:
+            raise ValueError("cloud_kms_rpc_key_ref_missing")
+        signature = base64.b64encode(signature_bytes).decode("ascii")
+        revocation_id = f"{self._trust_anchor_type}:{key_ref}"
+        return SigningResult(
+            signature=signature,
+            signing_scheme=ECDSA_P256_SCHEME,
+            signer_id=self._signer_id,
+            signer_type=self._signer_type,
+            key_ref=key_ref,
+            public_key=public_key_material,
+            attestation_level="attested",
+            config_profile=self._config_profile,
+            trust_anchor_type=self._trust_anchor_type,
+            key_algorithm=ECDSA_P256_SCHEME,
+            trust_proof=_build_trust_proof(
+                request,
+                trust_anchor_type=self._trust_anchor_type,
+                key_algorithm=ECDSA_P256_SCHEME,
+                key_ref=key_ref,
+                public_key_material=public_key_material,
+                signature=signature,
+                attestation_level="attested",
+                revocation_id=revocation_id,
+                attestation_type="kms_binding" if self._trust_anchor_type == "kms" else "vtpm_binding",
+            ),
+            revocation_id=revocation_id,
+        )
+
+
+def try_cloud_kms_rpc_signer_provider_from_env() -> Optional[CloudKmsRpcP256SignerProvider]:
+    """Path 2 entrypoint: contract PEM fake or optional ``google-cloud-kms`` client."""
+    key_version = kms_crypto_key_version_from_env()
+    if not key_version:
+        return None
+    pem = kms_contract_private_key_pem_from_env()
+    if pem:
+        private_key = _load_p256_private_key_from_pem(pem)
+        if private_key is None:
+            return None
+        backend: KmsRpcP256Backend = RecordingPemKmsBackend(
+            key_resource_name=key_version,
+            private_key=private_key,
+        )
+        return CloudKmsRpcP256SignerProvider(backend=backend)
+    backend = try_build_google_cloud_kms_backend(
+        key_version_name=key_version,
+        api_endpoint=kms_api_endpoint_from_env(),
+    )
+    if backend is None:
+        return None
+    return CloudKmsRpcP256SignerProvider(backend=backend)
+
+
 class Tpm2P256SignerProvider:
     provider_name = "tpm2_p256"
 
@@ -625,17 +730,23 @@ def resolve_signer_provider(*, request: SignerRequest) -> SignerProvider:
             return provider
 
     if request.required_key_algorithm == ECDSA_P256_SCHEME:
-        for provider in (
-            Tpm2P256SignerProvider(),
-            KmsP256SignerProvider(trust_anchor_type="kms"),
-            KmsP256SignerProvider(
-                private_key_pem=os.getenv("SEEDCORE_VTPM_P256_PRIVATE_KEY_PEM", "").strip(),
-                signer_id=os.getenv("SEEDCORE_VTPM_SIGNER_ID"),
-                key_ref=os.getenv("SEEDCORE_VTPM_KEY_ID"),
-                config_profile="vtpm_ecdsa_p256",
-                trust_anchor_type="vtpm",
-            ),
-        ):
+        cloud_rpc = try_cloud_kms_rpc_signer_provider_from_env()
+        p256_candidates: list[SignerProvider] = [Tpm2P256SignerProvider()]
+        if cloud_rpc is not None:
+            p256_candidates.append(cloud_rpc)
+        p256_candidates.extend(
+            (
+                KmsP256SignerProvider(trust_anchor_type="kms"),
+                KmsP256SignerProvider(
+                    private_key_pem=os.getenv("SEEDCORE_VTPM_P256_PRIVATE_KEY_PEM", "").strip(),
+                    signer_id=os.getenv("SEEDCORE_VTPM_SIGNER_ID"),
+                    key_ref=os.getenv("SEEDCORE_VTPM_KEY_ID"),
+                    config_profile="vtpm_ecdsa_p256",
+                    trust_anchor_type="vtpm",
+                ),
+            )
+        )
+        for provider in p256_candidates:
             if _provider_matches_requirements(provider, request):
                 return provider
         raise ValueError(f"{request.artifact_type} requires {ECDSA_P256_SCHEME} signer provider")
@@ -692,6 +803,8 @@ def _explicit_provider_for_profile(profile: str) -> Optional[SignerProvider]:
         return Tpm2P256SignerProvider()
     if configured == "kms":
         return KmsP256SignerProvider(trust_anchor_type="kms")
+    if configured == "cloud_kms_rpc":
+        return try_cloud_kms_rpc_signer_provider_from_env()
     if configured == "vtpm":
         return KmsP256SignerProvider(
             private_key_pem=os.getenv("SEEDCORE_VTPM_P256_PRIVATE_KEY_PEM", "").strip(),
@@ -721,6 +834,8 @@ def _provider_matches_requirements(provider: SignerProvider, request: SignerRequ
             return provider.is_hardware_available()
         return provider.is_available()
     if trust_anchor == "kms":
+        if isinstance(provider, CloudKmsRpcP256SignerProvider):
+            return provider.is_available() and provider.trust_anchor_type == "kms"
         return (
             isinstance(provider, KmsP256SignerProvider)
             and provider.is_available()
@@ -734,6 +849,8 @@ def _provider_matches_requirements(provider: SignerProvider, request: SignerRequ
         )
     if request.required_key_algorithm == ECDSA_P256_SCHEME:
         if isinstance(provider, Tpm2P256SignerProvider):
+            return provider.is_available()
+        if isinstance(provider, CloudKmsRpcP256SignerProvider):
             return provider.is_available()
         if isinstance(provider, KmsP256SignerProvider):
             return provider.is_available()

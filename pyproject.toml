@@ -124,6 +124,8 @@ full = [
     "xgboost-ray>=0.1.19",
 ]
 dev = ["pytest>=8.2", "pytest-asyncio>=0.23.7", "black", "ruff", "mypy", "ipykernel"]
+# Optional: Path 2 live client / emulator against real google.cloud.kms_v1 RPC shape.
+cloud-kms = ["google-cloud-kms>=2.21.0,<4"]
 
 [project.urls]
 Homepage = "https://github.com/NeilLi/seedcore"

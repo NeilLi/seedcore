@@ -73,3 +73,31 @@ This runbook turns the current "fixture-grade strict TPM path" into repeatable f
 2. drills executed on schedule with retained evidence outputs
 3. trust-bundle rotation and revocation playbooks exercised end-to-end
 4. hardened mode enabled for production custody workflows by default
+
+## Cloud KMS signing paths (Python evidence boundary)
+
+Google does not ship a supported local KMS emulator. Treat signing strategy as
+three explicit paths aligned with what failure mode you are trying to rule out:
+
+1. **Path 1 (default dev/tests):** keep
+   `SEEDCORE_ECDSA_P256_PRIVATE_KEY_PEM` + `KmsP256SignerProvider` — fast PEM
+   loop for receipt semantics, canonicalization, and policy behavior. No RPC
+   contract coverage.
+2. **Path 2 (RPC contract / CI / unofficial emulator):** set
+   `SEEDCORE_CLOUD_KMS_CRYPTO_KEY_VERSION` to the full crypto key **version**
+   resource name and `SEEDCORE_CLOUD_KMS_CONTRACT_PRIVATE_KEY_PEM` to a local
+   P-256 PEM. This uses `CloudKmsRpcP256SignerProvider` with a recording
+   PEM-backed backend that issues the same digest shape as
+   `google.cloud.kms_v1` `AsymmetricSign` (SHA-256 over the UTF-8 payload hash
+   bytes). For a live client, install optional extras `pip install -e ".[cloud-kms]"`,
+   omit the contract PEM, set `SEEDCORE_CLOUD_KMS_API_ENDPOINT` when pointing
+   at a community emulator, and use ADC. Select explicitly with
+   `SEEDCORE_SIGNER_PROVIDER_<PROFILE>=cloud_kms_rpc` when needed.
+3. **Path 3 (trust evidence, scheduled):** HSM-backed keys and real IAM in a
+   **sandbox GCP project** — used for hardware/latency/attestation milestones,
+   **not** as the default unit or integration test strategy. Run targeted smoke
+   checks with `SEEDCORE_CLOUD_KMS_INTEGRATION_TEST=1` only when deliberately
+   exercising live KMS.
+
+Path 3 is operator-scheduled work; routine CI should rely on Path 1 and,
+when proving client wiring, Path 2.
