@@ -55,6 +55,7 @@ PLUGIN_TOOL_NAMES = [
     "seedcore.owner_context.get",
     "seedcore.owner_context.preflight",
     "seedcore.agent_action.preflight",
+    "seedcore.agent_action.evaluate",
     "seedcore.digital_twin.capture_link",
     "seedcore.forensic_replay.fetch",
 ]
@@ -1086,6 +1087,46 @@ async def handle_agent_action_preflight(
     }
 
 
+async def handle_agent_action_evaluate(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    adapter_input: dict[str, Any],
+    debug: bool = True,
+    no_execute: bool = True,
+) -> dict[str, Any]:
+    from seedcore.adapters.rct_agent_action_gateway_reference_adapter import (
+        build_rct_agent_action_evaluate_request_v1,
+        build_rct_gateway_correlation_from_evaluate_response,
+    )
+
+    request = build_rct_agent_action_evaluate_request_v1(**adapter_input)
+    result = await runtime.evaluate_agent_action(
+        request,
+        debug=debug,
+        no_execute=no_execute,
+    )
+
+    correlation = build_rct_gateway_correlation_from_evaluate_response(
+        request_id=request.get("request_id") or "",
+        gateway_evaluate_response=result,
+    )
+
+    return {
+        "ok": bool((result.get("decision") or {}).get("allowed")),
+        "decision": result.get("decision"),
+        "required_approvals": result.get("required_approvals"),
+        "trust_gaps": result.get("trust_gaps"),
+        "obligations": result.get("obligations"),
+        "minted_artifacts": result.get("minted_artifacts"),
+        "execution_token": result.get("execution_token"),
+        "governed_receipt": result.get("governed_receipt"),
+        "forensic_linkage": result.get("forensic_linkage"),
+        "correlation": correlation,
+        "raw": result,
+        "source_url": runtime.api_url("/agent-actions/evaluate"),
+    }
+
+
 async def handle_digital_twin_capture_link(
     *,
     source_url: str,
@@ -1749,6 +1790,21 @@ if FastMCP is not None:
         return await handle_agent_action_preflight(
             _runtime(ctx),
             request=request,
+            debug=debug,
+            no_execute=no_execute,
+        )
+
+
+    @mcp.tool(name="seedcore.agent_action.evaluate")
+    async def seedcore_agent_action_evaluate(
+        ctx: AppContext,
+        adapter_input: dict[str, Any],
+        debug: bool = True,
+        no_execute: bool = True,
+    ) -> dict[str, Any]:
+        return await handle_agent_action_evaluate(
+            _runtime(ctx),
+            adapter_input=adapter_input,
             debug=debug,
             no_execute=no_execute,
         )
