@@ -22,7 +22,11 @@ must-win product workflow:
 This is now the repository's clearest milestone and roadmap anchor: Slice 1
 live sign-off for the canonical Restricted Custody Transfer wedge was closed on
 **March 30, 2026**, and Q2 **Window A host-first closure** completed on
-**April 2, 2026**.
+**April 2, 2026**. PKG–RCT **contract alignment** through Phase 4 is in the tree:
+activation hardening, publish-time validation, explicit **triple-hash** binding
+(policy bundle + decision graph + state) on receipts, and opt-in **strict replay**
+that rejects policy-only verification when signed artifacts omit those binds (see
+[pkg snapshot / RCT alignment](docs/development/pkg_snapshot_rct_alignment_research.md)).
 
 For the live roadmap and closure details, see:
 
@@ -69,6 +73,7 @@ Implemented in this repo (high-level):
 - Replay-verifiable evidence bundles plus offline verification via the `seedcore-verify` kernel/CLI.
 - Q2 verification surface (operator console + verification API) under `/api/v1/verification/*`.
 - Hot-path observability under `/api/v1/pdp/hot-path/status` plus Prometheus text at `/api/v1/pdp/hot-path/metrics`.
+- PKG RCT contract surfaces: snapshot manifests and contract artifacts; **opt-in** activation hardening (`SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE`, `SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT`), **opt-in** publish validation before snapshot activate (`SEEDCORE_PKG_RCT_PUBLISH_VALIDATE`), and **opt-in** strict replay verification (`SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH`) with host helper `scripts/host/verify_rct_replay_strict.py`.
 
 Restricted-custody trust hardening supports explicit `trust_proof` material, enabling offline verification against artifacts and a trust bundle (TPM fixture path included).
 
@@ -100,8 +105,9 @@ Current implementation:
 - coordinator execution follows a PKG-first flow and enforces a PKG-mandatory gate for action tasks
 - routing hints are extracted from PKG proto-plans rather than trusted from cognitive output alone
 - policy snapshots can be reloaded manually through the existing PKG management path
-- policy snapshots can be hot-activated fleet-wide through `POST /api/v1/pkg/snapshots/{snapshot_version}/activate`
+- policy snapshots can be hot-activated fleet-wide through `POST /api/v1/pkg/snapshots/{snapshot_version}/activate` (optional publish-time RCT checks when `SEEDCORE_PKG_RCT_PUBLISH_VALIDATE` is set)
 - edge policy consumers can resolve desired versions through `POST /api/v1/pkg/ota/heartbeat` and subscribe to `GET /api/v1/pkg/ota/stream`
+- compiled authz graph can be **dry-run compiled** for publish gates without swapping the active graph (`AuthzGraphManager.compile_snapshot_index`)
 
 ### 3. Trusted Chain of Custody
 
@@ -109,7 +115,7 @@ SeedCore already has the beginnings of a governed custody ledger.
 
 Current implementation:
 
-- evidence bundles include `intent_ref`, execution timing, telemetry, and execution receipts
+- evidence bundles include `intent_ref`, execution timing, telemetry, and execution receipts; policy receipts and bundles can carry **`policy_snapshot_hash`**, **`decision_graph_snapshot_hash`**, and **`state_binding_hash`** for replay-grade binding
 - HAL-backed transitions can carry signed `transition_receipt` payloads with nonce-based replay detection
 - governed closure persists receipt hash, nonce, transition sequence, endpoint identity, and authority source
 - forensic sealing captures a pre-contact evidence structure for edge-side custody events, with hardened-mode support for trust-anchor-backed `hal_capture` signing on attested endpoints
