@@ -10,7 +10,32 @@ SeedCore is a deterministic, zero-trust runtime for high-consequence AI actions.
 
 All outcomes (`allow` / `deny` / `quarantine` / `escalate`) are recorded with replayable, auditable evidence. SeedCore is not another model layer; it is the runtime that makes high-consequence AI action safe enough to execute.
 
-Decision record: [ADR 0001 - Keep the PDP Stateless and Synchronous at Decision Time](docs/architecture/adr/adr-0001-pdp-hot-path.md).
+The long ambition is large: become the trust substrate between frontier models and real-world execution. The execution strategy is deliberately narrow: win one high-trust vertical workflow first, make it operationally credible, and then expand from a hardened proof boundary rather than from a broad platform claim.
+
+Decision records:
+
+- [ADR 0001 - Keep the PDP Stateless and Synchronous at Decision Time](docs/architecture/adr/adr-0001-pdp-hot-path.md)
+- [ADR 0002 - Use Google IAP as the First-Mile Identity Gate for Non-Public SeedCore Ingress](docs/architecture/adr/adr-0002-iap-edge-identity.md)
+- [ADR 0003 - Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](docs/architecture/adr/adr-0003-igx-thor-trusted-edge-profile.md)
+
+## Where SeedCore Sits
+
+SeedCore is designed to sit between powerful ecosystems, not to replace them.
+
+- Model companies provide reasoning, planning, and multimodal intelligence.
+- Identity and cloud platforms such as Google Cloud can provide first-mile operator identity and access control.
+- Edge and robotics platforms such as NVIDIA Jetson and IGX Thor can provide the physical execution substrate, perception stack, and trusted hardware boundary.
+- SeedCore provides the governed admissibility and proof layer between those worlds:
+  - who was allowed to act
+  - under which exact policy and scope
+  - on which device or custody boundary
+  - with what evidence before and after execution
+
+In other words:
+
+> Google can help authenticate who reached the system. NVIDIA can help run the physical AI stack. SeedCore decides what is admissible, issues bounded authority, and proves what happened afterward.
+
+That is the position this repository is building toward. SeedCore is not trying to out-Google Google on identity or out-NVIDIA NVIDIA on edge compute. It is trying to own the missing trust layer that high-consequence agent systems still lack.
 
 ## 2026 Product Focus
 
@@ -46,6 +71,18 @@ That means the near-term product boundary is:
 
 This keeps the work focused on the layer SeedCore can uniquely own:
 governed admissibility and proof, not generalized model intelligence.
+
+For this phase, the vertical story should stay concrete:
+
+- operator and admin ingress can be hardened through IAP-style first-mile identity
+- the trust plane remains in SeedCore
+- edge execution can start on Jetson-class hardware and mature toward IGX Thor-class trusted-edge deployments
+- the must-win proof surface remains one custody-aware workflow, not a generic "autonomous everything" platform
+
+This is how SeedCore can hold both positions at once:
+
+- ambitious enough to matter as a category-defining trust substrate
+- disciplined enough to ship step by step in one high-trust vertical domain first
 
 Supporting documents:
 
@@ -134,6 +171,15 @@ AI Judgment -> Agent Accountability -> Zero-Trust Policy -> Robotic Embodiment -
 ## What SeedCore Is
 
 SeedCore is not a chatbot wrapper or a generic tool-calling layer. It is a governed runtime that converts advisory AI output into policy-checked execution.
+
+It should be read as a trust layer for agentic systems:
+
+- not another identity provider
+- not another model provider
+- not another robotics SDK
+- not another generic workflow orchestrator
+
+SeedCore's job is narrower and more defensible: bind identity, policy, hardware scope, and replayable evidence into one execution boundary.
 
 In the current repository baseline, **AI judgment** lives in the cognitive and coordinator planning stack. That layer can interpret, enrich, and route work, but it does not authorize high-stakes execution.
 
