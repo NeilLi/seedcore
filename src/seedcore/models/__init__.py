@@ -106,6 +106,8 @@ from .edge_telemetry import (
     EdgeTelemetryEnvelopeV0,
     EdgeTelemetrySampleV0,
     EdgeTelemetrySignerV0,
+    SignedEdgeTelemetryRefV0,
+    signed_telemetry_ref_from_envelope_v0,
 )
 from .task_api import Task
 from .task_payload import TaskPayload
@@ -166,6 +168,8 @@ __all__ = [
     "EdgeTelemetryEnvelopeV0",
     "EdgeTelemetrySampleV0",
     "EdgeTelemetrySignerV0",
+    "SignedEdgeTelemetryRefV0",
+    "signed_telemetry_ref_from_envelope_v0",
     "Task",
     "TaskPayload",
     "VerificationResult",

@@ -1,0 +1,24 @@
+{
+  "telemetry_refs": [
+    {
+      "contract_version": "seedcore.edge_telemetry_envelope.v0",
+      "telemetry_id": "tel-demo-001",
+      "asset_ref": "asset:lot-8841",
+      "edge_node_ref": "edge:handoff-bay-3",
+      "observed_at": "2026-04-02T12:00:00Z",
+      "sensor_kind": "motor_torque",
+      "payload_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "signer_key_ref": "kms:edge-signing-demo"
+    },
+    {
+      "contract_version": "seedcore.edge_telemetry_envelope.v0",
+      "telemetry_id": "tel-demo-002-weight",
+      "asset_ref": "asset:lot-8841",
+      "edge_node_ref": "edge:handoff-bay-3-scale",
+      "observed_at": "2026-04-02T12:00:05Z",
+      "sensor_kind": "weight_cell",
+      "payload_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "signer_key_ref": "kms:edge-signing-demo-weight"
+    }
+  ]
+}

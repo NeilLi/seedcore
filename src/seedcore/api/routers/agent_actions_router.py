@@ -972,6 +972,60 @@ def _prefixed_twin_id(kind: str, raw_value: str | None) -> str | None:
     return value if value.startswith(prefix) else f"{prefix}{value}"
 
 
+def _closure_request_asset_id(
+    *,
+    request_record: _AgentActionStoredRecord,
+) -> str:
+    request_payload = (
+        dict(request_record.request_payload)
+        if isinstance(request_record.request_payload, dict)
+        else {}
+    )
+    request_asset = (
+        request_payload.get("asset")
+        if isinstance(request_payload.get("asset"), dict)
+        else {}
+    )
+    governed_receipt = (
+        dict(request_record.response.governed_receipt)
+        if isinstance(request_record.response.governed_receipt, dict)
+        else {}
+    )
+    return str(
+        request_asset.get("asset_id")
+        or governed_receipt.get("asset_ref")
+        or governed_receipt.get("resource_ref")
+        or ""
+    ).strip()
+
+
+def _validate_closure_telemetry_refs_asset_binding(
+    *,
+    closure_payload: AgentActionClosureRequest,
+    request_record: _AgentActionStoredRecord,
+) -> None:
+    if not closure_payload.telemetry_refs:
+        return
+    asset_id = _closure_request_asset_id(request_record=request_record)
+    if not asset_id:
+        raise HTTPException(
+            status_code=422,
+            detail=_invalid_request_envelope(
+                message="telemetry_refs require a resolvable request asset_id for binding validation",
+                request_id=closure_payload.request_id,
+            ),
+        )
+    for ref in closure_payload.telemetry_refs:
+        if str(ref.asset_ref).strip() != asset_id:
+            raise HTTPException(
+                status_code=422,
+                detail=_invalid_request_envelope(
+                    message="telemetry_refs.asset_ref must match the evaluated request asset_id",
+                    request_id=closure_payload.request_id,
+                ),
+            )
+
+
 def _derive_closure_relevant_twin_snapshot(
     *,
     request_record: _AgentActionStoredRecord,
@@ -1195,6 +1249,7 @@ def _build_closure_evidence_bundle(
                 "motor_torque_hash": closure_payload.forensic_block.fingerprint_components.actuator_hash,
             },
             "sensor_signatures": [],
+            "telemetry_refs": [ref.model_dump(mode="json") for ref in closure_payload.telemetry_refs],
         },
         "settlement_status": {
             "is_finalized": closure_payload.outcome == "completed",
@@ -1205,7 +1260,7 @@ def _build_closure_evidence_bundle(
             ),
         },
     }
-    return {
+    bundle: Dict[str, Any] = {
         "evidence_bundle_id": closure_payload.evidence_bundle_id,
         "node_id": resolved_node_id or None,
         "execution_receipt": {"node_id": resolved_node_id} if resolved_node_id else {},
@@ -1216,6 +1271,9 @@ def _build_closure_evidence_bundle(
             "summary": dict(closure_payload.summary or {}),
         },
     }
+    if closure_payload.telemetry_refs:
+        bundle["telemetry_refs"] = [ref.model_dump(mode="json") for ref in closure_payload.telemetry_refs]
+    return bundle
 
 
 async def _apply_closure_settlement_handoff(
@@ -1650,6 +1708,11 @@ async def close_agent_action(
     if request_record is None:
         raise HTTPException(status_code=404, detail=f"agent action request '{request_key}' not found")
 
+    _validate_closure_telemetry_refs_asset_binding(
+        closure_payload=payload,
+        request_record=request_record,
+    )
+
     linked_disposition = str(request_record.response.decision.disposition or "").strip().lower()
     if linked_disposition != "allow":
         raise HTTPException(
@@ -1700,6 +1763,10 @@ async def close_agent_action(
             closure_payload=payload,
         )
         replay_status = "ready" if settlement_status == "applied" else "pending"
+        settlement_with_refs = dict(settlement_result)
+        if payload.telemetry_refs:
+            settlement_with_refs["telemetry_refs"] = [ref.model_dump(mode="json") for ref in payload.telemetry_refs]
+
         response = AgentActionClosureResponse(
             request_id=payload.request_id,
             closure_id=payload.closure_id,
@@ -1708,7 +1775,8 @@ async def close_agent_action(
             forensic_block_id=payload.forensic_block.forensic_block_id,
             settlement_status=settlement_status,
             replay_status=replay_status,
-            settlement_result=settlement_result,
+            telemetry_refs=list(payload.telemetry_refs),
+            settlement_result=settlement_with_refs,
             next_actions=(
                 ["assemble_replay_record", "publish_verification_surface"]
                 if settlement_status == "applied"

@@ -65,6 +65,29 @@ Latest repo-aligned critical-path status:
   and hot-path observability status/metrics checks are validated by a live host
   script with hardened metrics parsing diagnostics.
 
+## Status Update (2026-04-06)
+
+- **Window E/F (signed edge telemetry refs + minimal Gemini read bundle)** is
+  implemented as an additive contract pass:
+  - `SignedEdgeTelemetryRefV0` and `telemetry_refs` on
+    `AgentActionClosureRequest` / `AgentActionClosureResponse`, with duplicate
+    `telemetry_id` rejection, non-empty `payload_sha256` / `signer_key_ref`, and
+    strict `asset_ref` binding to the evaluated request asset at closure time.
+  - Closure-built evidence bundles persist `telemetry_refs`; forensic
+    materialization surfaces ordered refs under `physical_evidence.telemetry_refs`
+    and derives `physical_presence_hash` from ordered signed
+    `payload_sha256` values when such refs are present (inline snapshot fallback
+    unchanged when absent).
+  - `tests/test_edge_telemetry_schema_sync.py` locks exporter output to
+    `docs/schemas/edge_telemetry_envelope_v0.schema.json`; additional envelope
+    fixture `sample_envelope_v0_weight.json` and RCT shared
+    `signed_edge_telemetry_closure_refs.json` align refs with envelopes.
+  - Plugin `GEMINI_MINIMAL_READ_ONLY_BUNDLE`, `GET /info` field
+    `gemini_minimal_read_only_bundle`, and standardized read wrappers:
+    `seedcore.hotpath.status` is `read_only` with full contract JSON under `data`
+    (preserving `observability`); verification reads unchanged
+    (`ok`, `read_only`, `source_url`, `data` / `text`).
+
 ## Status Update (2026-04-03)
 
 - Deployment observability closure for hot-path metrics/status:
@@ -412,7 +435,10 @@ operational closure and external-boundary productization.
      (`rct_gateway_correlation.py`); validated in unit tests and
      `verify_agent_action_gateway_productization_real_calls.*`.
 5. **May-Jun 2026: edge telemetry and closure progression**
-   - completed: false
+   - completed: true
+   - status: **signed `telemetry_refs` on gateway closure, evidence bundle, and
+     forensic materialization; schema drift test; extra envelope + RCT shared
+     refs** (2026-04-06).
    - export JSON schema for `EdgeTelemetryEnvelopeV0`
    - persist envelope refs on the governed receipt / forensic path
    - extend fixtures so Q3 handshake work can rely on signed telemetry inputs
@@ -420,7 +446,9 @@ operational closure and external-boundary productization.
      contract evolves
 
 6. **Jun 2026 onward: Gemini-visible read tools**
-   - completed: false
+   - completed: true
+   - status: **`GEMINI_MINIMAL_READ_ONLY_BUNDLE` + `/info` metadata; hot-path
+     status aligned to verification read wrapper; docs/skills updated** (2026-04-06).
    - publish a minimal read-only tool bundle for verification queue, detail,
      replay, runbook lookup, and hot-path status/metrics
    - keep those tools narrow and operator-safe; they should expose the same
@@ -430,8 +458,9 @@ Recommended dependency rule:
 
 - finish item 1 before broadening environment blast radius
 - run items 2 and 3 in parallel once CI gates are stable
-- item 4 is complete; next sequencing focus is item 5 (edge telemetry progression)
-  and item 6 (Gemini-visible read tools), assuming operator and observability
+- items 5 and 6 (edge telemetry closure refs + minimal Gemini read bundle) are
+  complete as of 2026-04-06; next sequencing focus shifts to the following
+  numbered priorities in this document, assuming operator and observability
   surfaces remain the first line of defense for external-agent failures
 
 ### Explicit Sidecar

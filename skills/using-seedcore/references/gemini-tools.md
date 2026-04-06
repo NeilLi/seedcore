@@ -3,10 +3,18 @@
 When Gemini is using the Seedcore extension:
 
 - The extension should start the local `seedcore` MCP server automatically.
+- Verification and hot-path tools **proxy frozen HTTP/JSON (or Prometheus text) contracts only**; they do not add server-side business logic beyond HTTP forwarding and the stable response wrapper shape.
 - Use `seedcore.health` instead of manually curling `/health`.
 - Use `seedcore.readyz` instead of manually curling `/readyz`.
 - Use `seedcore.pkg.status` and `seedcore.pkg.authz_graph_status` before discussing PKG readiness.
-- Use `seedcore.hotpath.status`, `seedcore.hotpath.metrics` (Prometheus text, read-only), `seedcore.hotpath.verify_shadow`, and `seedcore.hotpath.benchmark` for hot-path promotion analysis.
+- **Minimal Gemini-visible read bundle** (blessed set; also exposed as `gemini_minimal_read_only_bundle` on the plugin `GET /info`):
+  - `seedcore.verification.queue`
+  - `seedcore.verification.workflow_verification_detail`
+  - `seedcore.verification.workflow_replay`
+  - `seedcore.verification.runbook_lookup`
+  - `seedcore.hotpath.status` (read-only; full status contract under `data`, including `observability` with `alert_level` and alerts)
+  - `seedcore.hotpath.metrics` (Prometheus text, read-only)
+- Additional tools may exist on the same MCP server (for example `seedcore.verification.transfer_review`, `seedcore.verification.workflow_projection`, `seedcore.hotpath.verify_shadow`, `seedcore.hotpath.benchmark`); they are **not** part of the minimal bundle above.
 - Use the Q2 **verification read** tools (all read-only; require the TS verification API on `SEEDCORE_VERIFICATION_API_BASE`, default `http://127.0.0.1:7071`):
   - `seedcore.verification.queue` — transfer queue / Screen 1 data (`GET .../transfers/queue`).
   - `seedcore.verification.transfer_review` — Screen 2 bundle (`GET .../transfers/review`).

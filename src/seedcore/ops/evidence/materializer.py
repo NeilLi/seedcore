@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from seedcore.ops.evidence.authority_consistency import (
     authority_consistency_summary,
     operator_actions_for_authority_issues as _build_operator_actions_for_authority_issues,
 )
+from seedcore.models.edge_telemetry import EDGE_TELEMETRY_ENVELOPE_VERSION
 from seedcore.ops.evidence.forensic_block_contract import (
     FORENSIC_BLOCK_CONTEXT,
     validate_forensic_block_payload,
@@ -255,6 +256,50 @@ def _first_inline_ref(refs: Any) -> Dict[str, Any]:
     return {}
 
 
+def _signed_edge_telemetry_ref_dicts(evidence_bundle: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw = evidence_bundle.get("telemetry_refs")
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("inline"), dict):
+            continue
+        if str(item.get("contract_version") or "").strip() != EDGE_TELEMETRY_ENVELOPE_VERSION:
+            continue
+        tid = str(item.get("telemetry_id") or "").strip()
+        ph = str(item.get("payload_sha256") or "").strip()
+        sk = str(item.get("signer_key_ref") or "").strip()
+        if not tid or not ph or not sk:
+            continue
+        out.append(item)
+    return out
+
+
+def _ordered_signed_telemetry_refs_public(evidence_bundle: Dict[str, Any]) -> List[Dict[str, Any]]:
+    refs = list(_signed_edge_telemetry_ref_dicts(evidence_bundle))
+    refs.sort(key=lambda item: str(item.get("telemetry_id") or ""))
+    keys = (
+        "contract_version",
+        "telemetry_id",
+        "asset_ref",
+        "edge_node_ref",
+        "observed_at",
+        "sensor_kind",
+        "payload_sha256",
+        "signer_key_ref",
+    )
+    return [{key: item.get(key) for key in keys} for item in refs]
+
+
+def _ordered_signed_telemetry_payload_chain(evidence_bundle: Dict[str, Any]) -> Optional[str]:
+    rows = _ordered_signed_telemetry_refs_public(evidence_bundle)
+    if not rows:
+        return None
+    return "|".join(str(row.get("payload_sha256") or "").strip() for row in rows)
+
+
 def _resolve_trust_gap_codes(*, authz_graph: Dict[str, Any], governed_receipt: Dict[str, Any]) -> list[str]:
     codes: list[str] = []
     receipt_codes = governed_receipt.get("trust_gap_codes")
@@ -399,6 +444,7 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
         governed_receipt=governed_receipt,
         policy_receipt=policy_receipt,
         execution_summary=execution_summary if isinstance(execution_summary, dict) else {},
+        evidence_bundle=evidence_bundle,
     )
     forensic_block_id = _derive_forensic_block_id(
         evidence_bundle=evidence_bundle,
@@ -546,6 +592,7 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
                 "motor_torque_hash": derived_components["actuator_hash"],
             },
             "sensor_signatures": [],
+            "telemetry_refs": _ordered_signed_telemetry_refs_public(evidence_bundle),
         },
         "settlement_status": {
             "is_finalized": None,
@@ -567,6 +614,13 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
         merged.setdefault("spatial_evidence", base_block["spatial_evidence"])
         merged.setdefault("cognitive_evidence", base_block["cognitive_evidence"])
         merged.setdefault("physical_evidence", base_block["physical_evidence"])
+        pe = merged.get("physical_evidence")
+        if isinstance(pe, dict):
+            alt_refs = _ordered_signed_telemetry_refs_public(evidence_bundle)
+            if alt_refs and not pe.get("telemetry_refs"):
+                pe = dict(pe)
+                pe["telemetry_refs"] = alt_refs
+                merged["physical_evidence"] = pe
         return _normalize_forensic_block_shape(merged)
     return _normalize_forensic_block_shape(base_block)
 
@@ -615,6 +669,7 @@ def _derive_forensic_fingerprint_components(
     governed_receipt: Dict[str, Any],
     policy_receipt: Dict[str, Any],
     execution_summary: Dict[str, Any],
+    evidence_bundle: Dict[str, Any],
 ) -> Dict[str, str]:
     decision_ref = str(governed_receipt.get("decision_hash") or policy_receipt.get("policy_receipt_id") or "").strip()
     execution_ref = str(execution_summary.get("actuator_result_hash") or "").strip()
@@ -626,15 +681,25 @@ def _derive_forensic_fingerprint_components(
             else ""
         ).strip()
     )
+    signed_chain = _ordered_signed_telemetry_payload_chain(evidence_bundle)
+    if signed_chain is not None:
+        explicit_physical = str(fingerprint_components.get("physical_presence_hash") or "").strip()
+        physical_basis = f"{explicit_physical}|{signed_chain}" if explicit_physical else signed_chain
+        physical_presence_hash = _hash_ref(
+            physical_basis,
+            fallback=f"presence:{asset_ref}:{execution_ref}",
+        )
+    else:
+        physical_presence_hash = _hash_ref(
+            fingerprint_components.get("physical_presence_hash") or execution_ref,
+            fallback=f"presence:{asset_ref}:{execution_ref}",
+        )
     return {
         "economic_hash": _hash_ref(
             fingerprint_components.get("economic_hash") or policy_receipt.get("policy_decision_id"),
             fallback=f"economic:{decision_ref}:{asset_ref}",
         ),
-        "physical_presence_hash": _hash_ref(
-            fingerprint_components.get("physical_presence_hash") or execution_ref,
-            fallback=f"presence:{asset_ref}:{execution_ref}",
-        ),
+        "physical_presence_hash": physical_presence_hash,
         "reasoning_hash": _hash_ref(
             fingerprint_components.get("reasoning_hash") or governed_receipt.get("decision_hash"),
             fallback=f"reasoning:{decision_ref}",

@@ -15,6 +15,9 @@ import mock_eventizer_dependencies  # noqa: F401
 
 import seedcore.api.routers.agent_actions_router as agent_actions_router
 from seedcore.models.action_intent import ExecutionToken
+import pytest
+from pydantic import ValidationError
+
 from seedcore.models.agent_action_gateway import AgentActionClosureRequest
 from seedcore.models.pdp_hot_path import HotPathDecisionView, HotPathEvaluateResponse
 
@@ -181,6 +184,10 @@ async def _organism_preflight_ok(*args, **kwargs):
 
 async def _organism_preflight_fail(*args, **kwargs):
     return False, "organism_route_unavailable:RuntimeError"
+
+
+async def _closure_settlement_disabled(*args, **kwargs):
+    return "pending", {"enabled": False}
 
 
 def test_agent_actions_evaluate_wraps_hot_path_result(monkeypatch):
@@ -841,3 +848,124 @@ def test_build_closure_evidence_bundle_includes_forensic_block():
     )
     assert bundle["forensic_block"]["@type"] == "ForensicBlock"
     assert bundle["forensic_block"]["forensic_block_id"] == "fb-2026-0001"
+
+
+def _sample_signed_telemetry_ref(*, asset_ref: str = "asset:lot-8841", telemetry_id: str = "tel-1") -> dict:
+    return {
+        "contract_version": "seedcore.edge_telemetry_envelope.v0",
+        "telemetry_id": telemetry_id,
+        "asset_ref": asset_ref,
+        "edge_node_ref": "edge:test",
+        "observed_at": "2026-03-31T10:00:00Z",
+        "sensor_kind": "motor_torque",
+        "payload_sha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "signer_key_ref": "kms:test-key",
+    }
+
+
+def test_agent_action_closure_request_rejects_duplicate_telemetry_id() -> None:
+    payload = _base_closure_payload()
+    payload["telemetry_refs"] = [
+        _sample_signed_telemetry_ref(telemetry_id="dup"),
+        _sample_signed_telemetry_ref(telemetry_id="dup"),
+    ]
+    with pytest.raises(ValidationError, match="duplicate telemetry_id"):
+        AgentActionClosureRequest.model_validate(payload)
+
+
+def test_agent_actions_closure_rejects_telemetry_asset_mismatch(monkeypatch) -> None:
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(agent_actions_router, "_apply_closure_settlement_handoff", _closure_settlement_disabled)
+
+    assert client.post("/api/v1/agent-actions/evaluate", json=_base_payload()).status_code == 200
+
+    bad = _base_closure_payload()
+    bad["telemetry_refs"] = [_sample_signed_telemetry_ref(asset_ref="asset:other")]
+    close_response = client.post("/api/v1/agent-actions/req-transfer-2026-0001/closures", json=bad)
+    assert close_response.status_code == 422
+    detail = close_response.json()["detail"]
+    assert detail["error_code"] == "request_validation_failed"
+
+
+def test_agent_actions_closure_accepts_telemetry_refs(monkeypatch) -> None:
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(agent_actions_router, "_apply_closure_settlement_handoff", _closure_settlement_disabled)
+
+    assert client.post("/api/v1/agent-actions/evaluate", json=_base_payload()).status_code == 200
+
+    ok = _base_closure_payload()
+    ok["telemetry_refs"] = [_sample_signed_telemetry_ref()]
+    close_response = client.post("/api/v1/agent-actions/req-transfer-2026-0001/closures", json=ok)
+    assert close_response.status_code == 200
+    body = close_response.json()
+    assert len(body["telemetry_refs"]) == 1
+    assert body["telemetry_refs"][0]["telemetry_id"] == "tel-1"
+    assert body["settlement_result"]["telemetry_refs"][0]["telemetry_id"] == "tel-1"
+
+
+def test_build_closure_evidence_bundle_includes_telemetry_refs() -> None:
+    request_record = agent_actions_router._AgentActionStoredRecord(
+        request_id="req-transfer-2026-0001",
+        idempotency_key="idem-transfer-2026-0001",
+        request_hash="hash-1",
+        recorded_at=datetime.now(timezone.utc),
+        response=agent_actions_router.AgentActionEvaluateResponse(
+            request_id="req-transfer-2026-0001",
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=10,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="ok",
+                reason="ok",
+                policy_snapshot_ref="snapshot:1",
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-1",
+                intent_id="req-transfer-2026-0001",
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:00:06Z",
+                contract_version="rules@8.0.0",
+                constraints={"endpoint_id": "node-x"},
+            ),
+        ),
+        request_payload={},
+    )
+    closure_payload = AgentActionClosureRequest.model_validate(
+        {
+            **_base_closure_payload(),
+            "telemetry_refs": [_sample_signed_telemetry_ref()],
+        }
+    )
+    bundle = agent_actions_router._build_closure_evidence_bundle(
+        closure_payload=closure_payload,
+        request_record=request_record,
+    )
+    assert len(bundle["telemetry_refs"]) == 1
+    assert bundle["forensic_block"]["physical_evidence"]["telemetry_refs"][0]["telemetry_id"] == "tel-1"

@@ -27,6 +27,16 @@ from .runtime_client import (
 from seedcore.ops.evidence.owner_context import owner_context_hash as build_owner_context_hash
 
 
+# Exact minimal read-only tool surface published for Gemini (narrower than full PLUGIN_TOOL_NAMES).
+GEMINI_MINIMAL_READ_ONLY_BUNDLE = (
+    "seedcore.verification.queue",
+    "seedcore.verification.workflow_verification_detail",
+    "seedcore.verification.workflow_replay",
+    "seedcore.verification.runbook_lookup",
+    "seedcore.hotpath.status",
+    "seedcore.hotpath.metrics",
+)
+
 PLUGIN_TOOL_NAMES = [
     "seedcore.health",
     "seedcore.readyz",
@@ -157,6 +167,9 @@ async def handle_hotpath_status(runtime: SeedcoreRuntimeClient) -> dict[str, Any
     raw = await runtime.hotpath_status()
     return {
         "ok": bool(raw.get("authz_graph_ready", True)),
+        "read_only": True,
+        "data": raw,
+        "source_url": runtime.api_url("/pdp/hot-path/status"),
         "mode": raw.get("mode"),
         "enforce_ready": raw.get("enforce_ready"),
         "authz_graph_ready": raw.get("authz_graph_ready"),
@@ -168,7 +181,6 @@ async def handle_hotpath_status(runtime: SeedcoreRuntimeClient) -> dict[str, Any
         "mismatched": raw.get("mismatched"),
         "latency_ms": raw.get("latency_ms"),
         "recent_results": raw.get("recent_results"),
-        "source_url": runtime.api_url("/pdp/hot-path/status"),
     }
 
 
@@ -1916,6 +1928,7 @@ async def info() -> dict[str, Any]:
         "service": "seedcore-plugin-mcp",
         "version": "1.0.0",
         "tools": PLUGIN_TOOL_NAMES,
+        "gemini_minimal_read_only_bundle": list(GEMINI_MINIMAL_READ_ONLY_BUNDLE),
         "description": "Read-only Seedcore operator tools for Codex and Gemini hosts",
     }
 

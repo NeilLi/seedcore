@@ -12,12 +12,14 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from seedcore.plugin.mcp_server import (
+    GEMINI_MINIMAL_READ_ONLY_BUNDLE,
     PLUGIN_TOOL_NAMES,
     app,
     handle_digital_twin_capture_link,
     handle_evidence_verify,
     handle_forensic_replay_fetch,
     handle_health,
+    handle_hotpath_status,
     handle_hotpath_benchmark,
     handle_hotpath_metrics,
     handle_hotpath_verify_shadow,
@@ -77,6 +79,19 @@ def test_plugin_info_lists_seedcore_tools():
     body = response.json()
     assert body["service"] == "seedcore-plugin-mcp"
     assert body["tools"] == PLUGIN_TOOL_NAMES
+    assert tuple(body["gemini_minimal_read_only_bundle"]) == GEMINI_MINIMAL_READ_ONLY_BUNDLE
+
+
+def test_gemini_minimal_read_only_bundle_is_exact_blessed_six_tools() -> None:
+    assert GEMINI_MINIMAL_READ_ONLY_BUNDLE == (
+        "seedcore.verification.queue",
+        "seedcore.verification.workflow_verification_detail",
+        "seedcore.verification.workflow_replay",
+        "seedcore.verification.runbook_lookup",
+        "seedcore.hotpath.status",
+        "seedcore.hotpath.metrics",
+    )
+    assert set(GEMINI_MINIMAL_READ_ONLY_BUNDLE).issubset(set(PLUGIN_TOOL_NAMES))
 
 
 def test_plugin_tool_surface_includes_q2_verification_read_tools():
@@ -149,6 +164,20 @@ async def test_handle_health_and_readyz_normalize_payloads():
     assert readyz["ok"] is True
     assert readyz["deps"] == {"db": "ok"}
     assert readyz["source_url"].endswith("/readyz")
+
+
+@pytest.mark.asyncio
+async def test_handle_hotpath_status_is_read_only_and_preserves_observability():
+    runtime = _RuntimeStub()
+    runtime.hotpath_status.return_value = {
+        "authz_graph_ready": True,
+        "observability": {"contract_version": "seedcore.observability.hot_path.v1", "alert_level": "info", "alerts": []},
+    }
+    out = await handle_hotpath_status(runtime)
+    assert out["read_only"] is True
+    assert out["data"]["observability"]["alert_level"] == "info"
+    assert out["authz_graph_ready"] is True
+    assert "/pdp/hot-path/status" in out["source_url"]
 
 
 @pytest.mark.asyncio

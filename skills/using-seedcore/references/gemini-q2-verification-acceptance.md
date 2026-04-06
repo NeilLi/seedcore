@@ -6,38 +6,41 @@ Use this prompt when you need to verify the SeedCore Q2 read-only verification s
 Run the SeedCore MCP acceptance check with fixture-backed Q2 verification only.
 
 Acceptance checklist:
-1. Verify these tools and mark PASS only if they are read-only shaped and return expected payloads:
+1. **Minimal Gemini-visible read bundle** (frozen contract proxies only; see `GET /info` → `gemini_minimal_read_only_bundle` on the plugin MCP app):
    - seedcore.verification.queue
-   - seedcore.verification.transfer_review
-   - seedcore.verification.workflow_projection
    - seedcore.verification.workflow_verification_detail
    - seedcore.verification.workflow_replay
    - seedcore.verification.runbook_lookup
-   - seedcore.hotpath.status
+   - seedcore.hotpath.status (`read_only`, full status under `data`, including `observability` / `alert_level`)
    - seedcore.hotpath.metrics
+2. Optional extra verification/hot-path tools (still read-only, not in the minimal bundle):
+   - seedcore.verification.transfer_review
+   - seedcore.verification.workflow_projection
 
-2. For the verification tools, use the allow_case fixture family and capture:
+3. Verify the minimal-bundle tools and mark PASS only if they are read-only shaped and return expected payloads (for the items in section 1).
+
+4. For the verification tools, use the allow_case fixture family and capture:
    - workflow_id
    - audit_id
    - intent_id
    - subject_id
 
-3. For hotpath.status, report:
+5. For hotpath.status, report (from `data` and top-level summary fields):
    - mode
    - parity summary
    - enforce_ready
    - graph_freshness_ok
    - alert level if present
 
-4. For hotpath.metrics, confirm:
+6. For hotpath.metrics, confirm:
    - Prometheus text is reachable
    - output includes alert/rollback or parity-related metrics
 
-5. Skip these tools unless you have a real runtime audit/public ID:
+7. Skip these tools unless you have a real runtime audit/public ID:
    - seedcore.evidence.verify
    - seedcore.forensic_replay.fetch
 
-6. If only fixture IDs are available, mark the two live-only tools as SKIPPED with reason:
+8. If only fixture IDs are available, mark the two live-only tools as SKIPPED with reason:
    - live-only runtime ID required
    - blocked-by-data
 

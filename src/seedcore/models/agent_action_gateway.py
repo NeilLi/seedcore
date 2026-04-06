@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .action_intent import ExecutionToken
+from .edge_telemetry import SignedEdgeTelemetryRefV0
 from .pdp_hot_path import HotPathDecisionView
 
 
@@ -375,6 +376,7 @@ class AgentActionClosureRequest(BaseModel):
     outcome: Literal["completed", "quarantined", "failed"] = "completed"
     evidence_bundle_id: str
     transition_receipt_ids: List[str] = Field(default_factory=list)
+    telemetry_refs: List[SignedEdgeTelemetryRefV0] = Field(default_factory=list)
     node_id: Optional[str] = None
     forensic_block: AgentActionForensicBlock
     summary: Dict[str, Any] = Field(default_factory=dict)
@@ -389,6 +391,16 @@ class AgentActionClosureRequest(BaseModel):
     def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional_str(value)
 
+    @model_validator(mode="after")
+    def _validate_telemetry_ref_ids(self) -> "AgentActionClosureRequest":
+        seen: set[str] = set()
+        for ref in self.telemetry_refs:
+            tid = str(ref.telemetry_id).strip()
+            if tid in seen:
+                raise ValueError(f"duplicate telemetry_id in telemetry_refs: {tid}")
+            seen.add(tid)
+        return self
+
 
 class AgentActionClosureResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -402,6 +414,7 @@ class AgentActionClosureResponse(BaseModel):
     replay_status: Literal["pending", "ready"] = "pending"
     linked_disposition: str
     forensic_block_id: Optional[str] = None
+    telemetry_refs: List[SignedEdgeTelemetryRefV0] = Field(default_factory=list)
     settlement_result: Dict[str, Any] = Field(default_factory=dict)
     next_actions: List[str] = Field(default_factory=list)
 

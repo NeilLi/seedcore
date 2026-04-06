@@ -121,6 +121,41 @@ def test_materialized_forensic_block_matches_contract_schema() -> None:
     assert forensic_block["asset_identity"]["asset_id"] == "asset:lot-8841"
 
 
+def test_materialized_physical_presence_hash_incorporates_signed_telemetry_refs() -> None:
+    audit_record = _build_audit_record()
+    baseline = materialize_seedcore_custody_event_payload(audit_record=audit_record)
+    base_hash = baseline["seedcore:forensic_block"]["fingerprint_components"]["physical_presence_hash"]
+    audit_record["evidence_bundle"]["telemetry_refs"] = [
+        {
+            "contract_version": "seedcore.edge_telemetry_envelope.v0",
+            "telemetry_id": "z-last",
+            "asset_ref": "asset:lot-8841",
+            "edge_node_ref": "edge:1",
+            "observed_at": "2026-04-02T12:00:00Z",
+            "sensor_kind": "temperature",
+            "payload_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "signer_key_ref": "kms:a",
+        },
+        {
+            "contract_version": "seedcore.edge_telemetry_envelope.v0",
+            "telemetry_id": "a-first",
+            "asset_ref": "asset:lot-8841",
+            "edge_node_ref": "edge:2",
+            "observed_at": "2026-04-02T12:00:01Z",
+            "sensor_kind": "generic",
+            "payload_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "signer_key_ref": "kms:b",
+        },
+    ]
+    with_signed = materialize_seedcore_custody_event_payload(audit_record=audit_record)
+    new_hash = with_signed["seedcore:forensic_block"]["fingerprint_components"]["physical_presence_hash"]
+    assert new_hash != base_hash
+    pe = with_signed["seedcore:forensic_block"]["physical_evidence"]
+    assert isinstance(pe.get("telemetry_refs"), list)
+    assert len(pe["telemetry_refs"]) == 2
+    assert pe["telemetry_refs"][0]["telemetry_id"] == "a-first"
+
+
 def test_materialized_forensic_block_rejects_invalid_existing_shape() -> None:
     audit_record = _build_audit_record()
     audit_record["evidence_bundle"]["forensic_block"] = {

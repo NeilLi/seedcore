@@ -74,6 +74,63 @@
           ],
           "title": "AgentActionForensicBlockFingerprintComponents",
           "type": "object"
+        },
+        "SignedEdgeTelemetryRefV0": {
+          "additionalProperties": false,
+          "description": "Frozen reference to a signed edge telemetry envelope (closure / receipt input).\n\nCarries digest binding fields only \u2014 not the full sample payload.",
+          "properties": {
+            "asset_ref": {
+              "title": "Asset Ref",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "seedcore.edge_telemetry_envelope.v0",
+              "default": "seedcore.edge_telemetry_envelope.v0",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "edge_node_ref": {
+              "title": "Edge Node Ref",
+              "type": "string"
+            },
+            "observed_at": {
+              "title": "Observed At",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "sensor_kind": {
+              "enum": [
+                "motor_torque",
+                "weight_cell",
+                "temperature",
+                "generic"
+              ],
+              "title": "Sensor Kind",
+              "type": "string"
+            },
+            "signer_key_ref": {
+              "title": "Signer Key Ref",
+              "type": "string"
+            },
+            "telemetry_id": {
+              "title": "Telemetry Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "telemetry_id",
+            "asset_ref",
+            "edge_node_ref",
+            "observed_at",
+            "sensor_kind",
+            "payload_sha256",
+            "signer_key_ref"
+          ],
+          "title": "SignedEdgeTelemetryRefV0",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -135,6 +192,13 @@
           "title": "Summary",
           "type": "object"
         },
+        "telemetry_refs": {
+          "items": {
+            "$ref": "#/$defs/SignedEdgeTelemetryRefV0"
+          },
+          "title": "Telemetry Refs",
+          "type": "array"
+        },
         "transition_receipt_ids": {
           "items": {
             "type": "string"
@@ -155,6 +219,65 @@
       "type": "object"
     },
     "AgentActionClosureResponse": {
+      "$defs": {
+        "SignedEdgeTelemetryRefV0": {
+          "additionalProperties": false,
+          "description": "Frozen reference to a signed edge telemetry envelope (closure / receipt input).\n\nCarries digest binding fields only \u2014 not the full sample payload.",
+          "properties": {
+            "asset_ref": {
+              "title": "Asset Ref",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "seedcore.edge_telemetry_envelope.v0",
+              "default": "seedcore.edge_telemetry_envelope.v0",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "edge_node_ref": {
+              "title": "Edge Node Ref",
+              "type": "string"
+            },
+            "observed_at": {
+              "title": "Observed At",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "sensor_kind": {
+              "enum": [
+                "motor_torque",
+                "weight_cell",
+                "temperature",
+                "generic"
+              ],
+              "title": "Sensor Kind",
+              "type": "string"
+            },
+            "signer_key_ref": {
+              "title": "Signer Key Ref",
+              "type": "string"
+            },
+            "telemetry_id": {
+              "title": "Telemetry Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "telemetry_id",
+            "asset_ref",
+            "edge_node_ref",
+            "observed_at",
+            "sensor_kind",
+            "payload_sha256",
+            "signer_key_ref"
+          ],
+          "title": "SignedEdgeTelemetryRefV0",
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "accepted_at": {
@@ -228,6 +351,13 @@
           "default": "accepted_pending_settlement",
           "title": "Status",
           "type": "string"
+        },
+        "telemetry_refs": {
+          "items": {
+            "$ref": "#/$defs/SignedEdgeTelemetryRefV0"
+          },
+          "title": "Telemetry Refs",
+          "type": "array"
         }
       },
       "required": [
@@ -1089,12 +1219,38 @@
           "title": "Request Id",
           "type": "string"
         },
+        "request_schema_bundle": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Schema Bundle"
+        },
         "required_approvals": {
           "items": {
             "type": "string"
           },
           "title": "Required Approvals",
           "type": "array"
+        },
+        "taxonomy_bundle": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Taxonomy Bundle"
         },
         "trust_gaps": {
           "items": {

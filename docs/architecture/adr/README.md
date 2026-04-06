@@ -9,6 +9,7 @@ windows, or implementation rewrites.
 
 - [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](./adr-0001-pdp-hot-path.md)
 - [ADR 0002: Use Google IAP as the First-Mile Identity Gate for Non-Public SeedCore Ingress](./adr-0002-iap-edge-identity.md)
+- [ADR 0003: Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](./adr-0003-igx-thor-trusted-edge-profile.md)
 
 ## Conventions
 
