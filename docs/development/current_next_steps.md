@@ -65,7 +65,7 @@ Latest repo-aligned critical-path status:
   and hot-path observability status/metrics checks are validated by a live host
   script with hardened metrics parsing diagnostics.
 
-## Status Update (2026-04-06)
+## Status Update (2026-04-06, Governance-Aware Learning Plan)
 
 - **Window E/F (signed edge telemetry refs + minimal Gemini read bundle)** is
   implemented as an additive contract pass:
@@ -87,6 +87,25 @@ Latest repo-aligned critical-path status:
     `seedcore.hotpath.status` is `read_only` with full contract JSON under `data`
     (preserving `observability`); verification reads unchanged
     (`ok`, `read_only`, `source_url`, `data` / `text`).
+
+## Status Update (2026-04-06)
+
+- **Post-Q2/Q3 governance-aware learning plan is now defined** as the next
+  higher implementation stage:
+  - the goal is not to replace the synchronous PDP, but to introduce
+    distillation, abstention tuning, proof refinement, and governance-aware RL
+    as bounded supporting components
+  - the canonical planning doc is
+    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
+  - the execution rule remains:
+    - the model may learn
+    - SeedCore still decides
+  - the initial sequence is:
+    - freeze governance-learning sample schemas and exports
+    - build a shadow-only distilled reasoning scaffold
+    - add HALT-style authority abstention tuning
+    - build a trust-proof refiner around strict replay verification
+    - add governance-aware RL in simulation only
 
 ## Status Update (2026-04-03)
 
@@ -154,6 +173,12 @@ The following should be treated as present, not future work:
 This means the next stage is not about adding more concepts for their own sake.
 It is about converting the existing governed execution baseline into a
 product-grade trust runtime for high-trust, multi-party environments.
+
+The next higher stage after that is now also explicit:
+
+- use learned systems only where they strengthen the trust slice through
+  bounded, replay-linkable, fail-closed behavior
+- do not let learning become an alternate authorization path
 
 ## Strategic Objective
 
@@ -265,6 +290,13 @@ The dependency order should stay clear:
 - then expose that trust boundary through a narrow product surface
 - then expand multi-party governance on top of a runtime that is already
   defensible and operable
+
+Once that program is materially closed, the next-stage implementation track is:
+
+- governance-aware learning through distillation, abstention tuning, proof
+  refinement, and simulation RL
+- canonical plan:
+  [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 
 ## Program Lock: One Must-Win Workflow
 

@@ -62,6 +62,7 @@ This table is the shortest answer to "what stage are we in?"
 | 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
 | 10. External agent boundary | Expose one narrow stable gateway for agent-originated requests | v1 contract drafted and being productized | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md) |
 | 11. Sidecar innovation tracks | Preserve robotics/VLA and source-registration ideas without distracting from the RCT wedge | Sidecar, not current center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
+| 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, and simulation RL as bounded trust-slice components | Planned next-stage track | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`current_next_steps.md`](current_next_steps.md) |
 
 ## 4. What Is Done
 
@@ -123,6 +124,9 @@ Near-term execution order:
    per [north_star_autonomous_trade_environment.md](north_star_autonomous_trade_environment.md)
    — follow the phased schedule in [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
    (compose, topics, flagged producers, degradation semantics).
+7. Start the governance-aware learning track only after the current trust slice
+   remains stable under the above pressures:
+   [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 
 Primary planning docs:
 
@@ -131,6 +135,7 @@ Primary planning docs:
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`edge_telemetry_evidence_closure_draft.md`](edge_telemetry_evidence_closure_draft.md)
 - [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
+- [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 
 ## 7. How To Read The Rest Of This Directory
 
@@ -174,6 +179,7 @@ Primary planning docs:
 - [`source_registration_tracking_event_sequence.md`](source_registration_tracking_event_sequence.md)
 - [`source_registration_tracking_event_curl_collection.md`](source_registration_tracking_event_curl_collection.md)
 - [`vla_2026_optimizations.md`](vla_2026_optimizations.md)
+- [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) — bounded learning plan that converts VLA/distillation ideas into a trust-slice-aligned execution track
 - [`autonomous_verifier_agents_decision_memo.md`](autonomous_verifier_agents_decision_memo.md)
 - [`baseline_task_types_analysis.md`](baseline_task_types_analysis.md)
 - [`agent_capability_skills_relationships.md`](agent_capability_skills_relationships.md)
