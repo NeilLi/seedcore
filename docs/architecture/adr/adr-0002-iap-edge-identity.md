@@ -24,8 +24,10 @@ Recent platform docs and Zero Trust research point to a layered model rather tha
 - Google Cloud now supports enabling IAP directly on Cloud Run so all ingress paths, including `run.app`, are routed through IAP before the container receives the request.
 - For GKE, IAP is enabled through `BackendConfig` on Ingress or `GCPBackendPolicy` on Gateway, but those are different control planes; `BackendConfig` is not valid for Gateway, and moving an existing BackendConfig from custom OAuth credentials to a Google-managed OAuth client requires recreating the backend.
 - Google Cloud requires applications to validate `x-goog-iap-jwt-assertion`; unsigned `x-goog-authenticated-user-*` headers are explicitly not sufficient as a security mechanism if IAP can be bypassed.
+- Google Cloud documents context-aware access for IAP through access levels and IAM Conditions, including device attributes, IP/network context, and URL host/path restrictions; those controls complement app authorization but do not replace it.
 - IAP health checks on Compute/GKE do not include JWT headers, so any app-side IAP validator must explicitly allow health-check paths.
 - Programmatic access is supported with user/service OIDC tokens or service-account signed JWTs. With a Google-managed OAuth client, programmatic access is blocked by default unless the OAuth client is allowlisted. Service-account OIDC tokens must include an `email` claim.
+- IAP also supports external identities through Identity Platform, workforce identities through Workforce Identity Federation, and HTTP-based on-premises application access, but those are optional extension paths rather than requirements for SeedCore's first operator ingress lane.
 - A 2025 arXiv preprint, "Identity Control Plane: The Unifying Layer for Zero Trust Infrastructure," argues for a unified human/workload/automation identity plane using OIDC/SAML, workload identity, brokered transaction tokens, and ABAC policy engines such as OPA/Cedar. That direction matches "IAP for ingress identity + SeedCore PDP for action authorization" better than replacing the PDP with edge IAM alone.
 
 ## Decision
@@ -37,6 +39,7 @@ SeedCore will **not** treat IAP as the sole authorization system for governed ac
 ### Decision Shape
 
 - IAP authenticates human operators and trusted org users before they reach protected admin/control routes.
+- IAP IAM policy and optional context-aware access policy act as the first-mile admission gate for those protected routes.
 - SeedCore's PDP, DID/delegation checks, signed-intent verification, and execution-token semantics remain the authoritative operation-level authorization boundary after ingress authentication.
 - For operator-triggered governed actions, the IAP principal and the SeedCore governance principal must both be captured in the audit/replay surface. If an IAP user identity contradicts the owner/assistant principal implied by a signed intent, delegation, or policy context on a high-consequence route, the request must fail closed or be quarantined.
 - Public trust and verification reads must be served from a **separate public hostname or deployment path** that is intentionally not org-IAP-gated, while write/admin/control surfaces remain IAP-protected.
@@ -68,6 +71,16 @@ Add one request middleware in `seedcore-api` that, when IAP enforcement is enabl
 
 Do **not** trust unsigned `x-goog-authenticated-user-email` or `x-goog-authenticated-user-id` as the primary security signal in production mode.
 
+#### Phase 2A: Add Optional Context-Aware Access for Operator Surfaces
+
+Once the basic IAP ingress lane is working, SeedCore should support stricter operator access through IAP IAM Conditions and Access Context Manager access levels where appropriate, for example:
+
+- requiring managed or compliant devices for `/admin` or other operator-only routes
+- restricting sensitive routes to specific IP or network contexts
+- applying tighter path-based conditions to the highest-consequence operator surfaces
+
+These controls should be treated as ingress hardening and operator-risk reduction, not as a replacement for SeedCore's governed action authorization.
+
 #### Phase 3: Define Machine-to-Machine Access
 
 - Internal pod-to-pod and `seedcore-api` to Ray Serve traffic should stay on private cluster service URLs plus NetworkPolicy, not browser-oriented IAP redirects.
@@ -93,6 +106,8 @@ It does not replace:
 - execution-token issuance
 - governed receipts and replay evidence
 
+This ADR also does not attempt to standardize every IAP deployment mode. IAP features such as TCP forwarding, on-premises app connectors, Identity Platform external identities, and Workforce Identity Federation are real extension paths, but they are outside the default scope of this ADR unless SeedCore later decides to expose those specific surfaces.
+
 This ADR also does not require an immediate migration of every existing `nginx` ingress route, Ray Serve route, or local dev script to IAP in one step. It requires a concrete split between protected operator surfaces and intentionally public verification surfaces, and it requires the app to cryptographically validate IAP assertions wherever IAP is expected to be the edge identity gate.
 
 ## Why
@@ -102,6 +117,7 @@ This is the most feasible interpretation of "use IAP" for the current SeedCore b
 Why this shape is preferable:
 
 - It aligns with NIST's layered Zero Trust guidance: edge identity checks, service identity, application authorization, and monitoring should work together rather than collapse into one layer.
+- It leaves room for stronger ingress policy later through context-aware access, device posture, and path-specific IAM conditions without forcing those concerns into SeedCore's business authorization layer.
 - It keeps SeedCore's domain-specific authorization semantics in the PDP, where custody, delegation, trust gaps, and execution-token constraints are already modeled.
 - It avoids breaking public verification APIs that are meant to be consumed anonymously.
 - It gives operators org-native IAM onboarding/offboarding and Cloud Audit Logging without forcing every router to implement bespoke auth.
@@ -122,6 +138,7 @@ Negative:
 - Dual ingress modes add deployment complexity during migration: local/dev `nginx` versus production IAP-backed GCLB/Gateway/Cloud Run.
 - `seedcore-api` must own IAP assertion verification, expected-audience config, public-key caching, and test fixtures.
 - Health checks, CORS preflight, and public trust endpoints need explicit route-level treatment.
+- If SeedCore later enables context-aware access, operators may also need device-compliance and access-level troubleshooting beyond ordinary IAM debugging.
 - IAP adds latency and is incompatible with Cloud CDN on protected backends, so latency-sensitive direct Ray Serve paths should stay private or use a different pattern.
 - Changing IAP OAuth-client mode on existing GKE backends can require backend recreation and a maintenance window.
 
@@ -131,6 +148,7 @@ Negative:
 - Keep IAP disabled by default for local dev and CI unless explicitly enabled by environment variables such as `SEEDCORE_IAP_REQUIRED=true` and `SEEDCORE_IAP_AUDIENCE=...`.
 - Use synthetic signed-header fixtures or a test-only bypass flag in integration tests; do not introduce production code that trusts arbitrary unsigned `x-goog-*` client headers.
 - Normalize ingress identity into stable fields such as `operator_sub`, `operator_email`, `operator_hd`, `operator_access_levels`, `iap_aud`, `iap_iss`, and request correlation IDs.
+- If context-aware access is enabled, preserve access-level evidence in structured logs so operator troubleshooting and forensic review can distinguish IAM failures from access-level failures.
 - Persist ingress operator identity in governed audit rows for operator-initiated actions if existing `actor` columns are not enough to reconstruct provenance.
 - For GKE Ingress using a Google-managed OAuth client, start with a new backend if possible. If an existing backend already uses custom OAuth credentials and must switch, plan a recreate window.
 - For GKE Gateway, use `GCPBackendPolicy`; for classic GKE Ingress, use `BackendConfig`. Do not mix those assumptions in one manifest.
@@ -170,6 +188,10 @@ Rejected. IAP authenticates ingress users and can enforce coarse access policy, 
 - [Programmatic authentication for IAP](https://docs.cloud.google.com/iap/docs/authentication-howto)
 - [Getting the user's identity with IAP](https://docs.cloud.google.com/iap/docs/identity-howto)
 - [Securing your app with signed headers](https://docs.cloud.google.com/iap/docs/signed-headers-howto)
+- [Setting up context-aware access with IAP](https://docs.cloud.google.com/iap/docs/cloud-iap-context-aware-access-howto)
+- [External identities for IAP](https://docs.cloud.google.com/iap/docs/external-identities)
+- [Configure IAP with Workforce Identity Federation](https://docs.cloud.google.com/iap/docs/use-workforce-identity-federation)
+- [Overview of IAP for on-premises apps](https://docs.cloud.google.com/iap/docs/cloud-iap-for-on-prem-apps-overview)
 - [GKE Ingress configuration: BackendConfig + IAP](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/ingress-configuration)
 - [GKE Gateway configuration: GCPBackendPolicy + IAP](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/configure-gateway-resources)
 - [NIST SP 800-207A announcement](https://www.nist.gov/news-events/news/2023/09/zero-trust-architecture-model-access-control-cloud-native-applications)

@@ -37,6 +37,22 @@ SeedCore will continue to rely on stateful supporting systems around that decisi
 - governed receipts and replay evidence after decision and execution
 - shadow/canary/enforce rollout with parity checks and rollback triggers
 
+### Context Supply Chain Clarification
+
+For SeedCore, a stateless PDP does **not** mean "pull whatever context is available at request time."
+
+It means the final decision stays stateless while the **context supply chain**
+becomes a first-class, fail-closed subsystem with four required properties:
+
+- event-driven context propagation instead of best-effort polling
+- per-request causality and freshness controls
+- cryptographically verifiable context envelopes for edge-critical attributes
+- attribute-level ownership and freshness SLAs
+
+For high-consequence actions, stale context should be treated as a policy
+failure, not as a soft operational inconvenience. In practice, stale custody,
+approval, or device state is often equivalent to an authorization bypass.
+
 ## Decision Boundaries
 
 This ADR establishes the shape of the final authorization boundary. It does not require:
@@ -46,6 +62,9 @@ This ADR establishes the shape of the final authorization boundary. It does not 
 - a prohibition on asynchronous enrichment, indexing, compilation, or audit processing
 
 This ADR does require that the final governed decision remains a single synchronous, deterministic, fail-closed step over pinned inputs.
+
+This ADR also requires that the systems feeding that step be designed so the PDP
+does not need to perform live, multi-hop consistency discovery at request time.
 
 ## Why
 
@@ -62,8 +81,30 @@ Benefits of this decision:
 Why this remains competitive:
 
 - the moat is not "stateless PDP" by itself
-- the moat is the combination of compiled policy, pinned snapshots, strict context typing, evidence binding, and operator-visible parity/rollback control
+- the moat is the combination of compiled policy, pinned snapshots, strict context typing, freshness and causality guarantees, evidence binding, and operator-visible parity/rollback control
 - SeedCore can make the final decision faster and more auditable than systems that rely on live graph rebuilding or loosely coupled policy calls
+
+### Why the Context Supply Chain Must Be Stronger
+
+Mature authorization systems do not solve freshness by making the final check
+asynchronous. They solve it by making the surrounding state pipeline more
+causally disciplined.
+
+Patterns that inform SeedCore here:
+
+- log-based CDC pipelines move source-of-truth mutations into streaming systems
+  quickly enough for near-local materialized views and caches to stay current
+- Zanzibar's zookie model, and SpiceDB's equivalent `ZedToken`, show how a
+  caller can require a check to be "at least as fresh" as a causally relevant
+  update
+- cryptographic attenuation/envelope mechanisms such as macaroons and biscuit
+  tokens show how context can be carried with the request itself rather than
+  rediscovered through a late network round-trip
+
+For SeedCore, these patterns are especially relevant because the hot path can
+govern simulator execution, custody release, or physical robot actions. In that
+environment, context lag is not merely stale UI data; it can create a real
+world policy gap.
 
 ## Consequences
 
@@ -77,6 +118,8 @@ Negative:
 
 - the snapshot and context supply chain becomes critical infrastructure
 - stale telemetry or stale snapshots must be handled explicitly and conservatively
+- local context caches, stream processors, and causality-token handling now sit
+  on the trust-critical path even if they are outside the final PDP function
 - any future extension that needs rich sharing or delegation graphs may require a separate graph-backed store, but not as the default hot-path architecture
 
 ## Implementation Notes
@@ -90,6 +133,97 @@ SeedCore should continue to preserve these properties in code and docs:
 - one hot-path observability contract
 - one promotion gate for shadow to canary to enforce
 
+SeedCore should also strengthen the context supply chain with the following
+implementation rules.
+
+### 1. Prefer Event-Driven Context Pipelines Over Request-Time Pulls
+
+Wherever possible, context used by the hot path should be pushed from systems of
+record into local materialized views or caches by event streams, not assembled
+by synchronous fan-out during the final authorization call.
+
+Preferred shape:
+
+- source-of-truth mutation occurs
+- CDC or equivalent change stream emits the mutation
+- Kafka or another durable event backbone distributes the change
+- near-local policy context views and caches subscribe and update
+- the final PDP evaluates against those pinned local views
+
+This is a better fit for SeedCore than repeatedly querying live backing systems
+for approval, custody, or edge state at decision time.
+
+### 2. Add Causality Tokens to Mutations and Requests
+
+Critical mutations should return an opaque causality token representing a
+minimum freshness boundary for later checks.
+
+Examples:
+
+- approval envelope updated
+- custody or twin state changed
+- delegation or role revoked
+- asset lock or release status changed
+
+The request assembler or PEP should be able to attach a causality token to a
+subsequent hot-path check and require the local context view to be at least that
+fresh before evaluation proceeds.
+
+If the local context store cannot prove that freshness bound in time, the
+request should block briefly for convergence or fail closed. SeedCore should not
+silently downgrade to "best effort" freshness for high-consequence actions.
+
+### 3. Use Cryptographically Bound Context Envelopes for Edge-Critical State
+
+For edge and robotics workflows, some context should arrive as a signed
+envelope rather than as a late database lookup.
+
+Examples include:
+
+- hardware identity and attestation summary
+- joint or actuator state
+- thermal or safety-limit telemetry
+- custody sensor evidence
+- signed edge telemetry envelopes already modeled by SeedCore
+
+The PDP remains stateless here too: it verifies the signature, checks freshness
+and scope, and evaluates policy over the attached claims. This removes a whole
+class of race conditions caused by request-time polling of remote edge state.
+
+### 4. Enforce Attribute-Level Freshness SLAs
+
+SeedCore should not treat all context as equally fresh or equally expensive.
+Each context class should have:
+
+- a data owner
+- a source of truth
+- a required freshness SLA
+- a fail-closed disposition if the SLA is violated
+
+Example direction:
+
+- org/profile context may tolerate minute-level staleness for low-risk reads
+- approval or delegation context may require tighter bounds for governed writes
+- custody and robot/device telemetry for physical execution may require
+  sub-second or otherwise explicitly bounded freshness
+
+The important rule is that the SLA must be explicit and replay-visible, not left
+to implicit cache defaults.
+
+### 5. Bind Freshness Into Replay Evidence
+
+Governed receipts and replay artifacts should continue evolving so they can
+explain not only which policy snapshot was used, but also which context-freshness
+and causality boundary was satisfied at decision time.
+
+This direction is already compatible with SeedCore's `state_binding_hash`
+trajectory and should grow toward:
+
+- context version or token references
+- freshness check outcomes
+- edge-envelope signature provenance
+- explicit mismatch or timeout reasons when quarantine occurs
+
 ## Follow-On Work
 
 The items below are important strengthening work implied by this ADR, but they
@@ -99,9 +233,19 @@ To keep this decision competitive over the next execution windows, prioritize th
 following:
 
 - Add a stronger cross-system freshness and causality contract.
+- Define one explicit causality-token format for hot-path-relevant mutations and
+  request assembly.
+- Move trust-critical approval, custody, and delegation projections toward
+  event-driven or CDC-backed local context views.
 - Include per-request consistency controls, strict model/version pinning, and
   explicit protection against stale authorization decisions.
+- Add request fields and replay evidence fields for context version/freshness
+  proofs where the workflow is sensitive enough to require them.
 - Add stricter schema/type validation for policy inputs and request context.
+- Define attribute-level freshness SLAs and fail-closed behavior by context
+  class, especially for custody, telemetry, and hardware state.
+- Prefer signed edge-state envelopes over request-time remote polling for
+  hardware-critical facts.
 - Keep asynchronous work for enrichment, indexing, and compilation, not for the
   final `allow` / `deny` / `quarantine` / `escalate` decision.
 - Keep the authoritative PDP local or near-local to execution boundaries where
@@ -114,6 +258,13 @@ following:
 
 Reference direction (informing these priorities): Zanzibar/SpiceDB/OpenFGA
 consistency patterns and Cedar-style schema validation discipline.
+
+Concrete reference patterns informing this direction:
+
+- Debezium-style log-based CDC and event streaming for context propagation
+- Zanzibar zookies / SpiceDB `ZedToken`-style causality bounds
+- Macaroon / Biscuit-style cryptographic attenuation and request-bound context
+  envelopes
 
 ## Alternatives Considered
 
@@ -128,3 +279,19 @@ Rejected as the primary model. Mutable runtime state makes replay, rollout, and 
 ### Zanzibar-Style External Graph as the Primary PDP
 
 Rejected as the default hot-path architecture for the current wedge. It is useful for large-scale relationship authorization, but SeedCore currently needs custody, evidence, and execution-token semantics first. A graph-backed ReBAC system can be added later if delegation complexity grows enough to justify it.
+
+### Best-Effort Request-Time Context Fetching
+
+Rejected for the hot path. It creates hidden consistency races exactly where
+SeedCore needs the most deterministic behavior. For high-consequence actions,
+request-time pull chains should be minimized in favor of subscribed local views,
+causality tokens, and signed context envelopes.
+
+## References
+
+- [Debezium Architecture](https://debezium.io/documentation/reference/architecture.html)
+- [Debezium PostgreSQL Connector](https://debezium.io/documentation/reference/stable/connectors/postgresql.html)
+- [Zanzibar: Google's Consistent, Global Authorization System](https://www.usenix.org/conference/atc19/presentation/pang)
+- [SpiceDB Consistency and ZedTokens](https://authzed.com/docs/spicedb/concepts/consistency)
+- [Macaroons: Cookies with Contextual Caveats for Decentralized Authorization in the Cloud](https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/)
+- [Biscuit FAQ](https://www.biscuitsec.org/docs/help/faq/)
