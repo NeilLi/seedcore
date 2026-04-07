@@ -140,6 +140,7 @@ from ..ops.source_registration.projector import record_tracking_event
 from ..coordinator.core.signals import SignalEnricher
 from ..coordinator.metrics.registry import get_global_metrics_tracker
 from .digital_twin_service import DigitalTwinService
+from .result_verifier_runtime import ResultVerifierRuntime
 
 
 setup_logging(app_name="seedcore.coordinator_service.driver")
@@ -513,16 +514,13 @@ class Coordinator:
         self._capability_changes_lock = asyncio.Lock()
         self._capability_retry_task: Optional[asyncio.Task] = None
 
+        self._result_verifier_runtime: Optional[ResultVerifierRuntime] = None
+        self._runtime_services_started = False
+        self._runtime_services_lock = asyncio.Lock()
+
         self._register_routes()
-        
-        # Start capability monitor in background (non-blocking)
-        # Use asyncio.create_task if we're in an async context, otherwise defer
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._start_capability_monitor())
-        except RuntimeError:
-            # No running loop - will start on first request or via endpoint
-            pass
+        self.app.add_event_handler("startup", self.start_runtime_services)
+        self.app.add_event_handler("shutdown", self.stop_runtime_services)
         
         logger.info("✅ Coordinator (Tier-0) initialized")
 
@@ -640,7 +638,7 @@ class Coordinator:
         **ENHANCEMENT: Waits for OrganismService readiness before starting monitor.**
         This ensures capability changes can be processed immediately instead of being queued.
         """
-        if self._capability_monitor_task is not None:
+        if self._capability_monitor_task is not None and not self._capability_monitor_task.done():
             return
 
         async def _init_and_start():
@@ -823,8 +821,50 @@ class Coordinator:
             tags=["Ops"],
         )
 
+    async def start_runtime_services(self) -> None:
+        """Idempotently start coordinator runtime-side background services."""
+        async with self._runtime_services_lock:
+            if self._runtime_services_started:
+                return
+            await self._start_capability_monitor()
+            if self._result_verifier_runtime is None:
+                self._result_verifier_runtime = ResultVerifierRuntime(self)
+            self._result_verifier_runtime.start()
+            self._runtime_services_started = True
+
+    async def stop_runtime_services(self) -> None:
+        """Stop runtime-side services owned by the coordinator lifecycle."""
+        async with self._runtime_services_lock:
+            if self._result_verifier_runtime is not None:
+                await self._result_verifier_runtime.stop()
+                self._result_verifier_runtime = None
+            if self._capability_monitor is not None:
+                try:
+                    await self._capability_monitor.stop()
+                except Exception:
+                    logger.debug("CapabilityMonitor stop failed", exc_info=True)
+                self._capability_monitor = None
+            await self._cancel_background_task(self._capability_monitor_task)
+            self._capability_monitor_task = None
+            await self._cancel_background_task(self._capability_retry_task)
+            self._capability_retry_task = None
+            self._runtime_services_started = False
+
+    async def _cancel_background_task(self, task: Optional[asyncio.Task]) -> None:
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("Background task cancellation failed", exc_info=True)
+
     async def __call__(self, request: Request):
         """Direct ASGI call for Ray Serve."""
+        # Backstop for deployment topologies that bypass ASGI lifespan events.
+        await self.start_runtime_services()
         send = getattr(request, "send", None) or getattr(request, "_send", None)
         if send is None:
             raise RuntimeError("Request object does not provide an ASGI send callable")

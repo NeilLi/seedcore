@@ -1174,6 +1174,22 @@ class ReplayService:
         receipts = evidence_inputs.get("transition_receipts") if isinstance(evidence_inputs.get("transition_receipts"), list) else []
         return [dict(item) for item in receipts if isinstance(item, dict)]
 
+    def verify_audit_record_for_result_verifier(
+        self,
+        record: Mapping[str, Any],
+    ) -> Tuple[ReplayVerificationStatus, Mapping[str, Any], Mapping[str, Any], List[Dict[str, Any]]]:
+        """Run replay-chain + Rust verification on an in-memory governed audit row (no DB)."""
+        evidence_bundle = record.get("evidence_bundle") if isinstance(record.get("evidence_bundle"), dict) else {}
+        policy_receipt = record.get("policy_receipt") if isinstance(record.get("policy_receipt"), dict) else {}
+        transition_receipts = self._extract_transition_receipts(evidence_bundle=evidence_bundle)
+        status = self._build_verification_status(
+            record=record,
+            policy_receipt=policy_receipt,
+            evidence_bundle=evidence_bundle,
+            transition_receipts=transition_receipts,
+        )
+        return status, evidence_bundle, policy_receipt, transition_receipts
+
     def _extract_authz_graph(self, *, record: Mapping[str, Any]) -> Dict[str, Any]:
         policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
         authz_graph = policy_decision.get("authz_graph")

@@ -42,13 +42,15 @@ MIGRATION_127="${SCRIPT_DIR}/migrations/126_digital_twin_persistence.sql"
 MIGRATION_128="${SCRIPT_DIR}/migrations/127_digital_twin_event_journal.sql"
 MIGRATION_129="${SCRIPT_DIR}/migrations/128_custody_graph.sql"
 MIGRATION_130="${SCRIPT_DIR}/migrations/130_transfer_approval_runtime.sql"
+MIGRATION_133="${SCRIPT_DIR}/migrations/133_result_verifier.sql"
+MIGRATION_134="${SCRIPT_DIR}/migrations/134_result_verifier_runtime_state.sql"
 
 # Check if all migration files exist
 for migration in \
   "$MIGRATION_001" "$MIGRATION_002" "$MIGRATION_003" "$MIGRATION_004" "$MIGRATION_007" \
   "$MIGRATION_008" "$MIGRATION_009" "$MIGRATION_010" "$MIGRATION_011" \
   "$MIGRATION_012" "$MIGRATION_013" "$MIGRATION_014" "$MIGRATION_015" \
-  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125" "$MIGRATION_126" "$MIGRATION_127" "$MIGRATION_128" "$MIGRATION_129" "$MIGRATION_130"
+  "$MIGRATION_016" "$MIGRATION_017" "$MIGRATION_117" "$MIGRATION_118" "$MIGRATION_119" "$MIGRATION_120" "$MIGRATION_121" "$MIGRATION_122" "$MIGRATION_123" "$MIGRATION_124" "$MIGRATION_125" "$MIGRATION_126" "$MIGRATION_127" "$MIGRATION_128" "$MIGRATION_129" "$MIGRATION_130" "$MIGRATION_133" "$MIGRATION_134"
 do
   if [[ ! -f "$migration" ]]; then
     echo "❌ Migration file not found at: $migration"
@@ -87,6 +89,8 @@ echo "   - 127: Persistent digital twin state + history"
 echo "   - 128: Append-only digital twin event journal"
 echo "   - 129: Custody graph, lineage chain, and dispute workflow tables"
 echo "   - 130: Transfer approval runtime envelopes + transition history"
+echo "   - 133: Result verifier jobs + immutable outcome rows"
+echo "   - 134: Result verifier durable intake runtime watermark state"
 
 find_pg_pod() {
   local sel pod
@@ -292,6 +296,16 @@ kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME"
 echo "⚙️  Running migration 130: Transfer approval runtime envelopes + transition history..."
 kubectl -n "$NAMESPACE" cp "$MIGRATION_130" "$POSTGRES_POD:/tmp/130_transfer_approval_runtime.sql"
 kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/130_transfer_approval_runtime.sql"
+
+# Migration 133 (Result Verifier queue + outcomes)
+echo "⚙️  Running migration 133: Result verifier jobs + immutable outcome rows..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_133" "$POSTGRES_POD:/tmp/133_result_verifier.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/133_result_verifier.sql"
+
+# Migration 134 (Result Verifier runtime state watermark)
+echo "⚙️  Running migration 134: Result verifier durable intake runtime watermark state..."
+kubectl -n "$NAMESPACE" cp "$MIGRATION_134" "$POSTGRES_POD:/tmp/134_result_verifier_runtime_state.sql"
+kubectl -n "$NAMESPACE" exec "$POSTGRES_POD" -- psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f "/tmp/134_result_verifier_runtime_state.sql"
 
 # 6) Verify schema
 echo "✅ Verifying schema..."

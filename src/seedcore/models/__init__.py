@@ -19,6 +19,7 @@ try:
     )
     from .digital_twin import DigitalTwinEventJournal, DigitalTwinHistory, DigitalTwinState
     from .governance_audit import GovernedExecutionAudit
+    from .result_verifier import ResultVerifierJob, ResultVerifierOutcomeRecord, ResultVerifierRuntimeState
     from .transfer_approval import (
         TransferApprovalEnvelopeRecord,
         TransferApprovalTransitionEventRecord,
@@ -194,6 +195,9 @@ try:
         "DigitalTwinHistory",
         "DigitalTwinEventJournal",
         "GovernedExecutionAudit",
+        "ResultVerifierJob",
+        "ResultVerifierOutcomeRecord",
+        "ResultVerifierRuntimeState",
         "TransferApprovalEnvelopeRecord",
         "TransferApprovalTransitionEventRecord",
         "SourceRegistration",

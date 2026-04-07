@@ -1669,6 +1669,37 @@ class DigitalTwinEventJournalDAO:
         ).scalars().all()
         return [self._row_to_dict(row) for row in rows]
 
+    async def list_events_for_result_verifier_poll(
+        self,
+        session,
+        *,
+        event_types: Sequence[str],
+        after_recorded_at: datetime,
+        after_id: uuid.UUID,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Ordered journal slice for Coordinator RESULT_VERIFIER intake (composite cursor)."""
+        types = [str(t) for t in event_types if str(t).strip()]
+        if not types:
+            return []
+        lim = max(1, min(int(limit), 500))
+        stmt = (
+            select(DigitalTwinEventJournal)
+            .where(DigitalTwinEventJournal.event_type.in_(types))
+            .where(
+                (DigitalTwinEventJournal.recorded_at > after_recorded_at)
+                | (
+                    (DigitalTwinEventJournal.recorded_at == after_recorded_at)
+                    & (DigitalTwinEventJournal.id > after_id)
+                )
+            )
+            .order_by(DigitalTwinEventJournal.recorded_at.asc(), DigitalTwinEventJournal.id.asc())
+            .limit(lim)
+        )
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+        return [self._row_to_dict(row) for row in rows]
+
     def _row_to_dict(self, row: DigitalTwinEventJournal) -> Dict[str, Any]:
         return {
             "id": str(row.id),

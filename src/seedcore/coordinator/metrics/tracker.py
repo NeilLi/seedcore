@@ -95,6 +95,16 @@ class MetricsTracker:
             "dispatch_hgnn_ok_total": 0,
             "dispatch_hgnn_err_total": 0,
             "route_and_execute_latency_ms": deque(maxlen=latency_reservoir_size),
+            # RESULT_VERIFIER (Coordinator-embedded)
+            "result_verifier_jobs_enqueued_total": 0,
+            "result_verifier_jobs_processed_total": 0,
+            "result_verifier_pass_total": 0,
+            "result_verifier_quarantine_total": 0,
+            "result_verifier_integrity_fail_total": 0,
+            "result_verifier_quarantine_mutations_total": 0,
+            "result_verifier_retry_total": 0,
+            "result_verifier_terminal_fail_total": 0,
+            "result_verifier_worker_latency_ms": deque(maxlen=latency_reservoir_size),
         }
     
     def track_routing_decision(self, decision: str, has_plan: bool = False):

@@ -44,6 +44,8 @@ MIGRATIONS=(
   126_digital_twin_persistence.sql
   127_digital_twin_event_journal.sql
   128_custody_graph.sql
+  133_result_verifier.sql
+  134_result_verifier_runtime_state.sql
 )
 
 for migration in "${MIGRATIONS[@]}"; do

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Mapping, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
 
 from seedcore.coordinator.core.governance import build_twin_snapshot, merge_authoritative_twins
 from seedcore.coordinator.dao import DigitalTwinDAO, DigitalTwinEventJournalDAO
 from seedcore.models.action_intent import TwinRevisionStage, TwinSnapshot
+
+if TYPE_CHECKING:
+    from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,9 @@ TWIN_UPDATE_POLICY: dict[str, set[str]] = {
     "dispute_resolved": {"owner", "assistant", "asset", "batch", "product", "edge", "transaction"},
     "registration_confirmed": {"asset", "batch", "product"},
     "registration_quarantined": {"asset", "batch", "product"},
+    "verification_passed": {"asset", "batch", "transaction", "edge", "product"},
+    "verification_quarantined": {"asset", "batch", "transaction"},
+    "verification_failed": {"asset", "batch", "transaction"},
 }
 
 
@@ -248,6 +255,196 @@ class DigitalTwinService:
             },
         )
 
+    async def apply_result_verifier_outcome(
+        self,
+        outcome: "ResultVerifierOutcome",
+        *,
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        session: Any = None,
+    ) -> Dict[str, Any]:
+        """Authoritative fail-closed twin/custody mutation after RESULT_VERIFIER (RCT v1)."""
+        event_type = str(outcome.twin_event_type or "").strip()
+        if not event_type:
+            return {"updated": 0, "reason": "no_twin_event"}
+        asset_ref = str(outcome.asset_id or "").strip()
+        if not asset_ref:
+            return {"updated": 0, "reason": "missing_asset_id"}
+        twin_id = asset_ref if asset_ref.startswith("asset:") else f"asset:{asset_ref}"
+        raw_id = twin_id.split(":", 1)[1] if ":" in twin_id else twin_id
+
+        existing = await self._get_authoritative_twin_row(
+            twin_type="asset",
+            twin_id=twin_id,
+            session=session,
+        )
+        base_snapshot = self._build_result_verifier_subject_snapshot(
+            twin_type="asset",
+            twin_id=twin_id,
+            raw_subject_id=raw_id,
+            existing_row=existing,
+        )
+        ctx = self._build_result_verifier_context(outcome=outcome, event_type=event_type)
+
+        relevant = {"asset": base_snapshot}
+        if session is not None:
+            return await self.persist_relevant_twins_in_session(
+                session,
+                relevant_twin_snapshot=relevant,
+                task_id=task_id,
+                intent_id=intent_id,
+                authority_source="result_verifier",
+                change_reason="result_verifier_enforcement",
+                transition_context=ctx,
+            )
+        return await self.persist_relevant_twins(
+            relevant_twin_snapshot=relevant,
+            task_id=task_id,
+            intent_id=intent_id,
+            authority_source="result_verifier",
+            change_reason="result_verifier_enforcement",
+            transition_context=ctx,
+        )
+
+    async def apply_result_verifier_outcome_fallback(
+        self,
+        outcome: "ResultVerifierOutcome",
+        *,
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        session: Any = None,
+    ) -> Dict[str, Any]:
+        """Fail-closed fallback when RESULT_VERIFIER cannot resolve an asset twin."""
+        event_type = str(outcome.twin_event_type or "").strip()
+        if event_type not in {"verification_failed", "verification_quarantined"}:
+            return {"updated": 0, "reason": "fallback_not_required"}
+        intent_ref = str(intent_id or "").strip()
+        if not intent_ref:
+            return {"updated": 0, "reason": "missing_subject_for_fail_closed"}
+        twin_id = intent_ref if intent_ref.startswith("transaction:") else f"transaction:{intent_ref}"
+        raw_id = twin_id.split(":", 1)[1] if ":" in twin_id else twin_id
+
+        existing = await self._get_authoritative_twin_row(
+            twin_type="transaction",
+            twin_id=twin_id,
+            session=session,
+        )
+        base_snapshot = self._build_result_verifier_subject_snapshot(
+            twin_type="transaction",
+            twin_id=twin_id,
+            raw_subject_id=raw_id,
+            existing_row=existing,
+        )
+        ctx = self._build_result_verifier_context(outcome=outcome, event_type=event_type)
+        relevant = {"transaction": base_snapshot}
+
+        if session is not None:
+            return await self.persist_relevant_twins_in_session(
+                session,
+                relevant_twin_snapshot=relevant,
+                task_id=task_id,
+                intent_id=intent_ref,
+                authority_source="result_verifier",
+                change_reason="result_verifier_enforcement",
+                transition_context=ctx,
+            )
+        return await self.persist_relevant_twins(
+            relevant_twin_snapshot=relevant,
+            task_id=task_id,
+            intent_id=intent_ref,
+            authority_source="result_verifier",
+            change_reason="result_verifier_enforcement",
+            transition_context=ctx,
+        )
+
+    async def _get_authoritative_twin_row(
+        self,
+        *,
+        twin_type: str,
+        twin_id: str,
+        session: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        if session is not None:
+            return await self._dao.get_authoritative_snapshot(
+                session,
+                twin_type=twin_type,
+                twin_id=twin_id,
+            )
+        return await self.get_authoritative_twin(twin_type=twin_type, twin_id=twin_id)
+
+    def _build_result_verifier_subject_snapshot(
+        self,
+        *,
+        twin_type: str,
+        twin_id: str,
+        raw_subject_id: str,
+        existing_row: Optional[Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        if existing_row and isinstance(existing_row.get("snapshot"), dict):
+            base_snapshot = dict(existing_row["snapshot"])
+            base_snapshot.setdefault("twin_kind", twin_type)
+            base_snapshot.setdefault("twin_id", twin_id)
+            base_snapshot.setdefault("custody", {})
+            base_snapshot.setdefault("identity", {})
+        else:
+            if twin_type == "transaction":
+                base_snapshot = {
+                    "twin_kind": "transaction",
+                    "twin_id": twin_id,
+                    "lifecycle_state": "PREPARED",
+                    "revision_stage": TwinRevisionStage.AUTHORITATIVE.value,
+                    "identity": {"intent_id": raw_subject_id},
+                    "custody": {"intent_id": raw_subject_id, "pending_authority": False},
+                    "delegation": {},
+                    "risk": {},
+                    "telemetry": {},
+                    "evidence_refs": [],
+                    "governance": {},
+                }
+            else:
+                base_snapshot = {
+                    "twin_kind": "asset",
+                    "twin_id": twin_id,
+                    "lifecycle_state": "REGISTERED",
+                    "revision_stage": TwinRevisionStage.AUTHORITATIVE.value,
+                    "identity": {"asset_id": raw_subject_id},
+                    "custody": {"asset_id": raw_subject_id, "pending_authority": False},
+                    "delegation": {},
+                    "risk": {},
+                    "telemetry": {},
+                    "evidence_refs": [],
+                    "governance": {},
+                }
+        if twin_type == "transaction":
+            base_snapshot["identity"].setdefault("intent_id", raw_subject_id)
+            base_snapshot["custody"].setdefault("intent_id", raw_subject_id)
+        else:
+            base_snapshot["identity"].setdefault("asset_id", raw_subject_id)
+            base_snapshot["custody"].setdefault("asset_id", raw_subject_id)
+        return base_snapshot
+
+    def _build_result_verifier_context(
+        self,
+        *,
+        outcome: "ResultVerifierOutcome",
+        event_type: str,
+    ) -> Dict[str, Any]:
+        ctx: Dict[str, Any] = {
+            "phase": "result_verifier",
+            "event_type": event_type,
+        }
+        if outcome.verified:
+            ctx["verification_passed_at"] = datetime.now(timezone.utc).isoformat()
+            return ctx
+        lock_payload = {
+            "failure_code": outcome.failure_code,
+            "failure_class": outcome.failure_class,
+            "issues": list(outcome.issues or [])[:32],
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        ctx["result_verifier_lockout"] = lock_payload
+        return ctx
+
     async def _load_persisted_refs(
         self,
         baseline_twins: Mapping[str, TwinSnapshot],
@@ -344,6 +541,38 @@ class DigitalTwinService:
         elif event_type in {"registration_confirmed", "registration_quarantined"}:
             snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
             snapshot.custody["pending_authority"] = False
+        elif event_type == "verification_failed":
+            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
+            snapshot.custody["pending_authority"] = False
+            snapshot.custody["quarantined"] = True
+            snapshot.custody["is_quarantined"] = True
+            snapshot.custody["authority_source"] = "result_verifier"
+            gov = dict(snapshot.governance or {})
+            lockouts = list(gov.get("lockouts") or [])
+            if "result_verifier_lockout" not in lockouts:
+                lockouts.append("result_verifier_lockout")
+            gov["lockouts"] = lockouts
+            gov["result_verifier_lockout"] = dict(context.get("result_verifier_lockout") or {})
+            snapshot.governance = gov
+        elif event_type == "verification_quarantined":
+            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
+            snapshot.custody["pending_authority"] = False
+            snapshot.custody["quarantined"] = True
+            snapshot.custody["is_quarantined"] = True
+            snapshot.custody["authority_source"] = "result_verifier"
+            gov = dict(snapshot.governance or {})
+            lockouts = list(gov.get("lockouts") or [])
+            if "result_verifier_lockout" not in lockouts:
+                lockouts.append("result_verifier_lockout")
+            gov["lockouts"] = lockouts
+            gov["result_verifier_lockout"] = dict(context.get("result_verifier_lockout") or {})
+            snapshot.governance = gov
+        elif event_type == "verification_passed":
+            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
+            snapshot.custody["pending_authority"] = False
+            gov = dict(snapshot.governance or {})
+            gov["verification_passed_at"] = context.get("verification_passed_at")
+            snapshot.governance = gov
 
         snapshot.evidence_refs = self._collect_evidence_refs(snapshot=snapshot, context=context)
         governance_state = dict(snapshot.governance or {})
@@ -367,6 +596,10 @@ class DigitalTwinService:
         if event_type == "dispute_opened":
             return "DISPUTED"
         if event_type == "registration_quarantined" and snapshot.twin_kind in {"asset", "batch"}:
+            return "QUARANTINED"
+        if event_type == "verification_failed" and snapshot.twin_kind in {"asset", "batch", "transaction"}:
+            return "VERIFICATION_FAILED"
+        if event_type == "verification_quarantined" and snapshot.twin_kind in {"asset", "batch", "transaction"}:
             return "QUARANTINED"
         if event_type == "registration_confirmed" and snapshot.twin_kind in {"asset", "batch", "product"}:
             return "REGISTERED"
