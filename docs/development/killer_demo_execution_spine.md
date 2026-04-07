@@ -217,6 +217,7 @@ Do not let the phase drift into:
 
 ## Related Documents
 
+- [autonomous_repair_transfer_demo_spec.md](/Users/ningli/project/seedcore/docs/development/autonomous_repair_transfer_demo_spec.md)
 - [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
 - [restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
 - [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
