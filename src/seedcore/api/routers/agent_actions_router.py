@@ -972,6 +972,158 @@ def _prefixed_twin_id(kind: str, raw_value: str | None) -> str | None:
     return value if value.startswith(prefix) else f"{prefix}{value}"
 
 
+def _evaluate_gate_subject_refs_for_request(
+    *,
+    payload: AgentActionEvaluateRequest,
+) -> List[Tuple[str, str]]:
+    refs: List[Tuple[str, str]] = []
+    asset_ref = _prefixed_twin_id("asset", payload.asset.asset_id)
+    if asset_ref:
+        refs.append(("asset", asset_ref))
+    lot_id = str(payload.asset.lot_id or "").strip()
+    batch_ref = _prefixed_twin_id("batch", lot_id)
+    if batch_ref:
+        refs.append(("batch", batch_ref))
+    transaction_ref = _prefixed_twin_id("transaction", payload.request_id)
+    if transaction_ref:
+        refs.append(("transaction", transaction_ref))
+    return refs
+
+
+def _closure_gate_subject_refs(
+    *,
+    request_record: _AgentActionStoredRecord,
+    closure_payload: AgentActionClosureRequest,
+) -> List[Tuple[str, str]]:
+    refs: List[Tuple[str, str]] = []
+    asset_id = _closure_request_asset_id(request_record=request_record)
+    asset_ref = _prefixed_twin_id("asset", asset_id)
+    if asset_ref:
+        refs.append(("asset", asset_ref))
+    request_payload = (
+        dict(request_record.request_payload)
+        if isinstance(request_record.request_payload, dict)
+        else {}
+    )
+    request_asset = (
+        request_payload.get("asset")
+        if isinstance(request_payload.get("asset"), dict)
+        else {}
+    )
+    lot_id = str(request_asset.get("lot_id") or "").strip()
+    batch_ref = _prefixed_twin_id("batch", lot_id)
+    if batch_ref:
+        refs.append(("batch", batch_ref))
+    transaction_ref = _prefixed_twin_id("transaction", closure_payload.request_id)
+    if transaction_ref:
+        refs.append(("transaction", transaction_ref))
+    return refs
+
+
+async def _evaluate_result_verifier_gate_for_twin_refs(
+    *,
+    twin_refs: List[Tuple[str, str]],
+    twin_service: DigitalTwinService | None = None,
+) -> Dict[str, Any]:
+    service = twin_service or _resolve_digital_twin_service()
+    if service is None:
+        return {"blocked": False, "reason": "service_unavailable"}
+    evaluator = getattr(service, "evaluate_result_verifier_gate", None)
+    if not callable(evaluator):
+        return {"blocked": False, "reason": "gate_unavailable"}
+    try:
+        verdict = await evaluator(twin_refs=twin_refs)
+    except Exception:
+        logger.warning("RESULT_VERIFIER policy/closure gate evaluation failed", exc_info=True)
+        return {"blocked": False, "reason": "gate_eval_failed"}
+    if isinstance(verdict, dict):
+        return dict(verdict)
+    return {"blocked": False, "reason": "invalid_gate_verdict"}
+
+
+async def _apply_result_verifier_policy_gate(
+    *,
+    payload: AgentActionEvaluateRequest,
+    response: AgentActionEvaluateResponse,
+) -> AgentActionEvaluateResponse:
+    disposition = str(response.decision.disposition or "").strip().lower()
+    if disposition != "allow":
+        return response
+
+    verdict = await _evaluate_result_verifier_gate_for_twin_refs(
+        twin_refs=_evaluate_gate_subject_refs_for_request(payload=payload),
+    )
+    if not bool(verdict.get("blocked")):
+        return response
+
+    reason_code = str(verdict.get("reason_code") or "result_verifier_lockout").strip()
+    reason = str(verdict.get("reason") or "").strip()
+    twin_type = str(verdict.get("twin_type") or "").strip()
+    twin_id = str(verdict.get("twin_id") or "").strip()
+    if not reason:
+        target = f"{twin_type}:{twin_id}" if twin_type and twin_id else "authoritative subject twin"
+        reason = f"RESULT_VERIFIER lockout blocks transfer execution for {target}."
+
+    trust_gaps = list(response.trust_gaps)
+    for marker in ("result_verifier_lockout", reason_code):
+        if marker and marker not in trust_gaps:
+            trust_gaps.append(marker)
+    minted_artifacts = [item for item in response.minted_artifacts if item != "ExecutionToken"]
+
+    return response.model_copy(
+        update={
+            "decision": response.decision.model_copy(
+                update={
+                    "allowed": False,
+                    "disposition": "deny",
+                    "reason_code": reason_code,
+                    "reason": reason,
+                }
+            ),
+            "execution_token": None,
+            "trust_gaps": trust_gaps,
+            "minted_artifacts": minted_artifacts,
+        }
+    )
+
+
+async def _enforce_result_verifier_closure_gate(
+    *,
+    request_record: _AgentActionStoredRecord,
+    closure_payload: AgentActionClosureRequest,
+    twin_service: DigitalTwinService | None = None,
+) -> None:
+    verdict = await _evaluate_result_verifier_gate_for_twin_refs(
+        twin_refs=_closure_gate_subject_refs(
+            request_record=request_record,
+            closure_payload=closure_payload,
+        ),
+        twin_service=twin_service,
+    )
+    if not bool(verdict.get("blocked")):
+        return
+
+    reason_code = str(verdict.get("reason_code") or "result_verifier_lockout").strip()
+    message = str(verdict.get("reason") or "").strip() or (
+        "Closure blocked by authoritative RESULT_VERIFIER lockout state."
+    )
+    twin_ref = None
+    twin_type = str(verdict.get("twin_type") or "").strip()
+    twin_id = str(verdict.get("twin_id") or "").strip()
+    if twin_type and twin_id:
+        twin_ref = f"{twin_type}:{twin_id}"
+
+    detail: Dict[str, Any] = {
+        "error_code": "closure_blocked_by_result_verifier",
+        "message": message,
+        "request_id": closure_payload.request_id,
+        "gate_reason_code": reason_code,
+    }
+    if twin_ref:
+        detail["twin_ref"] = twin_ref
+    raise HTTPException(status_code=409, detail=detail)
+
+
 def _closure_request_asset_id(
     *,
     request_record: _AgentActionStoredRecord,
@@ -1287,6 +1439,23 @@ async def _apply_closure_settlement_handoff(
     twin_service = _resolve_digital_twin_service()
     if twin_service is None:
         return "rejected", {"enabled": True, "error_code": "settlement_session_unavailable"}
+
+    gate_verdict = await _evaluate_result_verifier_gate_for_twin_refs(
+        twin_refs=_closure_gate_subject_refs(
+            request_record=request_record,
+            closure_payload=closure_payload,
+        ),
+        twin_service=twin_service,
+    )
+    if bool(gate_verdict.get("blocked")):
+        return "rejected", {
+            "enabled": True,
+            "error_code": "settlement_blocked_by_result_verifier",
+            "gate_reason_code": str(gate_verdict.get("reason_code") or "result_verifier_lockout"),
+            "reason": str(gate_verdict.get("reason") or ""),
+            "twin_type": gate_verdict.get("twin_type"),
+            "twin_id": gate_verdict.get("twin_id"),
+        }
 
     policy_receipt = (
         dict(request_record.response.governed_receipt)
@@ -1643,6 +1812,7 @@ async def evaluate_agent_action(
         )
         response = _apply_forensic_scope_guards(payload=payload, response=response)
         response = await _apply_organism_preflight(payload=payload, response=response)
+        response = await _apply_result_verifier_policy_gate(payload=payload, response=response)
         response = _apply_no_execute_preflight(response, requested=requested_no_execute)
         response = _annotate_owner_context_in_response(response, owner_twin_snapshot)
         response = response.model_copy(
@@ -1724,6 +1894,10 @@ async def close_agent_action(
                 "linked_disposition": linked_disposition or "unknown",
             },
         )
+    await _enforce_result_verifier_closure_gate(
+        request_record=request_record,
+        closure_payload=payload,
+    )
 
     closure_hash = _canonical_payload_hash(payload)
     claimed, idempotency_entry = await _claim_closure_idempotency_key(

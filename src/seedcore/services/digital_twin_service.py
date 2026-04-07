@@ -228,6 +228,47 @@ class DigitalTwinService:
             current_type = parent.split(":", 1)[0] if ":" in parent else current_type
         return lineage
 
+    async def evaluate_result_verifier_gate(
+        self,
+        *,
+        twin_refs: list[tuple[str, str]],
+        session: Any = None,
+    ) -> Dict[str, Any]:
+        """Return fail-closed gate verdict from authoritative verifier lockout state."""
+        normalized_refs = [
+            (str(twin_type).strip(), str(twin_id).strip())
+            for twin_type, twin_id in twin_refs
+            if str(twin_type).strip() and str(twin_id).strip()
+        ]
+        if not normalized_refs:
+            return {"blocked": False, "checked_refs": 0}
+
+        try:
+            if session is not None:
+                rows = await self._dao.get_authoritative_snapshots(session, twin_refs=normalized_refs)
+            else:
+                if not self._session_factory:
+                    return {"blocked": False, "checked_refs": len(normalized_refs), "reason": "session_unavailable"}
+                async with self._session_factory() as query_session:
+                    rows = await self._dao.get_authoritative_snapshots(query_session, twin_refs=normalized_refs)
+        except Exception:
+            logger.warning("Failed to resolve RESULT_VERIFIER gate snapshots", exc_info=True)
+            return {"blocked": False, "checked_refs": len(normalized_refs), "reason": "lookup_failed"}
+
+        for twin_type, twin_id in normalized_refs:
+            row = rows.get((twin_type, twin_id))
+            snapshot = row.get("snapshot") if isinstance(row, dict) else None
+            verdict = self._result_verifier_gate_from_snapshot(
+                twin_type=twin_type,
+                twin_id=twin_id,
+                snapshot=snapshot if isinstance(snapshot, dict) else {},
+            )
+            if verdict.get("blocked"):
+                verdict["checked_refs"] = len(normalized_refs)
+                return verdict
+
+        return {"blocked": False, "checked_refs": len(normalized_refs)}
+
     async def settle_from_evidence_bundle(
         self,
         *,
@@ -665,3 +706,47 @@ class DigitalTwinService:
             if node_id:
                 return node_id
         return None
+
+    def _result_verifier_gate_from_snapshot(
+        self,
+        *,
+        twin_type: str,
+        twin_id: str,
+        snapshot: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        lifecycle_state = str(snapshot.get("lifecycle_state") or "").strip().upper()
+        governance = snapshot.get("governance") if isinstance(snapshot.get("governance"), Mapping) else {}
+        lockouts = [
+            str(item).strip()
+            for item in list(governance.get("lockouts") or [])
+            if str(item).strip()
+        ]
+        has_result_verifier_lockout = (
+            "result_verifier_lockout" in lockouts
+            or bool(governance.get("result_verifier_lockout"))
+        )
+        last_event_type = str(governance.get("last_event_type") or "").strip().lower()
+
+        reason_code: Optional[str] = None
+        if lifecycle_state == "VERIFICATION_FAILED" or last_event_type == "verification_failed":
+            reason_code = "result_verifier_verification_failed"
+        elif last_event_type == "verification_quarantined":
+            reason_code = "result_verifier_quarantined"
+        elif lifecycle_state == "QUARANTINED" and has_result_verifier_lockout:
+            reason_code = "result_verifier_quarantined"
+        elif has_result_verifier_lockout:
+            reason_code = "result_verifier_lockout"
+
+        if reason_code is None:
+            return {"blocked": False}
+
+        return {
+            "blocked": True,
+            "reason_code": reason_code,
+            "reason": (
+                f"Authoritative RESULT_VERIFIER gate blocked downstream transaction for "
+                f"{twin_type}:{twin_id} ({reason_code})."
+            ),
+            "twin_type": twin_type,
+            "twin_id": twin_id,
+        }
