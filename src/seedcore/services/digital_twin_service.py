@@ -14,6 +14,44 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Fail-closed verdicts when the RESULT_VERIFIER gate cannot read authoritative twin state.
+RESULT_VERIFIER_GATE_FAILURE_REASONS: dict[str, str] = {
+    "result_verifier_gate_session_unavailable": (
+        "Authoritative digital twin session factory is unavailable; "
+        "RESULT_VERIFIER gate cannot be evaluated and fails closed."
+    ),
+    "result_verifier_gate_lookup_failed": (
+        "Authoritative digital twin snapshot lookup failed; "
+        "RESULT_VERIFIER gate fails closed."
+    ),
+    "result_verifier_gate_service_unavailable": (
+        "Digital twin service is unavailable; RESULT_VERIFIER gate fails closed."
+    ),
+    "result_verifier_gate_unavailable": (
+        "Digital twin service does not expose evaluate_result_verifier_gate; "
+        "RESULT_VERIFIER gate fails closed."
+    ),
+    "result_verifier_gate_eval_failed": (
+        "RESULT_VERIFIER gate evaluation raised an error; fails closed."
+    ),
+    "result_verifier_gate_invalid_verdict": (
+        "RESULT_VERIFIER gate returned an invalid verdict; fails closed."
+    ),
+}
+
+
+def build_result_verifier_gate_failure_verdict(*, reason_code: str, checked_refs: int) -> Dict[str, Any]:
+    """Return a blocked verdict when the gate cannot prove a clean authoritative state (RCT fail-closed)."""
+    return {
+        "blocked": True,
+        "reason_code": reason_code,
+        "reason": RESULT_VERIFIER_GATE_FAILURE_REASONS.get(
+            reason_code,
+            "RESULT_VERIFIER gate failed closed due to an unresolved infrastructure condition.",
+        ),
+        "checked_refs": checked_refs,
+    }
+
 
 TWIN_UPDATE_POLICY: dict[str, set[str]] = {
     "policy_created": {"owner", "assistant", "asset", "batch", "product", "edge", "transaction"},
@@ -248,12 +286,18 @@ class DigitalTwinService:
                 rows = await self._dao.get_authoritative_snapshots(session, twin_refs=normalized_refs)
             else:
                 if not self._session_factory:
-                    return {"blocked": False, "checked_refs": len(normalized_refs), "reason": "session_unavailable"}
+                    return build_result_verifier_gate_failure_verdict(
+                        reason_code="result_verifier_gate_session_unavailable",
+                        checked_refs=len(normalized_refs),
+                    )
                 async with self._session_factory() as query_session:
                     rows = await self._dao.get_authoritative_snapshots(query_session, twin_refs=normalized_refs)
         except Exception:
             logger.warning("Failed to resolve RESULT_VERIFIER gate snapshots", exc_info=True)
-            return {"blocked": False, "checked_refs": len(normalized_refs), "reason": "lookup_failed"}
+            return build_result_verifier_gate_failure_verdict(
+                reason_code="result_verifier_gate_lookup_failed",
+                checked_refs=len(normalized_refs),
+            )
 
         for twin_type, twin_id in normalized_refs:
             row = rows.get((twin_type, twin_id))

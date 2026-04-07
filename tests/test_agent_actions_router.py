@@ -190,6 +190,11 @@ async def _closure_settlement_disabled(*args, **kwargs):
     return "pending", {"enabled": False}
 
 
+class _ResultVerifierGateOpenService:
+    async def evaluate_result_verifier_gate(self, *, twin_refs):
+        return {"blocked": False, "checked_refs": len(list(twin_refs or []))}
+
+
 class _ResultVerifierGateBlockedService:
     async def evaluate_result_verifier_gate(self, *, twin_refs):
         return {
@@ -200,6 +205,16 @@ class _ResultVerifierGateBlockedService:
             "twin_id": "asset:lot-8841",
             "checked_refs": len(list(twin_refs or [])),
         }
+
+
+class _ResultVerifierGateRaisesService:
+    async def evaluate_result_verifier_gate(self, *, twin_refs):
+        raise RuntimeError("simulated gate failure")
+
+
+class _ResultVerifierGateBadReturnService:
+    async def evaluate_result_verifier_gate(self, *, twin_refs):
+        return None
 
 
 def test_agent_actions_evaluate_wraps_hot_path_result(monkeypatch):
@@ -531,6 +546,124 @@ def test_agent_actions_evaluate_quarantines_when_organism_preflight_fails(monkey
     assert "organism_not_ready" in body["trust_gaps"]
 
 
+@pytest.mark.asyncio
+async def test_evaluate_result_verifier_gate_for_twin_refs_empty_is_not_blocked():
+    verdict = await agent_actions_router._evaluate_result_verifier_gate_for_twin_refs(twin_refs=[])
+    assert verdict.get("blocked") is False
+    assert verdict.get("checked_refs") in (0, None)
+
+
+def test_agent_actions_evaluate_denies_when_digital_twin_service_unavailable(monkeypatch):
+    """Hot-path allow is flipped to deny when the twin service cannot run the verifier gate (fail-closed)."""
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(agent_actions_router, "_resolve_digital_twin_service", lambda: None)
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "deny"
+    assert body["decision"]["reason_code"] == "result_verifier_gate_service_unavailable"
+    assert body["execution_token"] is None
+    assert "ExecutionToken" not in body["minted_artifacts"]
+    assert "result_verifier_gate_service_unavailable" in body["trust_gaps"]
+
+
+def test_agent_actions_evaluate_denies_when_result_verifier_gate_eval_raises(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateRaisesService(),
+    )
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "deny"
+    assert body["decision"]["reason_code"] == "result_verifier_gate_eval_failed"
+    assert body["execution_token"] is None
+
+
+def test_agent_actions_evaluate_denies_when_result_verifier_gate_method_missing(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(agent_actions_router, "_resolve_digital_twin_service", lambda: SimpleNamespace())
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "deny"
+    assert body["decision"]["reason_code"] == "result_verifier_gate_unavailable"
+    assert body["execution_token"] is None
+
+
+def test_agent_actions_evaluate_denies_when_result_verifier_gate_returns_invalid_verdict(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateBadReturnService(),
+    )
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "deny"
+    assert body["decision"]["reason_code"] == "result_verifier_gate_invalid_verdict"
+    assert body["execution_token"] is None
+
+
 def test_agent_actions_evaluate_denies_when_result_verifier_gate_blocks(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()
@@ -816,7 +949,11 @@ def test_agent_actions_closure_rejects_when_result_verifier_gate_blocks(monkeypa
         lambda *args, **kwargs: _allow_hot_path_response(),
     )
     monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
-    monkeypatch.setattr(agent_actions_router, "_resolve_digital_twin_service", lambda: None)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateOpenService(),
+    )
 
     eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
     assert eval_response.status_code == 200

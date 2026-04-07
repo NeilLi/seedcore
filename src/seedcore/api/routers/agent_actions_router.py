@@ -44,7 +44,10 @@ from ...ops.pdp_hot_path import (
 )
 from ...ops.pkg import get_global_pkg_manager
 from ...ops.evidence.forensic_block_contract import FORENSIC_BLOCK_CONTEXT
-from ...services.digital_twin_service import DigitalTwinService
+from ...services.digital_twin_service import (
+    DigitalTwinService,
+    build_result_verifier_gate_failure_verdict,
+)
 from ...serve.organism_client import OrganismServiceClient
 
 
@@ -1025,20 +1028,41 @@ async def _evaluate_result_verifier_gate_for_twin_refs(
     twin_refs: List[Tuple[str, str]],
     twin_service: DigitalTwinService | None = None,
 ) -> Dict[str, Any]:
+    normalized_refs = [
+        (str(twin_type).strip(), str(twin_id).strip())
+        for twin_type, twin_id in twin_refs
+        if str(twin_type).strip() and str(twin_id).strip()
+    ]
+    if not normalized_refs:
+        return {"blocked": False, "checked_refs": 0}
+
+    checked = len(normalized_refs)
     service = twin_service or _resolve_digital_twin_service()
     if service is None:
-        return {"blocked": False, "reason": "service_unavailable"}
+        return build_result_verifier_gate_failure_verdict(
+            reason_code="result_verifier_gate_service_unavailable",
+            checked_refs=checked,
+        )
     evaluator = getattr(service, "evaluate_result_verifier_gate", None)
     if not callable(evaluator):
-        return {"blocked": False, "reason": "gate_unavailable"}
+        return build_result_verifier_gate_failure_verdict(
+            reason_code="result_verifier_gate_unavailable",
+            checked_refs=checked,
+        )
     try:
-        verdict = await evaluator(twin_refs=twin_refs)
+        verdict = await evaluator(twin_refs=normalized_refs)
     except Exception:
         logger.warning("RESULT_VERIFIER policy/closure gate evaluation failed", exc_info=True)
-        return {"blocked": False, "reason": "gate_eval_failed"}
+        return build_result_verifier_gate_failure_verdict(
+            reason_code="result_verifier_gate_eval_failed",
+            checked_refs=checked,
+        )
     if isinstance(verdict, dict):
         return dict(verdict)
-    return {"blocked": False, "reason": "invalid_gate_verdict"}
+    return build_result_verifier_gate_failure_verdict(
+        reason_code="result_verifier_gate_invalid_verdict",
+        checked_refs=checked,
+    )
 
 
 async def _apply_result_verifier_policy_gate(

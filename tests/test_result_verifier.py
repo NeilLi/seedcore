@@ -22,7 +22,10 @@ from seedcore.coordinator.result_verifier_dao import (
 )
 from seedcore.models.replay import ReplayVerificationStatus
 from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
-from seedcore.services.digital_twin_service import DigitalTwinService
+from seedcore.services.digital_twin_service import (
+    DigitalTwinService,
+    build_result_verifier_gate_failure_verdict,
+)
 from seedcore.services.result_verifier_engine import (
     is_restricted_custody_transfer_record,
     map_replay_verification_to_outcome,
@@ -100,6 +103,37 @@ def test_map_replay_verification_integrity_vs_trust() -> None:
     )
     assert o2.failure_class == "trust"
     assert o2.twin_event_type == "verification_quarantined"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_result_verifier_gate_fail_closed_without_session_factory() -> None:
+    svc = DigitalTwinService(session_factory=None, dao=MagicMock(), event_dao=MagicMock())
+    verdict = await svc.evaluate_result_verifier_gate(twin_refs=[("asset", "asset:x1")])
+    assert verdict["blocked"] is True
+    assert verdict["reason_code"] == "result_verifier_gate_session_unavailable"
+    assert verdict["checked_refs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_evaluate_result_verifier_gate_fail_closed_when_dao_raises() -> None:
+    dao = SimpleNamespace(
+        get_authoritative_snapshots=AsyncMock(side_effect=RuntimeError("db unavailable")),
+    )
+    svc = DigitalTwinService(session_factory=_StubSessionFactory(_StubSession()), dao=dao, event_dao=MagicMock())
+    verdict = await svc.evaluate_result_verifier_gate(twin_refs=[("asset", "asset:x1")])
+    assert verdict["blocked"] is True
+    assert verdict["reason_code"] == "result_verifier_gate_lookup_failed"
+
+
+def test_build_result_verifier_gate_failure_verdict_includes_reason() -> None:
+    v = build_result_verifier_gate_failure_verdict(
+        reason_code="result_verifier_gate_eval_failed",
+        checked_refs=2,
+    )
+    assert v["blocked"] is True
+    assert v["reason_code"] == "result_verifier_gate_eval_failed"
+    assert v["checked_refs"] == 2
+    assert "fails closed" in v["reason"].lower()
 
 
 def test_is_restricted_custody_transfer_record_gateway() -> None:

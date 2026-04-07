@@ -144,6 +144,19 @@ class MockAsyncSession:
         """Mock begin method for transaction."""
         return self
 
+class _MockScalarResult:
+    """Minimal SQLAlchemy 2.0-style scalar result for DAO code using result.scalars().all/first."""
+
+    def __init__(self, rows=None):
+        self._rows = list(rows or [])
+
+    def all(self):
+        return list(self._rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
 class MockResult:
     """Mock SQLAlchemy result."""
     
@@ -151,6 +164,9 @@ class MockResult:
         self._data = [{"test_value": 1}]
         self._index = 0
     
+    def scalars(self):
+        return _MockScalarResult([])
+
     def fetchone(self):
         """Mock fetchone method."""
         if self._index < len(self._data):
