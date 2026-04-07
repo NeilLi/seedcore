@@ -13,6 +13,34 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-04-07)
+
+Latest repo-aligned critical-path status:
+
+- `RESULT_VERIFIER` P0 is now implemented inside the coordinator runtime for
+  the RCT trust slice:
+  - intake polls `digital_twin_event_journal` and advances a durable high
+    watermark in `result_verifier_runtime_state`
+  - verification work is persisted through `result_verifier_jobs` and
+    `result_verifier_outcomes` with `FOR UPDATE SKIP LOCKED` worker claims
+  - replay validation reuses the same `ReplayService` verification path as the
+    operator/API replay surface
+- fail-closed enforcement is now authoritative rather than aspirational:
+  - replay mismatches immediately write `verification_failed` or
+    `verification_quarantined` twin/custody mutations
+  - governance lockout marker `result_verifier_lockout` is persisted with
+    `authority_source=result_verifier`
+  - policy evaluation, closure, and settlement handoff now hard-deny from
+    authoritative twin state when verifier lockout/quarantine is present
+- migrations `133_result_verifier.sql` and
+  `134_result_verifier_runtime_state.sql` are part of the local init path, and
+  the runtime is controlled through `SEEDCORE_RESULT_VERIFIER_*` env flags.
+- the main remaining P0 hardening work is operational rather than conceptual:
+  - add deeper Postgres integration coverage for journal -> job -> outcome ->
+    gate denial
+  - stress `SKIP LOCKED` multi-worker contention behavior
+  - document quarantine remediation / operator runbook handling
+
 ## Status Update (2026-04-02)
 
 Latest repo-aligned critical-path status:

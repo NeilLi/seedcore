@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
-Date: 2026-04-02
-Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete)
+Date: 2026-04-07
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped)
 
 ## Purpose
 
@@ -25,7 +25,47 @@ This plan is grounded in the current repo state:
 This is not a speculative "future platform" plan. It is a wedge-first
 execution plan.
 
-## Execution Update (2026-04-02)
+## Execution Update (2026-04-07)
+
+The highest-risk north-star verification gap is now closed for the current RCT
+slice:
+
+- **RESULT_VERIFIER (P0) is implemented and live-validated** for the RCT trust
+  slice: a coordinator-embedded runtime polls `digital_twin_event_journal` for
+  `transition_recorded` and `evidence_settled`, enqueues idempotent jobs
+  (`result_verifier_jobs`, `FOR UPDATE SKIP LOCKED` workers), runs the same
+  replay-chain verification stack as `ReplayService` (Python + Rust chain
+  verifier), and **immediately** mutates authoritative asset twin / custody on
+  mismatch (`verification_failed` vs `verification_quarantined`,
+  `result_verifier_lockout` in governance, `authority_source=result_verifier`).
+  Durable outcomes live in `result_verifier_outcomes`; intake watermark state is
+  in `result_verifier_runtime_state` (migrations `133` / `134`). Control:
+  `SEEDCORE_RESULT_VERIFIER_*` env vars. **v1 constraints:** RCT workflow scope
+  only; DB journal polling as the trigger (not Kafka); no automatic
+  unquarantine. Architecture decision: [ADR 0004](../architecture/adr/adr-0004-result-verifier-runtime.md).
+- **Hard downstream fail-closed gating is now wired to authoritative verifier
+  state**, not only read-side projection: policy evaluation, closure, and
+  settlement handoff explicitly deny when `result_verifier_lockout`,
+  `verification_failed`, or verifier quarantine state is present on the
+  authoritative twin.
+- **Near-term follow-ups:** Postgres-backed integration tests (journal -> job ->
+  twin mutation -> downstream deny), multi-worker `SKIP LOCKED` contention
+  coverage, operator remediation/runbook guidance for quarantine clearance, and
+  an optional future move to an out-of-coordinator worker or event-bus trigger
+  only if scale or isolation requires it.
+
+Remaining Q2 emphasis is now operationalization:
+
+- validate the now-aligned gates in each real deployment topology
+- expand adversarial and degraded-edge-condition coverage
+- stabilize benchmark and observability baselines under deployment-realistic
+  topology
+- begin the narrow Q3 bridge work only after the above is green enough to
+  support external-agent debugging without contract churn
+- define the smallest safe Gemini-visible read surface once the verification
+  and hot-path read contracts stop shifting
+
+## Prior Execution Update (2026-04-02)
 
 The highest-priority Q2 contract hardening sequence has now been implemented in
 the codebase for the RCT slice:
@@ -53,17 +93,6 @@ the codebase for the RCT slice:
     HTTP matrix + degraded-edge drill matrix by default via CI launcher scripts
   - hot-path observability gate parsing is hardened for deployment-role labeled
     Prometheus text and now passes against live host runtime metrics/status
-
-Remaining Q2 emphasis is now operationalization:
-
-- validate the now-aligned gates in each real deployment topology
-- expand adversarial and degraded-edge-condition coverage
-- stabilize benchmark and observability baselines under deployment-realistic
-  topology
-- begin the narrow Q3 bridge work only after the above is green enough to
-  support external-agent debugging without contract churn
-- define the smallest safe Gemini-visible read surface once the verification
-  and hot-path read contracts stop shifting
 
 ## Scheduled Next Execution Windows (2026-04-02)
 
@@ -412,6 +441,9 @@ Required outcomes:
   the physical execution boundary
 - audit-chain consistency across runtime, replay, and verification
 - explicit failure handling for missing, stale, or contradictory evidence
+- **2026-04 shipped:** continuous **RESULT_VERIFIER** loop after journal events:
+  deterministic replay verification and **fail-closed** authoritative twin/custody
+  mutation for RCT (see [ADR 0004](../architecture/adr/adr-0004-result-verifier-runtime.md))
 
 Interpretation:
 
@@ -642,6 +674,8 @@ The delivery order should stay strict.
 - hot-path semantics
 - parity evidence
 - rollback and quarantine behavior
+- ~~RESULT_VERIFIER: journal-driven replay verification with authoritative
+  fail-closed twin/custody enforcement (RCT v1; coordinator-embedded)~~
 
 ### Layer 2: Product contract and delegated authority
 
@@ -680,6 +714,8 @@ The year should be measured with a small set of metrics.
 - mismatch root-cause closure time
 - dependency freshness violations
 - auto-quarantine rate
+- RESULT_VERIFIER: jobs enqueued/processed, verification pass vs
+  integrity/trust failure counts, quarantine mutations, worker latency
 - evidence payload ingestion p50 / p95 latency
 - evidence payload size distribution
 - forensic block assembly latency
@@ -723,6 +759,8 @@ ownership lanes:
 - replay verification
 - settlement correctness
 - forensic block schema and chain integrity
+- RESULT_VERIFIER outcomes, quarantine mutations, and coordinator metrics
+  (`result_verifier_*`)
 
 ### Product lane
 

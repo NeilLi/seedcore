@@ -2,9 +2,10 @@
 
 ![SeedCore verifiable agentic ledger architecture](./assets/seedcore_verifiable_agentic_ledger.png)
 
-This overview captures the current Q2 “verification-surface” architecture end-to-end: requests are evaluated by the policy decision point (PDP), executed with replay-verifiable authority, and surfaced through a read-only verification API plus hot-path observability so operators (and AI agents) can audit outcomes consistently.
+This overview captures the current Q2 “verification-surface” architecture end-to-end: requests are evaluated by the policy decision point (PDP), executed with replay-verifiable authority, checked again by the post-decision `RESULT_VERIFIER` runtime, and surfaced through a read-only verification API plus hot-path observability so operators (and AI agents) can audit outcomes consistently.
 
 For the decision record behind the current PDP shape, see [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](../adr/adr-0001-pdp-hot-path.md).
+For the post-decision fail-closed verifier runtime, see [ADR 0004: Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](../adr/adr-0004-result-verifier-runtime.md).
 For the ADR index, see [Architecture ADR Index](../adr/README.md).
 In this architecture, "stateless PDP" means stateless at decision time: the final authorization call is synchronous and deterministic over pinned snapshot/context inputs, while surrounding systems manage state assembly and evidence persistence.
 
@@ -12,11 +13,12 @@ In this architecture, "stateless PDP" means stateless at decision time: the fina
 1. Human/agent intent is submitted as an action request and routed to the PDP.
 2. The PDP evaluates under a versioned policy snapshot and returns an allow/deny/quarantine decision plus the execution-scoped authority envelope.
 3. The execution authority produces evidence bundles (fingerprints + replay/audit artifacts) that are persisted into the forensic state store and integrated into verification-ready records.
-4. The verification API exposes projections over that evidence (queue, review, workflow detail, workflow replay, runbook lookup, and forensics). The operator console consumes these read endpoints for transfer/replay/runbook workflows.
+4. The `RESULT_VERIFIER` runtime consumes journaled post-decision events, replays the governed audit chain, and fail-closes authoritative twin state when integrity or trust mismatches are detected.
+5. The verification API exposes projections over that evidence (queue, review, workflow detail, workflow replay, runbook lookup, and forensics). The operator console consumes these read endpoints for transfer/replay/runbook workflows.
 
 ## Key Components
 The diagram’s components map to these responsibilities:
-`PDP` (policy decision point) enforces authorization and admission, `Evidence Integrator` normalizes/joins evidence into verification bundles, `Forensic State Store` keeps the replay/verifiability substrate, and the `Verification API` offers deterministic read projections for UI and agent tooling. `Hot-path Observability` closes the loop with deployment-role labeled metrics and a JSON status endpoint designed to match Prometheus text output.
+`PDP` (policy decision point) enforces authorization and admission, `Evidence Integrator` normalizes/joins evidence into verification bundles, `Forensic State Store` keeps the replay/verifiability substrate, and `RESULT_VERIFIER` performs machine-native post-decision replay verification plus authoritative fail-closed mutation. The `Verification API` offers deterministic read projections for UI and agent tooling. `Hot-path Observability` closes the loop with deployment-role labeled metrics and a JSON status endpoint designed to match Prometheus text output.
 
 ## Observability + Acceptance Contracts
 Hot-path checks validate that JSON status and Prometheus text agree (including `deployment_role` labeling), and Q2 acceptance gating enforces verification-API fixture coverage plus degraded-edge drill matrix scenarios (deny/quarantine behavior, stale telemetry/graphs, replay-tamper injections).
