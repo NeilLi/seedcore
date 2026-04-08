@@ -403,6 +403,14 @@ class CognitiveCore(dspy.Module):
             None  # Default CognitiveRetrieval (fallback)
         )
 
+    def attach_shared_semantic_memory(
+        self, semantic_memory: SemanticMemoryService
+    ) -> None:
+        """Attach a runtime-owned semantic memory facade for bridge/retrieval use."""
+        self.semantic_memory = semantic_memory
+        self.holon_fabric = semantic_memory.holon_fabric
+        logger.debug("Attached shared SemanticMemoryService to CognitiveCore")
+
     def set_memory_bridge(self, memory_bridge: CognitiveMemoryBridge) -> None:
         """Set the memory bridge instance for a specific agent.
 
@@ -533,11 +541,7 @@ class CognitiveCore(dspy.Module):
         try:
             bridge_logger = logger.getChild("memory_bridge")
             working = MwWorkingMemoryAdapter(mw)
-            semantic = self.semantic_memory or (
-                SemanticMemoryService(self.holon_fabric)
-                if self.holon_fabric is not None
-                else None
-            )
+            semantic = self.semantic_memory
             promotion_embedder = (
                 _SynopsisEmbedderAdapter(self.synopsis_embedder)
                 if self.synopsis_embedder is not None

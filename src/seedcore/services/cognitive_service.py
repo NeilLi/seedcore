@@ -144,6 +144,7 @@ try:
 except Exception:
     ML = None  # Fallback handled in _make_engine
 from ..models.result_schema import create_error_result
+from ..memory.semantic_memory import SemanticMemoryService
 
 # Optional: Graph Repo for Server-Side Hydration
 try:
@@ -575,8 +576,10 @@ class CognitiveOrchestrator:
         *,
         fast_pool_size: int = 8,
         deep_pool_size: int = 2,
+        semantic_memory: Optional[SemanticMemoryService] = None,
     ):
         self.ocps_client = ocps_client
+        self.semantic_memory = semantic_memory
         self.schema_version = "v2.2"
 
         # Cache of DSPy LM instances (lazy-initialized)
@@ -649,6 +652,7 @@ class CognitiveOrchestrator:
                 ocps_client=self.ocps_client,
                 graph_repo=self.graph_repo,
                 session_maker=self.session_maker,
+                semantic_memory=self.semantic_memory,
             )
             pool.append(core)
             logger.info(f"🧠 Initialized {profile.value} worker #{i+1} ({provider}/{model})")
