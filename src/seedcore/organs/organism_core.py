@@ -4353,6 +4353,41 @@ class OrganismCore:
                 out["organs"][oid] = {"error": str(e)}
         return out
 
+    async def get_memory_telemetry(self) -> Dict[str, Any]:
+        """Contract-shaped memory stats for state-service aggregation (single runtime owner).
+
+        Returned dict includes ``ok``, ``mw``, ``mlt``, and ``mfb`` keys aligned with
+        :mod:`seedcore.memory.telemetry` so :class:`MemoryAggregator` can poll without
+        opening duplicate PG/Neo4j pools.
+        """
+        from seedcore.memory.telemetry import (
+            incident_memory_stats_dict,
+            semantic_memory_stats_dict,
+            working_memory_stats_dict,
+        )
+
+        if not self._initialized:
+            return {
+                "ok": False,
+                "error": "organism_not_initialized",
+                "mw": await working_memory_stats_dict(None),
+                "mlt": await semantic_memory_stats_dict(None),
+                "mfb": await incident_memory_stats_dict(None),
+            }
+
+        semantic = self.memory_runtime.semantic if self.memory_runtime else None
+        incident = (
+            getattr(self.memory_runtime, "incident", None)
+            if self.memory_runtime
+            else None
+        )
+        return {
+            "ok": True,
+            "mw": await working_memory_stats_dict(self.mw_manager),
+            "mlt": await semantic_memory_stats_dict(semantic),
+            "mfb": await incident_memory_stats_dict(incident),
+        }
+
     # =====================================================================
     #  EVOLUTION API — AGENT WORKFORCE SCALING (v2)
     # =====================================================================

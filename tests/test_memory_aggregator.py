@@ -95,6 +95,58 @@ async def test_memory_aggregator_poll_mfb_uses_injected_incident():
 
 
 @pytest.mark.asyncio
+async def test_try_organism_telemetry_parses_ok_payload():
+    async def fetch():
+        return {
+            "ok": True,
+            "mw": {"status": "enabled", "reason": None},
+            "mlt": {"status": "enabled", "total_holons": 1},
+            "mfb": {"status": "unavailable", "reason": "incident_memory_not_configured"},
+        }
+
+    agg = MemoryAggregator(organism_telemetry_fetch=fetch)
+    batch = await agg._try_organism_telemetry()
+    assert batch is not None
+    mw, mlt, mfb = batch
+    assert mw["status"] == "enabled"
+    assert mlt["total_holons"] == 1
+    assert "reason" in mfb
+
+
+@pytest.mark.asyncio
+async def test_try_organism_telemetry_rejects_missing_ok():
+    async def fetch():
+        return {"mw": {}, "mlt": {}, "mfb": {}}
+
+    agg = MemoryAggregator(organism_telemetry_fetch=fetch)
+    batch = await agg._try_organism_telemetry()
+    assert batch is not None
+    mw, mlt, mfb = batch
+    assert mw == {}
+    assert mlt == {}
+    assert mfb == {}
+
+
+@pytest.mark.asyncio
+async def test_try_organism_telemetry_accepts_degraded_payload():
+    async def fetch():
+        return {
+            "ok": False,
+            "error": "organism_not_initialized",
+            "mw": {"status": "unavailable", "reason": "mw_manager_unavailable"},
+            "mlt": {"status": "unavailable", "reason": "semantic_memory_unavailable"},
+            "mfb": {"status": "unavailable", "reason": "incident_memory_not_configured"},
+        }
+
+    agg = MemoryAggregator(organism_telemetry_fetch=fetch)
+    batch = await agg._try_organism_telemetry()
+    assert batch is not None
+    _, mlt, mfb = batch
+    assert mlt["reason"] == "semantic_memory_unavailable"
+    assert mfb["reason"] == "incident_memory_not_configured"
+
+
+@pytest.mark.asyncio
 async def test_memory_aggregator_poll_mfb_uses_runtime_incident():
     class _RT:
         semantic = _FakeSemantic()

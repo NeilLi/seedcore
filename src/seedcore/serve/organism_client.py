@@ -192,6 +192,14 @@ class OrganismServiceClient(BaseServiceClient):
             logger.debug("OrganismServiceClient RPC organism-summary fallback: %s", exc)
             return await self.get("/organism-summary")
 
+    async def get_memory_telemetry(self) -> Dict[str, Any]:
+        """Fetch memory tier stats (mw / mlt / mfb) from the organism-owned runtime."""
+        try:
+            return await self._call_organism_rpc("rpc_memory_telemetry")
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC memory telemetry fallback: %s", exc)
+            return await self.get("/memory/telemetry")
+
     async def get_organism_metrics(self) -> Dict[str, Any]:
         """Get organism performance metrics."""
         return await self.get("/metrics")

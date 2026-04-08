@@ -1,7 +1,14 @@
 # Copyright 2024 SeedCore Contributors
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Optional incident (flashbulb) memory behind a single contract."""
+"""Optional incident memory behind :class:`IncidentMemory` (contract-shaped).
+
+MySQL-backed ``FlashbulbMemoryManager`` and HTTP ``FlashbulbClient`` remain a
+**legacy sidecar** for ops and tuning; they are not wired into
+:class:`MemoryRuntime` by default. Prefer :class:`IncidentMemoryService` with
+:class:`InMemoryIncidentBackend` or a future SQL adapter when product needs
+unified incident telemetry next to semantic/working memory.
+"""
 from __future__ import annotations
 
 import asyncio

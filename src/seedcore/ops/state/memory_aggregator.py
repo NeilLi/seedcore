@@ -14,7 +14,7 @@ excluding per-agent ('ma') stats, which are handled by the AgentAggregator.
 import asyncio
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Awaitable, Callable, Dict, Any, Optional
 
 # Import the data model. Note: 'ma' will be empty from this aggregator.
 
@@ -24,16 +24,12 @@ try:
     from ...memory.runtime import connect_default_memory_runtime
     from ...memory.incident_memory import IncidentMemoryService
     from ...memory.semantic_memory import SemanticMemoryService
-    from ...memory.working_memory import MwWorkingMemoryAdapter
-    from ...memory.contracts import MemorySubsystemStatus
     _MEMORY_AVAILABLE = True
 except ImportError:
     MwManager = None  # type: ignore
     connect_default_memory_runtime = None  # type: ignore
     IncidentMemoryService = None  # type: ignore
     SemanticMemoryService = None  # type: ignore
-    MwWorkingMemoryAdapter = None  # type: ignore
-    MemorySubsystemStatus = None  # type: ignore
     _MEMORY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -53,6 +49,9 @@ class MemoryAggregator:
         incident_memory: Optional[Any] = None,
         memory_runtime: Any = None,
         mw_manager: Optional[MwManager] = None,
+        organism_telemetry_fetch: Optional[
+            Callable[[], Awaitable[Dict[str, Any]]]
+        ] = None,
     ):
         """
         Initialize the proactive memory aggregator.
@@ -63,12 +62,16 @@ class MemoryAggregator:
             incident_memory: Optional injected :class:`IncidentMemoryService` (skips runtime lookup).
             memory_runtime: Optional injected :class:`MemoryRuntime` (uses ``.semantic``; not closed on stop).
             mw_manager: Optional injected ``MwManager`` for MW stats (skips default organ_id instance).
+            organism_telemetry_fetch: When set, poll memory stats via this async callable first
+                (HTTP/RPC to OrganismService). Must return a dict with ``ok: True`` and ``mw`` / ``mlt`` / ``mfb``
+                keys on success. On failure or missing ``ok``, falls back to local polling.
         """
         self.poll_interval = poll_interval
         self._inject_semantic = semantic_memory
         self._inject_incident = incident_memory
         self._inject_runtime = memory_runtime
         self._inject_mw = mw_manager
+        self._organism_telemetry_fetch = organism_telemetry_fetch
 
         # Internal state cache
         # We cache the raw dicts for mw, mlt, and mfb
@@ -147,15 +150,18 @@ class MemoryAggregator:
             try:
                 start_time = time.monotonic()
 
-                # 1. Poll all memory tiers in parallel
-                results = await asyncio.gather(
-                    self._poll_mw_stats(),
-                    self._poll_mlt_stats(),
-                    self._poll_mfb_stats(),
-                    return_exceptions=True
-                )
-                
-                mw_stats, mlt_stats, mfb_stats = results
+                # 1. Prefer organism-owned telemetry (single MemoryRuntime / pools) when configured.
+                org_batch = await self._try_organism_telemetry()
+                if org_batch is not None:
+                    mw_stats, mlt_stats, mfb_stats = org_batch
+                else:
+                    results = await asyncio.gather(
+                        self._poll_mw_stats(),
+                        self._poll_mlt_stats(),
+                        self._poll_mfb_stats(),
+                        return_exceptions=True,
+                    )
+                    mw_stats, mlt_stats, mfb_stats = results
                 
                 # 2. Handle exceptions and update the new stats dict
                 new_stats = {}
@@ -220,118 +226,49 @@ class MemoryAggregator:
 
     # --- Internal Polling Methods ---
 
+    async def _try_organism_telemetry(
+        self,
+    ) -> Optional[tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]]:
+        if self._organism_telemetry_fetch is None:
+            return None
+        try:
+            raw = await self._organism_telemetry_fetch()
+        except Exception as e:
+            logger.debug("Organism memory telemetry fetch failed: %s", e)
+            return None
+        if not isinstance(raw, dict):
+            return None
+        mw = raw.get("mw")
+        mlt = raw.get("mlt")
+        mfb = raw.get("mfb")
+        if not isinstance(mw, dict) or not isinstance(mlt, dict) or not isinstance(mfb, dict):
+            return None
+        if raw.get("ok") is not True:
+            logger.debug(
+                "Organism memory telemetry returned degraded payload: %s",
+                raw.get("error") or raw.get("reason") or "unknown",
+            )
+        return (mw, mlt, mfb)
+
     async def _poll_mw_stats(self) -> Dict[str, Any]:
         """Poll working memory statistics (mw) from MwManager via WorkingMemory contract."""
-        mw_manager = self._get_mw_manager()
-        if mw_manager is None or MwWorkingMemoryAdapter is None:
-            st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
-            return {
-                "status": st.value if st else "unavailable",
-                "reason": "mw_manager_unavailable",
-            }
+        from ...memory.telemetry import working_memory_stats_dict
 
-        snap = await MwWorkingMemoryAdapter(mw_manager).stats_snapshot()
-        total_requests = snap.total_requests
-        miss_rate = snap.misses / total_requests if total_requests > 0 else 0.0
-        try:
-            hot_items = await mw_manager.get_hot_items_async(top_n=10)
-            eviction_rate = len(hot_items) / max(total_requests, 1) * 0.1
-        except Exception:
-            eviction_rate = 0.0
-
-        return {
-            "status": snap.health.status.value,
-            "reason": snap.health.reason,
-            "buffer_size": total_requests,
-            "hit_rate": snap.hit_ratio,
-            "eviction_rate": eviction_rate,
-            "cache_utilization": snap.hit_ratio,
-            "miss_rate": miss_rate,
-            "total_requests": total_requests,
-            "successful_requests": snap.hits,
-            "l0_hits": snap.l0_hits,
-            "l1_hits": snap.l1_hits,
-            "l2_hits": snap.l2_hits,
-            "task_hit_ratio": snap.task_hit_ratio,
-        }
+        return await working_memory_stats_dict(self._get_mw_manager())
 
     async def _poll_mlt_stats(self) -> Dict[str, Any]:
         """Poll semantic memory statistics through the caller-facing contract."""
+        from ...memory.telemetry import semantic_memory_stats_dict
+
         semantic = await self._get_semantic_memory()
-        if semantic is None:
-            st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
-            return {
-                "status": st.value if st else "unavailable",
-                "reason": "semantic_memory_unavailable",
-            }
-
-        try:
-            snap = await semantic.stats_snapshot()
-            total_holons = int(snap.total_holons)
-            total_relationships = int(snap.total_relationships)
-            bytes_used = int(snap.bytes_used)
-        except Exception as e:
-            logger.error("Failed to query SemanticMemory stats: %s", e)
-            st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
-            return {
-                "status": st.value if st else "unavailable",
-                "reason": str(e),
-            }
-
-        storage_gb = bytes_used / (1024**3)
-        avg_holon_size = bytes_used // total_holons if total_holons > 0 else 0
-        index_size_mb = (bytes_used * 0.15) / (1024**2)
-
-        return {
-            "status": snap.health.status.value,
-            "reason": snap.health.reason,
-            "storage_gb": round(storage_gb, 2),
-            "compression_ratio": None,
-            "access_patterns": total_relationships,
-            "total_holons": total_holons,
-            "total_relationships": total_relationships,
-            "avg_holon_size": int(avg_holon_size),
-            "index_size_mb": round(index_size_mb, 2),
-            "bytes_used": bytes_used,
-            "vector_dimensions": None,
-        }
+        return await semantic_memory_stats_dict(semantic)
 
     async def _poll_mfb_stats(self) -> Dict[str, Any]:
         """Poll flashbulb / incident memory (optional subsystem)."""
+        from ...memory.telemetry import incident_memory_stats_dict
+
         incident = await self._get_incident_memory()
-        if incident is not None:
-            try:
-                snap = await incident.stats_snapshot()
-                return {
-                    "status": snap.health.status.value,
-                    "reason": snap.health.reason,
-                    "incidents": int(snap.incidents_recorded),
-                    "queue_size": None,
-                    "avg_weight": None,
-                    "decay_rate": None,
-                    "total_events": int(snap.incidents_recorded),
-                }
-            except Exception as e:
-                st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
-                return {
-                    "status": st.value if st else "unavailable",
-                    "reason": str(e),
-                    "incidents": 0,
-                    "queue_size": None,
-                    "avg_weight": None,
-                    "decay_rate": None,
-                    "total_events": 0,
-                }
-        st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
-        return {
-            "status": st.value if st else "unavailable",
-            "reason": "incident_memory_not_configured",
-            "incidents": 0,
-            "queue_size": 0,
-            "avg_weight": None,
-            "decay_rate": None,
-            "total_events": 0,
-        }
+        return await incident_memory_stats_dict(incident)
 
     # --- Lazy-init Helpers (copied from legacy) ---
 

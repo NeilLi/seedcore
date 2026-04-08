@@ -56,6 +56,7 @@ class ServiceState:
         self.agent_aggregator: Optional[AgentAggregator] = None
         self.memory_aggregator: Optional[MemoryAggregator] = None
         self.system_aggregator: Optional[SystemAggregator] = None
+        self.organism_memory_client: Optional[Any] = None
         self.pg_session_factory = None
         self.w_mode: np.ndarray = DEFAULT_W_MODE.copy()
         self.started_at: float = 0.0
@@ -375,10 +376,41 @@ async def startup_event():
         )
         await state.agent_aggregator.start()
 
-        # Current fallback path: state service is telemetry-only, and the target
-        # design is remote memory-stats polling from organism rather than
-        # defaulting to a second local PG/Neo4j bootstrap in this process.
-        state.memory_aggregator = MemoryAggregator(poll_interval=5.0)
+        # Prefer organism-owned memory telemetry (HTTP/RPC) to avoid a second local
+        # PG/Neo4j bootstrap in this process. Set MEMORY_AGGREGATOR_ORGANISM_TELEMETRY=0
+        # to force local polling + lazy connect_default_memory_runtime only.
+        use_org_mem = os.getenv(
+            "MEMORY_AGGREGATOR_ORGANISM_TELEMETRY", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        organism_memory_fetch = None
+        if use_org_mem:
+            try:
+                from seedcore.serve.organism_client import OrganismServiceClient
+
+                state.organism_memory_client = OrganismServiceClient(
+                    timeout=float(os.getenv("ORGANISM_HTTP_TIMEOUT_S", "15"))
+                )
+
+                async def _organism_memory_telemetry():
+                    assert state.organism_memory_client is not None
+                    return await state.organism_memory_client.get_memory_telemetry()
+
+                organism_memory_fetch = _organism_memory_telemetry
+                logger.info(
+                    "MemoryAggregator: organism /memory/telemetry polling enabled "
+                    "(MEMORY_AGGREGATOR_ORGANISM_TELEMETRY=1); local lazy runtime is fallback only"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "MemoryAggregator: organism telemetry client unavailable (%s); "
+                    "using local polling only",
+                    exc,
+                )
+
+        state.memory_aggregator = MemoryAggregator(
+            poll_interval=5.0,
+            organism_telemetry_fetch=organism_memory_fetch,
+        )
         await state.memory_aggregator.start()
 
         try:
@@ -424,6 +456,13 @@ async def shutdown_event():
         tasks.append(state.system_aggregator.stop())
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    if state.organism_memory_client is not None:
+        try:
+            await state.organism_memory_client.close()
+        except Exception:
+            logger.debug("Failed to close organism memory client", exc_info=True)
+        finally:
+            state.organism_memory_client = None
 
 
 @app.get("/health")

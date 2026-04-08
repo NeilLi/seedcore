@@ -30,3 +30,23 @@ async def test_memory_runtime_close_calls_vec_and_graph():
     await rt.close()
     vec.close.assert_awaited_once()
     graph.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_close_is_idempotent():
+    vec = MagicMock()
+    vec.close = AsyncMock()
+    graph = MagicMock()
+    graph.close = AsyncMock()
+    fabric = MagicMock()
+    sem = SemanticMemoryService(fabric)  # type: ignore[arg-type]
+    rt = MemoryRuntime(
+        vec_store=vec,
+        graph_store=graph,
+        fabric=fabric,  # type: ignore[arg-type]
+        semantic=sem,
+    )
+    await rt.close()
+    await rt.close()
+    vec.close.assert_awaited_once()
+    graph.close.assert_awaited_once()

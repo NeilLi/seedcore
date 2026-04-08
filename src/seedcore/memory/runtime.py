@@ -37,6 +37,7 @@ class MemoryRuntime:
         self.semantic = semantic
         self.incident = incident
         self.working: Optional[MwWorkingMemoryAdapter] = None
+        self._closed = False
 
     @property
     def holon_fabric(self) -> HolonFabric:
@@ -59,6 +60,10 @@ class MemoryRuntime:
         return out
 
     async def close(self) -> None:
+        """Idempotent shutdown of vector and graph pools (safe across duplicate calls)."""
+        if self._closed:
+            return
+        self._closed = True
         try:
             await self._vec.close()
         except Exception as e:

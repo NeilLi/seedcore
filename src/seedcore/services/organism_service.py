@@ -315,6 +315,19 @@ class OrganismService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    @app.get("/memory/telemetry")
+    async def memory_telemetry_http(self):
+        """Memory stats from the organism-owned :class:`MemoryRuntime` (no extra pool here)."""
+        try:
+            return await self.rpc_memory_telemetry()
+        except Exception as e:
+            logger.warning("memory_telemetry_http failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+    async def rpc_memory_telemetry(self) -> Dict[str, Any]:
+        """RPC/HTTP: contract-shaped ``mw`` / ``mlt`` / ``mfb`` for state-service MemoryAggregator."""
+        return await self.organism_core.get_memory_telemetry()
+
     @app.post("/initialize-organism")
     async def initialize_organism(self):
         """Manually trigger init (HTTP endpoint)."""

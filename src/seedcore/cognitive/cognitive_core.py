@@ -39,7 +39,8 @@ Architecture Notes:
 - Supports skip_retrieval mode for fast/chat paths
 - HGNN context can be provided directly without RAG pipeline
 - Memory bridge initialization is lazy (on-demand per agent)
-- ContextBroker is deprecated in favor of CognitiveMemoryBridge + HolonFabricRetrieval
+- Legacy ``ContextBroker`` (deprecated) is superseded by :class:`CognitiveMemoryBridge`
+  plus scoped retrieval; do not add new broker-era call paths
 """
 
 from __future__ import annotations

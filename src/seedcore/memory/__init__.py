@@ -46,21 +46,9 @@ from .runtime import MemoryRuntime, connect_default_memory_runtime
 from .semantic_memory import SemanticMemoryService
 from .working_memory import MwWorkingMemoryAdapter
 
-# Shards (optional Ray)
-try:
-    from .shared_cache_shard import SharedCacheShard
-except ImportError:
-    SharedCacheShard = None  # type: ignore
-
-try:
-    from .mw_store_shard import MwStoreShard
-except ImportError:
-    MwStoreShard = None  # type: ignore
-
-try:
-    from .flashbulb_client import FlashbulbClient
-except ImportError:
-    FlashbulbClient = None  # type: ignore
+_OPTIONAL_LEGACY_SHARD_EXPORTS = frozenset(
+    {"SharedCacheShard", "MwStoreShard", "FlashbulbClient"}
+)
 
 _LEGACY_EXPORTS = frozenset(
     {
@@ -76,6 +64,25 @@ _LEGACY_EXPORTS = frozenset(
 
 
 def __getattr__(name: str) -> Any:
+    if name in _OPTIONAL_LEGACY_SHARD_EXPORTS:
+        warnings.warn(
+            f"Importing {name} from seedcore.memory is deprecated; "
+            f"import from the defining submodule under seedcore.memory instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if name == "SharedCacheShard":
+            from .shared_cache_shard import SharedCacheShard as _x
+
+            return _x
+        if name == "MwStoreShard":
+            from .mw_store_shard import MwStoreShard as _x
+
+            return _x
+        if name == "FlashbulbClient":
+            from .flashbulb_client import FlashbulbClient as _x
+
+            return _x
     if name in _LEGACY_EXPORTS:
         from . import legacy as _legacy
 
@@ -111,7 +118,4 @@ __all__ = [
     "WorkingMemoryStats",
     "MemoryHealth",
     "MemorySubsystemStatus",
-    "SharedCacheShard",
-    "MwStoreShard",
-    "FlashbulbClient",
 ]

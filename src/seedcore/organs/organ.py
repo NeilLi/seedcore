@@ -17,6 +17,12 @@ That logic is centralized in the OrganismCore and StateService.
 The Organ supports multiple agent types:
 - BaseAgent (default): Generic executor with Behavior Plugin System
 - UtilityAgent: System observer and tuner (specialized learning agent)
+
+Memory note (Ray process boundary): each organ actor that lazily builds a local
+:class:`~seedcore.memory.runtime.MemoryRuntime` owns that runtime's lifecycle
+(``close()`` on teardown). The driver-process organism also holds a runtime for
+its ToolManager; those are **separate processes**—not shared handles—by design
+until a future transport can proxy semantic operations without duplicating pools.
 """
 
 from __future__ import annotations
