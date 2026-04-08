@@ -821,6 +821,9 @@ class EnergyService:
     async def rpc_log_event(self, event: Dict[str, Any]) -> dict:
         return await log_energy_event(event)
 
+    async def rpc_get_logs(self, limit: int = 100) -> dict:
+        return await get_energy_logs(limit=limit)
+
     async def rpc_health(self) -> dict:
         response = await health()
         return response.model_dump()

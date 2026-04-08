@@ -21,6 +21,7 @@ from typing import Dict, Any, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from .serve_rpc import call_serve_rpc, get_serve_deployment_handle
 from seedcore.models.cognitive import CognitiveType, DecisionKind
 from seedcore.models.task_payload import TaskPayload
 from seedcore.models.task import TaskType
@@ -105,6 +106,25 @@ class CognitiveServiceClient(BaseServiceClient):
             timeout=timeout,
             circuit_breaker=circuit_breaker,
             retry_config=retry_config,
+        )
+        self._rpc_handle = None
+
+    async def _call_cognitive_rpc(
+        self, method_name: str, *args: Any, timeout_s: Optional[float] = None
+    ) -> Dict[str, Any]:
+        if self._rpc_handle is None:
+            self._rpc_handle = get_serve_deployment_handle(
+                "CognitiveService",
+                app_name="cognitive",
+                enabled_env="SEEDCORE_COGNITIVE_RPC_ENABLED",
+            )
+        if self._rpc_handle is None:
+            raise RuntimeError("cognitive_rpc_handle_unavailable")
+        return await call_serve_rpc(
+            self._rpc_handle,
+            method_name,
+            *args,
+            timeout_s=self.timeout if timeout_s is None else timeout_s,
         )
 
     @staticmethod
@@ -261,9 +281,15 @@ class CognitiveServiceClient(BaseServiceClient):
             f"type={resolved_type.value}, pipeline={decision_kind.value}"
         )
 
-        return await self.post(
-            "/execute", json=updated_payload.model_dump(), timeout=effective_timeout
-        )
+        try:
+            return await self._call_cognitive_rpc(
+                "execute_cognitive_task", updated_payload, timeout_s=effective_timeout
+            )
+        except Exception as exc:
+            logger.debug("CognitiveServiceClient RPC execute fallback: %s", exc)
+            return await self.post(
+                "/execute", json=updated_payload.model_dump(), timeout=effective_timeout
+            )
 
     async def advisory_async(
         self,
@@ -283,11 +309,17 @@ class CognitiveServiceClient(BaseServiceClient):
             payload = TaskPayload.from_db(dict(task or {}))
 
         effective_timeout = timeout if timeout is not None else self.timeout
-        return await self.post(
-            "/advisory",
-            json=payload.model_dump(),
-            timeout=effective_timeout,
-        )
+        try:
+            return await self._call_cognitive_rpc(
+                "advisory", payload, timeout_s=effective_timeout
+            )
+        except Exception as exc:
+            logger.debug("CognitiveServiceClient RPC advisory fallback: %s", exc)
+            return await self.post(
+                "/advisory",
+                json=payload.model_dump(),
+                timeout=effective_timeout,
+            )
 
     # ---------------------------
     # Service info / health
@@ -295,11 +327,19 @@ class CognitiveServiceClient(BaseServiceClient):
 
     async def get_service_info(self) -> Dict[str, Any]:
         """Wraps the /info endpoint for service discovery."""
-        return await self.get("/info")
+        try:
+            return await self._call_cognitive_rpc("info")
+        except Exception as exc:
+            logger.debug("CognitiveServiceClient RPC info fallback: %s", exc)
+            return await self.get("/info")
 
     async def health_check(self) -> Dict[str, Any]:
         """Wraps the /health endpoint for service monitoring."""
-        return await self.get("/health")
+        try:
+            return await self._call_cognitive_rpc("health")
+        except Exception as exc:
+            logger.debug("CognitiveServiceClient RPC health fallback: %s", exc)
+            return await self.get("/health")
 
     async def is_healthy(self) -> bool:
         """Boolean check against the /health endpoint."""

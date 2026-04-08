@@ -571,7 +571,7 @@ class Coordinator:
                 # If not ready, queue changes locally for retry
                 try:
                     # Use a short timeout for health check to fail fast during initialization
-                    health = await self.organism_client.get("/health", timeout=3.0)
+                    health = await self.organism_client.health()
                     if not isinstance(health, dict) or not health.get("organism_initialized"):
                         await self._queue_capability_changes(
                             changes_dict,
@@ -737,18 +737,7 @@ class Coordinator:
         self, changes: list[dict[str, Any]]
     ) -> bool:
         try:
-            # Use Ray remote call if available, otherwise HTTP
-            if hasattr(self.organism_client, "rpc_notify_capability_changes"):
-                await self.organism_client.rpc_notify_capability_changes.remote(
-                    changes=changes
-                )
-            else:
-                # Fallback to HTTP POST if RPC not available
-                await self.organism_client.post(
-                    "/capability-changes",
-                    json={"changes": changes},
-                    timeout=10.0,
-                )
+            await self.organism_client.notify_capability_changes(changes)
             return True
         except Exception as e:
             # Check if this is a timeout/connection error (expected during initialization)
@@ -1175,9 +1164,8 @@ class Coordinator:
                 proto_plan=proto_plan,
             )
 
-            cognitive_res = await self.cognitive_client.post(
-                "/advisory",
-                json=advisory_payload,
+            cognitive_res = await self.cognitive_client.advisory_async(
+                task=advisory_payload,
                 timeout=float(max(5, self.timeout_s)),
             )
 
@@ -2657,21 +2645,15 @@ class Coordinator:
             # params.setdefault("routing", {})["required_specialization"] = _map_organ_to_spec(organ_id)
 
             # 3. Build headers with correlation + task ID for tracing
-            headers = _corr_headers("organism", cid_local)
-            if payload.get("task_id"):
-                headers["X-Task-ID"] = str(payload["task_id"])
-
             try:
                 # 4. Call Unified Organism Endpoint
                 # Note: The network routing to 'organ_id' happens here via the client
                 # 'self' is captured from the closure (outer scope)
                 # Use configured organism timeout instead of passed timeout parameter
                 organism_timeout = float(self.organism_timeout_s)
-                res = await self.organism_client.post(
-                    "/route-and-execute",
-                    json={"task": payload},
-                    headers=headers,
-                    timeout=organism_timeout,
+                res = await self.organism_client.route_and_execute(
+                    payload,
+                    current_epoch=None,
                 )
 
                 # 4. Handle Result - OrganismService now returns canonical envelope directly

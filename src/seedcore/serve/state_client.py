@@ -18,6 +18,7 @@ import logging
 from typing import Dict, Any
 
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from .ops_rpc import call_ops_rpc, get_ops_gateway_handle
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,19 @@ class StateServiceClient(BaseServiceClient):
             circuit_breaker=circuit_breaker,
             retry_config=retry_config,
         )
+        self._ops_handle = None
+
+    async def _call_ops_rpc(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        if self._ops_handle is None:
+            self._ops_handle = get_ops_gateway_handle()
+        if self._ops_handle is None:
+            raise RuntimeError("ops_gateway_rpc_unavailable")
+        return await call_ops_rpc(
+            self._ops_handle,
+            method_name,
+            *args,
+            timeout_s=self.timeout,
+        )
 
     # ----------------------------------------------------------------------
     # HOT PATH (Production)
@@ -74,12 +88,19 @@ class StateServiceClient(BaseServiceClient):
         Note: We do NOT pass 'response' here. The client just fetches data.
         The server endpoint sets the headers, and httpx handles receiving them.
         """
-        # The underlying self.get should handle the HTTP call
-        return await self.get("/ops/state/system-metrics")
+        try:
+            return await self._call_ops_rpc("rpc_state_system_metrics")
+        except Exception as exc:
+            logger.debug("StateServiceClient RPC get_system_metrics fallback: %s", exc)
+            return await self.get("/ops/state/system-metrics")
 
     async def get_unified_state(self) -> Dict[str, Any]:
         """Fetch the full unified state snapshot for planner/debug workloads."""
-        return await self.get("/ops/state/unified-state")
+        try:
+            return await self._call_ops_rpc("rpc_state_unified_state")
+        except Exception as exc:
+            logger.debug("StateServiceClient RPC get_unified_state fallback: %s", exc)
+            return await self.get("/ops/state/unified-state")
 
     # ----------------------------------------------------------------------
     # COLD PATH (Debugging / Offline Analysis)
@@ -94,7 +115,13 @@ class StateServiceClient(BaseServiceClient):
         Returns:
             Raw snapshot dictionary.
         """
-        return await self.get("/ops/state/agent-snapshots")
+        try:
+            return await self._call_ops_rpc("rpc_state_agent_snapshots")
+        except Exception as exc:
+            logger.debug(
+                "StateServiceClient RPC get_all_agent_snapshots fallback: %s", exc
+            )
+            return await self.get("/ops/state/agent-snapshots")
 
     # ----------------------------------------------------------------------
     # CONFIGURATION / CONTROL
@@ -110,11 +137,19 @@ class StateServiceClient(BaseServiceClient):
         Returns:
             A dictionary indicating success or updated mode.
         """
-        return await self.post("/ops/state/config/w_mode", json=new_config)
+        try:
+            return await self._call_ops_rpc("rpc_state_update_w_mode", new_config)
+        except Exception as exc:
+            logger.debug("StateServiceClient RPC update_w_mode fallback: %s", exc)
+            return await self.post("/ops/state/config/w_mode", json=new_config)
 
     async def get_status(self) -> Dict[str, Any]:
         """Get readiness/details for the state runtime."""
-        return await self.get("/ops/state/status")
+        try:
+            return await self._call_ops_rpc("rpc_state_status")
+        except Exception as exc:
+            logger.debug("StateServiceClient RPC get_status fallback: %s", exc)
+            return await self.get("/ops/state/status")
 
     # ----------------------------------------------------------------------
     # HEALTH
@@ -124,7 +159,11 @@ class StateServiceClient(BaseServiceClient):
         """
         Health check for StateService via OpsGateway.
         """
-        return await self.get("/ops/state/health")
+        try:
+            return await self._call_ops_rpc("rpc_state_health")
+        except Exception as exc:
+            logger.debug("StateServiceClient RPC health fallback: %s", exc)
+            return await self.get("/ops/state/health")
 
     async def is_healthy(self) -> bool:
         """Convenience method: return True if service reports healthy."""

@@ -8,9 +8,11 @@ canonical routing APIs: route_only() and route_and_execute().
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from .serve_rpc import call_serve_rpc, get_serve_deployment_handle
+from seedcore.models.organism import RouteAndExecuteRequest, RouteOnlyRequest
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,23 @@ class OrganismServiceClient(BaseServiceClient):
             circuit_breaker=circuit_breaker,
             retry_config=retry_config
         )
+        self._rpc_handle = None
+
+    async def _call_organism_rpc(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        if self._rpc_handle is None:
+            self._rpc_handle = get_serve_deployment_handle(
+                "OrganismService",
+                app_name="organism",
+                enabled_env="SEEDCORE_ORGANISM_RPC_ENABLED",
+            )
+        if self._rpc_handle is None:
+            raise RuntimeError("organism_rpc_handle_unavailable")
+        return await call_serve_rpc(
+            self._rpc_handle,
+            method_name,
+            *args,
+            timeout_s=self.timeout,
+        )
     
     # --- Primary Task Execution ---
     
@@ -113,7 +132,13 @@ class OrganismServiceClient(BaseServiceClient):
             "task": task,
             "current_epoch": current_epoch
         }
-        return await self.post("/route-only", json=request_data)
+        try:
+            return await self._call_organism_rpc(
+                "route_only", RouteOnlyRequest(**request_data)
+            )
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC route_only fallback: %s", exc)
+            return await self.post("/route-only", json=request_data)
     
     async def route_and_execute(
         self,
@@ -141,17 +166,31 @@ class OrganismServiceClient(BaseServiceClient):
             "task": task,
             "current_epoch": current_epoch
         }
-        return await self.post("/route-and-execute", json=request_data)
+        try:
+            return await self._call_organism_rpc(
+                "route_and_execute", RouteAndExecuteRequest(**request_data)
+            )
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC route_and_execute fallback: %s", exc)
+            return await self.post("/route-and-execute", json=request_data)
     
     # --- High-Level Organism Monitoring ---
     
     async def get_organism_status(self) -> Dict[str, Any]:
         """Get detailed status of all organ-registries in the organism."""
-        return await self.get("/organism-status")
+        try:
+            return await self._call_organism_rpc("get_organism_status")
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC organism-status fallback: %s", exc)
+            return await self.get("/organism-status")
     
     async def get_organism_summary(self) -> Dict[str, Any]:
         """Get a summary of the organism's current state."""
-        return await self.get("/organism-summary")
+        try:
+            return await self._call_organism_rpc("get_organism_summary")
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC organism-summary fallback: %s", exc)
+            return await self.get("/organism-summary")
 
     async def get_organism_metrics(self) -> Dict[str, Any]:
         """Get organism performance metrics."""
@@ -170,7 +209,11 @@ class OrganismServiceClient(BaseServiceClient):
 
     async def health(self) -> Dict[str, Any]:
         """Get organism health status."""
-        return await self.get("/health")
+        try:
+            return await self._call_organism_rpc("health")
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC health fallback: %s", exc)
+            return await self.get("/health")
     
     async def is_healthy(self) -> bool:
         """Check if the organism service is healthy."""
@@ -185,7 +228,26 @@ class OrganismServiceClient(BaseServiceClient):
     
     async def initialize_organism(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """Initialize the organism."""
-        return await self.post("/initialize-organism", json=config or {})
+        try:
+            return await self._call_organism_rpc("rpc_initialize_organism")
+        except Exception as exc:
+            logger.debug("OrganismServiceClient RPC initialize fallback: %s", exc)
+            return await self.post("/initialize-organism", json=config or {})
+
+    async def notify_capability_changes(
+        self, changes: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Notify organism about capability changes using RPC-first transport."""
+        try:
+            return await self._call_organism_rpc(
+                "rpc_notify_capability_changes", changes
+            )
+        except Exception as exc:
+            logger.debug(
+                "OrganismServiceClient RPC notify_capability_changes fallback: %s",
+                exc,
+            )
+            return await self.post("/capability-changes", json={"changes": changes})
     
     async def shutdown_organism(self) -> Dict[str, Any]:
         """Shutdown the organism."""

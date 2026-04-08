@@ -305,11 +305,9 @@ async def bulk_resolve_routes_cached(
                 if item.get("preferred_logical_id"):
                     payload["task"]["params"]["preferred_logical_id"] = item["preferred_logical_id"]
                 
-                resp = await organism_client.post(
-                    "/route-only",
-                    json=payload,
-                    headers=_corr_headers("organism", cid),
-                    timeout=resolve_timeout
+                resp = await organism_client.route_only(
+                    payload["task"],
+                    current_epoch=None,
                 )
                 
                 # Convert RouterDecisionResponse format to expected format
@@ -519,10 +517,9 @@ async def resolve_route_cached_async(
             resolve_timeout = min(0.05, max(0.005, client_timeout))  # 5-50ms window
             
             # Call new /route-only endpoint
-            resp = await organism_client.post(
-                "/route-only", json=payload,
-                headers=_corr_headers("organism", cid or uuid.uuid4().hex),
-                timeout=resolve_timeout
+            resp = await organism_client.route_only(
+                payload["task"],
+                current_epoch=None,
             )
             # New response format: { agent_id, organ_id, reason, is_high_stakes }
             # Extract organ_id as logical_id for compatibility

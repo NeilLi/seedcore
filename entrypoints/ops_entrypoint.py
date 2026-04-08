@@ -71,6 +71,58 @@ class OpsGateway:
         self.energy = _instantiate_deployment_backend(EnergyService)
 
     # ========================================================================
+    # Internal RPC Surface (preferred for in-cluster callers)
+    # ========================================================================
+
+    async def rpc_state_system_metrics(self):
+        return await self.state.rpc_system_metrics()
+
+    async def rpc_state_unified_state(self):
+        return await self.state.rpc_unified_state()
+
+    async def rpc_state_agent_snapshots(self):
+        return await self.state.rpc_agent_snapshots()
+
+    async def rpc_state_update_w_mode(self, payload: Dict[str, Any]):
+        return await self.state.rpc_update_w_mode(payload)
+
+    async def rpc_state_health(self):
+        return await self.state.rpc_health()
+
+    async def rpc_state_status(self):
+        return await self.state.rpc_status()
+
+    async def rpc_energy_metrics(self):
+        return await self.energy.rpc_get_metrics()
+
+    async def rpc_energy_compute_from_state(self):
+        return await self.energy.rpc_compute_from_state()
+
+    async def rpc_energy_compute(self, payload: Dict[str, Any]):
+        return await self.energy.rpc_compute_energy(EnergyRequest(**payload))
+
+    async def rpc_energy_optimize(self, payload: Dict[str, Any]):
+        return await self.energy.rpc_optimize_agents(OptimizationRequest(**payload))
+
+    async def rpc_energy_flywheel_result(self, payload: Dict[str, Any]):
+        return await self.energy.rpc_flywheel_result(FlywheelResultRequest(**payload))
+
+    async def rpc_energy_health(self):
+        return await self.energy.rpc_health()
+
+    async def rpc_energy_status(self):
+        return await self.energy.rpc_status()
+
+    async def rpc_energy_meta(self):
+        return await self.energy.rpc_get_meta()
+
+    async def rpc_energy_log(self, payload: Dict[str, Any]):
+        return await self.energy.rpc_log_event(payload)
+
+    async def rpc_energy_logs(self, limit: int = 100):
+        return await self.energy.rpc_get_logs(limit=limit)
+
+    # ========================================================================
     # Eventizer Routes
     # ========================================================================
 
@@ -128,7 +180,7 @@ class OpsGateway:
     async def state_system_metrics(self, response: StarletteResponse):
         """Refined Jet Fuel — precomputed aggregates."""
         try:
-            data = await self.state.rpc_system_metrics()
+            data = await self.rpc_state_system_metrics()
 
             if isinstance(data, dict):
                 meta = data.get("meta", {})
@@ -144,11 +196,20 @@ class OpsGateway:
             logger.error(f"State metrics error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    @ops_app.get("/state/unified-state")
+    async def state_unified_state(self):
+        """Full unified state snapshot for planner/debug workloads."""
+        try:
+            return await self.rpc_state_unified_state()
+        except Exception as e:
+            logger.error(f"State unified-state error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     @ops_app.get("/state/agent-snapshots")
     async def state_agent_snapshots(self):
         """Raw Crude Oil — snapshots."""
         try:
-            return await self.state.rpc_agent_snapshots()
+            return await self.rpc_state_agent_snapshots()
         except Exception as e:
             logger.error(f"State snapshots error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -157,7 +218,7 @@ class OpsGateway:
     async def state_update_w_mode(self, payload: Dict[str, Any]):
         """Update state config w_mode."""
         try:
-            return await self.state.rpc_update_w_mode()
+            return await self.rpc_state_update_w_mode(payload)
         except Exception as e:
             logger.error(f"State config error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -165,7 +226,12 @@ class OpsGateway:
     @ops_app.get("/state/health")
     async def state_health(self):
         """State service health check."""
-        return await self.state.rpc_health()
+        return await self.rpc_state_health()
+
+    @ops_app.get("/state/status")
+    async def state_status(self):
+        """State service readiness/details."""
+        return await self.rpc_state_status()
 
     # ========================================================================
     # Energy Service Routes
@@ -174,35 +240,52 @@ class OpsGateway:
     @ops_app.get("/energy/metrics")
     async def energy_metrics(self):
         """Get energy metrics."""
-        return await self.energy.rpc_get_metrics()
+        return await self.rpc_energy_metrics()
 
     @ops_app.get("/energy/compute-from-state")
     async def energy_compute_from_state(self):
         """Compute energy from state."""
-        return await self.energy.rpc_compute_from_state()
+        return await self.rpc_energy_compute_from_state()
 
     @ops_app.post("/energy/compute")
     async def energy_compute(self, payload: Dict[str, Any]):
         """Compute energy."""
-        req = EnergyRequest(**payload)
-        return await self.energy.rpc_compute_energy(req)
+        return await self.rpc_energy_compute(payload)
 
     @ops_app.post("/energy/optimize")
     async def energy_optimize(self, payload: Dict[str, Any]):
         """Optimize energy."""
-        req = OptimizationRequest(**payload)
-        return await self.energy.rpc_optimize_agents(req)
+        return await self.rpc_energy_optimize(payload)
 
     @ops_app.post("/flywheel/result")
     async def flywheel_result(self, payload: Dict[str, Any]):
         """Flywheel result."""
-        req = FlywheelResultRequest(**payload)
-        return await self.energy.rpc_flywheel_result(req)
+        return await self.rpc_energy_flywheel_result(payload)
 
     @ops_app.get("/energy/health")
     async def energy_health(self):
         """Energy service health check."""
-        return await self.energy.rpc_health()
+        return await self.rpc_energy_health()
+
+    @ops_app.get("/energy/status")
+    async def energy_status(self):
+        """Energy service readiness/details."""
+        return await self.rpc_energy_status()
+
+    @ops_app.get("/energy/meta")
+    async def energy_meta(self):
+        """Energy service promotion/contractivity metadata."""
+        return await self.rpc_energy_meta()
+
+    @ops_app.post("/energy/log")
+    async def energy_log(self, payload: Dict[str, Any]):
+        """Record an operational energy event."""
+        return await self.rpc_energy_log(payload)
+
+    @ops_app.get("/energy/logs")
+    async def energy_logs(self, limit: int = 100):
+        """Fetch recent energy events."""
+        return await self.rpc_energy_logs(limit=limit)
 
     # ========================================================================
     # Overall Health

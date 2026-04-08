@@ -16,6 +16,7 @@ The Coordinator Service now uses a unified interface:
 import logging
 from typing import Dict, Any, Optional, List, Union
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from .serve_rpc import call_serve_rpc, get_serve_deployment_handle
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,23 @@ class CoordinatorServiceClient(BaseServiceClient):
             circuit_breaker=circuit_breaker,
             retry_config=retry_config
         )
+        self._rpc_handle = None
+
+    async def _call_coordinator_rpc(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        if self._rpc_handle is None:
+            self._rpc_handle = get_serve_deployment_handle(
+                "Coordinator",
+                app_name="coordinator",
+                enabled_env="SEEDCORE_COORDINATOR_RPC_ENABLED",
+            )
+        if self._rpc_handle is None:
+            raise RuntimeError("coordinator_rpc_handle_unavailable")
+        return await call_serve_rpc(
+            self._rpc_handle,
+            method_name,
+            *args,
+            timeout_s=self.timeout,
+        )
     
     # Task Processing Methods
     async def route_and_execute(self, task: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
@@ -91,8 +109,12 @@ class CoordinatorServiceClient(BaseServiceClient):
             task = task.model_dump()
         elif hasattr(task, 'dict'):
             task = task.dict()
-        
-        return await self.post("/route-and-execute", json=task)
+
+        try:
+            return await self._call_coordinator_rpc("route_and_execute", task)
+        except Exception as exc:
+            logger.debug("CoordinatorServiceClient RPC route_and_execute fallback: %s", exc)
+            return await self.post("/route-and-execute", json=task)
 
     async def advisory(self, task: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
         """
@@ -106,7 +128,11 @@ class CoordinatorServiceClient(BaseServiceClient):
             task = task.model_dump()
         elif hasattr(task, "dict"):
             task = task.dict()
-        return await self.post("/advisory", json=task)
+        try:
+            return await self._call_coordinator_rpc("generate_advisory", task)
+        except Exception as exc:
+            logger.debug("CoordinatorServiceClient RPC advisory fallback: %s", exc)
+            return await self.post("/advisory", json=task)
     
     async def submit_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -168,7 +194,11 @@ class CoordinatorServiceClient(BaseServiceClient):
         Note: This is an operational endpoint (hidden from OpenAPI schema).
         Used by Kubernetes liveness probes.
         """
-        return await self.get("/health")
+        try:
+            return await self._call_coordinator_rpc("health")
+        except Exception as exc:
+            logger.debug("CoordinatorServiceClient RPC health fallback: %s", exc)
+            return await self.get("/health")
     
     async def get_metrics(self) -> Dict[str, Any]:
         """
@@ -177,7 +207,11 @@ class CoordinatorServiceClient(BaseServiceClient):
         Note: This is an operational endpoint (hidden from OpenAPI schema).
         Used by Prometheus for monitoring.
         """
-        return await self.get("/metrics")
+        try:
+            return await self._call_coordinator_rpc("get_metrics")
+        except Exception as exc:
+            logger.debug("CoordinatorServiceClient RPC get_metrics fallback: %s", exc)
+            return await self.get("/metrics")
     
     async def get_predicate_status(self) -> Dict[str, Any]:
         """
@@ -185,7 +219,11 @@ class CoordinatorServiceClient(BaseServiceClient):
         
         Note: This is an operational/admin endpoint (hidden from OpenAPI schema).
         """
-        return await self.get("/predicates/status")
+        try:
+            return await self._call_coordinator_rpc("get_predicate_status")
+        except Exception as exc:
+            logger.debug("CoordinatorServiceClient RPC get_predicate_status fallback: %s", exc)
+            return await self.get("/predicates/status")
     
     async def get_predicate_config(self) -> Dict[str, Any]:
         """
@@ -193,7 +231,11 @@ class CoordinatorServiceClient(BaseServiceClient):
         
         Note: This is an operational/admin endpoint (hidden from OpenAPI schema).
         """
-        return await self.get("/predicates/config")
+        try:
+            return await self._call_coordinator_rpc("get_predicate_config")
+        except Exception as exc:
+            logger.debug("CoordinatorServiceClient RPC get_predicate_config fallback: %s", exc)
+            return await self.get("/predicates/config")
     
     # Energy Management
     async def get_energy_state(self, agent_id: str) -> Dict[str, Any]:

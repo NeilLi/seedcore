@@ -11,6 +11,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from .base_client import BaseServiceClient, CircuitBreaker, RetryConfig
+from .ops_rpc import call_ops_rpc, get_ops_gateway_handle
 
 from seedcore.models.energy import (
     EnergyRequest,
@@ -59,6 +60,19 @@ class EnergyServiceClient(BaseServiceClient):
             circuit_breaker=circuit_breaker,
             retry_config=retry_config,
         )
+        self._ops_handle = None
+
+    async def _call_ops_rpc(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        if self._ops_handle is None:
+            self._ops_handle = get_ops_gateway_handle()
+        if self._ops_handle is None:
+            raise RuntimeError("ops_gateway_rpc_unavailable")
+        return await call_ops_rpc(
+            self._ops_handle,
+            method_name,
+            *args,
+            timeout_s=self.timeout,
+        )
 
     # ----------------------------------------------------------------------
     # FAST-PATH METRICS / HEALTH
@@ -66,7 +80,11 @@ class EnergyServiceClient(BaseServiceClient):
 
     async def get_metrics(self) -> Dict[str, Any]:
         """Fetch the latest cached energy metrics (fast path)."""
-        return await self.get("/ops/energy/metrics")
+        try:
+            return await self._call_ops_rpc("rpc_energy_metrics")
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC get_metrics fallback: %s", exc)
+            return await self.get("/ops/energy/metrics")
 
     async def get_current_energy(self) -> Dict[str, Any]:
         """Backward-compatible alias used by older cognitive helpers."""
@@ -74,15 +92,27 @@ class EnergyServiceClient(BaseServiceClient):
 
     async def health(self) -> Dict[str, Any]:
         """Ping EnergyService health via OpsGateway."""
-        return await self.get("/ops/energy/health")
+        try:
+            return await self._call_ops_rpc("rpc_energy_health")
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC health fallback: %s", exc)
+            return await self.get("/ops/energy/health")
 
     async def get_status(self) -> Dict[str, Any]:
         """Fetch runtime readiness and mode details."""
-        return await self.get("/ops/energy/status")
+        try:
+            return await self._call_ops_rpc("rpc_energy_status")
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC get_status fallback: %s", exc)
+            return await self.get("/ops/energy/status")
 
     async def get_meta(self) -> Dict[str, Any]:
         """Fetch promotion/contractivity metadata."""
-        return await self.get("/ops/energy/meta")
+        try:
+            return await self._call_ops_rpc("rpc_energy_meta")
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC get_meta fallback: %s", exc)
+            return await self.get("/ops/energy/meta")
 
     async def is_healthy(self) -> bool:
         try:
@@ -100,7 +130,13 @@ class EnergyServiceClient(BaseServiceClient):
         Trigger EnergyService to fetch the latest StateService metrics
         and compute energy immediately.
         """
-        return await self.get("/ops/energy/compute-from-state")
+        try:
+            return await self._call_ops_rpc("rpc_energy_compute_from_state")
+        except Exception as exc:
+            logger.debug(
+                "EnergyServiceClient RPC compute_energy_from_state fallback: %s", exc
+            )
+            return await self.get("/ops/energy/compute-from-state")
 
     async def compute_energy(
         self,
@@ -114,7 +150,12 @@ class EnergyServiceClient(BaseServiceClient):
             weights=weights,
             include_gradients=include_gradients,
         )
-        return await self.post("/ops/energy/compute", json=body.model_dump())
+        payload = body.model_dump()
+        try:
+            return await self._call_ops_rpc("rpc_energy_compute", payload)
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC compute_energy fallback: %s", exc)
+            return await self.post("/ops/energy/compute", json=payload)
 
     async def get_gradient(
         self,
@@ -144,7 +185,12 @@ class EnergyServiceClient(BaseServiceClient):
             task=task,
             max_agents=max_agents,
         )
-        return await self.post("/ops/energy/optimize", json=body.model_dump())
+        payload = body.model_dump()
+        try:
+            return await self._call_ops_rpc("rpc_energy_optimize", payload)
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC optimize_agents fallback: %s", exc)
+            return await self.post("/ops/energy/optimize", json=payload)
 
     # ----------------------------------------------------------------------
     # FLYWHEEL — Feedback Loop
@@ -174,12 +220,27 @@ class EnergyServiceClient(BaseServiceClient):
             drift=drift,
             beta_mem=beta_mem,
         )
-        return await self.post("/ops/flywheel/result", json=body.model_dump())
+        payload = body.model_dump()
+        try:
+            return await self._call_ops_rpc("rpc_energy_flywheel_result", payload)
+        except Exception as exc:
+            logger.debug(
+                "EnergyServiceClient RPC post_flywheel_result fallback: %s", exc
+            )
+            return await self.post("/ops/flywheel/result", json=payload)
 
     async def log_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Log an operational energy event."""
-        return await self.post("/ops/energy/log", json=payload)
+        try:
+            return await self._call_ops_rpc("rpc_energy_log", payload)
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC log_event fallback: %s", exc)
+            return await self.post("/ops/energy/log", json=payload)
 
     async def get_logs(self, limit: int = 100) -> Dict[str, Any]:
         """Fetch recent operational energy events."""
-        return await self.get("/ops/energy/logs", params={"limit": limit})
+        try:
+            return await self._call_ops_rpc("rpc_energy_logs", int(limit))
+        except Exception as exc:
+            logger.debug("EnergyServiceClient RPC get_logs fallback: %s", exc)
+            return await self.get("/ops/energy/logs", params={"limit": limit})
