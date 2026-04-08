@@ -5,7 +5,7 @@
 MemoryAggregator - Proactive aggregator for memory manager stats.
 
 This service runs a continuous background loop to poll all central memory
-managers (MwManager, HolonFabric) for their system-wide telemetry.
+managers (working, semantic, and incident memory) for system-wide telemetry.
 
 It provides a real-time, cached view of the organism's memory system health,
 excluding per-agent ('ma') stats, which are handled by the AgentAggregator.
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 class MemoryAggregator:
     """
     Runs a background loop to proactively collect and cache memory stats
-    from MwManager, HolonFabric, and Flashbulb systems.
+    from working-memory, semantic-memory, and incident-memory systems.
     """
 
     def __init__(
@@ -166,13 +166,13 @@ class MemoryAggregator:
                     new_stats["mw"] = mw_stats
 
                 if isinstance(mlt_stats, Exception):
-                    logger.error(f"Failed to poll HolonFabric: {mlt_stats}")
+                    logger.error(f"Failed to poll semantic memory: {mlt_stats}")
                     new_stats["mlt"] = self._stats_cache.get("mlt", {}) # Keep old
                 else:
                     new_stats["mlt"] = mlt_stats
 
                 if isinstance(mfb_stats, Exception):
-                    logger.error(f"Failed to poll MfbManager: {mfb_stats}")
+                    logger.error(f"Failed to poll incident memory: {mfb_stats}")
                     new_stats["mfb"] = self._stats_cache.get("mfb", {}) # Keep old
                 else:
                     new_stats["mfb"] = mfb_stats
