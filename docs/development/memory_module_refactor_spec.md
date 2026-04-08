@@ -856,10 +856,44 @@ Concrete follow-ups:
 
 ### 2. Outer-wiring and ownership (cognitive + runtime)
 
-**Problem:** the **state service** `MemoryAggregator` often runs in a **different
-process** than the organism; a second lazy `connect_default_memory_runtime()` is
-still possible there. That is acceptable for **telemetry-only** aggregation
-until a single owner is defined.
+**Final ownership policy**
+
+- **One `MemoryRuntime` owner per process boundary.**
+- A `MemoryRuntime` object is never treated as cross-process shareable state.
+- The process that opens PG/Neo4j pools owns `close()` for those pools.
+
+**By process role**
+
+- **Organism process:** owns the primary read/write `MemoryRuntime` for
+  semantic storage in the organism runtime.
+- **Agent / organ / tool-shard processes:** may own a local `MemoryRuntime`
+  only when they execute semantic reads/writes in that process and cannot rely
+  on a colocated outer owner. When already handed a runtime-owned
+  `semantic_memory`, they must not reconnect storage themselves.
+- **State service:** is **telemetry-only** and must not be a default storage
+  owner. Its preferred source is a **remote memory-stats boundary** exposed by
+  the organism service (or a dedicated stats proxy), not direct PG/Neo4j
+  bootstrap.
+
+**State service policy**
+
+- `state_service` should poll **contract-shaped memory stats over RPC/HTTP**
+  from the organism service.
+- `MemoryAggregator(..., memory_runtime=...)` injection remains valid only for
+  colocated/test deployments where the state layer runs in-process.
+- local `connect_default_memory_runtime()` inside `MemoryAggregator` becomes an
+  **explicit fallback/dev mode**, not the default production path.
+
+**Recommended implementation shape**
+
+1. add an organism-facing memory telemetry endpoint / RPC that returns the same
+   `mw` / `mlt` / `mfb` payload families state service already consumes
+2. teach `state_service` startup to prefer that remote source when an organism
+   handle is available
+3. keep lazy local runtime connect behind an explicit env flag for local/dev
+   survival only
+4. once remote stats polling is stable, treat duplicate state-service storage
+   bootstrap as non-default and document it as fallback-only
 
 **Target state:**
 
@@ -873,10 +907,9 @@ until a single owner is defined.
   shared semantic injection. When cognitive is **remote-only**,
   document that memory bridge / retrieval may be degraded unless an RPC or
   shared client supplies semantic access.
-- **State service:** prefer **`MemoryAggregator(..., memory_runtime=...)`** or
-  **`semantic_memory=...`** when the deployment model allows passing the
-  organism’s runtime (or a stats-only proxy). Until then, keep lazy connect but
-  treat it as **explicitly duplicate** in ops docs.
+- **State service:** prefer organism-owned remote stats polling. Only use
+  **`MemoryAggregator(..., memory_runtime=...)`** / local runtime wiring in
+  colocated or test deployments, and keep lazy connect as explicit fallback.
 
 ### 3. Already narrowed or documented elsewhere
 

@@ -375,8 +375,9 @@ async def startup_event():
         )
         await state.agent_aggregator.start()
 
-        # Telemetry-only: may open its own PG/Neo4j pools when not injected with the
-        # organism's MemoryRuntime (typical when state service runs in a separate process).
+        # Current fallback path: state service is telemetry-only, and the target
+        # design is remote memory-stats polling from organism rather than
+        # defaulting to a second local PG/Neo4j bootstrap in this process.
         state.memory_aggregator = MemoryAggregator(poll_interval=5.0)
         await state.memory_aggregator.start()
 

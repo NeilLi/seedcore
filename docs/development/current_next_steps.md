@@ -93,7 +93,12 @@ Latest repo-aligned memory-subsystem status:
     callers can require `semantic_memory`
   - continue normalizing residual HolonFabric-era logs/docstrings toward
     semantic-memory terminology (code path mostly migrated)
-  - keep pushing toward one clear runtime owner per process boundary
+  - runtime ownership policy is now decided:
+    organism owns the primary semantic-storage runtime in its process, and
+    state-service should consume remote memory stats rather than defaulting to
+    its own PG/Neo4j bootstrap
+  - implement the organism -> state-service memory telemetry boundary and push
+    local state-service runtime bootstrap behind explicit fallback/dev mode
   - decide whether to add live-backend semantic integration lanes beyond fast
     mock/contract tests
   - keep `HolonClient` retired (already removed) and avoid reintroducing
