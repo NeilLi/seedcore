@@ -920,13 +920,17 @@ class OrganismCore:
         threshold = self.config.get("agent_threshold_for_shards", 100)
 
         if num_agents < threshold:
-            self.tool_manager = ToolManager(
-                skill_store=self.skill_store,
-                mw_manager=self.mw_manager,
-                holon_fabric=self.holon_fabric,
-                cognitive_client=self.cognitive_client,
-                ml_client=self.ml_client,
-            )
+            tm_kw: Dict[str, Any] = {
+                "skill_store": self.skill_store,
+                "mw_manager": self.mw_manager,
+                "cognitive_client": self.cognitive_client,
+                "ml_client": self.ml_client,
+            }
+            if self.memory_runtime is not None:
+                tm_kw["semantic_memory"] = self.memory_runtime.semantic
+            elif self.holon_fabric is not None:
+                tm_kw["holon_fabric"] = self.holon_fabric
+            self.tool_manager = ToolManager(**tm_kw)
             self.tool_handler = self.tool_manager
             logger.info("🔧 ToolManager initialized (Single Mode)")
 

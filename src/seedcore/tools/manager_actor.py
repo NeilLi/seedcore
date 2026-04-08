@@ -165,19 +165,18 @@ class ToolManagerShard:
                 pool_min_size=1,
                 embedder=None,
             )
-            holon_fabric = runtime.holon_fabric
             mw = self._get_mw_manager()
             if mw is not None:
                 runtime.bind_working_memory(mw)
 
             self._memory_runtime = runtime
 
-            skill_store = HolonFabricSkillStoreAdapter(holon_fabric)
+            skill_store = HolonFabricSkillStoreAdapter(runtime.holon_fabric)
 
             self._manager = ToolManager(
                 skill_store=skill_store,
                 mw_manager=mw,
-                holon_fabric=holon_fabric,
+                semantic_memory=runtime.semantic,
                 cognitive_client=self._get_cognitive_client(),
                 ml_client=self._get_ml_client(),
                 mcp_client=self._get_mcp_client(),

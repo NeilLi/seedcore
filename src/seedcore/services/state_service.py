@@ -375,6 +375,8 @@ async def startup_event():
         )
         await state.agent_aggregator.start()
 
+        # Telemetry-only: may open its own PG/Neo4j pools when not injected with the
+        # organism's MemoryRuntime (typical when state service runs in a separate process).
         state.memory_aggregator = MemoryAggregator(poll_interval=5.0)
         await state.memory_aggregator.start()
 

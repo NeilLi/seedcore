@@ -698,8 +698,11 @@ Status:
 
 - partially completed
 - runtime exists, is wired into key callers, and lifecycle close is improved
+- organism / organ / agent local ToolManager and Ray tool shards now prefer
+  ``semantic_memory=runtime.semantic`` when a ``MemoryRuntime`` is already held
 - not yet complete as a single config/ownership path across every process
-  boundary
+  boundary (e.g. state-service ``MemoryAggregator`` may still lazy-connect when
+  not injected)
 
 ## Phase 3: Migrate callers
 
@@ -779,6 +782,7 @@ Additional validated commands from the latest review slice:
 ```bash
 pytest -q tests/test_memory_contracts.py tests/test_memory_aggregator.py tests/test_memory_runtime_lifecycle.py
 pytest -q tests/test_tools.py tests/test_cognitive_memory_bridge.py tests/test_semantic_memory_service.py
+pytest -q tests/test_memory_tool_integration.py
 ```
 
 ## Documentation Updates Required
@@ -816,15 +820,78 @@ incremental.
 
 ## Remaining Recommended Next Slice
 
-To finish the refactor without reopening scope, the next highest-value steps
-are:
+Focus on **closing real gaps** (not re-litigating completed contract work):
 
-1. migrate remaining callers from `HolonFabric` compatibility usage to
-   `SemanticMemory` / `WorkingMemory` dependencies where practical
-2. add broader integration tests around tool registration and collaborative
-   semantic promotion paths
-3. clean up deprecated memory fallbacks and compatibility-era naming in
-   `CognitiveCore`
-4. decide and document the final status of `HolonClient`
-5. either migrate incident/flashbulb flows onto `IncidentMemory` or mark them
-   explicitly legacy and non-core
+### 1. Broader integration tests (highest leverage)
+
+Add pytest coverage that exercises **multiple layers together**, not only mocks in
+isolation:
+
+- `ToolManager` + `SemanticMemory` (or a small fake implementing the same async
+  surface) for `memory.holon.*` / `memory.graph.*` routes.
+- `register_query_tools()` registering `knowledge.find` when the manager exposes
+  `semantic_memory` + `mw_manager`, and a minimal execute path on `FindKnowledgeTool`
+  (Mw miss → semantic `get_holon`).
+- Optional: `CollaborativeTaskTool` promotion calling `semantic_memory.upsert_holon`
+  with a stub embedder-free holon payload (unit-style but wired through the tool).
+
+Keep these tests **fast**: no live Postgres/Neo4j unless already marked as
+integration; prefer fakes that match the service method names the tools call.
+
+### 2. Reduce “compatibility-first” constructor shapes
+
+**Direction:** new and internal code should take **`semantic_memory`** (or a
+runtime-owned `MemoryRuntime`) first; **`holon_fabric`** remains a narrow escape
+hatch for legacy callers and for deriving `SemanticMemoryService(fabric)` at the
+boundary.
+
+Concrete follow-ups:
+
+- Prefer `ToolManager(..., semantic_memory=runtime.semantic)` everywhere the
+  process already holds a `MemoryRuntime` (organism, organ actor, agent local
+  manager, tool shards).
+- Tighten query-tool constructors (`FindKnowledgeTool`, `CollaborativeTaskTool`,
+  `Ltm*Tool`) so **`semantic_memory` is required** (keyword-only); drop
+  dual `holon_fabric` + `semantic_memory` optional matrices except inside a
+  single small resolver if still needed for one release.
+- In `CognitiveCore`, accept optional **`semantic_memory`** / **`holon_fabric`**
+  at construction (or a single `attach_shared_semantic_memory` used by the
+  cognitive service driver when colocated with a runtime) so lazy bridge init
+  does not re-wrap fabric ad hoc.
+
+### 3. Outer-wiring and ownership (cognitive + runtime)
+
+**Problem:** the **state service** `MemoryAggregator` often runs in a **different
+process** than the organism; a second lazy `connect_default_memory_runtime()` is
+still possible there. That is acceptable for **telemetry-only** aggregation
+until a single owner is defined.
+
+**Target state:**
+
+- **Organism / agents / shards:** one `MemoryRuntime` per process (or per shard)
+  that owns `close()`; `ToolManager` and MW binding consume **`runtime.semantic`**
+  and **`runtime.working`** rather than reconstructing parallel facades.
+- **Cognitive service:** when the cognitive driver is **colocated** with
+  semantic storage, inject the **same** `SemanticMemoryService` (or fabric via
+  orchestrator) into `CognitiveCore` so per-agent bridges do not construct a
+  second service instance unnecessarily. When cognitive is **remote-only**,
+  document that memory bridge / retrieval may be degraded unless an RPC or
+  shared client supplies semantic access.
+- **State service:** prefer **`MemoryAggregator(..., memory_runtime=...)`** or
+  **`semantic_memory=...`** when the deployment model allows passing the
+  organism’s runtime (or a stats-only proxy). Until then, keep lazy connect but
+  treat it as **explicitly duplicate** in ops docs.
+
+### 4. Already narrowed or documented elsewhere
+
+- `HolonClient`: compatibility adapter; prefer `SemanticMemoryService` (module
+  docstring).
+- Flashbulb / legacy MFB routes: marked non-core; migrate to `IncidentMemory` only
+  if product needs unified incident telemetry.
+
+**Suggested pytest commands for this slice:**
+
+```bash
+pytest -q tests/test_memory_tool_integration.py tests/test_memory_contracts.py \
+  tests/test_memory_aggregator.py tests/test_cognitive_memory_bridge.py
+```

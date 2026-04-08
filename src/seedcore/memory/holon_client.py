@@ -1,3 +1,8 @@
+"""Compatibility helper: thin adapter over :class:`HolonFabric` + an embedder.
+
+Prefer :class:`seedcore.memory.semantic_memory.SemanticMemoryService` for new code;
+this class remains for older call sites that construct episodic holons the legacy way.
+"""
 
 from typing import Any, Dict
 

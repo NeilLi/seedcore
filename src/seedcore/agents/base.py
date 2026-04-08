@@ -812,7 +812,7 @@ class BaseAgent:
             self.tool_handler = ToolManager(
                 skill_store=self._skill_store,
                 mw_manager=MwManager(organ_id=self.organ_id),
-                holon_fabric=self._holon_fabric,
+                semantic_memory=self._memory_runtime.semantic,
                 cognitive_client=self._get_cognitive_client(),
                 ml_client=self._get_ml_client(),
                 mcp_client=self._get_mcp_client(),

@@ -30,9 +30,8 @@ class CollaborativeTaskTool:
         mw_manager: Any,
         agent_id: str,
         get_energy_slice: callable,
-        holon_fabric: Any = None,
         *,
-        semantic_memory: Any = None,
+        semantic_memory: Any,
     ):
         """
         Initialize the CollaborativeTaskTool.
@@ -42,15 +41,12 @@ class CollaborativeTaskTool:
             mw_manager: MwManager instance for artifact storage
             agent_id: ID of the agent using this tool
             get_energy_slice: Function that returns current energy slice value
-            holon_fabric: Optional HolonFabric when semantic_memory is not passed
-            semantic_memory: Preferred facade for promotion (:class:`SemanticMemoryService`)
+            semantic_memory: Semantic memory facade for promotion (:class:`SemanticMemoryService`)
         """
-        from seedcore.tools.memory_tools import _resolve_semantic
-
         self.find_knowledge_tool = find_knowledge_tool
         self.mw_manager = mw_manager
-        self.semantic_memory = _resolve_semantic(holon_fabric, semantic_memory)
-        self.holon_fabric = getattr(self.semantic_memory, "holon_fabric", holon_fabric)
+        self.semantic_memory = semantic_memory
+        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
         self.agent_id = agent_id
         self._get_energy_slice = get_energy_slice
 

@@ -371,7 +371,7 @@ class Organ:
             self._tool_handler = ToolManager(
                 skill_store=self._skill_store,
                 mw_manager=self._get_mw_manager(),
-                holon_fabric=self._holon_fabric,
+                semantic_memory=self._memory_runtime.semantic,
                 cognitive_client=self._get_client_instance("cognitive"),
                 ml_client=self._get_client_instance("ml"),
             )

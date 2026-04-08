@@ -24,9 +24,8 @@ class FindKnowledgeTool:
         self,
         mw_manager: Any,
         agent_id: str,
-        holon_fabric: Any = None,
         *,
-        semantic_memory: Any = None,
+        semantic_memory: Any,
     ):
         """
         Initialize the FindKnowledgeTool.
@@ -34,14 +33,11 @@ class FindKnowledgeTool:
         Args:
             mw_manager: MwManager instance for working memory
             agent_id: ID of the agent using this tool
-            holon_fabric: Optional HolonFabric (wrapped as semantic memory if semantic_memory omitted)
-            semantic_memory: Preferred facade (:class:`SemanticMemoryService`)
+            semantic_memory: Semantic memory facade (:class:`SemanticMemoryService`)
         """
-        from seedcore.tools.memory_tools import _resolve_semantic
-
         self.mw_manager = mw_manager
-        self.semantic_memory = _resolve_semantic(holon_fabric, semantic_memory)
-        self.holon_fabric = getattr(self.semantic_memory, "holon_fabric", holon_fabric)
+        self.semantic_memory = semantic_memory
+        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
         self.agent_id = agent_id
 
     @property

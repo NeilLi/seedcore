@@ -236,8 +236,17 @@ def test_holon_fabric_retrieval_normalizes_scope_enum_values():
         mod.ChainOfThought = _Predictor
         sys.modules["dspy"] = mod
 
-    core = importlib.import_module("seedcore.cognitive.cognitive_core")
-    HolonFabricRetrieval = core.HolonFabricRetrieval
+    # Other tests may leave a stub ``seedcore.cognitive`` with an empty ``__path__``,
+    # which breaks normal submodule imports; temporarily clear cognitive submodules.
+    _saved_cog: dict[str, types.ModuleType] = {}
+    for _k in list(sys.modules):
+        if _k == "seedcore.cognitive" or _k.startswith("seedcore.cognitive."):
+            _saved_cog[_k] = sys.modules.pop(_k)
+    try:
+        core = importlib.import_module("seedcore.cognitive.cognitive_core")
+        HolonFabricRetrieval = core.HolonFabricRetrieval
+    finally:
+        sys.modules.update(_saved_cog)
 
     retrieval = HolonFabricRetrieval.__new__(HolonFabricRetrieval)
     retrieval.embedder = SimpleNamespace(embed=lambda text: [0.0, 1.0])

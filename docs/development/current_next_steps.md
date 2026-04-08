@@ -41,6 +41,56 @@ Latest repo-aligned critical-path status:
   - stress `SKIP LOCKED` multi-worker contention behavior
   - document quarantine remediation / operator runbook handling
 
+## Status Update (2026-04-08, Memory Refactor)
+
+Latest repo-aligned memory-subsystem status:
+
+- the bounded memory refactor is now materially underway rather than
+  speculative:
+  - caller-facing contracts exist for `WorkingMemory`, `SemanticMemory`, and
+    `IncidentMemory`
+  - `MemoryRuntime` now owns the main semantic-storage boundary
+    (`PgVectorStore` + `Neo4jGraph`) and exposes shared facades
+  - legacy tiered-memory exports have been narrowed behind
+    `seedcore.memory.legacy`
+- semantic-memory contract drift has been repaired:
+  - `HolonFabric`, pgvector, and Neo4j now align on upsert/search/delete/stats
+    enough for contract-level tests to pass
+  - task-outcome promotion now maps onto `HolonType.EPISODE`
+  - local host runtime support for Neo4j-backed semantic memory is wired
+    through `deploy/local/*`
+- caller migration has progressed beyond the initial bridge/tools slice:
+  - `CognitiveMemoryBridge` already depends on `WorkingMemory` and
+    `SemanticMemory`
+  - `ToolManager`, `memory_tools.py`, `FindKnowledgeTool`,
+    `CollaborativeTaskTool`, and query-tool registration now prefer
+    `semantic_memory`
+  - organism / organ / agent local `ToolManager` wiring and Ray tool shards now
+    prefer `semantic_memory=runtime.semantic` when they already hold a
+    `MemoryRuntime`
+  - `CognitiveCore` retrieval now routes through `SemanticMemoryService` in
+    `HolonFabricRetrieval`, including correct enum-to-scope-value normalization
+- state/telemetry work is improved but not fully unified:
+  - `MemoryAggregator` now polls semantic stats through the service/runtime
+    facade and supports injected `semantic_memory`, `memory_runtime`, and
+    `mw_manager`
+  - when `state_service` runs as a separate process, it may still open its own
+    telemetry-only PG/Neo4j pools unless injected with a shared runtime
+- test coverage now includes:
+  - semantic contract tests
+  - cognitive bridge tests
+  - Neo4j relationship sanitization tests
+  - memory aggregator/runtime lifecycle tests
+  - cross-layer memory tool integration tests
+- the main remaining memory work is now cleanup and unification, not basic
+  contract repair:
+  - reduce compatibility-first `HolonFabric` fallback usage where internal
+    callers can require `semantic_memory`
+  - keep pushing toward one clear runtime owner per process boundary
+  - decide the final product status of `HolonClient`
+  - either migrate flashbulb/legacy MFB paths onto `IncidentMemory` or keep
+    them explicitly quarantined as legacy-only
+
 ## Status Update (2026-04-02)
 
 Latest repo-aligned critical-path status:

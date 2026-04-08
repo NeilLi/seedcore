@@ -246,6 +246,9 @@ class CognitiveCore(dspy.Module):
         session_maker: Optional[Any] = None,
         # --- Backward compatibility: profile parameter (ignored) ---
         profile: Optional[Any] = None,  # Deprecated: kept for backward compatibility
+        # --- Optional shared semantic memory (same instance as organism/runtime when colocated) ---
+        semantic_memory: Optional[SemanticMemoryService] = None,
+        holon_fabric: Optional[Any] = None,
     ):
         super().__init__()
         self.llm_provider = llm_provider or "unknown"
@@ -385,11 +388,16 @@ class CognitiveCore(dspy.Module):
         ] = {}  # Dict[str, CognitiveRetrieval] - per-agent retrieval
 
         # Shared memory components (used by all agents, can be overridden per-agent)
-        # These are set externally or lazily initialized
         self.holon_client: Optional[Any] = None  # Legacy: optional HolonClient (bridge uses SemanticMemory)
-        self.holon_fabric: Optional[Any] = (
-            None  # HolonFabric instance (for HolonFabricRetrieval)
-        )
+        if semantic_memory is not None:
+            self.semantic_memory: Optional[SemanticMemoryService] = semantic_memory
+            self.holon_fabric = semantic_memory.holon_fabric
+        elif holon_fabric is not None:
+            self.semantic_memory = SemanticMemoryService(holon_fabric)
+            self.holon_fabric = holon_fabric
+        else:
+            self.semantic_memory = None
+            self.holon_fabric = None
         self.scope_resolver: Optional[Any] = None  # Default ScopeResolver (fallback)
         self.cognitive_retrieval: Optional[Any] = (
             None  # Default CognitiveRetrieval (fallback)
@@ -472,7 +480,6 @@ class CognitiveCore(dspy.Module):
 
         # 2) External dependencies: ScopeResolver, CognitiveRetrieval; optional semantic path
 
-        from ..memory.semantic_memory import SemanticMemoryService
         from ..memory.working_memory import MwWorkingMemoryAdapter
 
         # ScopeResolver: per-agent if available, otherwise shared, otherwise default
@@ -511,7 +518,7 @@ class CognitiveCore(dspy.Module):
         missing = []
         if cognitive_retrieval is None:
             missing.append(
-                "CognitiveRetrieval (self.cognitive_retrieval or set self.holon_fabric + embedder for HolonFabricRetrieval)"
+                "CognitiveRetrieval (self.cognitive_retrieval or set semantic_memory/holon_fabric + embedder for HolonFabricRetrieval)"
             )
 
         if missing:
@@ -526,7 +533,7 @@ class CognitiveCore(dspy.Module):
         try:
             bridge_logger = logger.getChild("memory_bridge")
             working = MwWorkingMemoryAdapter(mw)
-            semantic = (
+            semantic = self.semantic_memory or (
                 SemanticMemoryService(self.holon_fabric)
                 if self.holon_fabric is not None
                 else None

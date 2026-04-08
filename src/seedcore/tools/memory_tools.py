@@ -7,17 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-def _resolve_semantic(holon_fabric: Any = None, semantic_memory: Any = None) -> Any:
-    if semantic_memory is not None:
-        return semantic_memory
-    if holon_fabric is None:
-        return None
-    from seedcore.memory.semantic_memory import SemanticMemoryService
-
-    return SemanticMemoryService(holon_fabric)
-
-
 # ============================================================
 # MwManager Tools
 # ============================================================
@@ -116,9 +105,9 @@ class MwHotItemsTool:
 class LtmQueryTool:
     """Query holon by ID via :class:`SemanticMemoryService` (HolonFabric under the hood)."""
 
-    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
-        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
-        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
+    def __init__(self, *, semantic_memory: Any):
+        self.semantic = semantic_memory
+        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
 
     async def execute(self, holon_id: str):
         if not self.semantic:
@@ -150,9 +139,9 @@ class LtmQueryTool:
 class LtmSearchTool:
     """Vector similarity search via :class:`SemanticMemoryService`."""
 
-    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
-        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
-        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
+    def __init__(self, *, semantic_memory: Any):
+        self.semantic = semantic_memory
+        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
 
     async def execute(self, embedding: List[float], limit: int = 5):
         if not self.semantic:
@@ -194,9 +183,9 @@ class LtmSearchTool:
 class LtmStoreTool:
     """Store holon via :class:`SemanticMemoryService`."""
 
-    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
-        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
-        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
+    def __init__(self, *, semantic_memory: Any):
+        self.semantic = semantic_memory
+        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
 
     async def execute(self, holon_data: Dict[str, Any]):
         if not self.semantic:
@@ -251,9 +240,9 @@ class LtmStoreTool:
 class LtmRelationshipsTool:
     """Get holon relationships via :class:`SemanticMemoryService`."""
 
-    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
-        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
-        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
+    def __init__(self, *, semantic_memory: Any):
+        self.semantic = semantic_memory
+        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
 
     async def execute(self, holon_id: str):
         if not self.semantic:

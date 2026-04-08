@@ -97,8 +97,8 @@ class ToolManager:
         self,
         *,
         mw_manager: Optional["MwManager"] = None,
-        holon_fabric: Optional["HolonFabric"] = None,
         semantic_memory: Optional["SemanticMemoryService"] = None,
+        holon_fabric: Optional["HolonFabric"] = None,
         rbac_provider: Optional[Any] = None,
         skill_store: Optional["SkillStoreProtocol"] = None,
         enable_tracing: bool = True,
@@ -106,6 +106,9 @@ class ToolManager:
         cognitive_client: Optional["CognitiveServiceClient"] = None,
         ml_client: Optional["MLServiceClient"] = None,
     ):
+        """Prefer ``semantic_memory=`` when the process already owns a runtime facade;
+        ``holon_fabric=`` remains for legacy call sites and is wrapped automatically.
+        """
         # Internal tool registry
         self._tools: Dict[str, Tool] = {}
         self._lock = asyncio.Lock()  # Lock for tool registry operations
