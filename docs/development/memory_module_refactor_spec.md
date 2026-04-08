@@ -1,7 +1,7 @@
 # Memory Module Refactor Spec
 
 Date: 2026-04-08
-Status: In progress, partially implemented and repo-aligned
+Status: In progress — **Phase 0–1 (contract freeze + backend alignment) are effectively done** in code; Phases 2–4 remain partially complete (runtime ownership, caller migration, legacy export cleanup).
 
 ## Purpose
 
@@ -34,6 +34,23 @@ trust-critical state assumptions.
 
 This spec started as a target-state refactor document. As of 2026-04-08, a
 meaningful portion has now been implemented in the repo.
+
+### Milestone checklist
+
+Quick read for **“Core alignment & contract freeze”** (Phase 0–1) vs **later phases**.
+
+| Item | State | Notes |
+|------|--------|--------|
+| `WorkingMemory` / `SemanticMemory` / `IncidentMemory` protocols + DTOs | **Done** | `memory/contracts.py` |
+| HolonFabric ↔ pgvector / Neo4j contract alignment | **Done** (mock/contract lane) | Live DB: opt-in `SEEDCORE_LIVE_MEMORY_BACKENDS` |
+| `MemoryRuntime` + `SemanticMemoryService` / `MwWorkingMemoryAdapter` | **Done** | Single construction path inside `memory/` |
+| Promotion uses `HolonType.EPISODE` (not `TASK_EVENT`) | **Done** | `cognitive/memory_bridge.py` |
+| Scoped retrieval via `SemanticMemoryService.search` | **Done** | `HolonFabricRetrieval` in `cognitive_core.py` (rename optional) |
+| Tools / query paths use semantic facade | **Largely done** | `ToolManager`, `FindKnowledgeTool`, Ltm tools |
+| One runtime owner per **process** + organism telemetry for state service | **Partial** | Default: state polls organism `/memory/telemetry`; Ray actors may still open local runtimes |
+| No `HolonFabric` / raw backend use outside `memory/` | **Largely done** | `PgVectorStore` / `Neo4jGraph` constructed under `MemoryRuntime` only |
+| Legacy package surface & `HolonClient` | **Done** | `HolonClient` removed; legacy via `memory.legacy` + deprecated `__getattr__` |
+| Phase 2–4 (ownership everywhere, doc/README alignment, incident product decision) | **In progress** | See lists below |
 
 ### Completed in code
 
@@ -93,8 +110,6 @@ meaningful portion has now been implemented in the repo.
   bootstrap owner exists per process boundary
 - add live-backend (non-mocked) integration coverage for semantic runtime paths
   where feasible in CI/host lanes
-- keep `HolonClient` fully retired from the default memory story (no
-  compatibility path)
 - clarify whether incident / flashbulb memory will be actively migrated or kept
   explicitly legacy-only
 - finish migrating remaining compatibility references from `HolonFabric`
@@ -105,25 +120,21 @@ meaningful portion has now been implemented in the repo.
 
 ### 1. The exported memory surface is broader than the current architecture needs
 
-`src/seedcore/memory/__init__.py` still exports:
-
-- `SharedMemorySystem` / `MemoryTier`
-- adaptive energy-style helpers
-- `calculate_cost_vq`
-- `FlashbulbClient`
-- backend classes directly
-
-This keeps an older tiered-memory and adaptive-energy story alive at the
-package boundary even though the current README and ADR set emphasize a narrow,
-deterministic trust runtime instead.
+Historically, `seedcore.memory.__init__` re-exported tiered-memory helpers,
+`FlashbulbClient`, shard types, and similar at top level.
 
 Status update:
 
-- mostly addressed
-- `seedcore.memory.__init__` now prefers contracts/runtime/services and routes
-  legacy items through deprecation handling
-- remaining task: complete downstream caller migration so the legacy surface is
-  truly optional in practice, not only in exports
+- **mostly addressed in current code**
+- **Primary `__all__`** now centers contracts, `MemoryRuntime`,
+  `SemanticMemoryService`, `MwWorkingMemoryAdapter`, `HolonFabric` (still a
+  construction primitive inside `memory/`), and incident types
+- **`SharedMemorySystem` / `MemoryTier` / adaptive helpers**: `__getattr__` →
+  `seedcore.memory.legacy` with `DeprecationWarning`
+- **`SharedCacheShard` / `MwStoreShard` / `FlashbulbClient`**: no longer in
+  `__all__`; accessible only via deprecated `__getattr__` → defining submodule
+- remaining task: downstream callers should import from submodules explicitly;
+  then tighten or remove lazy re-exports entirely
 
 Relevant files:
 
@@ -212,9 +223,10 @@ Status update:
 
 ### 5. Some fallback paths are now explicitly stubs
 
-`CognitiveCore` still exposes legacy Mw text/vector search helpers that return
-empty results and tell the reader to use the newer bridge path instead. This is
-a sign that the public surface and the real intended architecture have drifted.
+Legacy `ContextBroker` construction in `CognitiveCore` used to call named Mw
+search helpers; those **named stub methods have been removed**. The default
+broker still uses **no-op** `text_fn` / `vec_fn` lambdas; real memory work is
+expected via `CognitiveMemoryBridge` and scoped retrieval.
 
 Relevant file:
 
@@ -222,37 +234,35 @@ Relevant file:
 
 Status update:
 
-- partially addressed
-- the newer bridge path is now more explicit, but deprecated fallback helpers
-  in `CognitiveCore` are now stubbed more explicitly and the scoped retrieval
-  path uses `SemanticMemoryService`
-- `CognitiveCore` now also exposes `attach_shared_semantic_memory(...)`, and
-  orchestrator worker construction can inject shared semantic memory directly
-- remaining task: finish cleanup of legacy broker-era naming in cognitive docs
-  and finalize remote cognitive memory behavior expectations in ops docs
+- **substantially addressed**
+- scoped retrieval class `HolonFabricRetrieval` delegates to
+  `SemanticMemoryService.search` (string scope labels normalized there)
+- `CognitiveCore.attach_shared_semantic_memory(...)` and orchestrator-level
+  `semantic_memory=` injection exist for shared facade wiring
+- remaining task: rename or document `HolonFabricRetrieval` (name still says
+  “fabric”) and trim remaining “broker” wording in comments where misleading
 
 ### 6. Memory telemetry is partly simulated instead of contract-shaped
 
-`MemoryAggregator` still computes long-term memory stats by reaching through
-backend internals and falls back to simulated values. That is useful for
-survival, but it is not a durable contract and does not match the repo's newer
-push toward explicit runtime status surfaces.
+Earlier versions reached through ad hoc internals or invented fields.
 
-Relevant file:
+Relevant files:
 
 - [src/seedcore/ops/state/memory_aggregator.py](/Users/ningli/project/seedcore/src/seedcore/ops/state/memory_aggregator.py)
+- [src/seedcore/memory/telemetry.py](/Users/ningli/project/seedcore/src/seedcore/memory/telemetry.py)
 
 Status update:
 
-- substantially improved
-- working-memory and semantic-memory polling now use explicit contract-shaped
-  status payloads with `enabled` / `degraded` / `unavailable`
-- dedicated aggregator tests now exist for injected semantic memory and runtime
-  lifecycle behavior
-- incident-memory polling now supports injected/runtime-provided
-  `IncidentMemoryService` and returns contract-shaped status payloads
-- remaining task: finalize product policy for optional incident telemetry in
-  deployments that intentionally disable flashbulb/incident memory
+- **substantially improved**
+- **Shared** `telemetry` helpers build **contract-shaped** `mw` / `mlt` / `mfb`
+  dicts for both aggregator and organism
+- **State service** (default): prefers **organism** `GET /memory/telemetry` /
+  `rpc_memory_telemetry` via `OrganismServiceClient`; **local**
+  `connect_default_memory_runtime` in the aggregator is **fallback** when remote
+  fetch fails or `MEMORY_AGGREGATOR_ORGANISM_TELEMETRY=0`
+- incident-memory polling supports injected/runtime `IncidentMemoryService`
+- remaining task: product policy for incident telemetry when disabled; optional
+  CI lane for live backends (`SEEDCORE_LIVE_MEMORY_BACKENDS`)
 
 ### 7. Flashbulb memory remains a legacy sidecar
 
@@ -714,9 +724,11 @@ Status:
 - runtime exists, is wired into key callers, and lifecycle close is improved
 - organism / organ / agent local ToolManager and Ray tool shards now prefer
   ``semantic_memory=runtime.semantic`` when a ``MemoryRuntime`` is already held
-- not yet complete as a single config/ownership path across every process
-  boundary (e.g. state-service ``MemoryAggregator`` may still lazy-connect when
-  not injected)
+- not yet complete as a single config/ownership path across every **Ray actor**
+  boundary (organ / agent / shard may still open their own runtime when they
+  need local semantic tools)
+- state-service **default** path now polls organism memory telemetry; lazy local
+  connect remains **fallback** only
 
 ## Phase 3: Migrate callers
 
@@ -913,8 +925,8 @@ Concrete follow-ups:
 
 ### 3. Already narrowed or documented elsewhere
 
-- `HolonClient`: removed from source and package exports; `SemanticMemoryService`
-  is the canonical caller-facing semantic path.
+- **`HolonClient`**: **removed from the repo**; `SemanticMemoryService` /
+  `CognitiveMemoryBridge` promotion paths are canonical for semantic writes.
 - Flashbulb / legacy MFB routes: marked non-core; migrate to `IncidentMemory` only
   if product needs unified incident telemetry.
 
