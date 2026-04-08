@@ -52,11 +52,18 @@ meaningful portion has now been implemented in the repo.
   than the stale `TASK_EVENT` label
 - tool-layer query and relationship paths now use normalized semantic-memory
   calls instead of reaching into graph neighbors directly
+- additional tool and query entry points now accept or derive
+  `SemanticMemoryService` explicitly instead of assuming direct
+  `HolonFabric` access
+- `CognitiveCore` retrieval now routes through `SemanticMemoryService` in
+  `HolonFabricRetrieval`, including correct enum-to-scope-value normalization
 - legacy exports were narrowed and compatibility/deprecation handling was added
   under `seedcore.memory.legacy`
 - repo-root memory test execution was fixed via pytest bootstrap hygiene
 - local runtime wiring for Neo4j was updated so host-local semantic memory is
   usable in `deploy/local`
+- legacy flashbulb modules and routes are now documented in code as non-core
+  compatibility surfaces
 
 ### Completed but still partial
 
@@ -65,6 +72,9 @@ meaningful portion has now been implemented in the repo.
 - lifecycle cleanup now closes runtime-owned resources in more places
 - `MemoryAggregator` now reads semantic stats through the service/runtime
   boundary instead of constructing vector/graph backends directly
+- `MemoryAggregator` now also supports injected runtime / semantic / working
+  dependencies so ownership can remain with outer wiring instead of the
+  aggregator itself
 
 ### Still required to complete the refactor
 
@@ -78,6 +88,8 @@ meaningful portion has now been implemented in the repo.
   retired from the default memory story
 - clarify whether incident / flashbulb memory will be actively migrated or kept
   explicitly legacy-only
+- finish migrating remaining compatibility references from `HolonFabric`
+  terminology toward `SemanticMemory` terminology where that improves clarity
 
 ## Repo Findings
 
@@ -203,7 +215,10 @@ Status update:
 
 - partially addressed
 - the newer bridge path is now more explicit, but deprecated fallback helpers
-  in `CognitiveCore` still need final cleanup after migration confidence is high
+  in `CognitiveCore` are now stubbed more explicitly and the scoped retrieval
+  path uses `SemanticMemoryService`
+- remaining task: finish cleanup of legacy broker-era naming and ensure
+  cognitive callers receive retrieval/runtime dependencies from outer wiring
 
 ### 6. Memory telemetry is partly simulated instead of contract-shaped
 
@@ -221,8 +236,10 @@ Status update:
 - substantially improved
 - working-memory and semantic-memory polling now use explicit contract-shaped
   status payloads with `enabled` / `degraded` / `unavailable`
-- remaining task: add dedicated tests for aggregator behavior and decide how
-  incident-memory telemetry should behave when the subsystem is optional
+- dedicated aggregator tests now exist for injected semantic memory and runtime
+  lifecycle behavior
+- remaining task: decide how incident-memory telemetry should behave when the
+  subsystem is optional
 
 ### 7. Flashbulb memory remains a legacy sidecar
 
@@ -237,9 +254,11 @@ Relevant files:
 
 Status update:
 
-- still open
-- the new incident-memory contract exists, but flashbulb/incident migration is
-  not yet the active completed slice
+- still open architecturally
+- the new incident-memory contract exists, and legacy flashbulb modules/routes
+  are now marked in code as non-core compatibility surfaces
+- remaining task: either migrate them onto `IncidentMemory` or leave them
+  clearly quarantined as legacy-only
 
 ### 8. Tests cover the cache facade better than the semantic-memory contract
 
@@ -267,8 +286,11 @@ Status update:
 - semantic contract tests, bridge tests, and Neo4j relationship sanitization
   tests now exist
 - repo-root pytest import hygiene has been fixed in test bootstrap
-- remaining task: add dedicated runtime lifecycle tests and broader caller
-  integration tests for tools/aggregator
+- dedicated runtime lifecycle and aggregator tests now exist
+- regression coverage now includes semantic scope normalization in
+  `HolonFabricRetrieval`
+- remaining task: broaden caller integration tests around query tool
+  registration and collaborative-task promotion paths
 
 ## Alignment Requirements
 
@@ -517,6 +539,14 @@ It should not require direct knowledge of `HolonFabric`, `PgVectorStore`, or
 - delete deprecated `_mw_text_search` / `_mw_vector_search` fallback paths after
   migration
 
+Implementation status:
+
+- `CognitiveMemoryBridge` already uses `WorkingMemory` and `SemanticMemory`
+- `HolonFabricRetrieval` in `CognitiveCore` now uses `SemanticMemoryService`
+  instead of raw fabric search and correctly normalizes scope enum values
+- remaining task: complete outer-wiring cleanup so cognitive paths do not rely
+  on compatibility-era fallback composition longer than needed
+
 ## 2. Tool layer
 
 `ToolManager`, `memory_tools.py`, and query tools should use the new contracts:
@@ -527,6 +557,15 @@ It should not require direct knowledge of `HolonFabric`, `PgVectorStore`, or
 
 Tools should stop reaching into `holon_fabric.graph.get_neighbors(...)`
 directly, because that bypasses the caller contract and backend normalization.
+
+Implementation status:
+
+- substantially completed
+- `ToolManager`, `memory_tools.py`, `FindKnowledgeTool`,
+  `CollaborativeTaskTool`, and query-tool registration now prefer
+  `SemanticMemoryService`
+- remaining task: continue reducing compatibility-first constructor shapes
+  where callers no longer need `HolonFabric` fallback support
 
 ## 3. Agent and organ wiring
 
@@ -561,6 +600,14 @@ Recommended status shape:
 
 with a reason field, instead of blending real and simulated stats into one
 opaque payload.
+
+Implementation status:
+
+- improved beyond the original slice
+- `MemoryAggregator` now supports injected `semantic_memory`,
+  `memory_runtime`, and `mw_manager` dependencies and avoids closing injected
+  owners
+- tests now cover injected semantic polling and lazy-runtime close semantics
 
 ## 5. Incident / flashbulb callers
 
@@ -672,6 +719,8 @@ Status:
 
 - partially completed
 - tool query paths and aggregator paths are materially improved
+- cognitive retrieval and query-tool registration are also more aligned with
+  the semantic facade now
 - remaining work includes finishing caller migration toward
   `SemanticMemory` / `WorkingMemory` service dependencies instead of
   `HolonFabric` compatibility use
@@ -725,6 +774,13 @@ Current validated commands:
 pytest -q tests/test_mw_manager.py tests/test_memory_contracts.py tests/test_cognitive_memory_bridge.py tests/test_semantic_memory_service.py tests/test_neo4j_graph_backend.py
 ```
 
+Additional validated commands from the latest review slice:
+
+```bash
+pytest -q tests/test_memory_contracts.py tests/test_memory_aggregator.py tests/test_memory_runtime_lifecycle.py
+pytest -q tests/test_tools.py tests/test_cognitive_memory_bridge.py tests/test_semantic_memory_service.py
+```
+
 ## Documentation Updates Required
 
 After implementation, update:
@@ -765,8 +821,10 @@ are:
 
 1. migrate remaining callers from `HolonFabric` compatibility usage to
    `SemanticMemory` / `WorkingMemory` dependencies where practical
-2. add runtime lifecycle tests and aggregator/tool integration tests
-3. clean up deprecated memory fallbacks in `CognitiveCore`
+2. add broader integration tests around tool registration and collaborative
+   semantic promotion paths
+3. clean up deprecated memory fallbacks and compatibility-era naming in
+   `CognitiveCore`
 4. decide and document the final status of `HolonClient`
 5. either migrate incident/flashbulb flows onto `IncidentMemory` or mark them
    explicitly legacy and non-core

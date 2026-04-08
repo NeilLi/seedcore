@@ -1,10 +1,15 @@
 import asyncio
+import importlib
+import sys
+import types
+from types import SimpleNamespace
 
 import mock_database_dependencies  # noqa: F401
 import mock_ray_dependencies  # noqa: F401
 
 from seedcore.memory.contracts import HolonRelation
 from seedcore.memory.mw_manager import MwManager
+from seedcore.models.holon import HolonScope
 from seedcore.tools.manager import ToolManager
 
 
@@ -121,6 +126,9 @@ class _FakeMwManager:
 
 
 class _FakeHolonFabric:
+    async def get_holon(self, holon_id):
+        return None
+
     async def list_relationships(self, holon_id, limit=50):
         return [
             HolonRelation(
@@ -133,11 +141,14 @@ class _FakeHolonFabric:
             )
         ]
 
-    async def query_context(self, query_vec, scopes, limit):
+    async def query_context(self, query_vec, scopes, limit=10, **kwargs):
         return []
 
     async def insert_holon(self, holon):
         return None
+
+    async def get_stats(self):
+        return {"total_holons": 0, "total_relationships": 0, "bytes_used": 0}
 
 
 def test_tool_manager_memory_routes_use_runtime_contracts(monkeypatch):
@@ -189,3 +200,57 @@ def test_tool_manager_memory_routes_use_runtime_contracts(monkeypatch):
     schemas = asyncio.run(manager.list_tools())
     assert "memory.mw.read" in schemas
     assert "memory.holon.relationships" in schemas
+
+
+def test_holon_fabric_retrieval_normalizes_scope_enum_values():
+    seen = {}
+
+    class _Sem:
+        async def search(self, q):
+            seen["query"] = q
+            return []
+
+    if "dspy" not in sys.modules:
+        mod = types.ModuleType("dspy")
+
+        class _Field:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class _Signature:
+            pass
+
+        class _Module:
+            pass
+
+        class _Predictor:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        mod.InputField = _Field
+        mod.OutputField = _Field
+        mod.Signature = _Signature
+        mod.Module = _Module
+        mod.Predict = _Predictor
+        mod.ChainOfThought = _Predictor
+        sys.modules["dspy"] = mod
+
+    core = importlib.import_module("seedcore.cognitive.cognitive_core")
+    HolonFabricRetrieval = core.HolonFabricRetrieval
+
+    retrieval = HolonFabricRetrieval.__new__(HolonFabricRetrieval)
+    retrieval.embedder = SimpleNamespace(embed=lambda text: [0.0, 1.0])
+    retrieval._semantic = _Sem()
+
+    asyncio.run(
+        retrieval.query_context(
+            text="router issue",
+            scopes=[HolonScope.GLOBAL, "organ"],
+            organ_id="organ-1",
+            entity_ids=[],
+            limit=3,
+        )
+    )
+
+    assert seen["query"].scopes == ["global", "organ"]

@@ -1,3 +1,5 @@
+"""Legacy HTTP surface for MySQL-backed flashbulb incidents (non-core memory path)."""
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional

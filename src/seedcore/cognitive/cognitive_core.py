@@ -60,7 +60,8 @@ import dspy  # pyright: ignore[reportMissingImports]
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 from seedcore.memory.holon_fabric import HolonFabric
-from seedcore.models.holon import Holon, HolonScope
+from seedcore.memory.semantic_memory import SemanticMemoryService
+from seedcore.memory.contracts import SemanticSearchQuery
 from ..coordinator.utils import normalize_task_payloads
 
 try:
@@ -167,8 +168,10 @@ class _SynopsisEmbedderAdapter:
 
 
 class HolonFabricRetrieval:
+    """Scoped text retrieval; implemented via :class:`SemanticMemoryService` (not raw fabric)."""
+
     def __init__(self, fabric: HolonFabric, embedder):
-        self.fabric = fabric
+        self._semantic = SemanticMemoryService(fabric)
         self.embedder = embedder
 
     async def query_context(
@@ -183,24 +186,39 @@ class HolonFabricRetrieval:
         ocps: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         vec = self.embedder.embed(text)
-        holons = await self.fabric.query_context(
-            query_vec=vec,
-            scopes=[HolonScope(s) for s in scopes],
+        if hasattr(vec, "tolist"):
+            emb = vec.tolist()
+        else:
+            emb = list(vec)
+        scope_labels = [
+            str(s.value) if hasattr(s, "value") else str(s) for s in scopes
+        ]
+        q = SemanticSearchQuery(
+            embedding=emb,
+            scopes=scope_labels or ["global"],
             organ_id=organ_id,
-            entity_ids=list(entity_ids),
+            entity_ids=list(entity_ids) if entity_ids else [],
             limit=limit,
         )
-
-        return [self._holon_to_dict(h) for h in holons]
-
-    def _holon_to_dict(self, h: Holon):
-        return {
-            "id": h.id,
-            "summary": h.summary,
-            "content": h.content,
-            "confidence": h.confidence,
-            "scope": h.scope.value,
-        }
+        rows = await self._semantic.search(q)
+        out = []
+        for r in rows:
+            d = (
+                r.model_dump()
+                if hasattr(r, "model_dump")
+                else r.dict()  # type: ignore[union-attr]
+            )
+            out.append(
+                {
+                    "id": d.get("holon_id", ""),
+                    "summary": d.get("summary", ""),
+                    "content": d.get("content", {}),
+                    "confidence": d.get("confidence", 1.0),
+                    "scope": d.get("scope", "global"),
+                    "type": d.get("type", "fact"),
+                }
+            )
+        return out
 
 
 # =============================================================================
@@ -273,16 +291,12 @@ class CognitiveCore(dspy.Module):
         # Kept for backward compatibility with legacy handlers that may still use it
         # Long-term memory uses HolonFabric via CognitiveMemoryBridge
         if context_broker is None:
-            # Create lambda functions that will be bound to agent_id at call time
+            # Legacy ContextBroker: Mw search hooks are no-ops; use CognitiveMemoryBridge for memory.
             def text_fn(query, k):
-                return self._mw_first_text_search(
-                    "", query, k
-                )  # Will be overridden in process()
+                return []
 
             def vec_fn(query, k):
-                return self._mw_first_vector_search(
-                    "", query, k
-                )  # Will be overridden in process()
+                return []
 
             self.context_broker = ContextBroker(
                 text_fn, vec_fn, token_budget=1500, ocps_client=self.ocps_client
@@ -3037,13 +3051,13 @@ class CognitiveCore(dspy.Module):
             return future.result(timeout=timeout)
 
     def _bind_broker(self, agent_id: str) -> ContextBroker:
-        """Return a ContextBroker instance with Mw search bindings for the given agent."""
+        """Return a ContextBroker instance (Mw search stubs; prefer memory bridge per agent)."""
 
         def text_fn(query, k):
-            return self._mw_first_text_search(agent_id, query, k)
+            return []
 
         def vec_fn(query, k):
-            return self._mw_first_vector_search(agent_id, query, k)
+            return []
 
         base = self.context_broker
         if base is None:
@@ -3103,26 +3117,6 @@ class CognitiveCore(dspy.Module):
         if isinstance(ids, (list, tuple, set)):
             return ",".join(str(item) for item in ids)
         return str(ids)
-
-    def _mw_first_text_search(
-        self, agent_id: str, q: str, k: int
-    ) -> List[Dict[str, Any]]:
-        """Search Mw for text queries.
-
-        NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
-        for proper scoped retrieval with HolonFabric.
-        """
-        return []
-
-    def _mw_first_vector_search(
-        self, agent_id: str, q: str, k: int
-    ) -> List[Dict[str, Any]]:
-        """Search Mw for vector queries.
-
-        NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
-        for proper scoped vector search with HolonFabric.
-        """
-        return []
 
     def _create_plan_from_steps(
         self,

@@ -417,7 +417,7 @@ async def register_query_tools(
     """
     # Get memory managers from tool_manager
     mw_manager = getattr(tool_manager, "mw_manager", None)
-    holon_fabric = getattr(tool_manager, "holon_fabric", None)
+    semantic_memory = getattr(tool_manager, "semantic_memory", None)
     
     # 1. Register GeneralQueryTool
     general_query_tool = GeneralQueryTool(
@@ -474,12 +474,12 @@ async def register_query_tools(
         await tool_manager.register("cognitive.assess_capabilities", assess_capabilities_tool)
     
     # 6. Register FindKnowledgeTool (if memory managers available)
-    if mw_manager and holon_fabric:
+    if mw_manager and semantic_memory:
         from .query import FindKnowledgeTool
         find_knowledge_tool = FindKnowledgeTool(
             mw_manager=mw_manager,
-            holon_fabric=holon_fabric,
             agent_id=agent_id,
+            semantic_memory=semantic_memory,
         )
         await tool_manager.register("knowledge.find", find_knowledge_tool)
         
@@ -489,9 +489,9 @@ async def register_query_tools(
             collaborative_task_tool = CollaborativeTaskTool(
                 find_knowledge_tool=find_knowledge_tool,
                 mw_manager=mw_manager,
-                holon_fabric=holon_fabric,
                 agent_id=agent_id,
                 get_energy_slice=get_energy_slice,
+                semantic_memory=semantic_memory,
             )
             await tool_manager.register("task.collaborative", collaborative_task_tool)
     

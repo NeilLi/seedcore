@@ -43,14 +43,27 @@ class MemoryAggregator:
     from MwManager, HolonFabric, and Flashbulb systems.
     """
 
-    def __init__(self, poll_interval: float = 5.0):
+    def __init__(
+        self,
+        poll_interval: float = 5.0,
+        *,
+        semantic_memory: Optional[Any] = None,
+        memory_runtime: Any = None,
+        mw_manager: Optional[MwManager] = None,
+    ):
         """
         Initialize the proactive memory aggregator.
 
         Args:
             poll_interval: How often (in seconds) to poll memory managers.
+            semantic_memory: Optional injected :class:`SemanticMemoryService` (skips lazy runtime).
+            memory_runtime: Optional injected :class:`MemoryRuntime` (uses ``.semantic``; not closed on stop).
+            mw_manager: Optional injected ``MwManager`` for MW stats (skips default organ_id instance).
         """
         self.poll_interval = poll_interval
+        self._inject_semantic = semantic_memory
+        self._inject_runtime = memory_runtime
+        self._inject_mw = mw_manager
 
         # Internal state cache
         # We cache the raw dicts for mw, mlt, and mfb
@@ -62,7 +75,7 @@ class MemoryAggregator:
         self._last_update_time: float = 0.0
 
         # Lazy initialization of memory managers
-        self._mw_manager: Optional[MwManager] = None
+        self._mw_manager: Optional[MwManager] = mw_manager
         self._memory_runtime = None
         self._semantic_memory: Optional[SemanticMemoryService] = None
 
@@ -92,7 +105,12 @@ class MemoryAggregator:
                 pass
         self._loop_task = None
         self._is_running.clear()
-        if self._memory_runtime is not None:
+        # Only close a runtime this aggregator created via lazy connect — not injected owners.
+        if (
+            self._memory_runtime is not None
+            and self._inject_semantic is None
+            and self._inject_runtime is None
+        ):
             try:
                 await self._memory_runtime.close()
             except Exception as e:
@@ -288,6 +306,8 @@ class MemoryAggregator:
 
     def _get_mw_manager(self) -> Optional[MwManager]:
         """Get or create a MwManager instance for stats collection."""
+        if self._inject_mw is not None:
+            return self._inject_mw
         if not _MEMORY_AVAILABLE or MwManager is None:
             return None
         if self._mw_manager is None:
@@ -301,6 +321,10 @@ class MemoryAggregator:
 
     async def _get_semantic_memory(self) -> Optional[SemanticMemoryService]:
         """Get or create SemanticMemory via the unified runtime boundary."""
+        if self._inject_semantic is not None:
+            return self._inject_semantic
+        if self._inject_runtime is not None:
+            return getattr(self._inject_runtime, "semantic", None)
         if (
             not _MEMORY_AVAILABLE
             or connect_default_memory_runtime is None

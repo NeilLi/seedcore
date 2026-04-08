@@ -1,3 +1,9 @@
+"""Legacy flashbulb (MySQL) incident logging — not part of the core :mod:`seedcore.memory` runtime.
+
+For the bounded memory subsystem, see :class:`seedcore.memory.incident_memory.IncidentMemoryService`
+and organism wiring; this module remains for historical APIs and ops tooling.
+"""
+
 import uuid
 import logging
 import json

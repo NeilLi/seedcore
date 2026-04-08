@@ -7,6 +7,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_semantic(holon_fabric: Any = None, semantic_memory: Any = None) -> Any:
+    if semantic_memory is not None:
+        return semantic_memory
+    if holon_fabric is None:
+        return None
+    from seedcore.memory.semantic_memory import SemanticMemoryService
+
+    return SemanticMemoryService(holon_fabric)
+
+
 # ============================================================
 # MwManager Tools
 # ============================================================
@@ -103,18 +114,17 @@ class MwHotItemsTool:
 # ============================================================
 
 class LtmQueryTool:
-    """Query holon by ID using HolonFabric.
-    
-    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
-    """
-    def __init__(self, holon_fabric: Any):
-        self.holon_fabric = holon_fabric
+    """Query holon by ID via :class:`SemanticMemoryService` (HolonFabric under the hood)."""
+
+    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
+        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
+        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
 
     async def execute(self, holon_id: str):
-        if not self.holon_fabric:
-            raise ValueError("HolonFabric not available")
+        if not self.semantic:
+            raise ValueError("Semantic memory not available")
         try:
-            holon = await self.holon_fabric.get_holon(holon_id)
+            holon = await self.semantic.get_holon(holon_id)
             if not holon:
                 return None
             if hasattr(holon, "model_dump"):
@@ -138,30 +148,33 @@ class LtmQueryTool:
 
 
 class LtmSearchTool:
-    """Vector similarity search using HolonFabric.
-    
-    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
-    """
-    def __init__(self, holon_fabric: Any):
-        self.holon_fabric = holon_fabric
+    """Vector similarity search via :class:`SemanticMemoryService`."""
+
+    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
+        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
+        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
 
     async def execute(self, embedding: List[float], limit: int = 5):
-        if not self.holon_fabric:
-            raise ValueError("HolonFabric not available")
-        import numpy as np  # pyright: ignore[reportMissingImports]
-        from seedcore.models.holon import HolonScope
-        
-        query_vec = np.array(embedding, dtype=np.float32)
-        holons = await self.holon_fabric.query_context(
-            query_vec=query_vec,
-            scopes=[HolonScope.GLOBAL],
-            limit=limit
+        if not self.semantic:
+            raise ValueError("Semantic memory not available")
+        from seedcore.memory.contracts import SemanticSearchQuery
+
+        q = SemanticSearchQuery(
+            embedding=list(embedding),
+            scopes=["global"],
+            limit=int(limit),
         )
-        # Convert Holon objects to dicts for backward compatibility
-        return [
-            h.model_dump() if hasattr(h, "model_dump") else h.dict()
-            for h in holons
-        ]
+        rows = await self.semantic.search(q)
+        out = []
+        for r in rows:
+            d = (
+                r.model_dump()
+                if hasattr(r, "model_dump")
+                else r.dict()  # type: ignore[union-attr]
+            )
+            d["id"] = d.get("holon_id", "")
+            out.append(d)
+        return out
 
     def schema(self):
         return {
@@ -179,16 +192,15 @@ class LtmSearchTool:
 
 
 class LtmStoreTool:
-    """Store holon using HolonFabric.
-    
-    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
-    """
-    def __init__(self, holon_fabric: Any):
-        self.holon_fabric = holon_fabric
+    """Store holon via :class:`SemanticMemoryService`."""
+
+    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
+        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
+        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
 
     async def execute(self, holon_data: Dict[str, Any]):
-        if not self.holon_fabric:
-            raise ValueError("HolonFabric not available")
+        if not self.semantic:
+            raise ValueError("Semantic memory not available")
         from seedcore.models.holon import Holon, HolonType, HolonScope
         
         # Convert legacy holon_data format to Holon object
@@ -206,7 +218,7 @@ class LtmStoreTool:
         )
         
         try:
-            await self.holon_fabric.insert_holon(holon)
+            await self.semantic.upsert_holon(holon)
             success = True
         except Exception as e:
             logger.error(f"Failed to insert holon: {e}")
@@ -237,17 +249,16 @@ class LtmStoreTool:
 
 
 class LtmRelationshipsTool:
-    """Get holon relationships using HolonFabric.
-    
-    Note: LongTermMemoryManager is deprecated. This tool now uses HolonFabric.
-    """
-    def __init__(self, holon_fabric: Any):
-        self.holon_fabric = holon_fabric
+    """Get holon relationships via :class:`SemanticMemoryService`."""
+
+    def __init__(self, holon_fabric: Any = None, *, semantic_memory: Any = None):
+        self.semantic = _resolve_semantic(holon_fabric, semantic_memory)
+        self.holon_fabric = getattr(self.semantic, "holon_fabric", None)
 
     async def execute(self, holon_id: str):
-        if not self.holon_fabric:
-            raise ValueError("HolonFabric not available")
-        rels = await self.holon_fabric.list_relationships(holon_id)
+        if not self.semantic:
+            raise ValueError("Semantic memory not available")
+        rels = await self.semantic.list_relationships(holon_id)
         out = []
         for r in rels:
             d = r.model_dump() if hasattr(r, "model_dump") else r.dict()

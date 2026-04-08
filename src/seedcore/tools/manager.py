@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from seedcore.serve.cognitive_client import CognitiveServiceClient
     from seedcore.memory.mw_manager import MwManager
     from seedcore.memory.holon_fabric import HolonFabric
+    from seedcore.memory.semantic_memory import SemanticMemoryService
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
@@ -72,7 +73,7 @@ class ToolManager:
     1. Internal registered Python tools (including query tools from query_tools.py:
        general_query, knowledge.find, task.collaborative, cognitive.*)
     2. Memory: MW tools (memory.mw.*)
-    3. Memory: HolonFabric tools (memory.holon.*)
+    3. Memory: Semantic / holon tools (memory.holon.*) via :class:`SemanticMemoryService`
     4. Cognitive service tools (cog.* or reason.*)
     5. External MCP service tools
 
@@ -97,6 +98,7 @@ class ToolManager:
         *,
         mw_manager: Optional["MwManager"] = None,
         holon_fabric: Optional["HolonFabric"] = None,
+        semantic_memory: Optional["SemanticMemoryService"] = None,
         rbac_provider: Optional[Any] = None,
         skill_store: Optional["SkillStoreProtocol"] = None,
         enable_tracing: bool = True,
@@ -114,7 +116,17 @@ class ToolManager:
 
         # Service dependencies
         self.mw_manager = mw_manager
-        self.holon_fabric = holon_fabric
+        from seedcore.memory.semantic_memory import SemanticMemoryService as _SMS
+
+        if semantic_memory is not None:
+            self.semantic_memory = semantic_memory
+            self.holon_fabric = semantic_memory.holon_fabric
+        elif holon_fabric is not None:
+            self.holon_fabric = holon_fabric
+            self.semantic_memory = _SMS(holon_fabric)
+        else:
+            self.holon_fabric = None
+            self.semantic_memory = None
         # Deprecated: kept for backward compatibility
         self.ltm_manager = None
         self._mcp_client = mcp_client
@@ -345,14 +357,16 @@ class ToolManager:
             raise ToolError(name, "MW execute failed", e)
 
     async def _execute_holon(self, name: str, args: Dict[str, Any], agent_id: str):
-        """Execute HolonFabric operations.
+        """Execute semantic memory (Holon) tools via :class:`SemanticMemoryService`.
 
         Supports canonical ``memory.holon.*`` tools and legacy
         ``memory.ltm.*`` aliases.
         """
-        if not self.holon_fabric:
-            raise ToolError(name, "HolonFabric not configured")
+        if not self.semantic_memory:
+            raise ToolError(name, "Semantic memory not configured")
         try:
+            from seedcore.memory.contracts import SemanticSearchQuery
+
             method = name.split(".", 2)[-1]
             # Map legacy LTM method names to HolonFabric operations
             if method == "query":
@@ -360,7 +374,7 @@ class ToolManager:
                 if not holon_id:
                     raise ToolError(name, "Missing holon_id parameter")
                 try:
-                    holon = await self.holon_fabric.get_holon(holon_id)
+                    holon = await self.semantic_memory.get_holon(holon_id)
                     if not holon:
                         return None
                     if hasattr(holon, "model_dump"):
@@ -374,17 +388,23 @@ class ToolManager:
                 limit = args.get("limit", 5)
                 if not embedding:
                     raise ToolError(name, "Missing embedding parameter")
-                import numpy as np  # pyright: ignore[reportMissingImports]
 
-                query_vec = np.array(embedding, dtype=np.float32)
-                # Use GLOBAL scope by default, can be extended with scopes parameter
-                from seedcore.models.holon import HolonScope
-
-                holons = await self.holon_fabric.query_context(
-                    query_vec=query_vec, scopes=[HolonScope.GLOBAL], limit=limit
+                q = SemanticSearchQuery(
+                    embedding=list(embedding),
+                    scopes=["global"],
+                    limit=int(limit),
                 )
-                # Convert Holon objects to dicts for backward compatibility
-                return [h.dict() if hasattr(h, "dict") else h for h in holons]
+                rows = await self.semantic_memory.search(q)
+                out = []
+                for r in rows:
+                    d = (
+                        r.model_dump()
+                        if hasattr(r, "model_dump")
+                        else r.dict()  # type: ignore[union-attr]
+                    )
+                    d["id"] = d.get("holon_id", "")
+                    out.append(d)
+                return out
             elif method == "store":
                 # Insert holon
                 holon_data = args.get("holon_data")
@@ -405,13 +425,13 @@ class ToolManager:
                     embedding=vector_data.get("embedding", []),
                     links=[graph_data] if graph_data else [],
                 )
-                await self.holon_fabric.insert_holon(holon)
+                await self.semantic_memory.upsert_holon(holon)
                 return True
             elif method == "relationships":
                 holon_id = args.get("holon_id")
                 if not holon_id:
                     raise ToolError(name, "Missing holon_id parameter")
-                rels = await self.holon_fabric.list_relationships(holon_id)
+                rels = await self.semantic_memory.list_relationships(holon_id)
                 out = []
                 for r in rels:
                     d = r.model_dump() if hasattr(r, "model_dump") else r.dict()
@@ -1511,7 +1531,7 @@ class ToolManager:
                 schema = tool.schema()
                 out.setdefault(schema["name"], schema)
 
-        if self.holon_fabric:
+        if self.semantic_memory:
             from .memory_tools import (
                 LtmQueryTool,
                 LtmSearchTool,
@@ -1520,10 +1540,10 @@ class ToolManager:
             )
 
             for tool in (
-                LtmQueryTool(self.holon_fabric),
-                LtmSearchTool(self.holon_fabric),
-                LtmStoreTool(self.holon_fabric),
-                LtmRelationshipsTool(self.holon_fabric),
+                LtmQueryTool(semantic_memory=self.semantic_memory),
+                LtmSearchTool(semantic_memory=self.semantic_memory),
+                LtmStoreTool(semantic_memory=self.semantic_memory),
+                LtmRelationshipsTool(semantic_memory=self.semantic_memory),
             ):
                 schema = tool.schema()
                 out.setdefault(schema["name"], schema)

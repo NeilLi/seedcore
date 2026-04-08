@@ -23,19 +23,25 @@ class FindKnowledgeTool:
     def __init__(
         self,
         mw_manager: Any,
-        holon_fabric: Any,
         agent_id: str,
+        holon_fabric: Any = None,
+        *,
+        semantic_memory: Any = None,
     ):
         """
         Initialize the FindKnowledgeTool.
 
         Args:
             mw_manager: MwManager instance for working memory
-            holon_fabric: HolonFabric instance for long-term memory (replaces LongTermMemoryManager)
             agent_id: ID of the agent using this tool
+            holon_fabric: Optional HolonFabric (wrapped as semantic memory if semantic_memory omitted)
+            semantic_memory: Preferred facade (:class:`SemanticMemoryService`)
         """
+        from seedcore.tools.memory_tools import _resolve_semantic
+
         self.mw_manager = mw_manager
-        self.holon_fabric = holon_fabric
+        self.semantic_memory = _resolve_semantic(holon_fabric, semantic_memory)
+        self.holon_fabric = getattr(self.semantic_memory, "holon_fabric", holon_fabric)
         self.agent_id = agent_id
 
     @property
@@ -71,7 +77,7 @@ class FindKnowledgeTool:
         logger.info(f"[{self.agent_id}] 🔍 Searching for '{fact_id}'...")
 
         # Check if memory managers are available
-        if not self.mw_manager or not self.holon_fabric:
+        if not self.mw_manager or not self.semantic_memory:
             logger.error(f"[{self.agent_id}] ❌ Memory managers not available")
             return None
 
@@ -145,7 +151,7 @@ class FindKnowledgeTool:
             )
             # Query by ID using graph store
             try:
-                holon = await self.holon_fabric.get_holon(fact_id)
+                holon = await self.semantic_memory.get_holon(fact_id)
                 if holon:
                     if hasattr(holon, "model_dump"):
                         long_term_data = holon.model_dump()

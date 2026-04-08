@@ -28,9 +28,11 @@ class CollaborativeTaskTool:
         self,
         find_knowledge_tool: FindKnowledgeTool,
         mw_manager: Any,
-        holon_fabric: Any,
         agent_id: str,
         get_energy_slice: callable,
+        holon_fabric: Any = None,
+        *,
+        semantic_memory: Any = None,
     ):
         """
         Initialize the CollaborativeTaskTool.
@@ -38,13 +40,17 @@ class CollaborativeTaskTool:
         Args:
             find_knowledge_tool: FindKnowledgeTool instance for knowledge finding
             mw_manager: MwManager instance for artifact storage
-            holon_fabric: HolonFabric instance for promotion (replaces LongTermMemoryManager)
             agent_id: ID of the agent using this tool
             get_energy_slice: Function that returns current energy slice value
+            holon_fabric: Optional HolonFabric when semantic_memory is not passed
+            semantic_memory: Preferred facade for promotion (:class:`SemanticMemoryService`)
         """
+        from seedcore.tools.memory_tools import _resolve_semantic
+
         self.find_knowledge_tool = find_knowledge_tool
         self.mw_manager = mw_manager
-        self.holon_fabric = holon_fabric
+        self.semantic_memory = _resolve_semantic(holon_fabric, semantic_memory)
+        self.holon_fabric = getattr(self.semantic_memory, "holon_fabric", holon_fabric)
         self.agent_id = agent_id
         self._get_energy_slice = get_energy_slice
 
@@ -71,8 +77,8 @@ class CollaborativeTaskTool:
     async def _promote_to_holon_fabric(
         self, key: str, obj: Dict[str, Any], compression: bool = True
     ) -> bool:
-        """Promote an object to HolonFabric by creating a Holon."""
-        if not self.holon_fabric:
+        """Promote an object to semantic memory by creating a Holon."""
+        if not self.semantic_memory:
             return False
 
         try:
@@ -113,7 +119,7 @@ class CollaborativeTaskTool:
                 }],
             )
 
-            await self.holon_fabric.insert_holon(holon)
+            await self.semantic_memory.upsert_holon(holon)
             return True
         except Exception as e:
             logger.debug(f"[{self.agent_id}] HolonFabric promote failed for {key}: {e}")
