@@ -79,8 +79,7 @@ from seedcore.graph.agent_repository import AgentGraphRepository
 
 # Long-term memory backend (HolonFabric replaces LongTermMemoryManager)
 from seedcore.memory.holon_fabric import HolonFabric
-from seedcore.memory.backends.pgvector_backend import PgVectorStore
-from seedcore.memory.backends.neo4j_graph import Neo4jGraph
+from seedcore.memory.runtime import MemoryRuntime
 
 # --- Import stateful dependencies ---
 from seedcore.memory.mw_manager import MwManager
@@ -345,6 +344,7 @@ class OrganismCore:
         self.ml_client: Optional[MLServiceClient] = None
         self.energy_client: Optional[EnergyServiceClient] = None
         self.holon_fabric: Optional[HolonFabric] = None
+        self.memory_runtime: Optional[MemoryRuntime] = None
 
         # --- Organ Registry (Tier-1) ---
         self.organ_registry: Optional[OrganRegistry] = None
@@ -509,9 +509,11 @@ class OrganismCore:
             logger.critical(f"❌ Phase 1 Boot Failed: {e}")
             raise
 
-        # Extract HolonFabric from the gather result (it returns the instance)
-        # Note: _ensure_janitor returns None, _init_services returns None
-        self.holon_fabric = results[1]
+        # Memory runtime owns PG/Neo4j pools and exposes HolonFabric
+        self.memory_runtime = results[1]
+        self.holon_fabric = self.memory_runtime.holon_fabric
+        if self.mw_manager:
+            self.memory_runtime.bind_working_memory(self.mw_manager)
 
         # ==============================================================
         # PHASE 2: ADAPTERS & LOGIC (Sequential dependency on Phase 1)
@@ -850,43 +852,23 @@ class OrganismCore:
     # ------------------------------------------------------------------
     #  HELPER: Holon Fabric (Storage Layer)
     # ------------------------------------------------------------------
-    async def _init_holon_fabric(self) -> HolonFabric:
-        """Initialize PG + Neo4j and return the Fabric instance."""
+    async def _init_holon_fabric(self) -> MemoryRuntime:
+        """Initialize PG + Neo4j via MemoryRuntime (single storage boundary)."""
         logger.info("🔌 Connecting HolonFabric Storage...")
 
-        # Pool size calculation:
-        # - OrganismService can have up to 5 replicas (see rayservice.yaml)
-        # - Each replica creates its own pool
-        # - PostgreSQL default max_connections is usually 100
-        # - Other services (Reaper, dispatchers, etc.) also need connections
-        # - Default: 2 connections per replica (5 replicas × 2 = 10 connections)
-        # - Configurable via PG_POOL_SIZE env var or config.pg_pool_size
         default_pool_size = int(os.getenv("PG_POOL_SIZE", "2"))
         pool_size = self.config.get("pg_pool_size", default_pool_size)
 
-        pg_store = PgVectorStore(
-            dsn=PG_DSN,
+        runtime = await MemoryRuntime.connect_storage(
+            pg_dsn=PG_DSN,
+            neo4j_uri=NEO4J_URI or NEO4J_BOLT_URL,
+            neo4j_auth=(NEO4J_USER, NEO4J_PASSWORD),
             pool_size=pool_size,
-            pool_min_size=1,  # Minimum 1 connection per replica
-        )
-        neo4j_graph = Neo4jGraph(
-            NEO4J_URI or NEO4J_BOLT_URL,
-            auth=(NEO4J_USER, NEO4J_PASSWORD),
-        )
-
-        # Connect both DBs in parallel
-        await asyncio.gather(
-            pg_store._get_pool(),
-            # Assuming neo4j_graph has an async verify or connect method
-            # If not, it's usually lazy, which is fine.
-            self._verify_neo4j(neo4j_graph),
-        )
-
-        return HolonFabric(
-            vec_store=pg_store,
-            graph=neo4j_graph,
+            pool_min_size=1,
             embedder=None,
         )
+        await self._verify_neo4j(runtime.holon_fabric.graph)
+        return runtime
 
     # ------------------------------------------------------------------
     #  HELPER: Service Clients
@@ -5564,8 +5546,20 @@ class OrganismCore:
                     f"[OrganismCore] Error shutting down organ {organ_id}: {e}"
                 )
 
-        # Close HolonFabric connections
-        if self.holon_fabric:
+        for shard in getattr(self, "tool_shards", None) or []:
+            try:
+                ref = shard.close_memory_runtime.remote()
+                await self._ray_await(ref)
+            except Exception as e:
+                logger.debug("[OrganismCore] Tool shard memory runtime close: %s", e)
+
+        if self.memory_runtime:
+            try:
+                logger.info("[OrganismCore] Closing memory runtime (vector + graph)")
+                await self.memory_runtime.close()
+            except Exception as e:
+                logger.error("[OrganismCore] Failed to close memory runtime: %s", e)
+        elif self.holon_fabric:
             try:
                 logger.info("[OrganismCore] Closing HolonFabric connections")
                 if hasattr(self.holon_fabric, "vec") and self.holon_fabric.vec:

@@ -168,6 +168,9 @@ Primary planning docs:
   (cluster posture includes Kafka; local rollout → [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
 - [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md) — phased
   local broker, topics, and producer order for intent / telemetry / policy outcomes
+- [`memory_module_refactor_spec.md`](memory_module_refactor_spec.md) — draft plan
+  for narrowing `memory/` into explicit working / semantic / incident contracts
+  aligned to the current trust-runtime architecture
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`language_evolution_map.md`](language_evolution_map.md)
 - [`rust_workspace_proposal.md`](rust_workspace_proposal.md)

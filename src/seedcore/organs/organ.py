@@ -277,6 +277,7 @@ class Organ:
         # 4. Lazy Resource Containers
         self._tool_handler: Optional[Any] = None
         self._holon_fabric: Optional["HolonFabric"] = None
+        self._memory_runtime: Optional[Any] = None
         self._skill_store: Optional["SkillStoreProtocol"] = None
         self._mw_manager: Optional["MwManager"] = None
         self._cognitive_client: Optional["CognitiveServiceClient"] = None
@@ -304,42 +305,43 @@ class Organ:
             if not self._holon_fabric_config:
                 raise RuntimeError(f"Organ {self.organ_id} missing HolonFabric config")
 
-            # Import locally to avoid top-level circular deps
-            from ..memory.holon_fabric import HolonFabric
-            from ..memory.backends.pgvector_backend import PgVectorStore
-            from ..memory.backends.neo4j_graph import Neo4jGraph
+            from ..memory.runtime import MemoryRuntime
             from ..organs.organism_core import HolonFabricSkillStoreAdapter
-            from ..database import PG_DSN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+            from ..database import (
+                PG_DSN,
+                NEO4J_URI,
+                NEO4J_BOLT_URL,
+                NEO4J_USER,
+                NEO4J_PASSWORD,
+            )
 
             logger.info(f"⚙️ [{self.organ_id}] Initializing HolonFabric connections...")
 
-            # 1. Setup PG
             pg_cfg = self._holon_fabric_config.get("pg", {})
-            pg_store = PgVectorStore(
-                dsn=pg_cfg.get("dsn")
-                or self._holon_fabric_config.get("pg_dsn", PG_DSN),
-                pool_size=pg_cfg.get("pool_size")
-                or self._holon_fabric_config.get("pg_pool_size", 2),
-                pool_min_size=1,
-            )
-            # Verify PG connection
-            await pg_store._get_pool()
-
-            # 2. Setup Neo4j
             neo4j_cfg = self._holon_fabric_config.get("neo4j", {})
-            neo4j_graph = Neo4jGraph(
+            neo4j_uri = (
                 neo4j_cfg.get("uri")
-                or self._holon_fabric_config.get("neo4j_uri", NEO4J_URI),
-                auth=(
+                or self._holon_fabric_config.get("neo4j_uri")
+                or NEO4J_URI
+                or NEO4J_BOLT_URL
+            )
+            runtime = await MemoryRuntime.connect_storage(
+                pg_dsn=pg_cfg.get("dsn")
+                or self._holon_fabric_config.get("pg_dsn", PG_DSN),
+                neo4j_uri=neo4j_uri,
+                neo4j_auth=(
                     neo4j_cfg.get("user")
                     or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
                     neo4j_cfg.get("password")
                     or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
                 ),
+                pool_size=pg_cfg.get("pool_size")
+                or self._holon_fabric_config.get("pg_pool_size", 2),
+                pool_min_size=1,
+                embedder=None,
             )
-
-            # 3. Construct Fabric & Adapter
-            self._holon_fabric = HolonFabric(vec_store=pg_store, graph=neo4j_graph)
+            self._memory_runtime = runtime
+            self._holon_fabric = runtime.holon_fabric
             self._skill_store = HolonFabricSkillStoreAdapter(self._holon_fabric)
 
             logger.info(f"✅ [{self.organ_id}] HolonFabric initialized.")
@@ -1318,4 +1320,13 @@ class Organ:
             tasks.append(self.remove_agent(agent_id))
 
         await asyncio.gather(*tasks)
+        if self._memory_runtime is not None:
+            try:
+                await self._memory_runtime.close()
+            except Exception as e:
+                logger.warning("[%s] Failed to close memory runtime: %s", self.organ_id, e)
+            finally:
+                self._memory_runtime = None
+                self._holon_fabric = None
+                self._skill_store = None
         logger.info(f"[{self.organ_id}] Shutdown complete.")

@@ -116,6 +116,17 @@ bash deploy/local/run-hal.sh
 bash deploy/local/run-ray-head.sh foreground
 ```
 
+If you are running `organism` / task stack with semantic memory enabled, start
+Neo4j as well:
+
+```bash
+docker start seedcore-neo4j || \
+docker run -d --name seedcore-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password \
+  neo4j:5
+```
+
 Then, in another terminal:
 
 ```bash

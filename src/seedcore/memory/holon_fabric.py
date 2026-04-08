@@ -5,8 +5,10 @@ from typing import List, Optional, Dict, Any, Sequence, Protocol
 
 from ..models.holon import Holon, HolonScope, HolonType
 
+from .backends.pgvector_backend import Holon as VecHolon
 from .backends.pgvector_backend import PgVectorStore
 from .backends.neo4j_graph import Neo4jGraph
+from .contracts import HolonRelation
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ class HolonFabric:
 
         # 1) Vector upsert
         try:
-            await self.vec.upsert(uuid=uuid, embedding=embedding, meta=meta)
+            await self.vec.upsert(VecHolon(uuid=uuid, embedding=embedding, meta=meta))
         except Exception as e:
             raise RuntimeError(f"Vector upsert failed for {uuid}: {e}") from e
 
@@ -64,7 +66,9 @@ class HolonFabric:
                 "access_policy": meta.get("access_policy"),
                 "type": holon.type.value,
             }
-            await self.graph.upsert_node(uuid, holon.type.value, holon.summary or "", node_props)
+            await self.graph.upsert_node(
+                uuid, holon.type.value, holon.summary or "", props=node_props
+            )
 
             for link in (holon.links or []):
                 # expected link: {'rel': 'REL_TYPE', 'target_id': 'uuid', 'props': {...}}
@@ -76,7 +80,7 @@ class HolonFabric:
         except Exception as e:
             # compensate vector write to avoid drifting
             try:
-                await self.vec.delete(uuid=uuid)
+                await self.vec.delete(uuid)
             except Exception:
                 pass
             raise RuntimeError(f"Graph upsert failed for {uuid}: {e}") from e
@@ -105,7 +109,8 @@ class HolonFabric:
 
         # Convert and double-check scope
         holons: List[Holon] = []
-        for rec in results:
+        for raw in results:
+            rec = {k: raw[k] for k in raw.keys()}  # asyncpg.Record-safe
             meta = dict(rec.get("meta") or {})
             h = self._from_vec_record(rec, meta)
             if self._allowed(h, scopes, organ_id, entity_ids):
@@ -171,29 +176,55 @@ class HolonFabric:
         On vector failure, attempt to restore graph node (best-effort).
         """
         try:
-            # 1) Delete from graph first (if delete_node method exists)
             try:
-                if hasattr(self.graph, "delete_node"):
-                    await self.graph.delete_node(holon_id)
-                else:
-                    # Fallback: delete node via Cypher query if method doesn't exist
-                    # This is a best-effort deletion
-                    logger.debug(f"delete_node method not available, skipping graph deletion for {holon_id}")
+                await self.graph.delete_node(holon_id)
             except Exception as e:
-                logger.warning(f"Graph deletion failed for {holon_id}: {e}")
-                # Continue to vector deletion anyway
-            
-            # 2) Delete from vector store
+                logger.warning("Graph deletion failed for %s: %s", holon_id, e)
+
             try:
-                await self.vec.delete(uuid=holon_id)
+                await self.vec.delete(holon_id)
             except Exception as e:
-                logger.error(f"Vector deletion failed for {holon_id}: {e}")
-                # Note: Graph already deleted, so we can't fully compensate
-                # In production, you might want to log this for manual reconciliation
+                logger.error("Vector deletion failed for %s: %s", holon_id, e)
                 raise
         except Exception as e:
-            logger.error(f"Failed to delete holon {holon_id}: {e}")
+            logger.error("Failed to delete holon %s: %s", holon_id, e)
             raise
+
+    async def list_relationships(
+        self, holon_id: str, limit: int = 50
+    ) -> List[HolonRelation]:
+        """Normalized neighbor/edge view for tools and services."""
+        rows = await self.graph.get_neighbors(holon_id, limit=limit)
+        out: List[HolonRelation] = []
+        for nb in rows:
+            nid = nb.get("uuid")
+            if not nid:
+                continue
+            props = dict(nb.get("props") or {})
+            out.append(
+                HolonRelation(
+                    holon_id=holon_id,
+                    neighbor_id=str(nid),
+                    rel_type=str(nb.get("rel_type") or "RELATED_TO"),
+                    neighbor_type=nb.get("holon_type") or props.get("type"),
+                    neighbor_summary=nb.get("summary") or "",
+                    props=props,
+                )
+            )
+        return out
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """Aggregated semantic-store metrics for telemetry and CostVQ."""
+        total_holons = await self.vec.get_count()
+        total_relationships = await self.graph.get_count()
+        bytes_used = await self.vec.execute_scalar_query(
+            "SELECT pg_total_relation_size('holons')"
+        )
+        return {
+            "total_holons": int(total_holons),
+            "total_relationships": int(total_relationships),
+            "bytes_used": int(bytes_used or 0),
+        }
 
     # ------------------------
     # Helpers
@@ -341,14 +372,13 @@ class HolonFabric:
             for nb in neighbors:
                 if len(out) >= max_total:
                     break
-                # nb expected: {'uuid': ..., 'type': ..., 'summary': ..., 'props': {...}}
-                props = nb.get("props") or {}
+                props = dict(nb.get("props") or {})
                 meta = {
                     "id": nb.get("uuid"),
-                    "type": props.get("type") or nb.get("type", "fact"),
+                    "type": props.get("type") or nb.get("holon_type", "fact"),
                     "scope": props.get("scope", "global"),
                     "summary": nb.get("summary", ""),
-                    "content": {},  # you can hydrate content from another store if needed
+                    "content": {},
                     "decay_rate": props.get("decay_rate", 0.1),
                     "confidence": props.get("confidence", 1.0),
                     "access_policy": props.get("access_policy", []),

@@ -1,6 +1,15 @@
 import os
 import sys
 import atexit
+from pathlib import Path
+
+TESTS_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = TESTS_ROOT.parent
+SRC_ROOT = PROJECT_ROOT / "src"
+
+for path in (str(TESTS_ROOT), str(PROJECT_ROOT), str(SRC_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 
 # ----------------------------------------------------------------------

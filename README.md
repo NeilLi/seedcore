@@ -110,6 +110,7 @@ Implemented in this repo (high-level):
 - Replay-verifiable evidence bundles plus offline verification via the `seedcore-verify` kernel/CLI.
 - Q2 verification surface (operator console + verification API) under `/api/v1/verification/*`.
 - Hot-path observability under `/api/v1/pdp/hot-path/status` plus Prometheus text at `/api/v1/pdp/hot-path/metrics`.
+- Bounded **memory** subsystem (`MemoryRuntime`, working / semantic / optional incident services): advisory context for agents and tools, not a second product center or an implicit authority for PDP decisions.
 - PKG RCT contract surfaces: snapshot manifests and contract artifacts; **opt-in** activation hardening (`SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE`, `SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT`), **opt-in** publish validation before snapshot activate (`SEEDCORE_PKG_RCT_PUBLISH_VALIDATE`), and **opt-in** strict replay verification (`SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH`) with host helper `scripts/host/verify_rct_replay_strict.py`.
 
 Restricted-custody trust hardening supports explicit `trust_proof` material, enabling offline verification against artifacts and a trust bundle (TPM fixture path included).

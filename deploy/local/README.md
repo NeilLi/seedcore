@@ -92,6 +92,17 @@ brew services start postgresql@17
 brew services start redis
 ```
 
+Start Neo4j for semantic memory (matches `deploy/local/host-env.sh` defaults
+`NEO4J_USER=neo4j`, `NEO4J_PASSWORD=password`):
+
+```bash
+docker start seedcore-neo4j || \
+docker run -d --name seedcore-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password \
+  neo4j:5
+```
+
 Start the API and HAL in separate terminals:
 
 ```bash
@@ -172,4 +183,5 @@ Stop the local runtime:
 bash deploy/local/run-ray-head.sh stop
 brew services stop postgresql@17
 brew services stop redis
+docker stop seedcore-neo4j
 ```

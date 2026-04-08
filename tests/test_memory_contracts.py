@@ -1,14 +1,11 @@
 import asyncio
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import mock_database_dependencies  # noqa: F401
 import mock_ray_dependencies  # noqa: F401
 
-from src.seedcore.memory.mw_manager import MwManager
-from src.seedcore.tools.manager import ToolManager
+from seedcore.memory.contracts import HolonRelation
+from seedcore.memory.mw_manager import MwManager
+from seedcore.tools.manager import ToolManager
 
 
 def test_mw_manager_recent_episode_round_trip(monkeypatch):
@@ -123,14 +120,18 @@ class _FakeMwManager:
         return [("task:123", 4)]
 
 
-class _FakeGraph:
-    async def get_neighbors(self, holon_id, limit=None):
-        return [{"summary": "router knowledge", "props": {"type": "fact", "scope": "global"}}]
-
-
 class _FakeHolonFabric:
-    def __init__(self):
-        self.graph = _FakeGraph()
+    async def list_relationships(self, holon_id, limit=50):
+        return [
+            HolonRelation(
+                holon_id=holon_id,
+                neighbor_id="n1",
+                rel_type="RELATED_TO",
+                neighbor_summary="router knowledge",
+                neighbor_type="fact",
+                props={"type": "fact", "scope": "global"},
+            )
+        ]
 
     async def query_context(self, query_vec, scopes, limit):
         return []

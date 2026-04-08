@@ -77,6 +77,18 @@ class PgVectorStore:
         """Utility to convert numpy array to pgvector string format."""
         return '[' + ','.join(str(x) for x in embedding.tolist()) + ']'
 
+    async def delete(self, uuid: str) -> bool:
+        """Remove a holon row by UUID."""
+        q = "DELETE FROM holons WHERE uuid = $1::uuid"
+        try:
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(q, uuid)
+            return True
+        except Exception as e:
+            logger.error(f"Delete failed for holon {uuid}: {e}", exc_info=True)
+            return False
+
     async def upsert(self, holon: Holon) -> bool:
         """
         Inserts or updates a single holon in the database.
@@ -99,17 +111,29 @@ class PgVectorStore:
             logger.error(f"Upsert failed for holon {holon.uuid}: {e}", exc_info=True)
             return False
 
-    async def search(self, emb: np.ndarray, k: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[asyncpg.Record]:
+    async def search(
+        self,
+        emb: Optional[np.ndarray] = None,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        *,
+        query_vec: Optional[np.ndarray] = None,
+    ) -> List[asyncpg.Record]:
         """
         Performs vector similarity search with optional metadata filtering.
         Returns raw asyncpg.Record objects.
+
+        ``query_vec`` is an alias for ``emb`` (HolonFabric compatibility).
         
         Args:
             emb: Query embedding vector
             k: Number of results to return
             filters: Optional filter dictionary. Supports:
-                - "or": List of filter conditions (each is a dict with keys like "scope", "access_policy", "entity_id")
+                - "or": List of filter conditions (each is a dict with keys like "scope", "organ_id", "access_policy", "entity_id")
         """
+        vec = query_vec if query_vec is not None else emb
+        if vec is None:
+            raise ValueError("search requires emb or query_vec")
         where_clauses = []
         params = [emb]  # First param is always the embedding vector
         param_idx = 2  # Start from $2 since $1 is the embedding
@@ -121,6 +145,12 @@ class PgVectorStore:
                 if "scope" in condition:
                     if condition["scope"] == "global":
                         or_conditions.append("meta->>'scope' = 'global'")
+                    elif condition["scope"] == "organ" and "organ_id" in condition:
+                        or_conditions.append(
+                            f"(meta->>'scope' = 'organ' AND meta->>'organ_id' = ${param_idx})"
+                        )
+                        params.append(condition["organ_id"])
+                        param_idx += 1
                     elif condition["scope"] == "organ" and "access_policy" in condition:
                         or_conditions.append(
                             f"(meta->>'scope' = 'organ' AND ${param_idx} = ANY(SELECT jsonb_array_elements_text(meta->'access_policy')))"
@@ -163,7 +193,7 @@ class PgVectorStore:
         
         try:
             pool = await self._get_pool()
-            vec_str = self._embedding_to_str(emb)
+            vec_str = self._embedding_to_str(vec)
             params[0] = vec_str  # Replace embedding numpy array with string
             async with pool.acquire() as conn:
                 return await conn.fetch(q, *params)

@@ -49,7 +49,7 @@ from ..config.memory_settings import CONFIG
 
 try:
     # Sharded miss tracker implementation
-    from src.seedcore.memory.mw_store_shard import MwStoreShard  # type: ignore
+    from seedcore.memory.mw_store_shard import MwStoreShard  # type: ignore
 except Exception:  # pragma: no cover - MwStoreShard may not be importable in some contexts
     MwStoreShard = None  # type: ignore
 

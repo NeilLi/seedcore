@@ -9,7 +9,8 @@ SeedCore powers multi-agent orchestration with:
 - Control Plane (Coordinator): Surprise-driven routing, PKG-based planning,
   and OCPS adaptive policy.
 - Intelligence Plane (Cognitive): LLM-driven reasoning, HGNN-based retrieval,
-  and Holon Memory Fabric for long-term + episodic memory.
+  and bounded memory services (working + semantic Holon fabric + optional incidents)
+  for advisory context—not a parallel trust authority.
 - Execution Plane (Organism): Skill-based routing, agent lifecycle management,
   and ultra-low-latency task execution.
 
@@ -18,7 +19,7 @@ Core features:
 ✓ TaskPayload v2.0 (structured envelopes: chat, interaction, cognitive, graph)
 ✓ OrganismCore router with skill- and organ-aware routing
 ✓ Agent Tunnels for conversational affinity
-✓ HolonFabric memory, episodic replay, and controlled forgetting
+✓ MemoryRuntime (working / semantic / optional incident) behind explicit contracts
 ✓ PKG-based strategic planning + DAG decomposition
 ✓ Ray-native distributed execution (actors, distributed services)
 ✓ Config-driven bootstrapping, pluggable agents, and extensible tools

@@ -12,39 +12,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Memory subpackage.
+"""Memory subsystem: bounded working, semantic, and optional incident services.
 
-This package provides the memory system for SeedCore, including:
-- Working memory (Mw) via MwManager
-- Long-term memory via HolonFabric (unified vector + graph storage)
-- HolonClient for persisting cognitive facts to HolonFabric
-- Adaptive memory control loops
-- Memory consolidation utilities
+Memory is advisory for cognition/tools unless promoted into typed,
+freshness-aware context elsewhere. It is not an authority source for governed
+PDP decisions.
+
+Prefer :class:`MemoryRuntime` and the service protocols in :mod:`contracts`.
 """
 
-# Core memory classes
-from .holon_fabric import HolonFabric, Embedder
-from .holon_client import HolonClient
-from .mw_manager import MwManager
-from .system import SharedMemorySystem, MemoryTier
+from __future__ import annotations
 
-# Adaptive memory loop functions
-from .adaptive_loop import (
-    calculate_dynamic_mem_util,
-    adaptive_mem_update,
-    get_memory_metrics,
-    estimate_memory_gradient,
+import warnings
+from typing import Any
+
+from .contracts import (
+    HolonRelation,
+    IncidentMemory,
+    IncidentMemoryStats,
+    MemoryHealth,
+    MemorySubsystemStatus,
+    SemanticMemory,
+    SemanticMemoryStats,
+    SemanticSearchQuery,
+    SemanticSearchResult,
+    WorkingMemory,
+    WorkingMemoryStats,
 )
+from .holon_client import HolonClient
+from .holon_fabric import Embedder, HolonFabric
+from .incident_memory import IncidentMemoryService, InMemoryIncidentBackend
+from .mw_manager import MwManager
+from .runtime import MemoryRuntime, connect_default_memory_runtime
+from .semantic_memory import SemanticMemoryService
+from .working_memory import MwWorkingMemoryAdapter
 
-# CostVQ calculation - export the new async version from cost_vq.py
-# Note: adaptive_loop.py also has a legacy sync version for backward compatibility
-from .cost_vq import calculate_cost_vq
-
-# Backend classes (commonly used)
-from .backends.pgvector_backend import PgVectorStore, Holon
-from .backends.neo4j_graph import Neo4jGraph
-
-# Shard classes (for distributed caching)
+# Shards (optional Ray)
 try:
     from .shared_cache_shard import SharedCacheShard
 except ImportError:
@@ -55,33 +58,62 @@ try:
 except ImportError:
     MwStoreShard = None  # type: ignore
 
-# Consolidation functions (if available)
 try:
     from .flashbulb_client import FlashbulbClient
 except ImportError:
     FlashbulbClient = None  # type: ignore
 
+_LEGACY_EXPORTS = frozenset(
+    {
+        "SharedMemorySystem",
+        "MemoryTier",
+        "calculate_dynamic_mem_util",
+        "calculate_cost_vq",
+        "adaptive_mem_update",
+        "get_memory_metrics",
+        "estimate_memory_gradient",
+    }
+)
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LEGACY_EXPORTS:
+        from . import legacy as _legacy
+
+        warnings.warn(
+            f"Importing {name} from seedcore.memory is deprecated; "
+            f"use seedcore.memory.legacy (or update callers).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(_legacy, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
-    # Core classes
+    "contracts",
+    "Embedder",
     "HolonFabric",
     "HolonClient",
-    "Embedder",
+    "HolonRelation",
     "MwManager",
-    "SharedMemorySystem",
-    "MemoryTier",
-    # Adaptive loop functions
-    "calculate_dynamic_mem_util",
-    "calculate_cost_vq",
-    "adaptive_mem_update",
-    "get_memory_metrics",
-    "estimate_memory_gradient",
-    # Backend classes
-    "PgVectorStore",
-    "Holon",
-    "Neo4jGraph",
-    # Shard classes
+    "MwWorkingMemoryAdapter",
+    "MemoryRuntime",
+    "connect_default_memory_runtime",
+    "SemanticMemoryService",
+    "SemanticMemory",
+    "SemanticSearchQuery",
+    "SemanticSearchResult",
+    "SemanticMemoryStats",
+    "IncidentMemory",
+    "IncidentMemoryService",
+    "InMemoryIncidentBackend",
+    "IncidentMemoryStats",
+    "WorkingMemory",
+    "WorkingMemoryStats",
+    "MemoryHealth",
+    "MemorySubsystemStatus",
     "SharedCacheShard",
     "MwStoreShard",
-    # FlashbulbClient
-    "FlashbulbClient"
+    "FlashbulbClient",
 ]

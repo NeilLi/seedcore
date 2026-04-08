@@ -356,32 +356,18 @@ class ToolManager:
             method = name.split(".", 2)[-1]
             # Map legacy LTM method names to HolonFabric operations
             if method == "query":
-                # Query by ID - use graph store to find node, then retrieve from vector store
                 holon_id = args.get("holon_id")
                 if not holon_id:
                     raise ToolError(name, "Missing holon_id parameter")
-                # Try to get from graph store first
                 try:
-                    neighbors = await self.holon_fabric.graph.get_neighbors(
-                        holon_id, limit=1
-                    )
-                    if neighbors:
-                        # Found in graph, construct a basic Holon from metadata
-                        node_data = (
-                            neighbors[0] if isinstance(neighbors, list) else neighbors
-                        )
-                        props = node_data.get("props", {})
-                        return {
-                            "id": holon_id,
-                            "type": props.get("type", "fact"),
-                            "scope": props.get("scope", "global"),
-                            "summary": node_data.get("summary", ""),
-                            "content": props,
-                        }
+                    holon = await self.holon_fabric.get_holon(holon_id)
+                    if not holon:
+                        return None
+                    if hasattr(holon, "model_dump"):
+                        return holon.model_dump()
+                    return holon.dict()
                 except Exception:
-                    pass
-                # Fallback: return None if not found
-                return None
+                    return None
             elif method == "search":
                 # Vector similarity search
                 embedding = args.get("embedding")
@@ -422,12 +408,17 @@ class ToolManager:
                 await self.holon_fabric.insert_holon(holon)
                 return True
             elif method == "relationships":
-                # Get relationships
                 holon_id = args.get("holon_id")
                 if not holon_id:
                     raise ToolError(name, "Missing holon_id parameter")
-                neighbors = await self.holon_fabric.graph.get_neighbors(holon_id)
-                return neighbors
+                rels = await self.holon_fabric.list_relationships(holon_id)
+                out = []
+                for r in rels:
+                    d = r.model_dump() if hasattr(r, "model_dump") else r.dict()
+                    d.setdefault("summary", d.get("neighbor_summary", ""))
+                    d.setdefault("uuid", d.get("neighbor_id"))
+                    out.append(d)
+                return out
             else:
                 raise ToolError(name, f"Unknown HolonFabric method '{method}'")
         except Exception as e:

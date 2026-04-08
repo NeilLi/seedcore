@@ -8,16 +8,16 @@ Responsibilities (high‑level):
   • PRE‑EXECUTION hydration (server‑side):
       - Resolve scopes & entity_ids via ScopeResolver / Organism policy
       - Retrieve semantic context via Cognitive Retrieval (RRF, MMR hooks)
-      - Retrieve episodic context via MwManager (short‑term)
+      - Retrieve episodic context via WorkingMemory (short‑term)
       - Apply OCPS‑informed dynamic token budgeting
       - Produce a compact `hydrated_task` payload for DSPy
 
   • POST‑EXECUTION consolidation:
       - Build a structured MemoryEvent with provenance & trust
       - Fact sanitization, conflict checks (hooks)
-      - Cache governance (TTL per task type) via MwManager
-      - Editor‑in‑Chief promotion decision to Holon Fabric (policy + signals)
-      - Persist long‑term facts/holons (graph + vector via HolonClient)
+      - Cache governance (TTL per task type) via WorkingMemory
+      - Editor‑in‑Chief promotion decision (policy + signals)
+      - Persist long‑term facts/holons via SemanticMemory upsert
 
 Notes:
   • This module intentionally contains *no* model invocation logic.
@@ -35,6 +35,8 @@ import time
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Protocol, Tuple, Sequence
+
+from seedcore.memory.contracts import SemanticMemory, WorkingMemory
 
 # --------------------------------------------------------------------------------------
 # Protocols (thin interfaces) — provide concrete implementations in your runtime layer.
@@ -62,7 +64,17 @@ class CognitiveRetrieval(Protocol):
         """
 
 
+class PromotionEmbedder(Protocol):
+    """Text-to-vector for holon promotion (e.g. synopsis / embedding client)."""
+
+    def embed(self, text: str) -> Any:
+        """Return floats as a sequence or ndarray for :class:`Holon.embedding`."""
+        ...
+
+
 class MwManager(Protocol):
+    """Deprecated: prefer :class:`seedcore.memory.contracts.WorkingMemory`."""
+
     def set_item(self, key: str, value: Any, ttl_s: Optional[int] = None) -> None: ...
     def set_global_item_typed(self, kind: str, scope: str, item_id: str, payload: Any, ttl_s: Optional[int] = None) -> None: ...
     async def get_recent_episode(self, *, organ_id: Optional[str], agent_id: str, k: int = 10) -> List[Dict[str, Any]]: ...
@@ -70,8 +82,11 @@ class MwManager(Protocol):
 
 
 class HolonClient(Protocol):
+    """Deprecated: prefer :class:`seedcore.memory.contracts.SemanticMemory` + PromotionEmbedder."""
+
     async def persist_holon(self, *, fact: Dict[str, Any]) -> str:
         """Create or upsert a holon record (graph + vector). Returns holon id."""
+        ...
 
 
 # --------------------------------------------------------------------------------------
@@ -168,7 +183,7 @@ class CognitiveMemoryBridge:
       • `process_post_execution(...)` – consolidate + promote after execution
 
     It delegates retrieval and promotion semantics to injected services and
-    keeps Mw TTL/policy decisions outside (Organism).
+    keeps working-memory TTL/policy decisions outside (Organism).
     """
 
     def __init__(
@@ -176,18 +191,20 @@ class CognitiveMemoryBridge:
         *,
         agent_id: str,
         organ_id: Optional[str],
-        mw: MwManager,
-        holon: HolonClient,
+        working: WorkingMemory,
         scope_resolver: ScopeResolver,
         retrieval: CognitiveRetrieval,
+        semantic: Optional[SemanticMemory] = None,
+        embedder: Optional[PromotionEmbedder] = None,
         logger: Optional[logging.Logger] = None,
         default_hydration_limit: int = 5,
         default_chat_k: int = 10,
     ) -> None:
         self.agent_id = agent_id
         self.organ_id = organ_id
-        self.mw = mw
-        self.holon = holon
+        self.working = working
+        self.semantic = semantic
+        self.embedder = embedder
         self.scope_resolver = scope_resolver
         self.retrieval = retrieval
         self.default_hydration_limit = default_hydration_limit
@@ -332,16 +349,13 @@ class CognitiveMemoryBridge:
 
     async def _load_recent_chat(self, *, k: int) -> List[Dict[str, Any]]:
         try:
-            result = self.mw.get_recent_episode(
+            return await self.working.get_recent_episode(
                 organ_id=self.organ_id,
                 agent_id=self.agent_id,
                 k=k,
             )
-            if hasattr(result, "__await__"):
-                result = await result  # type: ignore[assignment]
-            return result or []
         except Exception as e:
-            self.log.warning(f"Mw.get_recent_episode failed: {e}")
+            self.log.warning("WorkingMemory.get_recent_episode failed: %s", e)
             return []
 
     def _suggest_token_budget(self, *, ocps: Optional[Dict[str, Any]], holon_count: int, chat_k: int) -> int:
@@ -370,19 +384,52 @@ class CognitiveMemoryBridge:
         return bool(event.policy.get("force_promote", False))
 
     async def _promote_to_holon(self, event: MemoryEvent) -> None:
-        # Construct a Fact/ Holon dict the HolonClient expects. The cognitive
-        # layer owns summarization/embedding/graph schema in the client.
+        if self.semantic is None or self.embedder is None:
+            self.log.debug(
+                "Skipping holon promotion: semantic memory or embedder not configured."
+            )
+            return
         fact = self._event_to_fact(event)
         try:
-            holon_id = await self.holon.persist_holon(fact=fact)
-            self.log.info(f"Promoted MemoryEvent to holon id={holon_id}")
+            holon = self._fact_to_holon(fact)
+            await self.semantic.upsert_holon(holon)
+            self.log.info("Promoted MemoryEvent to holon id=%s", holon.id)
         except Exception as e:
-            self.log.warning(f"Holon promotion failed: {e}")
+            self.log.warning("Holon promotion failed: %s", e)
+
+    def _fact_to_holon(self, fact: Dict[str, Any]) -> Any:
+        from seedcore.models.holon import Holon, HolonScope, HolonType
+
+        assert self.embedder is not None
+        hid = fact["task"]["id"]
+        summary = fact["outcome"]["result_preview"] or fact["task"]["description"]
+        raw = self.embedder.embed(summary)
+        if hasattr(raw, "tolist"):
+            embedding = raw.tolist()
+        else:
+            embedding = list(raw)
+
+        return Holon(
+            id=hid,
+            type=HolonType.EPISODE,
+            scope=HolonScope.GLOBAL,
+            summary=summary,
+            content=fact,
+            embedding=embedding,
+            confidence=float(fact.get("outcome", {}).get("confidence") or 1.0),
+            decay_rate=0.1,
+            links=[
+                {
+                    "rel": "GENERATED_BY",
+                    "target_id": fact["src"]["agent_id"],
+                }
+            ],
+        )
 
     def _event_to_fact(self, event: MemoryEvent) -> Dict[str, Any]:
-        # Minimal but rich payload; HolonClient should add embeddings/graph.
+        # Minimal but rich payload; embedder + SemanticMemory handle vectors / stores.
         return {
-            "type": "TASK_EVENT",
+            "type": "episode",
             "src": {
                 "agent_id": event.agent_id,
                 "organ_id": event.organ_id,
@@ -441,28 +488,27 @@ class CognitiveMemoryBridge:
 
     def _mw_put_local(self, key: str, payload: Dict[str, Any]) -> None:
         try:
-            self.mw.set_item(key, payload)
+            self.working.put(key, payload)
         except Exception as e:
-            self.log.warning(f"Mw.set_item failed: {e}")
+            self.log.warning("WorkingMemory.put failed: %s", e)
 
     def _mw_put_global(self, *, kind: str, scope: str, item_id: str, payload: Dict[str, Any], ttl_s: Optional[int] = None) -> None:
         try:
-            self.mw.set_global_item_typed(kind, scope, item_id, payload, ttl_s=ttl_s)
+            self.working.put_global_typed(
+                kind, scope, item_id, payload, ttl_s=ttl_s
+            )
         except Exception as e:
-            self.log.warning(f"Mw.set_global_item_typed failed: {e}")
+            self.log.warning("WorkingMemory.put_global_typed failed: %s", e)
 
     async def _mw_append_episode(self, payload: Dict[str, Any], ttl_s: Optional[int] = None) -> None:
-        append_episode = getattr(self.mw, "append_episode_async", None)
-        if not callable(append_episode):
-            return
         try:
-            await append_episode(
+            await self.working.append_episode(
                 agent_id=self.agent_id,
                 episode=payload,
                 ttl_s=ttl_s,
             )
         except Exception as e:
-            self.log.warning(f"Mw.append_episode_async failed: {e}")
+            self.log.warning("WorkingMemory.append_episode failed: %s", e)
 
     # ----------------------------------------------------------------------------------
     # Small helpers

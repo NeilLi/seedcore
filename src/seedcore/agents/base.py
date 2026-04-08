@@ -152,6 +152,7 @@ class BaseAgent:
         # We store configs now; actual clients/connections are created on first access properties
         self._holon_fabric_config = holon_fabric_config
         self._holon_fabric: Optional[Any] = None
+        self._memory_runtime: Optional[Any] = None
         self._skill_store: Optional[SkillStoreProtocol] = None
 
         # Extract configs from passed objects (Legacy support) or use provided dicts
@@ -439,7 +440,20 @@ class BaseAgent:
                     f"{behavior.__class__.__name__}: {e}",
                     exc_info=True,
                 )
-        
+
+        if self._memory_runtime is not None:
+            try:
+                await self._memory_runtime.close()
+            except Exception as e:
+                logger.warning(
+                    f"[{self.agent_id}] Error closing memory runtime: {e}",
+                    exc_info=True,
+                )
+            finally:
+                self._memory_runtime = None
+                self._holon_fabric = None
+                self._skill_store = None
+
         self._behaviors.clear()
         self.lifecycle = "shutdown"
         logger.info(f"[{self.agent_id}] ✅ Agent shutdown complete")
@@ -641,9 +655,7 @@ class BaseAgent:
     async def _ensure_holon_fabric(self) -> Any:
         """Lazily create HolonFabric from config to avoid serialization issues."""
         if self._holon_fabric is None and self._holon_fabric_config:
-            from seedcore.memory.holon_fabric import HolonFabric
-            from seedcore.memory.backends.pgvector_backend import PgVectorStore
-            from seedcore.memory.backends.neo4j_graph import Neo4jGraph
+            from seedcore.memory.runtime import MemoryRuntime
             from seedcore.database import (
                 PG_DSN,
                 NEO4J_URI,
@@ -652,41 +664,31 @@ class BaseAgent:
                 NEO4J_PASSWORD,
             )
 
-            # Support both structured (new) and flat (legacy) config formats
             pg_cfg = self._holon_fabric_config.get("pg", {})
             neo4j_cfg = self._holon_fabric_config.get("neo4j", {})
-
-            pg_store = PgVectorStore(
-                dsn=pg_cfg.get("dsn")
-                or self._holon_fabric_config.get("pg_dsn", PG_DSN),
-                pool_size=pg_cfg.get("pool_size")
-                or self._holon_fabric_config.get("pg_pool_size", 2),
-                pool_min_size=1,
-            )
             neo4j_uri = (
                 neo4j_cfg.get("uri")
                 or self._holon_fabric_config.get("neo4j_uri")
                 or NEO4J_URI
                 or NEO4J_BOLT_URL
             )
-            neo4j_graph = Neo4jGraph(
-                neo4j_uri,
-                auth=(
+            runtime = await MemoryRuntime.connect_storage(
+                pg_dsn=pg_cfg.get("dsn")
+                or self._holon_fabric_config.get("pg_dsn", PG_DSN),
+                neo4j_uri=neo4j_uri,
+                neo4j_auth=(
                     neo4j_cfg.get("user")
                     or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
                     neo4j_cfg.get("password")
                     or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
                 ),
-            )
-
-            # Initialize connections
-            await pg_store._get_pool()
-
-            self._holon_fabric = HolonFabric(
-                vec_store=pg_store,
-                graph=neo4j_graph,
+                pool_size=pg_cfg.get("pool_size")
+                or self._holon_fabric_config.get("pg_pool_size", 2),
+                pool_min_size=1,
                 embedder=None,
             )
+            self._memory_runtime = runtime
+            self._holon_fabric = runtime.holon_fabric
 
             # Create SkillStore adapter
             from seedcore.organs.organism_core import HolonFabricSkillStoreAdapter

@@ -130,13 +130,6 @@ try:
 except ImportError:
     TaskMetadataRepository = None
 
-# Holon Client import (for Memory Bridge)
-try:
-    from ..memory.holon_client import HolonClient
-except ImportError:
-    HolonClient = None  # type: ignore
-
-
 class DefaultScopeResolver:
     """Default implementation of ScopeResolver protocol."""
 
@@ -379,7 +372,7 @@ class CognitiveCore(dspy.Module):
 
         # Shared memory components (used by all agents, can be overridden per-agent)
         # These are set externally or lazily initialized
-        self.holon_client: Optional[Any] = None  # HolonClient instance
+        self.holon_client: Optional[Any] = None  # Legacy: optional HolonClient (bridge uses SemanticMemory)
         self.holon_fabric: Optional[Any] = (
             None  # HolonFabric instance (for HolonFabricRetrieval)
         )
@@ -391,10 +384,8 @@ class CognitiveCore(dspy.Module):
     def set_memory_bridge(self, memory_bridge: CognitiveMemoryBridge) -> None:
         """Set the memory bridge instance for a specific agent.
 
-        This should be called when all required dependencies are available:
-        - agent_id, organ_id (from context)
-        - MwManager (from _mw_by_agent)
-        - HolonClient, ScopeResolver, CognitiveRetrieval (provided externally)
+        Expects a bridge built with WorkingMemory + CognitiveRetrieval (+ optional
+        SemanticMemory and embedder for promotion).
         """
         agent_id = memory_bridge.agent_id
         if agent_id in self.memory_bridges:
@@ -465,11 +456,10 @@ class CognitiveCore(dspy.Module):
             )
             return False
 
-        # 2) External dependencies: HolonClient, ScopeResolver, CognitiveRetrieval
-        # Note: HolonClient from memory.holon_client implements the Protocol from memory_bridge
+        # 2) External dependencies: ScopeResolver, CognitiveRetrieval; optional semantic path
 
-        # HolonClient: shared across all agents (set externally)
-        holon_client = self.holon_client
+        from ..memory.semantic_memory import SemanticMemoryService
+        from ..memory.working_memory import MwWorkingMemoryAdapter
 
         # ScopeResolver: per-agent if available, otherwise shared, otherwise default
         scope_resolver = self.scope_resolvers.get(agent_id) or self.scope_resolver
@@ -505,15 +495,6 @@ class CognitiveCore(dspy.Module):
                 )
 
         missing = []
-        if holon_client is None:
-            if HolonClient is None:
-                missing.append(
-                    "HolonClient (module not available - install from memory.holon_client)"
-                )
-            else:
-                missing.append(
-                    "HolonClient (self.holon_client - set an instance of memory.holon_client.HolonClient)"
-                )
         if cognitive_retrieval is None:
             missing.append(
                 "CognitiveRetrieval (self.cognitive_retrieval or set self.holon_fabric + embedder for HolonFabricRetrieval)"
@@ -530,11 +511,23 @@ class CognitiveCore(dspy.Module):
         # 3) Construct the CognitiveMemoryBridge for this agent
         try:
             bridge_logger = logger.getChild("memory_bridge")
+            working = MwWorkingMemoryAdapter(mw)
+            semantic = (
+                SemanticMemoryService(self.holon_fabric)
+                if self.holon_fabric is not None
+                else None
+            )
+            promotion_embedder = (
+                _SynopsisEmbedderAdapter(self.synopsis_embedder)
+                if self.synopsis_embedder is not None
+                else None
+            )
             memory_bridge = CognitiveMemoryBridge(
                 agent_id=agent_id,
                 organ_id=organ_id,
-                mw=mw,
-                holon=holon_client,
+                working=working,
+                semantic=semantic,
+                embedder=promotion_embedder,
                 scope_resolver=scope_resolver,
                 retrieval=cognitive_retrieval,
                 logger=bridge_logger,
@@ -3024,24 +3017,6 @@ class CognitiveCore(dspy.Module):
                     return None
             return mgr
 
-    def _mw_text_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
-        """Search text in Mw for agent."""
-        mw = self._mw(agent_id)
-        if not mw:
-            return []
-        # MwManager doesn't have search_text method - return empty for now
-        # Text search should use CognitiveMemoryBridge + HolonFabricRetrieval instead
-        return []
-
-    def _mw_vector_search(self, agent_id: str, q: str, k: int) -> List[Dict[str, Any]]:
-        """Search vectors in Mw for agent."""
-        mw = self._mw(agent_id)
-        if not mw:
-            return []
-        # MwManager doesn't have search_vector method - return empty for now
-        # Vector search should use CognitiveMemoryBridge + HolonFabricRetrieval instead
-        return []
-
     def _run_coro_sync(
         self, coro: Awaitable[Any], *, timeout: Optional[float] = None
     ) -> Any:
@@ -3137,7 +3112,7 @@ class CognitiveCore(dspy.Module):
         NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
         for proper scoped retrieval with HolonFabric.
         """
-        return self._mw_text_search(agent_id, q, k)
+        return []
 
     def _mw_first_vector_search(
         self, agent_id: str, q: str, k: int
@@ -3147,7 +3122,7 @@ class CognitiveCore(dspy.Module):
         NOTE: This method is deprecated. Use CognitiveMemoryBridge + HolonFabricRetrieval
         for proper scoped vector search with HolonFabric.
         """
-        return self._mw_vector_search(agent_id, q, k)
+        return []
 
     def _create_plan_from_steps(
         self,

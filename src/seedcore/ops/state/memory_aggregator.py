@@ -21,15 +21,17 @@ from typing import Dict, Any, Optional
 # Optional memory module imports
 try:
     from ...memory.mw_manager import MwManager
-    from ...memory.holon_fabric import HolonFabric
-    from ...memory.backends.pgvector_backend import PgVectorStore
-    from ...memory.backends.neo4j_graph import Neo4jGraph
+    from ...memory.runtime import connect_default_memory_runtime
+    from ...memory.semantic_memory import SemanticMemoryService
+    from ...memory.working_memory import MwWorkingMemoryAdapter
+    from ...memory.contracts import MemorySubsystemStatus
     _MEMORY_AVAILABLE = True
 except ImportError:
     MwManager = None  # type: ignore
-    HolonFabric = None  # type: ignore
-    PgVectorStore = None  # type: ignore
-    Neo4jGraph = None  # type: ignore
+    connect_default_memory_runtime = None  # type: ignore
+    SemanticMemoryService = None  # type: ignore
+    MwWorkingMemoryAdapter = None  # type: ignore
+    MemorySubsystemStatus = None  # type: ignore
     _MEMORY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,8 @@ class MemoryAggregator:
 
         # Lazy initialization of memory managers
         self._mw_manager: Optional[MwManager] = None
-        self._holon_fabric: Optional[HolonFabric] = None
+        self._memory_runtime = None
+        self._semantic_memory: Optional[SemanticMemoryService] = None
 
         # Control
         self._loop_task: Optional[asyncio.Task] = None
@@ -89,6 +92,14 @@ class MemoryAggregator:
                 pass
         self._loop_task = None
         self._is_running.clear()
+        if self._memory_runtime is not None:
+            try:
+                await self._memory_runtime.close()
+            except Exception as e:
+                logger.debug("MemoryAggregator runtime close failed: %s", e)
+            finally:
+                self._memory_runtime = None
+                self._semantic_memory = None
         logger.info("Proactive memory poll loop stopped.")
 
     def is_running(self) -> bool:
@@ -185,97 +196,93 @@ class MemoryAggregator:
     # --- Internal Polling Methods ---
 
     async def _poll_mw_stats(self) -> Dict[str, Any]:
-        """Poll working memory statistics (mw) from MwManager."""
+        """Poll working memory statistics (mw) from MwManager via WorkingMemory contract."""
         mw_manager = self._get_mw_manager()
-        if mw_manager is None:
-            logger.debug("MwManager unavailable, returning simulated stats")
-            return self._get_simulated_mw_stats()
-        
-        # Get telemetry from the MwManager instance
-        # Use async method if available, else fall back to sync
-        get_telemetry_fn = getattr(mw_manager, "get_telemetry_async", mw_manager.get_telemetry)
-        
-        if asyncio.iscoroutinefunction(get_telemetry_fn):
-            telemetry = await get_telemetry_fn()
-        else:
-            telemetry = get_telemetry_fn()
-            
-        # --- Process Telemetry (copied from legacy) ---
-        total_requests = telemetry.get("total_requests", 0)
-        hits = telemetry.get("hits", 0)
-        hit_ratio = telemetry.get("hit_ratio", 0.0)
-        
-        buffer_size = total_requests  # Approximate
-        cache_utilization = hit_ratio  # Proxy
-        miss_rate = telemetry.get("misses", 0) / total_requests if total_requests > 0 else 0.0
-        
+        if mw_manager is None or MwWorkingMemoryAdapter is None:
+            st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
+            return {
+                "status": st.value if st else "unavailable",
+                "reason": "mw_manager_unavailable",
+            }
+
+        snap = await MwWorkingMemoryAdapter(mw_manager).stats_snapshot()
+        total_requests = snap.total_requests
+        miss_rate = snap.misses / total_requests if total_requests > 0 else 0.0
         try:
             hot_items = await mw_manager.get_hot_items_async(top_n=10)
-            eviction_rate = len(hot_items) / max(total_requests, 1) * 0.1  # Rough estimate
+            eviction_rate = len(hot_items) / max(total_requests, 1) * 0.1
         except Exception:
-            eviction_rate = 0.12  # Fallback
-        
+            eviction_rate = 0.0
+
         return {
-            "buffer_size": buffer_size,
-            "hit_rate": hit_ratio,
+            "status": snap.health.status.value,
+            "reason": snap.health.reason,
+            "buffer_size": total_requests,
+            "hit_rate": snap.hit_ratio,
             "eviction_rate": eviction_rate,
-            "cache_utilization": cache_utilization,
+            "cache_utilization": snap.hit_ratio,
             "miss_rate": miss_rate,
             "total_requests": total_requests,
-            "successful_requests": hits,
-            "l0_hits": telemetry.get("l0_hits", 0),
-            "l1_hits": telemetry.get("l1_hits", 0),
-            "l2_hits": telemetry.get("l2_hits", 0),
-            "task_hit_ratio": telemetry.get("task_hit_ratio", 0.0),
+            "successful_requests": snap.hits,
+            "l0_hits": snap.l0_hits,
+            "l1_hits": snap.l1_hits,
+            "l2_hits": snap.l2_hits,
+            "task_hit_ratio": snap.task_hit_ratio,
         }
 
     async def _poll_mlt_stats(self) -> Dict[str, Any]:
-        """Poll long-term memory statistics (mlt) from HolonFabric."""
-        fabric = self._get_holon_fabric()
-        if fabric is None:
-            logger.debug("HolonFabric unavailable, returning simulated stats")
-            return self._get_simulated_mlt_stats()
-        
+        """Poll semantic memory statistics through the caller-facing contract."""
+        semantic = await self._get_semantic_memory()
+        if semantic is None:
+            st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
+            return {
+                "status": st.value if st else "unavailable",
+                "reason": "semantic_memory_unavailable",
+            }
+
         try:
-            # Query stats directly from backends
-            total_holons = await fabric.vec.get_count()
-            total_relationships = await fabric.graph.get_count()
-            
-            # Get bytes_used from pgvector store
-            bytes_query = "SELECT pg_total_relation_size('holons')"
-            bytes_used = await fabric.vec.execute_scalar_query(bytes_query)
-            bytes_used = int(bytes_used) if bytes_used is not None else 0
-            
-            status = "active"  # Assume active if we can query
-            
+            snap = await semantic.stats_snapshot()
+            total_holons = int(snap.total_holons)
+            total_relationships = int(snap.total_relationships)
+            bytes_used = int(snap.bytes_used)
         except Exception as e:
-            logger.error(f"Failed to query HolonFabric stats: {e}")
-            return self._get_simulated_mlt_stats()
-        
-        # --- Process Stats (copied from legacy) ---
-        storage_gb = bytes_used / (1024 ** 3)
-        avg_holon_size = bytes_used / total_holons if total_holons > 0 else 0
-        compression_ratio = 0.65  # Default estimate
-        index_size_mb = (bytes_used * 0.15) / (1024 ** 2)
-        
+            logger.error("Failed to query SemanticMemory stats: %s", e)
+            st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
+            return {
+                "status": st.value if st else "unavailable",
+                "reason": str(e),
+            }
+
+        storage_gb = bytes_used / (1024**3)
+        avg_holon_size = bytes_used // total_holons if total_holons > 0 else 0
+        index_size_mb = (bytes_used * 0.15) / (1024**2)
+
         return {
+            "status": snap.health.status.value,
+            "reason": snap.health.reason,
             "storage_gb": round(storage_gb, 2),
-            "compression_ratio": compression_ratio,
+            "compression_ratio": None,
             "access_patterns": total_relationships,
             "total_holons": total_holons,
             "total_relationships": total_relationships,
             "avg_holon_size": int(avg_holon_size),
             "index_size_mb": round(index_size_mb, 2),
             "bytes_used": bytes_used,
-            "status": status,
-            "vector_dimensions": 768  # Default, can be made configurable
+            "vector_dimensions": None,
         }
 
     async def _poll_mfb_stats(self) -> Dict[str, Any]:
-        """Poll flashbulb memory statistics (mfb)."""
-        # TODO: Integrate with actual FlashbulbClient instances
-        # For now, return simulated statistics
-        return self._get_simulated_mfb_stats()
+        """Poll flashbulb / incident memory (optional subsystem)."""
+        st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
+        return {
+            "status": st.value if st else "unavailable",
+            "reason": "incident_memory_not_configured",
+            "incidents": 0,
+            "queue_size": 0,
+            "avg_weight": None,
+            "decay_rate": None,
+            "total_events": 0,
+        }
 
     # --- Lazy-init Helpers (copied from legacy) ---
 
@@ -292,63 +299,22 @@ class MemoryAggregator:
                 return None
         return self._mw_manager
 
-    def _get_holon_fabric(self) -> Optional[HolonFabric]:
-        """Get or create a HolonFabric instance for LTM stats."""
-        if not _MEMORY_AVAILABLE or HolonFabric is None:
+    async def _get_semantic_memory(self) -> Optional[SemanticMemoryService]:
+        """Get or create SemanticMemory via the unified runtime boundary."""
+        if (
+            not _MEMORY_AVAILABLE
+            or connect_default_memory_runtime is None
+            or SemanticMemoryService is None
+        ):
             return None
-        if self._holon_fabric is None:
+        if self._semantic_memory is None:
             try:
-                import os
-                # Create backend stores directly
-                pg_store = PgVectorStore(
-                    os.getenv("PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"),
-                    pool_size=10
+                self._memory_runtime = await connect_default_memory_runtime(
+                    pool_size=2,
+                    embedder=None,
                 )
-                neo4j_graph = Neo4jGraph(
-                    os.getenv("NEO4J_URI") or os.getenv("NEO4J_BOLT_URL", "bolt://neo4j:7687"),
-                    auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password"))
-                )
-                
-                # Create HolonFabric instance
-                self._holon_fabric = HolonFabric(
-                    vec_store=pg_store,
-                    graph=neo4j_graph,
-                    embedder=None  # No embedder needed for stats collection
-                )
+                self._semantic_memory = self._memory_runtime.semantic
             except Exception as e:
-                logger.debug(f"Failed to create HolonFabric: {e}")
+                logger.debug(f"Failed to create SemanticMemory runtime: {e}")
                 return None
-        return self._holon_fabric
-
-    # --- Simulated Data Fallbacks (copied from legacy) ---
-
-    def _get_simulated_mw_stats(self) -> Dict[str, Any]:
-        return {
-            "buffer_size": 1024,
-            "hit_rate": 0.78,
-            "eviction_rate": 0.12,
-            "cache_utilization": 0.65,
-            "miss_rate": 0.22,
-            "total_requests": 1000,
-            "successful_requests": 780
-        }
-
-    def _get_simulated_mlt_stats(self) -> Dict[str, Any]:
-        return {
-            "storage_gb": 50.2,
-            "compression_ratio": 0.65,
-            "access_patterns": 42,
-            "total_holons": 1000,
-            "avg_holon_size": 1024,
-            "query_latency_ms": 150.0,
-            "index_size_mb": 25.5
-        }
-    
-    def _get_simulated_mfb_stats(self) -> Dict[str, Any]:
-        return {
-            "incidents": 0,
-            "queue_size": 128,
-            "avg_weight": 0.73,
-            "decay_rate": 0.15,
-            "total_events": 500
-        }
+        return self._semantic_memory

@@ -34,6 +34,30 @@ serve_route_present() {
   curl -fsS "${SERVE_GATEWAY}/-/routes" 2>/dev/null | rg -q "\"${route_prefix}\""
 }
 
+need_neo4j() {
+  [[ " ${APPS} " == *" organism "* ]]
+}
+
+neo4j_port_open() {
+  python3 - "$1" "$2" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+s = socket.socket()
+s.settimeout(1)
+try:
+    s.connect((host, port))
+except OSError:
+    raise SystemExit(1)
+else:
+    raise SystemExit(0)
+finally:
+    s.close()
+PY
+}
+
 start_app() {
   local app="$1"
   local pidfile="${PID_DIR}/${app}.pid"
@@ -69,6 +93,18 @@ cmd="${1:-start}"
 
 case "${cmd}" in
   start)
+    if need_neo4j && [[ "${SEEDCORE_SKIP_NEO4J_CHECK}" != "1" ]]; then
+      if ! neo4j_port_open "${NEO4J_HOST}" "${NEO4J_BOLT_PORT}"; then
+        cat >&2 <<EOF
+Neo4j is required for organism memory runtime but is not reachable at ${NEO4J_HOST}:${NEO4J_BOLT_PORT}.
+Start Neo4j first (example):
+  docker start seedcore-neo4j || docker run -d --name seedcore-neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=${NEO4J_USER}/${NEO4J_PASSWORD} neo4j:5
+Or bypass this preflight (not recommended):
+  SEEDCORE_SKIP_NEO4J_CHECK=1 bash deploy/local/run-ray-stack.sh start
+EOF
+        exit 1
+      fi
+    fi
     bash "${SCRIPT_DIR}/run-ray-head.sh" start
     for app in ${APPS}; do
       start_app "${app}"

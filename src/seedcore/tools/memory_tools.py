@@ -113,22 +113,15 @@ class LtmQueryTool:
     async def execute(self, holon_id: str):
         if not self.holon_fabric:
             raise ValueError("HolonFabric not available")
-        # Query by ID: try graph store first, then vector store
         try:
-            neighbors = await self.holon_fabric.graph.get_neighbors(holon_id, limit=1)
-            if neighbors:
-                node_data = neighbors[0] if isinstance(neighbors, list) else neighbors
-                props = node_data.get("props", {})
-                return {
-                    "id": holon_id,
-                    "type": props.get("type", "fact"),
-                    "scope": props.get("scope", "global"),
-                    "summary": node_data.get("summary", ""),
-                    "content": props,
-                }
+            holon = await self.holon_fabric.get_holon(holon_id)
+            if not holon:
+                return None
+            if hasattr(holon, "model_dump"):
+                return holon.model_dump()
+            return holon.dict()
         except Exception:
-            pass
-        return None
+            return None
 
     def schema(self):
         return {
@@ -165,7 +158,10 @@ class LtmSearchTool:
             limit=limit
         )
         # Convert Holon objects to dicts for backward compatibility
-        return [h.dict() if hasattr(h, "dict") else h for h in holons]
+        return [
+            h.model_dump() if hasattr(h, "model_dump") else h.dict()
+            for h in holons
+        ]
 
     def schema(self):
         return {
@@ -251,7 +247,14 @@ class LtmRelationshipsTool:
     async def execute(self, holon_id: str):
         if not self.holon_fabric:
             raise ValueError("HolonFabric not available")
-        return await self.holon_fabric.graph.get_neighbors(holon_id)
+        rels = await self.holon_fabric.list_relationships(holon_id)
+        out = []
+        for r in rels:
+            d = r.model_dump() if hasattr(r, "model_dump") else r.dict()
+            d.setdefault("summary", d.get("neighbor_summary", ""))
+            d.setdefault("uuid", d.get("neighbor_id"))
+            out.append(d)
+        return out
 
     def schema(self):
         return {

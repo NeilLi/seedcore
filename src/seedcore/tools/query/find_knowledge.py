@@ -145,17 +145,12 @@ class FindKnowledgeTool:
             )
             # Query by ID using graph store
             try:
-                neighbors = await self.holon_fabric.graph.get_neighbors(fact_id, limit=1)
-                if neighbors:
-                    node_data = neighbors[0] if isinstance(neighbors, list) else neighbors
-                    props = node_data.get("props", {})
-                    long_term_data = {
-                        "id": fact_id,
-                        "type": props.get("type", "fact"),
-                        "scope": props.get("scope", "global"),
-                        "summary": node_data.get("summary", ""),
-                        "content": props,
-                    }
+                holon = await self.holon_fabric.get_holon(fact_id)
+                if holon:
+                    if hasattr(holon, "model_dump"):
+                        long_term_data = holon.model_dump()
+                    else:
+                        long_term_data = holon.dict()
                 else:
                     long_term_data = None
             except Exception as e:

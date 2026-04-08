@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 import ray  # pyright: ignore[reportMissingImports]
-from typing import Dict, Any, Optional
+from typing import TYPE_CHECKING, Dict, Any, Optional
+
 from .manager import ToolManager
+
+if TYPE_CHECKING:
+    from ..memory.runtime import MemoryRuntime
 
 @ray.remote(num_cpus=0.1)
 class ToolManagerShard:
@@ -24,7 +30,8 @@ class ToolManagerShard:
         self._mcp_client_cfg = mcp_client_cfg
         self._mcp_client = None
         self._manager: Optional[ToolManager] = None
-    
+        self._memory_runtime: Optional[MemoryRuntime] = None
+
     def _get_cognitive_client(self):
         """Lazily create CognitiveServiceClient from config to avoid serialization issues."""
         if self._cognitive_client is None and self._cognitive_client_cfg:
@@ -135,46 +142,41 @@ class ToolManagerShard:
         """Lazily initialize ToolManager with local connections."""
         if self._manager is None:
             # Import here to avoid circular imports
-            from ..memory.holon_fabric import HolonFabric
-            from ..memory.backends.pgvector_backend import PgVectorStore
-            from ..memory.backends.neo4j_graph import Neo4jGraph
+            from ..memory.runtime import MemoryRuntime
             from ..database import PG_DSN, NEO4J_URI, NEO4J_BOLT_URL, NEO4J_USER, NEO4J_PASSWORD
             from ..organs.organism_core import HolonFabricSkillStoreAdapter
-            
-            # Create HolonFabric with local connections
-            # Support both structured (new) and flat (legacy) config formats
+
             pg_cfg = self._holon_fabric_config.get("pg", {})
             neo4j_cfg = self._holon_fabric_config.get("neo4j", {})
-            
-            pg_store = PgVectorStore(
-                dsn=pg_cfg.get("dsn") or self._holon_fabric_config.get("pg_dsn", PG_DSN),
-                pool_size=pg_cfg.get("pool_size") or self._holon_fabric_config.get("pg_pool_size", 2),
-                pool_min_size=1,
-            )
+
             neo4j_uri = neo4j_cfg.get("uri") or self._holon_fabric_config.get("neo4j_uri") or NEO4J_URI or NEO4J_BOLT_URL
-            neo4j_graph = Neo4jGraph(
-                neo4j_uri,
-                auth=(
-                    neo4j_cfg.get("user") or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
-                    neo4j_cfg.get("password") or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
+            runtime = await MemoryRuntime.connect_storage(
+                pg_dsn=pg_cfg.get("dsn")
+                or self._holon_fabric_config.get("pg_dsn", PG_DSN),
+                neo4j_uri=neo4j_uri,
+                neo4j_auth=(
+                    neo4j_cfg.get("user")
+                    or self._holon_fabric_config.get("neo4j_user", NEO4J_USER),
+                    neo4j_cfg.get("password")
+                    or self._holon_fabric_config.get("neo4j_password", NEO4J_PASSWORD),
                 ),
-            )
-            
-            # Initialize connections
-            # Neo4j driver is lazy, so we just verify pg_store connection
-            await pg_store._get_pool()
-            
-            holon_fabric = HolonFabric(
-                vec_store=pg_store,
-                graph=neo4j_graph,
+                pool_size=pg_cfg.get("pool_size")
+                or self._holon_fabric_config.get("pg_pool_size", 2),
+                pool_min_size=1,
                 embedder=None,
             )
-            
+            holon_fabric = runtime.holon_fabric
+            mw = self._get_mw_manager()
+            if mw is not None:
+                runtime.bind_working_memory(mw)
+
+            self._memory_runtime = runtime
+
             skill_store = HolonFabricSkillStoreAdapter(holon_fabric)
-            
+
             self._manager = ToolManager(
                 skill_store=skill_store,
-                mw_manager=self._get_mw_manager(),
+                mw_manager=mw,
                 holon_fabric=holon_fabric,
                 cognitive_client=self._get_cognitive_client(),
                 ml_client=self._get_ml_client(),
@@ -182,7 +184,17 @@ class ToolManagerShard:
             )
         
         return self._manager
-    
+
+    async def close_memory_runtime(self) -> None:
+        """Close vector/graph pools for this shard. Safe to call multiple times."""
+        if self._memory_runtime is None:
+            return
+        try:
+            await self._memory_runtime.close()
+        finally:
+            self._memory_runtime = None
+            self._manager = None
+
     @property
     def manager(self) -> ToolManager:
         """Lazy accessor for manager (creates on first access)."""

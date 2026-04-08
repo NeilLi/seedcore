@@ -20,6 +20,9 @@ In this architecture, "stateless PDP" means stateless at decision time: the fina
 The diagram’s components map to these responsibilities:
 `PDP` (policy decision point) enforces authorization and admission, `Evidence Integrator` normalizes/joins evidence into verification bundles, `Forensic State Store` keeps the replay/verifiability substrate, and `RESULT_VERIFIER` performs machine-native post-decision replay verification plus authoritative fail-closed mutation. The `Verification API` offers deterministic read projections for UI and agent tooling. `Hot-path Observability` closes the loop with deployment-role labeled metrics and a JSON status endpoint designed to match Prometheus text output.
 
+## Supporting memory (non-authoritative)
+Working memory, semantic (Holon) memory, and optional incident memory are **bounded supporting services** around the trust runtime. They supply short-lived cache, scoped retrieval, and salience logging for cognition and tools. Reads are advisory unless explicitly promoted into typed, freshness-aware context elsewhere. The PDP and other governed hot paths must not treat general-purpose memory lookups as authority sources. Prefer `seedcore.memory.MemoryRuntime` and the protocols in `seedcore.memory.contracts` over direct use of raw `PgVectorStore` / `Neo4jGraph` adapters in callers outside `seedcore.memory`.
+
 ## Observability + Acceptance Contracts
 Hot-path checks validate that JSON status and Prometheus text agree (including `deployment_role` labeling), and Q2 acceptance gating enforces verification-API fixture coverage plus degraded-edge drill matrix scenarios (deny/quarantine behavior, stale telemetry/graphs, replay-tamper injections).
 
