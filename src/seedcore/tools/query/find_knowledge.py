@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # seedcore/tools/query/find_knowledge.py
 """
-Tool for finding knowledge using Mw -> Mlt escalation.
-Implements the Mw -> Mlt workflow with negative caching and single-flight guards.
+Tool for finding knowledge using working-memory -> semantic-memory escalation.
+Implements a fast cache-first workflow with negative caching and single-flight guards.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 class FindKnowledgeTool:
     """
-    Tool for finding knowledge using Mw -> Mlt escalation.
-    Implements the Mw -> Mlt workflow with negative caching and single-flight guards.
+    Tool for finding knowledge using working-memory -> semantic-memory escalation.
+    Implements a fast cache-first workflow with negative caching and single-flight guards.
     """
 
     def __init__(
@@ -37,7 +37,6 @@ class FindKnowledgeTool:
         """
         self.mw_manager = mw_manager
         self.semantic_memory = semantic_memory
-        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
         self.agent_id = agent_id
 
     @property
@@ -141,9 +140,9 @@ class FindKnowledgeTool:
             except Exception as e:
                 logger.error(f"[{self.agent_id}] ❌ Error querying Mw: {e}")
 
-            # 2. On a miss, escalate to HolonFabric (long-term memory)
+            # 2. On a miss, escalate to semantic memory
             logger.info(
-                f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to HolonFabric..."
+                f"[{self.agent_id}] ⚠️ '{fact_id}' not in Mw (cache miss). Escalating to semantic memory..."
             )
             # Query by ID using graph store
             try:
@@ -156,11 +155,11 @@ class FindKnowledgeTool:
                 else:
                     long_term_data = None
             except Exception as e:
-                logger.error(f"[{self.agent_id}] ❌ Error querying HolonFabric: {e}")
+                logger.error(f"[{self.agent_id}] ❌ Error querying semantic memory: {e}")
                 long_term_data = None
 
             if long_term_data:
-                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in HolonFabric.")
+                logger.info(f"[{self.agent_id}] ✅ Found '{fact_id}' in semantic memory.")
 
                 # 3. Cache the retrieved data back into Mw
                 logger.info(f"[{self.agent_id}] 💾 Caching '{fact_id}' back to Mw...")
@@ -175,7 +174,7 @@ class FindKnowledgeTool:
             else:
                 # On total miss: write negative cache
                 logger.info(
-                    f"[{self.agent_id}] ❌ '{fact_id}' not found in HolonFabric. Setting negative cache."
+                    f"[{self.agent_id}] ❌ '{fact_id}' not found in semantic memory. Setting negative cache."
                 )
                 try:
                     self.mw_manager.set_negative_cache(
@@ -188,7 +187,7 @@ class FindKnowledgeTool:
                 return None
 
         except Exception as e:
-            logger.error(f"[{self.agent_id}] ❌ Error querying HolonFabric: {e}")
+            logger.error(f"[{self.agent_id}] ❌ Error querying semantic memory: {e}")
             return None
         finally:
             # Always clear in-flight sentinel
@@ -201,4 +200,3 @@ class FindKnowledgeTool:
             f"[{self.agent_id}] 🚨 Could not find '{fact_id}' in any memory tier."
         )
         return None
-

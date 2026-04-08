@@ -46,7 +46,6 @@ class CollaborativeTaskTool:
         self.find_knowledge_tool = find_knowledge_tool
         self.mw_manager = mw_manager
         self.semantic_memory = semantic_memory
-        self.holon_fabric = getattr(semantic_memory, "holon_fabric", None)
         self.agent_id = agent_id
         self._get_energy_slice = get_energy_slice
 
@@ -70,7 +69,7 @@ class CollaborativeTaskTool:
             },
         }
 
-    async def _promote_to_holon_fabric(
+    async def _promote_to_semantic_memory(
         self, key: str, obj: Dict[str, Any], compression: bool = True
     ) -> bool:
         """Promote an object to semantic memory by creating a Holon."""
@@ -99,7 +98,7 @@ class CollaborativeTaskTool:
             vec = np.pad(vec, (0, 768 - len(vec)), mode="constant")
             embedding = vec / (np.linalg.norm(vec) + 1e-6)
 
-            # Build the Holon object for HolonFabric
+            # Build the Holon object for semantic memory
             from seedcore.models.holon import Holon, HolonType, HolonScope
             
             holon = Holon(
@@ -118,7 +117,9 @@ class CollaborativeTaskTool:
             await self.semantic_memory.upsert_holon(holon)
             return True
         except Exception as e:
-            logger.debug(f"[{self.agent_id}] HolonFabric promote failed for {key}: {e}")
+            logger.debug(
+                f"[{self.agent_id}] semantic-memory promote failed for {key}: {e}"
+            )
             return False
 
     def _mw_put_json_local(self, key: str, obj: Dict[str, Any]) -> bool:
@@ -238,7 +239,8 @@ class CollaborativeTaskTool:
         )
 
         if success and quality >= 0.8:
-            await self._promote_to_holon_fabric(artifact_key, artifact, compression=True)
+            await self._promote_to_semantic_memory(
+                artifact_key, artifact, compression=True
+            )
 
         return result
-
