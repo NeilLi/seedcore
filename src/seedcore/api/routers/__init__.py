@@ -20,6 +20,7 @@ ACTIVE_ROUTER_SPECS = (
     ("Advisory", "advisory_router"),
     ("PKG", "pkg_router"),
     ("Capabilities", "capabilities_router"),
+    ("Policy Assistant", "policy_assistant_router"),
 )
 
 LEGACY_ROUTER_NAMES = (
@@ -45,6 +46,7 @@ _ROUTER_MODULES = {
     "advisory_router": ".advisory_router",
     "pkg_router": ".pkg_router",
     "capabilities_router": ".capabilities_router",
+    "policy_assistant_router": ".policy_assistant_router",
     "dspy_router": ".legacy.dspy_router",
     "energy_router": ".legacy.energy_router",
     "holon_router": ".legacy.holon_router",

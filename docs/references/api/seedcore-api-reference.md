@@ -196,15 +196,32 @@ This surface adds the missing external authority APIs needed for DID-style ident
 | `GET` | `/api/v1/creator-profiles/{owner_id}` | Fetch the current creator profile for an owner DID. |
 | `POST` | `/api/v1/trust-preferences` | Upsert owner trust-preference policy hints. |
 | `GET` | `/api/v1/trust-preferences/{owner_id}` | Fetch current trust preferences for an owner DID. |
+| `POST` | `/api/v1/owner-policies` | Upsert typed owner policy contract for assistant-facing policy setup. |
+| `GET` | `/api/v1/owner-policies/{owner_id}` | Fetch the current owner policy contract for an owner DID. |
+| `POST` | `/api/v1/owner-context/preflight` | Run deterministic owner context preflight and return predicted trust gaps/reason codes. |
 | `POST` | `/api/v1/intents/submit-signed` | Verify an externally signed `ActionIntent` and run it through the current PDP flow. |
 
 ### 8.1 Notes
 
 - DID and delegation records are currently persisted using the existing facts table in the `identity` namespace.
 - Creator profile and trust preference records are also persisted in the `identity` namespace as owner-scoped fact records.
+- Owner policy contract records are persisted as owner-scoped facts under predicate `owner_policy_contract`.
 - Externally signed intent submission currently supports `ed25519` and `hmac_sha256`.
 - Signed submission requires nonce protection and rejects replayed nonces.
 - Signed submission verifies ingress authenticity but still runs the normal PDP and delegation checks before issuing `ExecutionToken`.
+
+## 8.2 Policy Assistant Batch Preflight API
+
+Implemented in [policy_assistant_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/policy_assistant_router.py).
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/policy-assistant/scenario-pack/evaluate` | Evaluate a scenario pack using forced `no_execute=true` preflight for each scenario and return aggregate summary. |
+
+Notes:
+
+- This endpoint is advisory/preflight-only and does not mint execution authority.
+- Each scenario delegates to the existing `agent-actions/evaluate` path with `no_execute=true` enforced.
 
 ## 9. Custody API
 

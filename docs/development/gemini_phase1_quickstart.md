@@ -206,6 +206,12 @@ Validate:
 
 Use `seedcore.agent_action.preflight` to evaluate policy/trust gaps without minting `ExecutionToken`.
 
+HTTP equivalents for assistant integration:
+
+- `POST /api/v1/owner-context/preflight`
+- `POST /api/v1/agent-actions/evaluate?no_execute=true`
+- `POST /api/v1/policy-assistant/scenario-pack/evaluate` (forces `no_execute=true` per scenario)
+
 ```json
 {
   "tool": "seedcore.agent_action.preflight",

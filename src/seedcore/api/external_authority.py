@@ -36,6 +36,7 @@ DID_PREDICATE = "did_document"
 DELEGATION_PREDICATE_PREFIX = "delegation:"
 CREATOR_PROFILE_PREDICATE = "creator_profile"
 TRUST_PREFERENCES_PREDICATE = "trust_preferences"
+OWNER_POLICY_CONTRACT_PREDICATE = "owner_policy_contract"
 DEFAULT_EXTERNAL_INTENT_MAX_SKEW_SECONDS = 300
 DEFAULT_EXTERNAL_INTENT_NONCE_TTL_SECONDS = 300
 _NONCE_CACHE: dict[str, float] = {}
@@ -179,6 +180,95 @@ class TrustPreferencesUpsertRequest(BaseModel):
     high_value_step_up_threshold_usd: Optional[float] = None
     updated_by: str = "identity_router"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OwnerPolicySpendControl(BaseModel):
+    scope: str = "global"
+    currency: str = "USD"
+    per_transaction_limit: Optional[float] = None
+    daily_limit: Optional[float] = None
+    monthly_limit: Optional[float] = None
+    step_up_threshold: Optional[float] = None
+
+
+class OwnerPolicyMerchantRule(BaseModel):
+    merchant: str
+    marketplace: Optional[str] = None
+    disposition: Literal["ALLOW", "DENY", "ESCALATE"] = "ALLOW"
+    required_provenance: Optional[str] = None
+    max_amount: Optional[float] = None
+
+
+class OwnerPolicyPublishingRule(BaseModel):
+    channel: str
+    content_type: str
+    disposition: Literal["ALLOW", "DENY", "ESCALATE"] = "ALLOW"
+    requires_review: bool = False
+    required_approvals: int = 0
+
+
+class OwnerPolicyApprovalChain(BaseModel):
+    action_family: str
+    threshold_type: str
+    threshold_value: float
+    required_approval_count: int = 1
+    approver_roles: list[str] = Field(default_factory=list)
+    step_up_on_risk_score: Optional[float] = None
+
+
+class OwnerPolicyDelegatedAssistant(BaseModel):
+    assistant_id: str
+    authority_level: Literal["observer", "contributor", "signer"] = "observer"
+    allowed_actions: list[str] = Field(default_factory=list)
+
+
+class OwnerPolicyRecord(BaseModel):
+    owner_id: str
+    policy_id: str = "owner-policy-default"
+    policy_version: str = "v1"
+    status: Literal["ACTIVE", "SUPERSEDED", "REVOKED"] = "ACTIVE"
+    default_disposition: Literal["ALLOW", "DENY", "ESCALATE"] = "DENY"
+    allowed_categories: list[str] = Field(default_factory=list)
+    denied_categories: list[str] = Field(default_factory=list)
+    spend_controls: list[OwnerPolicySpendControl] = Field(default_factory=list)
+    merchant_rules: list[OwnerPolicyMerchantRule] = Field(default_factory=list)
+    publishing_rules: list[OwnerPolicyPublishingRule] = Field(default_factory=list)
+    approval_chains: list[OwnerPolicyApprovalChain] = Field(default_factory=list)
+    delegated_assistants: list[OwnerPolicyDelegatedAssistant] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=lambda: isoformat(utcnow()))
+    updated_by: str = "policy_assistant"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    source_namespace: str = IDENTITY_NAMESPACE
+    source_predicate: str = OWNER_POLICY_CONTRACT_PREDICATE
+
+
+class OwnerPolicyUpsertRequest(BaseModel):
+    owner_id: str
+    policy_id: str = "owner-policy-default"
+    policy_version: str = "v1"
+    status: Literal["ACTIVE", "SUPERSEDED", "REVOKED"] = "ACTIVE"
+    default_disposition: Literal["ALLOW", "DENY", "ESCALATE"] = "DENY"
+    allowed_categories: list[str] = Field(default_factory=list)
+    denied_categories: list[str] = Field(default_factory=list)
+    spend_controls: list[OwnerPolicySpendControl] = Field(default_factory=list)
+    merchant_rules: list[OwnerPolicyMerchantRule] = Field(default_factory=list)
+    publishing_rules: list[OwnerPolicyPublishingRule] = Field(default_factory=list)
+    approval_chains: list[OwnerPolicyApprovalChain] = Field(default_factory=list)
+    delegated_assistants: list[OwnerPolicyDelegatedAssistant] = Field(default_factory=list)
+    updated_by: str = "policy_assistant"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OwnerContextPreflightRequest(BaseModel):
+    owner_id: str
+    assistant_id: Optional[str] = None
+    delegation_id: Optional[str] = None
+    merchant_ref: Optional[str] = None
+    declared_value_usd: Optional[float] = None
+    required_modalities: list[str] = Field(default_factory=list)
+    available_modalities: list[str] = Field(default_factory=list)
+    observed_provenance_level: Optional[str] = None
+    risk_score: Optional[float] = None
 
 
 async def upsert_did_document(session: AsyncSession, payload: DIDRegistrationRequest | DIDDocumentRecord) -> DIDDocumentRecord:
@@ -494,6 +584,64 @@ async def get_trust_preferences(session: AsyncSession, owner_id: str) -> TrustPr
         return None
     try:
         return TrustPreferencesRecord(**fact.object_data)
+    except Exception:
+        return None
+
+
+async def upsert_owner_policy(
+    session: AsyncSession,
+    payload: OwnerPolicyUpsertRequest | OwnerPolicyRecord,
+) -> OwnerPolicyRecord:
+    record = payload if isinstance(payload, OwnerPolicyRecord) else OwnerPolicyRecord(
+        owner_id=payload.owner_id,
+        policy_id=payload.policy_id,
+        policy_version=payload.policy_version,
+        status=payload.status,
+        default_disposition=payload.default_disposition,
+        allowed_categories=payload.allowed_categories,
+        denied_categories=payload.denied_categories,
+        spend_controls=payload.spend_controls,
+        merchant_rules=payload.merchant_rules,
+        publishing_rules=payload.publishing_rules,
+        approval_chains=payload.approval_chains,
+        delegated_assistants=payload.delegated_assistants,
+        updated_by=payload.updated_by,
+        metadata=payload.metadata,
+        source_namespace=IDENTITY_NAMESPACE,
+        source_predicate=OWNER_POLICY_CONTRACT_PREDICATE,
+    )
+    fact = await _get_owner_fact(session, owner_id=record.owner_id, predicate=OWNER_POLICY_CONTRACT_PREDICATE)
+    if fact is None:
+        fact = Fact(
+            text=f"Owner policy contract for {record.owner_id}",
+            tags=["identity", "owner_policy"],
+            meta_data={"record_type": "owner_policy_contract"},
+            namespace=IDENTITY_NAMESPACE,
+            subject=record.owner_id,
+            predicate=OWNER_POLICY_CONTRACT_PREDICATE,
+            object_data=record.model_dump(mode="json"),
+            created_by=record.updated_by,
+        )
+        session.add(fact)
+    else:
+        fact.text = f"Owner policy contract for {record.owner_id}"
+        fact.tags = ["identity", "owner_policy"]
+        fact.meta_data = {"record_type": "owner_policy_contract"}
+        fact.object_data = record.model_dump(mode="json")
+        fact.created_by = record.updated_by
+    await session.commit()
+    return record
+
+
+async def get_owner_policy(session: AsyncSession, owner_id: str) -> OwnerPolicyRecord | None:
+    fact = await _get_owner_fact(session, owner_id=owner_id, predicate=OWNER_POLICY_CONTRACT_PREDICATE)
+    if fact is None or not isinstance(fact.object_data, dict):
+        return None
+    try:
+        payload = dict(fact.object_data)
+        payload.setdefault("source_namespace", IDENTITY_NAMESPACE)
+        payload.setdefault("source_predicate", OWNER_POLICY_CONTRACT_PREDICATE)
+        return OwnerPolicyRecord(**payload)
     except Exception:
         return None
 
