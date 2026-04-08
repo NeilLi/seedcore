@@ -22,6 +22,7 @@ from typing import Dict, Any, Optional
 try:
     from ...memory.mw_manager import MwManager
     from ...memory.runtime import connect_default_memory_runtime
+    from ...memory.incident_memory import IncidentMemoryService
     from ...memory.semantic_memory import SemanticMemoryService
     from ...memory.working_memory import MwWorkingMemoryAdapter
     from ...memory.contracts import MemorySubsystemStatus
@@ -29,6 +30,7 @@ try:
 except ImportError:
     MwManager = None  # type: ignore
     connect_default_memory_runtime = None  # type: ignore
+    IncidentMemoryService = None  # type: ignore
     SemanticMemoryService = None  # type: ignore
     MwWorkingMemoryAdapter = None  # type: ignore
     MemorySubsystemStatus = None  # type: ignore
@@ -48,6 +50,7 @@ class MemoryAggregator:
         poll_interval: float = 5.0,
         *,
         semantic_memory: Optional[Any] = None,
+        incident_memory: Optional[Any] = None,
         memory_runtime: Any = None,
         mw_manager: Optional[MwManager] = None,
     ):
@@ -57,11 +60,13 @@ class MemoryAggregator:
         Args:
             poll_interval: How often (in seconds) to poll memory managers.
             semantic_memory: Optional injected :class:`SemanticMemoryService` (skips lazy runtime).
+            incident_memory: Optional injected :class:`IncidentMemoryService` (skips runtime lookup).
             memory_runtime: Optional injected :class:`MemoryRuntime` (uses ``.semantic``; not closed on stop).
             mw_manager: Optional injected ``MwManager`` for MW stats (skips default organ_id instance).
         """
         self.poll_interval = poll_interval
         self._inject_semantic = semantic_memory
+        self._inject_incident = incident_memory
         self._inject_runtime = memory_runtime
         self._inject_mw = mw_manager
 
@@ -78,6 +83,7 @@ class MemoryAggregator:
         self._mw_manager: Optional[MwManager] = mw_manager
         self._memory_runtime = None
         self._semantic_memory: Optional[SemanticMemoryService] = None
+        self._incident_memory: Optional[IncidentMemoryService] = None
 
         # Control
         self._loop_task: Optional[asyncio.Task] = None
@@ -118,6 +124,7 @@ class MemoryAggregator:
             finally:
                 self._memory_runtime = None
                 self._semantic_memory = None
+                self._incident_memory = None
         logger.info("Proactive memory poll loop stopped.")
 
     def is_running(self) -> bool:
@@ -291,6 +298,30 @@ class MemoryAggregator:
 
     async def _poll_mfb_stats(self) -> Dict[str, Any]:
         """Poll flashbulb / incident memory (optional subsystem)."""
+        incident = await self._get_incident_memory()
+        if incident is not None:
+            try:
+                snap = await incident.stats_snapshot()
+                return {
+                    "status": snap.health.status.value,
+                    "reason": snap.health.reason,
+                    "incidents": int(snap.incidents_recorded),
+                    "queue_size": None,
+                    "avg_weight": None,
+                    "decay_rate": None,
+                    "total_events": int(snap.incidents_recorded),
+                }
+            except Exception as e:
+                st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
+                return {
+                    "status": st.value if st else "unavailable",
+                    "reason": str(e),
+                    "incidents": 0,
+                    "queue_size": None,
+                    "avg_weight": None,
+                    "decay_rate": None,
+                    "total_events": 0,
+                }
         st = getattr(MemorySubsystemStatus, "UNAVAILABLE", None)
         return {
             "status": st.value if st else "unavailable",
@@ -342,3 +373,17 @@ class MemoryAggregator:
                 logger.debug(f"Failed to create SemanticMemory runtime: {e}")
                 return None
         return self._semantic_memory
+
+    async def _get_incident_memory(self) -> Optional[IncidentMemoryService]:
+        """Get injected incident memory or runtime-backed incident service."""
+        if self._inject_incident is not None:
+            return self._inject_incident
+        if self._incident_memory is not None:
+            return self._incident_memory
+        if self._inject_runtime is not None:
+            self._incident_memory = getattr(self._inject_runtime, "incident", None)
+            return self._incident_memory
+        if self._memory_runtime is not None:
+            self._incident_memory = getattr(self._memory_runtime, "incident", None)
+            return self._incident_memory
+        return None

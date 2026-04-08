@@ -8,6 +8,7 @@ import mock_database_dependencies  # noqa: F401
 import mock_ray_dependencies  # noqa: F401
 
 from seedcore.memory.contracts import (
+    IncidentMemoryStats,
     MemoryHealth,
     MemorySubsystemStatus,
     SemanticMemoryStats,
@@ -22,6 +23,13 @@ class _FakeSemantic:
             total_holons=7,
             total_relationships=3,
             bytes_used=4096,
+        )
+
+class _FakeIncident:
+    async def stats_snapshot(self) -> IncidentMemoryStats:
+        return IncidentMemoryStats(
+            health=MemoryHealth(status=MemorySubsystemStatus.ENABLED),
+            incidents_recorded=11,
         )
 
 
@@ -75,3 +83,27 @@ async def test_memory_aggregator_stop_closes_lazy_runtime(monkeypatch):
     assert sem is rt.semantic
     await agg.stop()
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_memory_aggregator_poll_mfb_uses_injected_incident():
+    agg = MemoryAggregator(poll_interval=60.0, incident_memory=_FakeIncident())
+    mfb = await agg._poll_mfb_stats()
+    assert mfb["status"] == "enabled"
+    assert mfb["incidents"] == 11
+    assert mfb["total_events"] == 11
+
+
+@pytest.mark.asyncio
+async def test_memory_aggregator_poll_mfb_uses_runtime_incident():
+    class _RT:
+        semantic = _FakeSemantic()
+        incident = _FakeIncident()
+
+        async def close(self) -> None:
+            return None
+
+    agg = MemoryAggregator(memory_runtime=_RT())
+    mfb = await agg._poll_mfb_stats()
+    assert mfb["status"] == "enabled"
+    assert mfb["incidents"] == 11
