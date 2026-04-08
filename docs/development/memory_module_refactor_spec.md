@@ -75,6 +75,15 @@ meaningful portion has now been implemented in the repo.
 - `MemoryAggregator` now also supports injected runtime / semantic / working
   dependencies so ownership can remain with outer wiring instead of the
   aggregator itself
+- `MemoryAggregator` incident polling now supports injected/runtime-provided
+  `IncidentMemoryService` and emits contract-shaped status payloads
+- `CognitiveCore` now has explicit shared semantic attachment
+  (`attach_shared_semantic_memory`) and `CognitiveOrchestrator` can inject one
+  shared `semantic_memory` facade into all core workers
+- cross-layer tool integration tests now cover:
+  - semantic holon query and relationship routes
+  - query-tool registration for `knowledge.find`
+  - `CollaborativeTaskTool` promotion via `semantic_memory.upsert_holon`
 
 ### Still required to complete the refactor
 
@@ -82,14 +91,15 @@ meaningful portion has now been implemented in the repo.
   depend on `SemanticMemory` or `WorkingMemory`
 - reduce remaining duplicate memory-runtime construction paths so one clear
   bootstrap owner exists per process boundary
-- add broader caller integration coverage for `ToolManager`,
-  `FindKnowledgeTool`, `MemoryAggregator`, and runtime lifecycle behavior
+- add live-backend (non-mocked) integration coverage for semantic runtime paths
+  where feasible in CI/host lanes
 - decide whether `HolonClient` remains as a compatibility adapter or is fully
   retired from the default memory story
 - clarify whether incident / flashbulb memory will be actively migrated or kept
   explicitly legacy-only
 - finish migrating remaining compatibility references from `HolonFabric`
-  terminology toward `SemanticMemory` terminology where that improves clarity
+  terminology toward `SemanticMemory` terminology in logs/docstrings where that
+  improves clarity
 
 ## Repo Findings
 
@@ -217,8 +227,10 @@ Status update:
 - the newer bridge path is now more explicit, but deprecated fallback helpers
   in `CognitiveCore` are now stubbed more explicitly and the scoped retrieval
   path uses `SemanticMemoryService`
-- remaining task: finish cleanup of legacy broker-era naming and ensure
-  cognitive callers receive retrieval/runtime dependencies from outer wiring
+- `CognitiveCore` now also exposes `attach_shared_semantic_memory(...)`, and
+  orchestrator worker construction can inject shared semantic memory directly
+- remaining task: finish cleanup of legacy broker-era naming in cognitive docs
+  and finalize remote cognitive memory behavior expectations in ops docs
 
 ### 6. Memory telemetry is partly simulated instead of contract-shaped
 
@@ -238,8 +250,10 @@ Status update:
   status payloads with `enabled` / `degraded` / `unavailable`
 - dedicated aggregator tests now exist for injected semantic memory and runtime
   lifecycle behavior
-- remaining task: decide how incident-memory telemetry should behave when the
-  subsystem is optional
+- incident-memory polling now supports injected/runtime-provided
+  `IncidentMemoryService` and returns contract-shaped status payloads
+- remaining task: finalize product policy for optional incident telemetry in
+  deployments that intentionally disable flashbulb/incident memory
 
 ### 7. Flashbulb memory remains a legacy sidecar
 
@@ -289,8 +303,10 @@ Status update:
 - dedicated runtime lifecycle and aggregator tests now exist
 - regression coverage now includes semantic scope normalization in
   `HolonFabricRetrieval`
-- remaining task: broaden caller integration tests around query tool
-  registration and collaborative-task promotion paths
+- caller integration tests now include query-tool registration and
+  collaborative-task promotion paths
+- remaining task: continue expanding live-backend integration depth without
+  slowing default CI lanes
 
 ## Alignment Requirements
 
@@ -822,23 +838,7 @@ incremental.
 
 Focus on **closing real gaps** (not re-litigating completed contract work):
 
-### 1. Broader integration tests (highest leverage)
-
-Add pytest coverage that exercises **multiple layers together**, not only mocks in
-isolation:
-
-- `ToolManager` + `SemanticMemory` (or a small fake implementing the same async
-  surface) for `memory.holon.*` / `memory.graph.*` routes.
-- `register_query_tools()` registering `knowledge.find` when the manager exposes
-  `semantic_memory` + `mw_manager`, and a minimal execute path on `FindKnowledgeTool`
-  (Mw miss → semantic `get_holon`).
-- Optional: `CollaborativeTaskTool` promotion calling `semantic_memory.upsert_holon`
-  with a stub embedder-free holon payload (unit-style but wired through the tool).
-
-Keep these tests **fast**: no live Postgres/Neo4j unless already marked as
-integration; prefer fakes that match the service method names the tools call.
-
-### 2. Reduce “compatibility-first” constructor shapes
+### 1. Keep reducing compatibility-first constructor shapes
 
 **Direction:** new and internal code should take **`semantic_memory`** (or a
 runtime-owned `MemoryRuntime`) first; **`holon_fabric`** remains a narrow escape
@@ -850,16 +850,13 @@ Concrete follow-ups:
 - Prefer `ToolManager(..., semantic_memory=runtime.semantic)` everywhere the
   process already holds a `MemoryRuntime` (organism, organ actor, agent local
   manager, tool shards).
-- Tighten query-tool constructors (`FindKnowledgeTool`, `CollaborativeTaskTool`,
-  `Ltm*Tool`) so **`semantic_memory` is required** (keyword-only); drop
-  dual `holon_fabric` + `semantic_memory` optional matrices except inside a
-  single small resolver if still needed for one release.
-- In `CognitiveCore`, accept optional **`semantic_memory`** / **`holon_fabric`**
-  at construction (or a single `attach_shared_semantic_memory` used by the
-  cognitive service driver when colocated with a runtime) so lazy bridge init
-  does not re-wrap fabric ad hoc.
+- query-tool constructors now require semantic-memory facades in new call paths;
+  continue shrinking compatibility matrices in legacy entry points.
+- `CognitiveCore` now accepts semantic at construction and via
+  `attach_shared_semantic_memory`; continue removing remaining fallback wording
+  and references that imply direct fabric access is preferred.
 
-### 3. Outer-wiring and ownership (cognitive + runtime)
+### 2. Outer-wiring and ownership (cognitive + runtime)
 
 **Problem:** the **state service** `MemoryAggregator` often runs in a **different
 process** than the organism; a second lazy `connect_default_memory_runtime()` is
@@ -873,8 +870,9 @@ until a single owner is defined.
   and **`runtime.working`** rather than reconstructing parallel facades.
 - **Cognitive service:** when the cognitive driver is **colocated** with
   semantic storage, inject the **same** `SemanticMemoryService` (or fabric via
-  orchestrator) into `CognitiveCore` so per-agent bridges do not construct a
-  second service instance unnecessarily. When cognitive is **remote-only**,
+  orchestrator) into `CognitiveCore` so per-agent bridges do not construct
+  unnecessary extra wrappers. This is now supported by orchestrator-level
+  shared semantic injection. When cognitive is **remote-only**,
   document that memory bridge / retrieval may be degraded unless an RPC or
   shared client supplies semantic access.
 - **State service:** prefer **`MemoryAggregator(..., memory_runtime=...)`** or
@@ -882,7 +880,7 @@ until a single owner is defined.
   organism’s runtime (or a stats-only proxy). Until then, keep lazy connect but
   treat it as **explicitly duplicate** in ops docs.
 
-### 4. Already narrowed or documented elsewhere
+### 3. Already narrowed or documented elsewhere
 
 - `HolonClient`: compatibility adapter; prefer `SemanticMemoryService` (module
   docstring).
@@ -893,5 +891,6 @@ until a single owner is defined.
 
 ```bash
 pytest -q tests/test_memory_tool_integration.py tests/test_memory_contracts.py \
-  tests/test_memory_aggregator.py tests/test_cognitive_memory_bridge.py
+  tests/test_memory_aggregator.py tests/test_memory_runtime_lifecycle.py \
+  tests/test_cognitive_memory_bridge.py tests/test_cognitive_memory_wiring.py
 ```

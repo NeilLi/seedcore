@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import types
+import importlib
 
 import mock_database_dependencies  # noqa: F401
 import mock_ray_dependencies  # noqa: F401
@@ -43,8 +44,17 @@ if "openai" not in sys.modules:
     openai_mod.OpenAI = _OpenAI
     sys.modules["openai"] = openai_mod
 
-from seedcore.cognitive.cognitive_core import CognitiveCore
-from seedcore.services import cognitive_service as cs
+def _import_cognitive_modules():
+    saved: dict[str, types.ModuleType] = {}
+    for key in list(sys.modules):
+        if key == "seedcore.cognitive" or key.startswith("seedcore.cognitive."):
+            saved[key] = sys.modules.pop(key)
+    try:
+        core_mod = importlib.import_module("seedcore.cognitive.cognitive_core")
+        cs_mod = importlib.import_module("seedcore.services.cognitive_service")
+        return core_mod, cs_mod
+    finally:
+        sys.modules.update(saved)
 
 
 class _FakeSemantic:
@@ -53,7 +63,9 @@ class _FakeSemantic:
 
 
 def test_cognitive_core_attach_shared_semantic_memory_sets_fields():
-    core = CognitiveCore.__new__(CognitiveCore)
+    core_mod, _ = _import_cognitive_modules()
+    core_cls = core_mod.CognitiveCore
+    core = core_cls.__new__(core_cls)
     fabric = object()
     semantic = _FakeSemantic(fabric)
     core.attach_shared_semantic_memory(semantic)  # type: ignore[arg-type]
@@ -62,6 +74,7 @@ def test_cognitive_core_attach_shared_semantic_memory_sets_fields():
 
 
 def test_orchestrator_passes_shared_semantic_memory_to_cores(monkeypatch):
+    _, cs = _import_cognitive_modules()
     calls: list[dict] = []
 
     class _FakeCore:

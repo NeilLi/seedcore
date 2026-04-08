@@ -70,10 +70,15 @@ Latest repo-aligned memory-subsystem status:
     `MemoryRuntime`
   - `CognitiveCore` retrieval now routes through `SemanticMemoryService` in
     `HolonFabricRetrieval`, including correct enum-to-scope-value normalization
+  - `CognitiveCore` now exposes `attach_shared_semantic_memory(...)`, and
+    `CognitiveOrchestrator` can inject shared semantic memory into all worker
+    cores to reduce compatibility-era re-wrapping
 - state/telemetry work is improved but not fully unified:
   - `MemoryAggregator` now polls semantic stats through the service/runtime
     facade and supports injected `semantic_memory`, `memory_runtime`, and
     `mw_manager`
+  - incident telemetry now supports injected/runtime-provided
+    `IncidentMemoryService` with contract-shaped status output
   - when `state_service` runs as a separate process, it may still open its own
     telemetry-only PG/Neo4j pools unless injected with a shared runtime
 - test coverage now includes:
@@ -86,7 +91,11 @@ Latest repo-aligned memory-subsystem status:
   contract repair:
   - reduce compatibility-first `HolonFabric` fallback usage where internal
     callers can require `semantic_memory`
+  - continue normalizing residual HolonFabric-era logs/docstrings toward
+    semantic-memory terminology (code path mostly migrated)
   - keep pushing toward one clear runtime owner per process boundary
+  - decide whether to add live-backend semantic integration lanes beyond fast
+    mock/contract tests
   - decide the final product status of `HolonClient`
   - either migrate flashbulb/legacy MFB paths onto `IncidentMemory` or keep
     them explicitly quarantined as legacy-only
