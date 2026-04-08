@@ -93,8 +93,8 @@ meaningful portion has now been implemented in the repo.
   bootstrap owner exists per process boundary
 - add live-backend (non-mocked) integration coverage for semantic runtime paths
   where feasible in CI/host lanes
-- decide whether `HolonClient` remains as a compatibility adapter or is fully
-  retired from the default memory story
+- keep `HolonClient` fully retired from the default memory story (no
+  compatibility path)
 - clarify whether incident / flashbulb memory will be actively migrated or kept
   explicitly legacy-only
 - finish migrating remaining compatibility references from `HolonFabric`
@@ -159,8 +159,8 @@ Status update:
 
 ### 3. Cognitive promotion types drift from the current holon model
 
-`HolonClient` and `CognitiveMemoryBridge` still emit `TASK_EVENT`, but
-`HolonType` currently defines only:
+Earlier cognitive promotion paths emitted `TASK_EVENT`, but `HolonType`
+currently defines only:
 
 - `FACT`
 - `EPISODE`
@@ -172,7 +172,6 @@ data model it writes into.
 
 Relevant files:
 
-- [src/seedcore/memory/holon_client.py](/Users/ningli/project/seedcore/src/seedcore/memory/holon_client.py)
 - [src/seedcore/cognitive/memory_bridge.py](/Users/ningli/project/seedcore/src/seedcore/cognitive/memory_bridge.py)
 - [src/seedcore/models/holon.py](/Users/ningli/project/seedcore/src/seedcore/models/holon.py)
 
@@ -641,7 +640,6 @@ The migration should preserve a bounded compatibility window.
 
 - `MwManager` import path
 - `HolonFabric` import path
-- `HolonClient` import path
 - current tool names such as `memory.mw.*` and `memory.holon.*`
 
 ### Add immediately
@@ -882,8 +880,8 @@ until a single owner is defined.
 
 ### 3. Already narrowed or documented elsewhere
 
-- `HolonClient`: compatibility adapter; prefer `SemanticMemoryService` (module
-  docstring).
+- `HolonClient`: removed from source and package exports; `SemanticMemoryService`
+  is the canonical caller-facing semantic path.
 - Flashbulb / legacy MFB routes: marked non-core; migrate to `IncidentMemory` only
   if product needs unified incident telemetry.
 

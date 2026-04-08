@@ -388,7 +388,6 @@ class CognitiveCore(dspy.Module):
         ] = {}  # Dict[str, CognitiveRetrieval] - per-agent retrieval
 
         # Shared memory components (used by all agents, can be overridden per-agent)
-        self.holon_client: Optional[Any] = None  # Legacy: optional HolonClient (bridge uses SemanticMemory)
         if semantic_memory is not None:
             self.semantic_memory: Optional[SemanticMemoryService] = semantic_memory
             self.holon_fabric = semantic_memory.holon_fabric

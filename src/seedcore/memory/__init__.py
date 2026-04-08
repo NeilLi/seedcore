@@ -39,7 +39,6 @@ from .contracts import (
     WorkingMemory,
     WorkingMemoryStats,
 )
-from .holon_client import HolonClient
 from .holon_fabric import Embedder, HolonFabric
 from .incident_memory import IncidentMemoryService, InMemoryIncidentBackend
 from .mw_manager import MwManager
@@ -94,7 +93,6 @@ __all__ = [
     "contracts",
     "Embedder",
     "HolonFabric",
-    "HolonClient",
     "HolonRelation",
     "MwManager",
     "MwWorkingMemoryAdapter",

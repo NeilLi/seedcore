@@ -81,14 +81,6 @@ class MwManager(Protocol):
     async def append_episode_async(self, *, agent_id: str, episode: Any, ttl_s: Optional[int] = None, max_items: Optional[int] = None) -> List[Dict[str, Any]]: ...
 
 
-class HolonClient(Protocol):
-    """Deprecated: prefer :class:`seedcore.memory.contracts.SemanticMemory` + PromotionEmbedder."""
-
-    async def persist_holon(self, *, fact: Dict[str, Any]) -> str:
-        """Create or upsert a holon record (graph + vector). Returns holon id."""
-        ...
-
-
 # --------------------------------------------------------------------------------------
 # Data Schemas
 # --------------------------------------------------------------------------------------

@@ -96,7 +96,8 @@ Latest repo-aligned memory-subsystem status:
   - keep pushing toward one clear runtime owner per process boundary
   - decide whether to add live-backend semantic integration lanes beyond fast
     mock/contract tests
-  - decide the final product status of `HolonClient`
+  - keep `HolonClient` retired (already removed) and avoid reintroducing
+    compatibility adapters in new code
   - either migrate flashbulb/legacy MFB paths onto `IncidentMemory` or keep
     them explicitly quarantined as legacy-only
 
