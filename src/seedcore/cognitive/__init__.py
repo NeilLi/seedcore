@@ -58,6 +58,14 @@ def __getattr__(name: str) -> Any:
                 "Install DSPy to use SeedCore cognitive-core exports."
             ) from exc
         raise
+    except Exception as exc:
+        if module_name in {".cognitive_core", ".cognitive_registry", ".advisory"}:
+            raise ModuleNotFoundError(
+                f"{name} requires a working optional 'dspy' dependency stack. "
+                "Install or repair DSPy-compatible dependencies to use SeedCore "
+                "cognitive-core exports."
+            ) from exc
+        raise
 
     value = getattr(module, attr_name)
     globals()[name] = value

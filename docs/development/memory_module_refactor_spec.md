@@ -918,10 +918,41 @@ Concrete follow-ups:
 - Flashbulb / legacy MFB routes: marked non-core; migrate to `IncidentMemory` only
   if product needs unified incident telemetry.
 
-**Suggested pytest commands for this slice:**
+**Preferred host-local integration runner for this slice:**
+
+```bash
+bash scripts/host/verify_memory_refactor_integration.sh
+```
+
+Optional extensions:
+
+```bash
+# include live semantic backend integration when PgVector/Neo4j are available
+bash scripts/host/verify_memory_refactor_integration.sh --live-backend
+
+# include live runtime endpoint checks for organism/ops memory surfaces
+bash scripts/host/verify_memory_refactor_integration.sh --runtime
+
+# run both optional layers
+bash scripts/host/verify_memory_refactor_integration.sh --all
+```
+
+The script currently bundles:
+
+- contract and adapter tests
+- memory aggregator and runtime lifecycle tests
+- cognitive memory bridge / shared semantic wiring tests
+- semantic-memory backend contract tests
+- host-local runtime default regression checks
+- cognitive package import safety checks for optional DSPy environments
+
+**Raw pytest equivalent for the core slice:**
 
 ```bash
 pytest -q tests/test_memory_tool_integration.py tests/test_memory_contracts.py \
   tests/test_memory_aggregator.py tests/test_memory_runtime_lifecycle.py \
-  tests/test_cognitive_memory_bridge.py tests/test_cognitive_memory_wiring.py
+  tests/test_cognitive_memory_bridge.py tests/test_cognitive_memory_wiring.py \
+  tests/test_memory_telemetry.py tests/test_semantic_memory_service.py \
+  tests/test_neo4j_graph_backend.py tests/test_mw_manager.py \
+  tests/test_host_local_runtime_defaults.py tests/test_cognitive_package_imports.py
 ```
