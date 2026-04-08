@@ -112,6 +112,18 @@ def _in_k8s_namespace() -> Optional[str]:
     except Exception:
         return None
 
+
+def _prefer_localhost_runtime() -> bool:
+    """Return True when running outside Kubernetes without explicit cluster wiring."""
+    if _in_k8s_namespace():
+        return False
+
+    explicit = os.getenv(ENV_SERVE_GATEWAY) or os.getenv(ENV_RAY_ADDRESS)
+    if explicit:
+        return False
+
+    return True
+
 def _compose_service_fqdn(name: str, namespace: Optional[str]) -> str:
     """If `name` already looks FQDN-ish, return it. Otherwise add namespace FQDN if known."""
     if "." in name:
@@ -267,6 +279,11 @@ def _derive_serve_gateway() -> str:
         _log.info("SERVE_GATEWAY override in use: %s", gw)
         return gw
 
+    if _prefer_localhost_runtime():
+        gw = f"http://127.0.0.1:{DEFAULT_SERVE_PORT}"
+        _log.info("Derived SERVE gateway (host-local fallback): %s", gw)
+        return gw
+
     ns = _in_k8s_namespace()
 
     # 2) Derive from Ray address
@@ -300,9 +317,23 @@ def _derive_serve_gateway() -> str:
             _log.warning("Derived SERVE gateway (direct host fallback): %s", gw)
             return gw
 
+        if ns is None:
+            gw = f"http://127.0.0.1:{DEFAULT_SERVE_PORT}"
+            _log.warning(
+                "Unable to resolve gateway candidates derived from RAY_ADDRESS=%s; using host-local fallback %s",
+                ra,
+                gw,
+            )
+            return gw
+
         _log.warning("Unable to resolve gateway candidates derived from RAY_ADDRESS=%s; falling back.", ra)
 
     # 3) Cluster-aware default
+    if ns is None:
+        gw = f"http://127.0.0.1:{DEFAULT_SERVE_PORT}"
+        _log.info("Derived SERVE gateway (host-local default): %s", gw)
+        return gw
+
     default_name = "seedcore-svc-stable-svc" if prefer == "stable" else "seedcore-svc-serve-svc"
     default_fqdn = _compose_service_fqdn(default_name, ns)
     gw = f"http://{default_fqdn}:{DEFAULT_SERVE_PORT}"

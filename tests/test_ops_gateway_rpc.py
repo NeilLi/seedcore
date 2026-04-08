@@ -103,12 +103,28 @@ async def test_ops_embedded_state_energy_startup_runs_once(monkeypatch):
     async def _energy_startup():
         calls.append("energy")
 
+    async def _state_metrics(_response=None):
+        return {"success": True, "metrics": {}}
+
+    async def _state_health():
+        return {"status": "healthy"}
+
     monkeypatch.setattr(ops, "state_startup_event", _state_startup)
     monkeypatch.setattr(ops, "energy_startup_event", _energy_startup)
+    monkeypatch.setattr(ops, "state_get_system_metrics", _state_metrics)
+    monkeypatch.setattr(ops, "state_health", _state_health)
     monkeypatch.setattr(ops, "_ops_embedded_services_started", False)
     monkeypatch.setattr(ops, "_ops_embedded_services_lock", None)
+    configured = {}
+    monkeypatch.setattr(
+        ops,
+        "configure_embedded_state_provider",
+        lambda **kwargs: configured.update(kwargs),
+    )
 
     await ops._ensure_embedded_ops_dependencies_started()
     await ops._ensure_embedded_ops_dependencies_started()
 
     assert calls == ["state", "energy"]
+    assert callable(configured["metrics_fetch"])
+    assert callable(configured["health_fetch"])

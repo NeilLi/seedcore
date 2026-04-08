@@ -73,8 +73,33 @@ class AgentAggregator:
         self._loop_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
         self._is_running = asyncio.Event()  # Set when first poll completes
+        self._warned_missing_router = False
 
         logger.info("✅ AgentAggregator initialized")
+
+    def _try_refresh_organism_router(self) -> Any:
+        """Best-effort lazy router lookup for cases where organism starts later."""
+        if self.organism_router is not None:
+            return self.organism_router
+
+        try:
+            from seedcore.serve.organism_client import get_organism_service_handle
+
+            self.organism_router = get_organism_service_handle()
+        except Exception as exc:
+            if not self._warned_missing_router:
+                logger.warning(
+                    "AgentAggregator organism router unavailable; running in degraded mode until organism is reachable: %s",
+                    exc,
+                )
+                self._warned_missing_router = True
+            return None
+
+        if self.organism_router is not None:
+            if self._warned_missing_router:
+                logger.info("AgentAggregator organism router recovered")
+            self._warned_missing_router = False
+        return self.organism_router
 
     async def start(self):
         """Start the proactive polling loop."""
@@ -129,8 +154,19 @@ class AgentAggregator:
                 # 1. Discover all live agents from the global router
                 # This call uses the new OrganismService (v2) which wraps OrganismCore.
                 # OrganismCore aggregates handles from all organs.
+                router = self._try_refresh_organism_router()
+                if router is None:
+                    logger.debug(
+                        "AgentAggregator organism router still unavailable; publishing empty snapshot state"
+                    )
+                    empty_metrics = self._compute_system_metrics({}, {})
+                    await self._update_state({}, empty_metrics)
+                    self._is_running.set()
+                    await asyncio.sleep(self.poll_interval)
+                    continue
+
                 agent_handles_ref = (
-                    self.organism_router.rpc_get_all_agent_handles.remote()
+                    router.rpc_get_all_agent_handles.remote()
                 )
                 agent_handles: Dict[str, Any] = await self._async_ray_get(
                     agent_handles_ref
@@ -142,6 +178,7 @@ class AgentAggregator:
                     )
                     empty_metrics = self._compute_system_metrics({}, {})
                     await self._update_state({}, empty_metrics)  # Clear state
+                    self._is_running.set()
                     await asyncio.sleep(self.poll_interval)
                     continue
 

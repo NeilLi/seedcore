@@ -1150,8 +1150,8 @@ def reset_cognitive_service():
 # =============================================================================
 
 # --- Configuration for info endpoints ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
-RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://127.0.0.1:23001")
+RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-local")
 
 # --- Request/Response Models ---
 # Note: Using TaskPayload directly for system-wide consistency

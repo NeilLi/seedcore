@@ -14,7 +14,7 @@ import asyncio
 import os
 import time
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import numpy as np
 from fastapi import Body, FastAPI, HTTPException
@@ -66,6 +66,8 @@ EVENT_LOG_LIMIT = int(os.getenv("SEEDCORE_ENERGY_EVENT_LOG_LIMIT", "1000"))
 class ServiceState:
     def __init__(self) -> None:
         self.state_client: Optional[StateServiceClient] = None
+        self.local_state_metrics_fetch: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
+        self.local_state_health_fetch: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
         self.ml_client: Optional[MLServiceClient] = None
         self.sampler_task: Optional[asyncio.Task] = None
         self.sampler_is_running: bool = False
@@ -93,6 +95,22 @@ class ServiceState:
 
 
 state = ServiceState()
+
+
+def configure_embedded_state_provider(
+    *,
+    metrics_fetch: Callable[[], Awaitable[Dict[str, Any]]],
+    health_fetch: Callable[[], Awaitable[Dict[str, Any]]],
+) -> None:
+    """Use direct in-process StateService access instead of client transport."""
+    state.local_state_metrics_fetch = metrics_fetch
+    state.local_state_health_fetch = health_fetch
+
+
+def clear_embedded_state_provider() -> None:
+    """Reset embedded state-provider hooks."""
+    state.local_state_metrics_fetch = None
+    state.local_state_health_fetch = None
 
 
 def _clamp(value: Any, low: float = 0.0, high: float = 1.0) -> float:
@@ -220,6 +238,28 @@ async def _get_annotations(metrics: Dict[str, Any]) -> Dict[str, Any]:
     return heuristic
 
 
+async def _get_state_metrics_payload() -> Dict[str, Any]:
+    if state.local_state_metrics_fetch is not None:
+        return await state.local_state_metrics_fetch()
+    if state.state_client is None:
+        raise HTTPException(status_code=503, detail="StateService client not ready.")
+    return await state.state_client.get_system_metrics()
+
+
+async def _state_service_is_healthy() -> bool:
+    if state.local_state_health_fetch is not None:
+        try:
+            return (await state.local_state_health_fetch()).get("status") in {
+                "healthy",
+                "degraded",
+            }
+        except Exception:
+            return False
+    if state.state_client is None:
+        return False
+    return await state.state_client.is_healthy()
+
+
 def _build_meta_payload() -> Dict[str, Any]:
     total_router = (state.router_fast_hits + state.router_escalations) or 1
     p_fast_observed = state.router_fast_hits / total_router
@@ -296,12 +336,12 @@ async def _background_sampler():
     state.sampler_is_running = True
     while True:
         try:
-            if not state.state_client:
+            if state.local_state_metrics_fetch is None and not state.state_client:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(30.0, retry_delay * 1.5)
                 continue
 
-            data = await state.state_client.get_system_metrics()
+            data = await _get_state_metrics_payload()
             if not data.get("success"):
                 logger.warning("StateService returned failure: %s", data.get("error", "unknown"))
                 await asyncio.sleep(retry_delay)
@@ -443,7 +483,13 @@ def _create_weights_for_state(
 async def startup_event():
     logger.info("EnergyService starting up...")
     state.started_at = time.time()
-    state.state_client = StateServiceClient(timeout=8.0)
+    if state.local_state_metrics_fetch is not None:
+        if state.state_client is not None:
+            await state.state_client.close()
+            state.state_client = None
+        logger.info("EnergyService using embedded StateService provider")
+    elif state.state_client is None:
+        state.state_client = StateServiceClient(timeout=8.0)
     if state.ml_feedback_enabled:
         try:
             state.ml_client = MLServiceClient(timeout=6.0)
@@ -471,9 +517,9 @@ async def shutdown_event():
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    if not state.state_client:
+    if state.local_state_metrics_fetch is None and not state.state_client:
         raise HTTPException(status_code=503, detail="State client not initialized")
-    state_service_healthy = await state.state_client.is_healthy()
+    state_service_healthy = await _state_service_is_healthy()
     if state.sampler_is_running and state_service_healthy:
         status = "healthy"
     elif state_service_healthy:
@@ -491,9 +537,7 @@ async def health():
 
 @app.get("/status")
 async def status():
-    state_service_healthy = (
-        await state.state_client.is_healthy() if state.state_client else False
-    )
+    state_service_healthy = await _state_service_is_healthy()
     return {
         "status": (
             "ready"
@@ -614,10 +658,10 @@ async def compute_energy_endpoint(request: EnergyRequest):
 
 async def _compute_energy_from_state_impl() -> EnergyResponse:
     start_time = time.time()
-    if not state.state_client:
+    if state.local_state_metrics_fetch is None and not state.state_client:
         raise HTTPException(status_code=503, detail="StateService client not ready.")
 
-    data = await state.state_client.get_system_metrics()
+    data = await _get_state_metrics_payload()
     if not data.get("success"):
         return EnergyResponse(
             success=False,

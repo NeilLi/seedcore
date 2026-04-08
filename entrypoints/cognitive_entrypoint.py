@@ -25,8 +25,8 @@ setup_logging(app_name="seedcore.cognitive_service.driver")
 logger = ensure_serve_logger("seedcore.cognitive_service", level="DEBUG")
 
 # --- Configuration ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
-RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://127.0.0.1:23001")
+RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-local")
 APP_NAME = "cognitive"
 ROUTE_PREFIX = "/cognitive"
 

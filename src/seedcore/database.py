@@ -9,6 +9,7 @@ and Ray tasks.
 
 import os
 import logging
+import getpass
 from functools import lru_cache
 from typing import Optional, AsyncGenerator, Dict, Any, Generator
 from contextlib import asynccontextmanager
@@ -36,6 +37,25 @@ except ImportError:
     aioredis = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def _in_k8s_runtime() -> bool:
+    if os.getenv("POD_NAMESPACE") or os.getenv("SEEDCORE_NS"):
+        return True
+    return os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+
+
+def _default_service_host(cluster_host: str, localhost: str = "127.0.0.1") -> str:
+    return cluster_host if _in_k8s_runtime() else localhost
+
+
+def _default_postgres_user() -> str:
+    if _in_k8s_runtime():
+        return "postgres"
+    try:
+        return getpass.getuser() or "postgres"
+    except Exception:
+        return "postgres"
 
 __all__ = [
     # Engine getters
@@ -108,10 +128,10 @@ def _infer_encrypted_from_uri(uri: str) -> bool:
     return scheme in ("neo4j+s", "neo4j+ssc", "bolt+s", "bolt+ssc")
 
 # PostgreSQL
-POSTGRES_HOST = get_env_setting("POSTGRES_HOST", "postgresql")
+POSTGRES_HOST = get_env_setting("POSTGRES_HOST", _default_service_host("postgresql"))
 POSTGRES_PORT = get_env_int_setting("POSTGRES_PORT", 5432)
-POSTGRES_DB = get_env_setting("POSTGRES_DB", "postgres")
-POSTGRES_USER = get_env_setting("POSTGRES_USER", "postgres")
+POSTGRES_DB = get_env_setting("POSTGRES_DB", "seedcore" if not _in_k8s_runtime() else "postgres")
+POSTGRES_USER = get_env_setting("POSTGRES_USER", _default_postgres_user())
 POSTGRES_PASSWORD = get_env_setting("POSTGRES_PASSWORD", "CHANGE_ME")
 PG_DSN = get_env_setting(
     "PG_DSN",
@@ -119,7 +139,7 @@ PG_DSN = get_env_setting(
 )
 
 # MySQL
-MYSQL_HOST = get_env_setting("MYSQL_HOST", "mysql")
+MYSQL_HOST = get_env_setting("MYSQL_HOST", _default_service_host("mysql"))
 MYSQL_PORT = get_env_int_setting("MYSQL_PORT", 3306)
 MYSQL_DB = get_env_setting("MYSQL_DB", "seedcore")
 MYSQL_USER = get_env_setting("MYSQL_USER", "root")
@@ -130,7 +150,7 @@ MYSQL_DSN = get_env_setting(
 )
 
 # Redis (optional, falls back to in-memory storage if unavailable)
-REDIS_HOST = get_env_setting("REDIS_HOST", "localhost")
+REDIS_HOST = get_env_setting("REDIS_HOST", _default_service_host("redis"))
 REDIS_PORT = get_env_int_setting("REDIS_PORT", 6379)
 REDIS_DB = get_env_int_setting("REDIS_DB", 0)
 REDIS_URL = get_env_setting("REDIS_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
@@ -140,7 +160,7 @@ REDIS_SOCKET_TIMEOUT = get_env_int_setting("REDIS_SOCKET_TIMEOUT", 30)
 REDIS_SOCKET_CONNECT_TIMEOUT = get_env_int_setting("REDIS_SOCKET_CONNECT_TIMEOUT", 5)
 
 # Neo4j
-NEO4J_HOST = get_env_setting("NEO4J_HOST", "neo4j")
+NEO4J_HOST = get_env_setting("NEO4J_HOST", _default_service_host("neo4j"))
 NEO4J_BOLT_PORT = get_env_int_setting("NEO4J_BOLT_PORT", 7687)
 NEO4J_HTTP_PORT = get_env_int_setting("NEO4J_HTTP_PORT", 7474)
 NEO4J_USER = get_env_setting("NEO4J_USER", "neo4j")

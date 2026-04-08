@@ -36,8 +36,8 @@ logger = ensure_serve_logger("seedcore.ml_service", level="DEBUG")
 # --- Configuration ---
 # These defaults are used only for local testing via main()
 # When deployed via rayservice.yaml, env vars are set at container level
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
-RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://127.0.0.1:23001")
+RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-local")
 APP_NAME = "ml_service"
 ROUTE_PREFIX = "/ml"
 

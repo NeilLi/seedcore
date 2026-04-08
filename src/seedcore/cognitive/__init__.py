@@ -12,40 +12,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Cognitive core implementations for SeedCore.
-"""
+"""Cognitive package exports with lazy loading for optional DSPy dependencies."""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any, Dict, Tuple
 
 from .dspy_client import DSpyCognitiveClient
 
-# Import the moved modules
-from .cognitive_core import (
-    CognitiveCore, 
-    CognitiveContext,
-)
-from .cognitive_registry import (
-    cognitive_signature,
-    cognitive_handler,
-    cognitive_validator,
-    CognitiveRegistry
-)
-from .advisory import CognitiveAdvisoryContractBuilder
+_LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
+    "CognitiveCore": (".cognitive_core", "CognitiveCore"),
+    "CognitiveContext": (".cognitive_core", "CognitiveContext"),
+    "cognitive_signature": (".cognitive_registry", "cognitive_signature"),
+    "cognitive_handler": (".cognitive_registry", "cognitive_handler"),
+    "cognitive_validator": (".cognitive_registry", "cognitive_validator"),
+    "CognitiveRegistry": (".cognitive_registry", "CognitiveRegistry"),
+    "CognitiveAdvisoryContractBuilder": (
+        ".advisory",
+        "CognitiveAdvisoryContractBuilder",
+    ),
+}
 
-# Create a standalone function for easier importing
+
 def for_env() -> DSpyCognitiveClient:
     """Factory function that applies env-based namespacing automatically."""
     return DSpyCognitiveClient.for_env()
 
+
+def __getattr__(name: str) -> Any:
+    if name == "for_env":
+        return for_env
+
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = target
+    try:
+        module = import_module(module_name, __name__)
+    except ModuleNotFoundError as exc:
+        if exc.name == "dspy":
+            raise ModuleNotFoundError(
+                f"{name} requires the optional 'dspy' dependency. "
+                "Install DSPy to use SeedCore cognitive-core exports."
+            ) from exc
+        raise
+
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
-    'DSpyCognitiveClient',
-    'for_env',
-    # Cognitive core exports
-    'CognitiveCore',
-    'CognitiveContext',
-    # Cognitive registry exports
-    'cognitive_signature',
-    'cognitive_handler',
-    'cognitive_validator',
-    'CognitiveRegistry',
-    'CognitiveAdvisoryContractBuilder',
+    "DSpyCognitiveClient",
+    "for_env",
+    "CognitiveCore",
+    "CognitiveContext",
+    "cognitive_signature",
+    "cognitive_handler",
+    "cognitive_validator",
+    "CognitiveRegistry",
+    "CognitiveAdvisoryContractBuilder",
 ]

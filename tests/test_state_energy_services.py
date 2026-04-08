@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import types
@@ -36,6 +37,7 @@ from seedcore.models.state import (
     UnifiedState,
 )
 from seedcore.services import energy_service, state_service
+from seedcore.ops.state.agent_aggregator import AgentAggregator
 
 
 def test_state_operational_summary_surfaces_pressure():
@@ -285,3 +287,95 @@ async def test_build_state_response_publishes_authoritative_assets(monkeypatch):
     assert response.payload is not None
     assert response.payload.assets["lot-11"]["current_zone"] == "zone-d"
     assert response.payload.to_payload()["assets"]["lot-11"]["registration_status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_agent_aggregator_sets_running_when_organism_router_is_unavailable(monkeypatch):
+    class _GraphRepo:
+        async def load_agent_overlay_matrix(self, session, organ_ids=None, min_weight=0.01):
+            return [], None
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Factory:
+        def __call__(self):
+            return _Session()
+
+    aggregator = AgentAggregator(
+        organism_router=None,
+        graph_repo=_GraphRepo(),
+        poll_interval=0.01,
+    )
+
+    monkeypatch.setattr(
+        "seedcore.ops.state.agent_aggregator.get_async_pg_session_factory",
+        lambda: _Factory(),
+    )
+    monkeypatch.setattr(
+        aggregator,
+        "_try_refresh_organism_router",
+        lambda: None,
+    )
+
+    task = asyncio.create_task(aggregator._poll_loop())
+    try:
+        await asyncio.wait_for(aggregator.wait_for_first_poll(timeout=0.2), timeout=0.3)
+        metrics = await aggregator.get_system_metrics()
+        assert aggregator.is_running() is True
+        assert metrics["total_agents"] == 0
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_energy_startup_uses_embedded_state_provider_without_transport_client(monkeypatch):
+    async def _embedded_metrics():
+        return {"success": True, "metrics": {"memory": {}, "system": {}, "ops": {}}}
+
+    async def _embedded_health():
+        return {"status": "healthy"}
+
+    async def _background_noop():
+        energy_service.state.sampler_is_running = True
+
+    class _ForbiddenStateClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("StateServiceClient should not be constructed")
+
+    old_metrics_fetch = energy_service.state.local_state_metrics_fetch
+    old_health_fetch = energy_service.state.local_state_health_fetch
+    old_state_client = energy_service.state.state_client
+    old_sampler_task = energy_service.state.sampler_task
+
+    monkeypatch.setattr(energy_service, "_background_sampler", _background_noop)
+    monkeypatch.setattr(energy_service, "StateServiceClient", _ForbiddenStateClient)
+
+    energy_service.configure_embedded_state_provider(
+        metrics_fetch=_embedded_metrics,
+        health_fetch=_embedded_health,
+    )
+    energy_service.state.state_client = None
+    energy_service.state.sampler_task = None
+
+    try:
+        await energy_service.startup_event()
+        await asyncio.sleep(0)
+        assert energy_service.state.state_client is None
+        assert await energy_service._state_service_is_healthy() is True
+    finally:
+        if energy_service.state.sampler_task:
+            await energy_service.shutdown_event()
+        energy_service.clear_embedded_state_provider()
+        energy_service.state.local_state_metrics_fetch = old_metrics_fetch
+        energy_service.state.local_state_health_fetch = old_health_fetch
+        energy_service.state.state_client = old_state_client
+        energy_service.state.sampler_task = old_sampler_task

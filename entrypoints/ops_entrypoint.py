@@ -19,11 +19,15 @@ from seedcore.services.state_service import (
     StateService,
     startup_event as state_startup_event,
     shutdown_event as state_shutdown_event,
+    get_system_metrics as state_get_system_metrics,
+    health as state_health,
 )
 from seedcore.services.energy_service import (
     EnergyService,
     startup_event as energy_startup_event,
     shutdown_event as energy_shutdown_event,
+    configure_embedded_state_provider,
+    clear_embedded_state_provider,
 )
 from seedcore.models.energy import (
     EnergyRequest,
@@ -65,6 +69,10 @@ async def _ensure_embedded_ops_dependencies_started() -> None:
         if _ops_embedded_services_started:
             return
         await state_startup_event()
+        configure_embedded_state_provider(
+            metrics_fetch=lambda: state_get_system_metrics(None),
+            health_fetch=state_health,
+        )
         await energy_startup_event()
         _ops_embedded_services_started = True
         logger.info(
@@ -92,6 +100,7 @@ async def _ops_shutdown_event() -> None:
             logger.warning(
                 "OpsGateway embedded shutdown encountered error: %s", result
             )
+    clear_embedded_state_provider()
     _ops_embedded_services_started = False
 
 def _instantiate_deployment_backend(deployment_obj: Any, *args, **kwargs) -> Any:

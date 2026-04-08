@@ -19,6 +19,22 @@ from seedcore.memory.mw_manager import MwManager
 logger = logging.getLogger(__name__)
 
 
+def _host_local_default_pg_dsn() -> str:
+    user = os.getenv("POSTGRES_USER") or os.getenv("USER") or "postgres"
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    host = os.getenv("POSTGRES_HOST", "127.0.0.1")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    db = os.getenv("POSTGRES_DB", "seedcore")
+    auth = user if not password else f"{user}:{password}"
+    return f"postgresql://{auth}@{host}:{port}/{db}"
+
+
+def _host_local_default_neo4j_uri() -> str:
+    host = os.getenv("NEO4J_HOST", "127.0.0.1")
+    port = os.getenv("NEO4J_BOLT_PORT", "7687")
+    return f"bolt://{host}:{port}"
+
+
 class MemoryRuntime:
     """Owns backend lifecycles and exposes service facades."""
 
@@ -110,11 +126,21 @@ async def connect_default_memory_runtime(
     embedder: Any = None,
 ) -> MemoryRuntime:
     """Build a runtime from environment defaults (used by organism / agents)."""
+    default_pg = (
+        "postgresql://postgres:password@postgresql:5432/seedcore"
+        if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+        else _host_local_default_pg_dsn()
+    )
+    default_neo4j = (
+        "bolt://neo4j:7687"
+        if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+        else _host_local_default_neo4j_uri()
+    )
     dsn = pg_dsn or os.getenv(
-        "PG_DSN", "postgresql://postgres:password@postgresql:5432/seedcore"
+        "PG_DSN", default_pg
     )
     uri = neo4j_uri or os.getenv("NEO4J_URI") or os.getenv(
-        "NEO4J_BOLT_URL", "bolt://neo4j:7687"
+        "NEO4J_BOLT_URL", default_neo4j
     )
     user = neo4j_user or os.getenv("NEO4J_USER", "neo4j")
     password = neo4j_password or os.getenv("NEO4J_PASSWORD", "password")

@@ -31,8 +31,8 @@ from seedcore.models.result_schema import make_envelope, normalize_envelope
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 
 # --- Configuration ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
-RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-dev"))
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://127.0.0.1:23001")
+RAY_NAMESPACE = os.getenv("SEEDCORE_NS", os.getenv("RAY_NAMESPACE", "seedcore-local"))
 
 # Configure logging
 setup_logging(app_name="seedcore.organism_service.driver")

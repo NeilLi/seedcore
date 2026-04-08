@@ -22,8 +22,8 @@ setup_logging(app_name="seedcore.coordinator_service.driver")
 logger = ensure_serve_logger("seedcore.coordinator_service", level="DEBUG")
 
 # --- Configuration ---
-RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://seedcore-svc-stable-svc:10001")
-RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-dev")
+RAY_ADDR = os.getenv("RAY_ADDRESS", "ray://127.0.0.1:23001")
+RAY_NS = os.getenv("RAY_NAMESPACE", "seedcore-local")
 
 def build_coordinator(args: dict | None = None):
     """Builder for the Coordinator Serve app."""
@@ -35,8 +35,8 @@ def build_coordinator(args: dict | None = None):
         "SEEDCORE_PG_DSN": os.getenv("SEEDCORE_PG_DSN", ""),
         "COORDINATOR_REPLICAS": os.getenv("COORDINATOR_REPLICAS", "1"),
         "COORDINATOR_NUM_CPUS": os.getenv("COORDINATOR_NUM_CPUS", "0.2"),
-        "SERVE_GATEWAY": os.getenv("SERVE_GATEWAY", "http://seedcore-svc-stable-svc:8000"),
-        "SEEDCORE_API_URL": os.getenv("SEEDCORE_API_URL", "http://seedcore-api:8002"),
+        "SERVE_GATEWAY": os.getenv("SERVE_GATEWAY", "http://127.0.0.1:8000"),
+        "SEEDCORE_API_URL": os.getenv("SEEDCORE_API_URL", "http://127.0.0.1:8002"),
         "SEEDCORE_API_TIMEOUT": os.getenv("SEEDCORE_API_TIMEOUT", "5.0"),
         "ORCH_HTTP_TIMEOUT": os.getenv("ORCH_HTTP_TIMEOUT", "10.0"),
         "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "8.0"),

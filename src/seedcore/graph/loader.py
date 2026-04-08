@@ -47,7 +47,8 @@ def _ensure_dgl():
             torch = None
     return DGL_AVAILABLE
 
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+_IN_K8S = os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687" if _IN_K8S else "bolt://127.0.0.1:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
