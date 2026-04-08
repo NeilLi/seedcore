@@ -91,3 +91,24 @@ async def test_energy_service_client_prefers_ops_rpc(monkeypatch):
     assert await client.log_event({"metric": "router_hit"}) == {"logged": "router_hit"}
     assert await client.get_logs(limit=5) == {"returned_count": 5}
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ops_embedded_state_energy_startup_runs_once(monkeypatch):
+    calls = []
+
+    async def _state_startup():
+        calls.append("state")
+
+    async def _energy_startup():
+        calls.append("energy")
+
+    monkeypatch.setattr(ops, "state_startup_event", _state_startup)
+    monkeypatch.setattr(ops, "energy_startup_event", _energy_startup)
+    monkeypatch.setattr(ops, "_ops_embedded_services_started", False)
+    monkeypatch.setattr(ops, "_ops_embedded_services_lock", None)
+
+    await ops._ensure_embedded_ops_dependencies_started()
+    await ops._ensure_embedded_ops_dependencies_started()
+
+    assert calls == ["state", "energy"]

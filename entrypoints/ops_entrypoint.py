@@ -2,7 +2,7 @@
 import asyncio
 import sys
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Explicitly import FastAPI Response to avoid collision with your data models
 from fastapi import FastAPI, HTTPException, Response as StarletteResponse  # pyright: ignore[reportMissingImports]
@@ -15,8 +15,16 @@ sys.path.insert(0, "/app/src")
 from seedcore.logging_setup import ensure_serve_logger, setup_logging
 from seedcore.services.eventizer_service import EventizerService
 from seedcore.services.fact_service import FactManagerService
-from seedcore.services.state_service import StateService
-from seedcore.services.energy_service import EnergyService
+from seedcore.services.state_service import (
+    StateService,
+    startup_event as state_startup_event,
+    shutdown_event as state_shutdown_event,
+)
+from seedcore.services.energy_service import (
+    EnergyService,
+    startup_event as energy_startup_event,
+    shutdown_event as energy_shutdown_event,
+)
 from seedcore.models.energy import (
     EnergyRequest,
     OptimizationRequest,
@@ -33,6 +41,58 @@ ops_app = FastAPI(
     version="2.0.0",
     docs_url="/docs",
 )
+
+
+_ops_embedded_services_started = False
+_ops_embedded_services_lock: Optional[asyncio.Lock] = None
+
+
+def _get_embedded_startup_lock() -> asyncio.Lock:
+    global _ops_embedded_services_lock
+    if _ops_embedded_services_lock is None:
+        _ops_embedded_services_lock = asyncio.Lock()
+    return _ops_embedded_services_lock
+
+
+async def _ensure_embedded_ops_dependencies_started() -> None:
+    """Initialize embedded state/energy lifecycle when ops runs in-process."""
+    global _ops_embedded_services_started
+    if _ops_embedded_services_started:
+        return
+
+    lock = _get_embedded_startup_lock()
+    async with lock:
+        if _ops_embedded_services_started:
+            return
+        await state_startup_event()
+        await energy_startup_event()
+        _ops_embedded_services_started = True
+        logger.info(
+            "OpsGateway embedded state/energy lifecycle initialized"
+        )
+
+
+@ops_app.on_event("startup")
+async def _ops_startup_event() -> None:
+    await _ensure_embedded_ops_dependencies_started()
+
+
+@ops_app.on_event("shutdown")
+async def _ops_shutdown_event() -> None:
+    global _ops_embedded_services_started
+    if not _ops_embedded_services_started:
+        return
+    results = await asyncio.gather(
+        energy_shutdown_event(),
+        state_shutdown_event(),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning(
+                "OpsGateway embedded shutdown encountered error: %s", result
+            )
+    _ops_embedded_services_started = False
 
 def _instantiate_deployment_backend(deployment_obj: Any, *args, **kwargs) -> Any:
     """
@@ -75,51 +135,67 @@ class OpsGateway:
     # ========================================================================
 
     async def rpc_state_system_metrics(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.state.rpc_system_metrics()
 
     async def rpc_state_unified_state(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.state.rpc_unified_state()
 
     async def rpc_state_agent_snapshots(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.state.rpc_agent_snapshots()
 
     async def rpc_state_update_w_mode(self, payload: Dict[str, Any]):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.state.rpc_update_w_mode(payload)
 
     async def rpc_state_health(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.state.rpc_health()
 
     async def rpc_state_status(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.state.rpc_status()
 
     async def rpc_energy_metrics(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_get_metrics()
 
     async def rpc_energy_compute_from_state(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_compute_from_state()
 
     async def rpc_energy_compute(self, payload: Dict[str, Any]):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_compute_energy(EnergyRequest(**payload))
 
     async def rpc_energy_optimize(self, payload: Dict[str, Any]):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_optimize_agents(OptimizationRequest(**payload))
 
     async def rpc_energy_flywheel_result(self, payload: Dict[str, Any]):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_flywheel_result(FlywheelResultRequest(**payload))
 
     async def rpc_energy_health(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_health()
 
     async def rpc_energy_status(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_status()
 
     async def rpc_energy_meta(self):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_get_meta()
 
     async def rpc_energy_log(self, payload: Dict[str, Any]):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_log_event(payload)
 
     async def rpc_energy_logs(self, limit: int = 100):
+        await _ensure_embedded_ops_dependencies_started()
         return await self.energy.rpc_get_logs(limit=limit)
 
     # ========================================================================
@@ -299,8 +375,8 @@ class OpsGateway:
             results = await asyncio.gather(
                 self.eventizer.health(),
                 self.fact.health_check(),
-                self.state.rpc_health(),
-                self.energy.rpc_health(),
+                self.rpc_state_health(),
+                self.rpc_energy_health(),
                 return_exceptions=True,
             )
 
