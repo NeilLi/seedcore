@@ -260,6 +260,7 @@ class CognitiveCore(dspy.Module):
         self.schema_version = "v2.0"
         self._state_lock = threading.RLock()
         self._last_sufficiency: Dict[str, Any] = {}
+        self._memory_bridge_degradation_counts: Dict[str, int] = {}
 
         # Initialize Mw support (episodic memory)
         self._mw_enabled = bool(MW_ENABLED and _MW_AVAILABLE)
@@ -478,7 +479,7 @@ class CognitiveCore(dspy.Module):
             logger.debug("Memory bridge initialization skipped: MwManager not enabled")
             return False
 
-        mw = self._mw_by_agent.get(agent_id) if hasattr(self, "_mw_by_agent") else None
+        mw = self._mw(agent_id)
         if mw is None:
             logger.debug(
                 "Memory bridge initialization skipped: "
@@ -716,6 +717,7 @@ class CognitiveCore(dspy.Module):
                 initial_chat_history,
                 cog_flags,
                 reason="Memory bridge unavailable; retrieval skipped.",
+                reason_code="bridge_unavailable",
             )
 
         try:
@@ -755,6 +757,7 @@ class CognitiveCore(dspy.Module):
                 initial_chat_history,
                 cog_flags,
                 reason="Hydration failed",
+                reason_code="hydration_failed",
             )
 
     def _construct_bridged_knowledge_context(
@@ -807,6 +810,7 @@ class CognitiveCore(dspy.Module):
         chat_history: List,
         cog_flags: Dict,
         reason: str,
+        reason_code: str = "unknown",
     ) -> Dict[str, Any]:
         """
         Constructs a minimal context when the bridge is missing or errors out.
@@ -825,6 +829,13 @@ class CognitiveCore(dspy.Module):
         if context.input_data:
             context.input_data["params"] = params
 
+        self._record_memory_bridge_degradation(
+            reason_code=reason_code,
+            stage="hydrate",
+            context=context,
+            detail=reason,
+        )
+
         return {
             "facts": [],
             "holons": [],
@@ -838,7 +849,38 @@ class CognitiveCore(dspy.Module):
             },
             "hgnn_embedding": None,
             "cognitive_flags": cog_flags,
+            "memory_bridge_degraded": True,
+            "memory_bridge_reason": reason_code,
         }
+
+    def _record_memory_bridge_degradation(
+        self,
+        *,
+        reason_code: str,
+        stage: str,
+        context: Optional[CognitiveContext],
+        detail: Optional[str] = None,
+    ) -> None:
+        code = str(reason_code or "unknown")
+        with self._state_lock:
+            self._memory_bridge_degradation_counts[code] = (
+                self._memory_bridge_degradation_counts.get(code, 0) + 1
+            )
+            count = self._memory_bridge_degradation_counts[code]
+        logger.warning(
+            "memory_bridge_degraded event=%s reason=%s agent_id=%s task_id=%s count=%d detail=%s",
+            stage,
+            code,
+            getattr(context, "agent_id", None),
+            self._extract_task_id(getattr(context, "input_data", {}) or {}),
+            count,
+            detail or "",
+        )
+
+    def get_memory_bridge_degradation_counts(self) -> Dict[str, int]:
+        """Return a snapshot of per-reason memory-bridge degradation counters."""
+        with self._state_lock:
+            return dict(self._memory_bridge_degradation_counts)
 
     def _run_hgnn_pipeline(
         self, context: CognitiveContext, embedding: List[float]
@@ -1007,6 +1049,7 @@ class CognitiveCore(dspy.Module):
         return self._package_result(
             context=context,
             payload=processed_payload,
+            knowledge_context=knowledge_context,
             cache_key=cache_key,
             task_id=task_id,
             suff_dict=suff_dict,
@@ -1686,6 +1729,15 @@ class CognitiveCore(dspy.Module):
 
         if stateless_mode:
             payload.setdefault("meta", {})["stateless_mode"] = True
+            if is_personal:
+                payload["meta"]["memory_bridge_degraded"] = True
+                payload["meta"]["memory_bridge_reason"] = "stateless_mode"
+                self._record_memory_bridge_degradation(
+                    reason_code="stateless_mode",
+                    stage="post_exec",
+                    context=context,
+                    detail="Skipping post-execution memory consolidation in stateless mode.",
+                )
             logger.debug(
                 "Skipping post-execution memory consolidation (stateless mode) "
                 f"for task_id={context.input_data.get('task_id') if context.input_data else 'n/a'}"
@@ -1741,9 +1793,25 @@ class CognitiveCore(dspy.Module):
                 logger.warning(
                     f"Memory bridge post-execution failed: {e}", exc_info=True
                 )
+                payload.setdefault("meta", {})["memory_bridge_degraded"] = True
+                payload["meta"]["memory_bridge_reason"] = "post_exec_failed"
+                self._record_memory_bridge_degradation(
+                    reason_code="post_exec_failed",
+                    stage="post_exec",
+                    context=context,
+                    detail=str(e),
+                )
                 # Continue execution even if memory bridge fails
         elif is_personal:
             # Personal request but no bridge available - log but don't fail
+            payload.setdefault("meta", {})["memory_bridge_degraded"] = True
+            payload["meta"]["memory_bridge_reason"] = "post_exec_bridge_missing"
+            self._record_memory_bridge_degradation(
+                reason_code="post_exec_bridge_missing",
+                stage="post_exec",
+                context=context,
+                detail="No per-agent memory bridge found during post-exec.",
+            )
             logger.debug(
                 f"Memory bridge post-execution skipped: no bridge for agent_id={context.agent_id}"
             )
@@ -1754,6 +1822,7 @@ class CognitiveCore(dspy.Module):
         self,
         context: CognitiveContext,
         payload: Dict[str, Any],
+        knowledge_context: Dict[str, Any],
         cache_key: str,
         task_id: Optional[str],
         suff_dict: Dict[str, Any],
@@ -1780,6 +1849,17 @@ class CognitiveCore(dspy.Module):
             if hasattr(out.payload, "cog_type")
             else context.cog_type.value,
         }
+        bridge_degraded = bool(knowledge_context.get("memory_bridge_degraded")) or bool(
+            (payload.get("meta") or {}).get("memory_bridge_degraded")
+        )
+        if bridge_degraded:
+            reason = (
+                knowledge_context.get("memory_bridge_reason")
+                or (payload.get("meta") or {}).get("memory_bridge_reason")
+                or "unknown"
+            )
+            out_dict["metadata"]["memory_bridge_degraded"] = True
+            out_dict["metadata"]["memory_bridge_reason"] = reason
         cognitive_cfg = (
             (context.input_data or {}).get("params", {}).get("cognitive", {})
             if isinstance((context.input_data or {}).get("params"), dict)

@@ -659,6 +659,24 @@ class CognitiveOrchestrator:
             logger.info(f"🧠 Initialized {profile.value} worker #{i+1} ({provider}/{model})")
         return pool
 
+    def attach_shared_semantic_memory(
+        self, semantic_memory: Optional[SemanticMemoryService]
+    ) -> None:
+        """Attach/update shared semantic-memory facade across existing cores."""
+        self.semantic_memory = semantic_memory
+        for pool in self.core_pools.values():
+            for core in pool:
+                if not core:
+                    continue
+                if semantic_memory is None:
+                    core.semantic_memory = None
+                    core.holon_fabric = None
+                    continue
+                try:
+                    core.attach_shared_semantic_memory(semantic_memory)
+                except Exception as exc:
+                    logger.warning("Failed to attach shared semantic memory to core: %s", exc)
+
     # ============================================================================
     # 🔁 Load Balancing (Round Robin)
     # ============================================================================
@@ -1094,7 +1112,8 @@ class CognitiveOrchestrator:
         status = {
             "status": "healthy",
             "pools": {},
-            "hydration": "enabled" if self.session_maker else "disabled"
+            "hydration": "enabled" if self.session_maker else "disabled",
+            "memory_bridge_degradation_counts": {},
         }
         
         # Check Thread Pool
@@ -1116,6 +1135,27 @@ class CognitiveOrchestrator:
             status["status"] = "degraded"
             status["warning"] = "No cognitive cores available"
 
+        # Aggregate degradation counters from cores for operator-visible SLO tracking.
+        aggregated: Dict[str, int] = {}
+        for pool in self.core_pools.values():
+            for core in pool:
+                if not core or not hasattr(core, "get_memory_bridge_degradation_counts"):
+                    continue
+                try:
+                    counts = core.get_memory_bridge_degradation_counts()
+                except Exception:
+                    continue
+                if not isinstance(counts, dict):
+                    continue
+                for reason, count in counts.items():
+                    key = str(reason)
+                    try:
+                        value = int(count)
+                    except Exception:
+                        continue
+                    aggregated[key] = aggregated.get(key, 0) + value
+        status["memory_bridge_degradation_counts"] = aggregated
+
         return status
     
 
@@ -1125,15 +1165,26 @@ class CognitiveOrchestrator:
 
 COGNITIVE_SERVICE_INSTANCE: Optional[CognitiveOrchestrator] = None
 
-def initialize_cognitive_service(ocps_client=None) -> CognitiveOrchestrator:
+def initialize_cognitive_service(
+    ocps_client=None,
+    *,
+    semantic_memory: Optional[SemanticMemoryService] = None,
+) -> CognitiveOrchestrator:
     global COGNITIVE_SERVICE_INSTANCE
     if COGNITIVE_SERVICE_INSTANCE is None:
         try:
-            COGNITIVE_SERVICE_INSTANCE = CognitiveOrchestrator(ocps_client=ocps_client)
+            COGNITIVE_SERVICE_INSTANCE = CognitiveOrchestrator(
+                ocps_client=ocps_client,
+                semantic_memory=semantic_memory,
+            )
             logger.info("Initialized global cognitive service")
         except Exception as e:
             logger.error(f"Failed to initialize cognitive service: {e}")
             raise
+    elif semantic_memory is not None:
+        # Allow late binding into the singleton so callers can wire semantic-memory
+        # after boot order constraints are resolved.
+        COGNITIVE_SERVICE_INSTANCE.attach_shared_semantic_memory(semantic_memory)
     return COGNITIVE_SERVICE_INSTANCE
 
 def get_cognitive_service() -> Optional[CognitiveOrchestrator]:
@@ -1180,12 +1231,14 @@ app = FastAPI(title="SeedCore Cognitive Service", version="2.0.0")
 @serve.deployment(name="CognitiveService")
 @serve.ingress(app)
 class CognitiveService:
-    def __init__(self):
+    def __init__(self, semantic_memory: Optional[SemanticMemoryService] = None):
         setup_logging(app_name="seedcore.cognitive_service.replica")
         self.logger = ensure_serve_logger("seedcore.cognitive_service", level="DEBUG")
 
         self.logger.info("🚀 Initializing warm cognitive_service for new replica...")
-        self.cognitive_service: CognitiveOrchestrator = initialize_cognitive_service()
+        self.cognitive_service: CognitiveOrchestrator = initialize_cognitive_service(
+            semantic_memory=semantic_memory
+        )
         self.logger.info("✅ Cognitive_service is warm and ready.")
 
     @app.get("/health")
