@@ -12,6 +12,32 @@ All outcomes (`allow` / `deny` / `quarantine` / `escalate`) are recorded with re
 
 The long ambition is large: become the trust substrate between frontier models and real-world execution. The execution strategy is deliberately narrow: win one high-trust vertical workflow first, make it operationally credible, and then expand from a hardened proof boundary rather than from a broad platform claim.
 
+## Trust Runtime, Not A Cybersecurity Product
+
+SeedCore uses zero-trust language, but it should not be framed as a traditional
+cybersecurity product. Cybersecurity systems primarily protect environments by
+detecting threats, hardening perimeters, or blocking suspicious behavior.
+SeedCore governs execution *within* an environment: it decides whether a
+high-consequence action is admissible, issues bounded authority when policy
+allows it, and produces replayable proof that explains exactly why the action
+was allowed.
+
+In practical terms:
+
+- SeedCore emphasizes deterministic, policy-driven execution rather than
+  heuristic threat detection.
+- Its core output is signed receipts, transition evidence, and replayable
+  forensic bundles rather than alerts or perimeter blocks.
+- The PDP is synchronous and stateless at decision time; it evaluates
+  admissibility against current policy, not whether an actor "looks malicious."
+- Memory is a bounded supporting subsystem for context and salience, not a
+  threat-intelligence plane or an alternate authority path.
+
+This is why SeedCore is better described as a **trust runtime**: it governs
+high-consequence action and proves outcomes, instead of acting as a general
+defensive security layer. For the canonical category framing, see
+[trust runtime category distinction](docs/development/trust_runtime_category_distinction.md).
+
 Decision records:
 
 - [ADR 0001 - Keep the PDP Stateless and Synchronous at Decision Time](docs/architecture/adr/adr-0001-pdp-hot-path.md)
@@ -175,6 +201,7 @@ SeedCore is not a chatbot wrapper or a generic tool-calling layer. It is a gover
 
 It should be read as a trust layer for agentic systems:
 
+- not a traditional cybersecurity detection or perimeter-defense product
 - not another identity provider
 - not another model provider
 - not another robotics SDK

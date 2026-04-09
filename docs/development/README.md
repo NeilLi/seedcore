@@ -24,6 +24,9 @@ Canonical north-star references:
   (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
+- [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
+  - canonical explanation of why SeedCore is a trust runtime rather than a
+    traditional cybersecurity product
 
 ## 2. Current Program Center
 
@@ -168,6 +171,9 @@ Primary planning docs:
 
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
   (cluster posture includes Kafka; local rollout → [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
+- [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
+  — category framing reference for external messaging, partner docs, and README
+  language
 - [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md) — phased
   local broker, topics, and producer order for intent / telemetry / policy outcomes
 - [`memory_module_refactor_spec.md`](memory_module_refactor_spec.md) — draft plan

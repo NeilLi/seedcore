@@ -1056,6 +1056,10 @@ Better positioning:
   high-trust, multi-party workflows."
 - "SeedCore moves trust from application claims to cryptographically anchored
   execution evidence."
+- "SeedCore governs execution within an environment; it is not a perimeter
+  defense product."
+- "SeedCore is a trust runtime with deterministic policy decisions and
+  replayable proof, not a threat-detection engine."
 
 Claims to avoid:
 
@@ -1063,6 +1067,10 @@ Claims to avoid:
 - "legally binding digital contracts" as a near-term product claim
 - "full autonomous commerce stack" before the narrow wedge is demonstrably
   credible
+- "cybersecurity platform" without explaining the execution-governance
+  distinction
+- "threat detection" or "threat intelligence" as if those were the PDP's core
+  product jobs
 
 More grounded alternatives:
 
@@ -1070,6 +1078,13 @@ More grounded alternatives:
   requirements in regulated supply chains"
 - "governed, co-signed execution receipts for high-trust multi-party workflows"
 - "a runtime for cryptographically defensible, replayable governed execution"
+- "a trust runtime that decides admissibility and proves why a governed action
+  was allowed"
+
+Reference:
+
+- [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
+  is the canonical note for explaining this category boundary
 
 ## Practical Guidance
 

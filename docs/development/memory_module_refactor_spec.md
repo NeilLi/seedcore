@@ -30,6 +30,11 @@ Memory should not continue to behave like an implicit "general substrate" that
 quietly mixes cache, cognition, analytics, legacy energy loops, and
 trust-critical state assumptions.
 
+Memory is also not a threat-intelligence or defensive decision plane. In the
+current SeedCore architecture, memory supports context, salience, and operator
+legibility around the trust runtime; it does not replace the PDP, and it does
+not redefine SeedCore as a cybersecurity detection system.
+
 ## Current Implementation Status
 
 This spec started as a target-state refactor document. As of 2026-04-08, a

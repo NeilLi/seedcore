@@ -220,8 +220,22 @@ Category to own:
 
 - zero-trust execution runtime for custody-aware agent operations
 
+Category distinction to keep explicit:
+
+- SeedCore is not a traditional cybersecurity product, even though it shares
+  zero-trust terminology.
+- Cybersecurity products primarily protect environments through detection,
+  hardening, or blocking suspicious behavior.
+- SeedCore governs execution inside an environment: it evaluates admissibility,
+  issues bounded authority, and produces replayable proof.
+- The PDP is deterministic and stateless at decision time; it is not a threat
+  classifier.
+- Memory and supporting state systems exist to provide bounded context,
+  salience, and evidence support, not a threat-intelligence plane.
+
 What SeedCore is not:
 
+- a perimeter-defense or threat-detection system
 - another model provider
 - a generic agent framework
 - a chatbot orchestration tool
@@ -246,9 +260,18 @@ The evidence layer proves what happened.
 Messaging guardrails:
 
 - prefer "productizing irrefutable governed execution and forensic replay"
+- prefer "governing execution within the environment" over "protecting the
+  environment"
+- explain the difference between policy-driven admissibility and threat
+  detection when zero-trust language might cause confusion
 - avoid "full autonomous commerce stack" claims for the current phase
+- avoid collapsing SeedCore into generic cybersecurity positioning without
+  naming the proof-runtime distinction
 - keep claims tied to the must-win `Restricted Custody Transfer` workflow and
   replay-verifiable evidence surface
+- use
+  [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
+  as the canonical supporting note for this category framing
 
 ## Product Definition For 2026
 
