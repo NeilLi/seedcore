@@ -8,6 +8,10 @@ Status: In progress — **Phase 0–1 (contract freeze + backend alignment) are 
 This document defines how `src/seedcore/memory/` should be refactored to fit
 the current SeedCore architecture, product boundary, and runtime contracts.
 
+For the trading/runtime-side flow that uses these contracts without allowing
+memory to become hidden authority, see
+[Trading Memory Admissibility Flow](./trading_memory_admissibility_flow.md).
+
 The current memory package still reflects an older "cognitive-first platform"
 shape. The rest of the repository has narrowed around a different center:
 
