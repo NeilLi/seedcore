@@ -973,3 +973,41 @@ pytest -q tests/test_memory_tool_integration.py tests/test_memory_contracts.py \
   tests/test_neo4j_graph_backend.py tests/test_mw_manager.py \
   tests/test_host_local_runtime_defaults.py tests/test_cognitive_package_imports.py
 ```
+
+---
+
+## Implementation truth, Ray hardening, and deferred research (2026-04-09)
+
+This checklist tracks **truth-alignment** and **shortest-path hardening** versus **research-only** items. It complements the refactor milestones above; it does not replace them.
+
+### Implement / in progress (this repo)
+
+| Item | Status | Notes |
+|------|--------|--------|
+| ML service docstring matches exposed HTTP API | **Done** | `ml_service.py` no longer claims `/hgnn/*`; graph embeddings stay under `seedcore.graph` / GraphDispatcher actors. |
+| Rename misleading `h_hgnn` system vector | **Done** | `SystemState.h_agent_centroid` + metrics key `h_agent_centroid`; payloads now use one canonical field name. |
+| Escalation path label vs ML | **Done** | `DecisionKind.ESCALATED` now serializes as `"escalated"`; comments clarify it is not an ML HTTP surface. |
+| `MemoryRuntime.health()` includes graph reachability | **Done** | Neo4j `ping()` + payload field `graph`. |
+| pgvector search telemetry | **Done** | DEBUG log: `k`, filter use, row count, latency. |
+| Live semantic integration | **Extended** | `tests/test_semantic_memory_live_integration.py`: health asserts `graph`; optional `test_live_semantic_search_executes_pgvector_path` when `SEEDCORE_LIVE_MEMORY_BACKENDS=1`. |
+| Ray object spilling (K8s) | **Done** | `deploy/k8s/rayservice.yaml`: `RAY_object_spilling_config` + `emptyDir` at `/tmp/ray/spill` on head and workers; `docker/env.example` documents the same pattern. |
+| Idempotent graph embedder actors | **Done** | `GraphEmbedder` / `NimRetrievalEmbedder`: `max_restarts=3`. |
+| Single `MemoryRuntime` owner per process | **In progress** | See §2.2 / checklist above; finish removing duplicate construction paths. |
+
+### Manuscript / narrative — defer or delete unless built
+
+| Item | Action |
+|------|--------|
+| NVSA / stochastic in-memory factorization | **Defer** — not in codebase; frame as future work only. |
+| Dynamic spectral hypergraph clustering for escalation | **Defer** — not implemented; coordinator uses surprise/drift/PKG, not spectral grouping. |
+| Placement-group scaling from “surprise sentinel” | **Defer** — no such control loop; document Ray Serve autoscaling / KubeRay instead. |
+| “Millions of micro-agents / general cognitive substrate” | **Defer / delete** — conflicts with current product wedge (e.g. RCT-focused boundary in this spec). |
+
+### References (ops + retrieval)
+
+- [RayService HA](https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/rayservice-high-availability.html)
+- [Ray Serve fault tolerance](https://docs.ray.io/en/latest/serve/production-guide/fault-tolerance.html)
+- [Ray object spilling](https://docs.ray.io/en/latest/ray-core/objects/object-spilling.html)
+- [Ray actor fault tolerance](https://docs.ray.io/en/latest/ray-core/fault_tolerance/actors.html)
+- [Neo4j vector indexes](https://neo4j.com/docs/cypher-manual/current/indexes/semantic-indexes/vector-indexes)
+- [pgvector](https://github.com/pgvector/pgvector)

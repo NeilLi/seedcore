@@ -128,6 +128,13 @@ spec:
   # ===================================================================
   #  Ray Cluster Configuration
   # ===================================================================
+  # Ops hardening (see also docker/env.example):
+  # - Object spilling: https://docs.ray.io/en/latest/ray-core/objects/object-spilling.html
+  # - Serve fault tolerance: https://docs.ray.io/en/latest/serve/production-guide/fault-tolerance.html
+  # - RayService HA / head recovery: https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/rayservice-high-availability.html
+  # - Actor fault tolerance: https://docs.ray.io/en/latest/ray-core/fault_tolerance/actors.html
+  # GCS fault tolerance (external Redis, etc.) is infra-specific; enable per KubeRay/Ray
+  # version docs when you need strict head-loss durability beyond RayService restarts.
   rayClusterConfig:
     rayVersion: "2.53.0"
     # -------------------------------------------------------------------
@@ -170,6 +177,8 @@ spec:
                   value: '{"head_node": 1}'
                 - name: XGB_STORAGE_PATH
                   value: "/app/data/models"
+                - name: RAY_object_spilling_config
+                  value: '{"type":"filesystem","params":{"directory_path":"/tmp/ray/spill"}}'
               ports:
                 - name: gcs
                   containerPort: 6379
@@ -194,6 +203,8 @@ spec:
                   mountPath: /app/data
                 - name: project-src
                   mountPath: /app
+                - name: ray-spill
+                  mountPath: /tmp/ray/spill
               # Probes are good practice for production readiness.
               startupProbe:
                 exec:
@@ -236,6 +247,8 @@ spec:
               hostPath:
                 path: /project
                 type: Directory
+            - name: ray-spill
+              emptyDir: {}
 
     # -------------------------------------------------------------------
     #  Worker Node Specification
@@ -266,6 +279,8 @@ spec:
                     value: "/usr/local/bin/seedcore-verify"
                   - name: XGB_STORAGE_PATH
                     value: "/app/data/models"
+                  - name: RAY_object_spilling_config
+                    value: '{"type":"filesystem","params":{"directory_path":"/tmp/ray/spill"}}'
                 resources:
                   requests:
                     cpu: "500m"
@@ -278,6 +293,8 @@ spec:
                     mountPath: /app/data
                   - name: project-src
                     mountPath: /app
+                  - name: ray-spill
+                    mountPath: /tmp/ray/spill
                 readinessProbe:
                   exec:
                     command:
@@ -308,3 +325,5 @@ spec:
                 hostPath:
                   path: /project
                   type: Directory
+              - name: ray-spill
+                emptyDir: {}

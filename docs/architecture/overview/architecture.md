@@ -2274,7 +2274,7 @@ CREATE TABLE task_router_telemetry (
 - GIN index for efficient JSONB queries
 
 **Chosen Route** (`chosen_route`):
-- Route decision: `fast` (deterministic), `planner` (deep analysis), `hgnn` (graph-based routing)
+- Route decision: `fast` (deterministic), `planner` (deep analysis), `escalated` (escalated / deep path; not the ML ``/hgnn/*`` HTTP API)
 
 ### Indexes
 
@@ -2303,6 +2303,8 @@ The State Service provides centralized state collection from distributed Ray act
 - `GET /status` - Service status
 - `POST /unified-state` - Get unified state (with options)
 - `GET /unified-state` - Simplified unified state query
+
+**System metrics (`metrics.system`)**: `h_agent_centroid` is the topology-weighted centroid of agents' private 128-dimensional vectors (from `AgentAggregator`). It is **not** a trained HGNN embedding.
 
 **Resource Allocation**:
 - CPU: 0.5

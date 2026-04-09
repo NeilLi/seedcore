@@ -213,14 +213,14 @@ def decide_route_with_hysteresis(
     plan_enter: float = 0.60,
     plan_exit: float = 0.57,
 ) -> str:
-    """Hysteresis-based routing decision (fast → plan → HGNN)."""
+    """Hysteresis-based routing decision (fast -> plan -> escalated)."""
 
     # Clamp and alias
     S = max(0.0, min(1.0, surprise_score))
 
     FAST = DecisionKind.FAST_PATH.value
     PLAN = DecisionKind.COGNITIVE.value
-    HGNN = DecisionKind.ESCALATED.value
+    ESCALATED = DecisionKind.ESCALATED.value
 
     # ------------------------------------------------------------------
     # 1) Hysteresis: stick with last decision if still inside its band.
@@ -231,8 +231,8 @@ def decide_route_with_hysteresis(
     if last_decision == PLAN and fast_exit <= S < plan_exit:
         return PLAN
 
-    if last_decision == HGNN and S >= plan_exit:
-        return HGNN
+    if last_decision == ESCALATED and S >= plan_exit:
+        return ESCALATED
 
     # ------------------------------------------------------------------
     # 2) Fresh decision if hysteresis does not apply.
@@ -242,7 +242,7 @@ def decide_route_with_hysteresis(
     elif S < plan_enter:
         return PLAN
     else:
-        return HGNN
+        return ESCALATED
 
 
 # --- Drift Calculation (The "System 2" Input) ---

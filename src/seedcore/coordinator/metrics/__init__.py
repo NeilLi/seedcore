@@ -12,10 +12,10 @@ Architecture:
 - exporters.py: Pluggable exporter layer (Prometheus, OpenTelemetry, Redis)
 
 The MetricsTracker provides a lightweight, in-memory instrumentation layer that:
-- Tracks routing decisions (fast/planner/HGNN)
+- Tracks routing decisions (fast/planner/escalated)
 - Monitors task execution outcomes (success/failure, latency)
 - Records persistence events (proto_plan upsert, outbox enqueue)
-- Measures dispatch performance (planner/HGNN success rates)
+- Measures dispatch performance (planner/escalated success rates)
 - Calculates aggregate statistics (success rates, routing ratios, latency averages)
 
 Thread-safety:
@@ -36,11 +36,11 @@ Usage:
     
     # Track routing decisions
     tracker.track_routing_decision("fast")
-    tracker.track_routing_decision("hgnn", has_plan=True)
+    tracker.track_routing_decision("escalated", has_plan=True)
     
     # Track execution metrics
     tracker.track_metrics("fast", success=True, latency_ms=42.0)
-    tracker.track_metrics("hgnn", success=False, latency_ms=150.0)
+    tracker.track_metrics("escalated", success=False, latency_ms=150.0)
     
     # Record persistence operations
     tracker.record_proto_plan_upsert("ok")
@@ -117,4 +117,3 @@ __all__ = [
     "DispatchMetrics",
     "PersistenceMetrics",
 ]
-

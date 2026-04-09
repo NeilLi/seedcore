@@ -175,9 +175,9 @@ def _serialize_system_state(
     system_state: SystemState, ops_summary: Dict[str, Any]
 ) -> Dict[str, Any]:
     return {
-        "h_hgnn": None
-        if system_state.h_hgnn is None
-        else system_state.h_hgnn.tolist(),
+        "h_agent_centroid": None
+        if system_state.h_agent_centroid is None
+        else system_state.h_agent_centroid.tolist(),
         "E_patterns": None
         if system_state.E_patterns is None
         else system_state.E_patterns.tolist(),
@@ -289,7 +289,7 @@ async def _build_state_response(
 
     ops_summary = _build_operational_summary(agent_metrics, memory_stats, e_patterns)
     system_state = SystemState(
-        h_hgnn=agent_metrics.get("h_hgnn"),
+        h_agent_centroid=agent_metrics.get("h_agent_centroid"),
         E_patterns=e_patterns,
         w_mode=state.w_mode.copy(),
         ml={

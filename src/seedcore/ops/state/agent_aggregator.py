@@ -415,7 +415,7 @@ class AgentAggregator:
                 "lifecycle_distribution": {},
                 "specialization_distribution": {},
                 "specialization_load": {},
-                "h_hgnn": np.zeros(128, dtype=np.float32),
+                "h_agent_centroid": np.zeros(128, dtype=np.float32),
                 "pair_matrix_present": False,
                 "pair_degrees": {},
                 "pair_neighbors": {},
@@ -462,7 +462,7 @@ class AgentAggregator:
         specialization_counts = defaultdict(int)
         specialization_load = defaultdict(list)
 
-        # --- New h_hgnn Calculation ---
+        # --- Topology-weighted agent private-vector centroid (not a trained HGNN) ---
         embeddings = []
         weights = []
 
@@ -481,7 +481,7 @@ class AgentAggregator:
             load_value = snapshot.load if snapshot.load > 0 else snapshot.mem_util
             specialization_load[spec_name].append(load_value)
 
-            # --- Add embedding and weight for h_hgnn ---
+            # --- Add embedding and weight for centroid ---
             if snapshot.h is not None and snapshot.h.size > 0:
                 embeddings.append(snapshot.h)
 
@@ -506,11 +506,11 @@ class AgentAggregator:
             for spec, loads in specialization_load.items()
         }
 
-        # --- Compute final h_hgnn ---
+        # --- Final centroid in agent private space (128-d) ---
         if embeddings:
-            h_hgnn = np.average(embeddings, axis=0, weights=weights)
+            h_agent_centroid = np.average(embeddings, axis=0, weights=weights)
         else:
-            h_hgnn = np.zeros(128, dtype=np.float32)
+            h_agent_centroid = np.zeros(128, dtype=np.float32)
 
         return {
             "total_agents": len(snapshots),
@@ -520,7 +520,7 @@ class AgentAggregator:
             "lifecycle_distribution": dict(lifecycles),
             "specialization_distribution": dict(specialization_counts),
             "specialization_load": spec_avg_load,
-            "h_hgnn": h_hgnn,  # HGNN centroid (now topology-aware when available)
+            "h_agent_centroid": h_agent_centroid,
             "pair_matrix_present": has_topology,
             "pair_degrees": pair_degrees,
             "pair_neighbors": dict(pair_neighbors),

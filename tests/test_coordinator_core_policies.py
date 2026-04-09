@@ -154,7 +154,7 @@ class TestSurpriseComputer:
             "criticality": 0.7,
         }
         result = computer.compute(signals)
-        assert result["decision_kind"] in ["fast", "planner", "hgnn", "cognitive", "escalated"]
+        assert result["decision_kind"] in ["fast", "planner", "cognitive", "escalated"]
 
 
 class TestNeuralCUSUMValve:
@@ -279,8 +279,8 @@ class TestDecideRouteWithHysteresis:
         )
         assert decision == "planner"
     
-    def test_hgnn_path_decision(self):
-        """Test HGNN path decision."""
+    def test_escalated_path_decision(self):
+        """Test escalated path decision."""
         decision = decide_route_with_hysteresis(
             surprise_score=0.75,
             last_decision=None,
@@ -289,7 +289,7 @@ class TestDecideRouteWithHysteresis:
             plan_enter=0.60,
             plan_exit=0.57,
         )
-        assert decision == "hgnn"
+        assert decision == "escalated"
     
     def test_hysteresis_fast_exit(self):
         """Test hysteresis prevents fast exit too early."""
@@ -370,6 +370,4 @@ class TestComputeDriftScore:
 
         # Fallback heuristics: anomaly_triage (0.3) + priority >= 8 (0.2) = 0.5
         assert pytest.approx(drift_score, rel=1e-3) == 0.5
-
-
 

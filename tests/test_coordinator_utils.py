@@ -307,9 +307,9 @@ class TestExtractDecision:
     
     def test_extract_from_top_level(self):
         """Test extracting decision from top level."""
-        data = {"decision": "hgnn"}
+        data = {"decision": "escalated"}
         result = extract_decision(data)
-        assert result == "hgnn"
+        assert result == "escalated"
     
     def test_extract_nonexistent(self):
         """Test extracting when decision doesn't exist."""
@@ -485,4 +485,3 @@ class TestIterDependencyEntries:
         """Test iterating over None."""
         entries = list(iter_dependency_entries(None))
         assert len(entries) == 0
-

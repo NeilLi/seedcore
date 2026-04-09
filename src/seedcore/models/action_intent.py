@@ -238,7 +238,7 @@ class OwnerTwin(BaseModel):
     public_key_fingerprint: Optional[str] = None
     delegations: List[DelegatedAuthority] = Field(default_factory=list)
     state: str = "ACTIVE"
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     graph_ref: Optional[str] = None
 
 

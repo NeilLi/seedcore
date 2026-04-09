@@ -801,34 +801,28 @@ async def test_enqueue_task_embedding_now_times_out(monkeypatch):
 @pytest.mark.asyncio
 async def test_drift_fallback_heuristic_when_ml_unavailable(monkeypatch):
     """Test the fallback drift score calculation when ML service is unavailable."""
-    # Create a mock coordinator that bypasses the Ray Serve decorator
-    with patch.object(cs, 'Coordinator') as mock_coordinator_class:
-        # Create a mock instance
-        mock_coordinator = MagicMock()
-        mock_coordinator.predicate_router = StubPredicateRouter()
-        mock_coordinator.ml_client = StubClient(responses={"/drift/score": RuntimeError("ml down")})
-        
-        # Mock the _compute_drift_score method to test the fallback logic
-        async def mock_compute_drift_score(task):
-            # Simulate the fallback drift score calculation
-            score = 0.0
-            task_type = str(task.get("type", "unknown")).lower()
-            if task_type == "anomaly_triage":
-                score += 0.3
-            priority = float(task.get("priority", 5))
-            if priority >= 8:
-                score += 0.2
-            complexity = float(task.get("complexity", 0.5))
-            score += complexity * 0.2
-            history_ids = task.get("history_ids", [])
-            if len(history_ids) == 0:
-                score += 0.1
-            return max(0.0, min(1.0, score))
-        
-        mock_coordinator._compute_drift_score = mock_compute_drift_score
-        mock_coordinator_class.return_value = mock_coordinator
-        
-        c = mock_coordinator
+    c = MagicMock()
+    c.predicate_router = StubPredicateRouter()
+    c.ml_client = StubClient(responses={"/drift/score": RuntimeError("ml down")})
+
+    # Mock the _compute_drift_score method to test the fallback logic
+    async def mock_compute_drift_score(task):
+        # Simulate the fallback drift score calculation
+        score = 0.0
+        task_type = str(task.get("type", "unknown")).lower()
+        if task_type == "anomaly_triage":
+            score += 0.3
+        priority = float(task.get("priority", 5))
+        if priority >= 8:
+            score += 0.2
+        complexity = float(task.get("complexity", 0.5))
+        score += complexity * 0.2
+        history_ids = task.get("history_ids", [])
+        if len(history_ids) == 0:
+            score += 0.1
+        return max(0.0, min(1.0, score))
+
+    c._compute_drift_score = mock_compute_drift_score
 
     # Simple task with high priority, some complexity, no history -> deterministic heuristic
     task = {
@@ -966,6 +960,7 @@ def test_eventizer_request_accepts_fast_eventizer_refinement_fields():
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited:RuntimeWarning")
 async def test_handle_source_registration_task_applies_normalization_and_cognitive_enrichment():
     with patch.object(cs.Coordinator, "__init__", return_value=None):
         coordinator = cs.Coordinator.__new__(cs.Coordinator)
@@ -973,18 +968,24 @@ async def test_handle_source_registration_task_applies_normalization_and_cogniti
     coordinator._session_factory = None
     coordinator.graph_task_repo = None
     coordinator.timeout_s = 10.0
-    coordinator._persist_source_registration_decision = AsyncMock()
-    coordinator.cognitive_client = SimpleNamespace(
-        execute_async=AsyncMock(
-            return_value={
-                "result": {
-                    "summary": "Cross-modal evidence aligned",
-                    "semantic_hints": ["seal integrity consistent"],
-                    "conflicts": [],
-                }
+    persist_calls = []
+    cognitive_calls = []
+
+    async def _persist_decision(task_dict, decision):
+        persist_calls.append((task_dict, decision))
+
+    async def _execute_async(**kwargs):
+        cognitive_calls.append(kwargs)
+        return {
+            "result": {
+                "summary": "Cross-modal evidence aligned",
+                "semantic_hints": ["seal integrity consistent"],
+                "conflicts": [],
             }
-        )
-    )
+        }
+
+    coordinator._persist_source_registration_decision = _persist_decision
+    coordinator.cognitive_client = SimpleNamespace(execute_async=_execute_async)
 
     task_dict = {
         "task_id": "task-reg-1",
@@ -1060,11 +1061,11 @@ async def test_handle_source_registration_task_applies_normalization_and_cogniti
     assert decision["rule_trace"]["cognitive_enrichment"]["semantic_hints"] == [
         "seal integrity consistent"
     ]
-    coordinator.cognitive_client.execute_async.assert_awaited_once()
-    enrichment_task = coordinator.cognitive_client.execute_async.await_args.kwargs["task"]
+    assert len(cognitive_calls) == 1
+    enrichment_task = cognitive_calls[0]["task"]
     assert enrichment_task["params"]["cognitive"]["disable_memory_write"] is True
     assert enrichment_task["params"]["cognitive"]["skip_retrieval"] is True
-    coordinator._persist_source_registration_decision.assert_awaited_once()
+    assert len(persist_calls) == 1
 
 
 @pytest.mark.asyncio

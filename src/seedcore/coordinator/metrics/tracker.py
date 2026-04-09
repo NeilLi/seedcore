@@ -24,10 +24,10 @@ class MetricsTracker:
     Track task execution metrics for monitoring and optimization.
     
     This tracker provides:
-    - Routing decision tracking (fast/planner/HGNN)
+    - Routing decision tracking (fast/planner/escalated)
     - Task execution outcomes (success/failure, latency)
     - Outbox, dispatch, and persistence events
-    - HGNN plan quality (empty vs generated)
+    - Escalated plan quality (empty vs generated)
     - Overall success and routing distribution rates
     
     Thread-safety:
@@ -72,16 +72,16 @@ class MetricsTracker:
             # Routing decisions (counts routing choices, not execution)
             "fast_routed_total": 0,
             "planner_routed_total": 0,
-            "hgnn_routed_total": 0,
-            # HGNN plan generation (when routed to HGNN)
-            "hgnn_plan_generated_total": 0,  # Non-empty proto_plan
-            "hgnn_plan_empty_total": 0,       # Empty proto_plan (PKG failed)
+            "escalated_routed_total": 0,
+            # Escalated plan generation (when routed to escalated path)
+            "escalated_plan_generated_total": 0,  # Non-empty proto_plan
+            "escalated_plan_empty_total": 0,       # Empty proto_plan (PKG failed)
             # Execution metrics (tracks actual pipeline runs)
             "fast_path_tasks": 0,
-            "hgnn_tasks": 0,
+            "escalated_tasks": 0,
             "escalation_failures": 0,
             "fast_path_latency_ms": deque(maxlen=latency_reservoir_size),
-            "hgnn_latency_ms": deque(maxlen=latency_reservoir_size),
+            "escalated_latency_ms": deque(maxlen=latency_reservoir_size),
             "escalation_latency_ms": deque(maxlen=latency_reservoir_size),
             # Persistence / dispatch metrics
             "proto_plan_upsert_ok_total": 0,
@@ -92,8 +92,8 @@ class MetricsTracker:
             "outbox_embed_enqueue_err_total": 0,
             "dispatch_planner_ok_total": 0,
             "dispatch_planner_err_total": 0,
-            "dispatch_hgnn_ok_total": 0,
-            "dispatch_hgnn_err_total": 0,
+            "dispatch_escalated_ok_total": 0,
+            "dispatch_escalated_err_total": 0,
             "route_and_execute_latency_ms": deque(maxlen=latency_reservoir_size),
             # RESULT_VERIFIER (Coordinator-embedded)
             "result_verifier_jobs_enqueued_total": 0,
@@ -112,20 +112,20 @@ class MetricsTracker:
         Track routing decisions (separate from execution).
         
         Args:
-            decision: 'fast', 'planner', or 'hgnn'
-            has_plan: For HGNN, whether proto_plan has tasks
+            decision: 'fast', 'planner', or 'escalated'
+            has_plan: For the escalated path, whether proto_plan has tasks
         """
         with self._lock:
             if decision == "fast":
                 self._task_metrics["fast_routed_total"] += 1
             elif decision == "planner":
                 self._task_metrics["planner_routed_total"] += 1
-            elif decision == "hgnn":
-                self._task_metrics["hgnn_routed_total"] += 1
+            elif decision == "escalated":
+                self._task_metrics["escalated_routed_total"] += 1
                 if has_plan:
-                    self._task_metrics["hgnn_plan_generated_total"] += 1
+                    self._task_metrics["escalated_plan_generated_total"] += 1
                 else:
-                    self._task_metrics["hgnn_plan_empty_total"] += 1
+                    self._task_metrics["escalated_plan_empty_total"] += 1
             else:
                 logger.warning(f"Unknown routing decision: {decision}")
     
@@ -134,7 +134,7 @@ class MetricsTracker:
         Track task execution metrics.
         
         Args:
-            path: Execution path ('fast', 'hgnn', 'hgnn_fallback', 'escalation_failure')
+            path: Execution path ('fast', 'escalated', 'escalated_fallback', 'escalation_failure')
             success: Whether execution succeeded
             latency_ms: Execution latency in milliseconds
         """
@@ -148,9 +148,9 @@ class MetricsTracker:
             if path == "fast":
                 self._task_metrics["fast_path_tasks"] += 1
                 self._task_metrics["fast_path_latency_ms"].append(latency_ms)
-            elif path in ["hgnn", "hgnn_fallback"]:
-                self._task_metrics["hgnn_tasks"] += 1
-                self._task_metrics["hgnn_latency_ms"].append(latency_ms)
+            elif path in ["escalated", "escalated_fallback"]:
+                self._task_metrics["escalated_tasks"] += 1
+                self._task_metrics["escalated_latency_ms"].append(latency_ms)
             elif path == "escalation_failure":
                 self._task_metrics["escalation_failures"] += 1
                 self._task_metrics["escalation_latency_ms"].append(latency_ms)
@@ -184,7 +184,7 @@ class MetricsTracker:
         Record dispatch operation.
         
         Args:
-            route: 'planner' or 'hgnn'
+            route: 'planner' or 'escalated'
             status: 'ok' or 'err'
         """
         key = f"dispatch_{route}_{status}_total"
@@ -259,10 +259,10 @@ class MetricsTracker:
             if latencies:
                 metrics["fast_path_latency_avg_ms"] = sum(latencies) / len(latencies)
         
-        if metrics.get("hgnn_latency_ms"):
-            latencies = metrics["hgnn_latency_ms"]
+        if metrics.get("escalated_latency_ms"):
+            latencies = metrics["escalated_latency_ms"]
             if latencies:
-                metrics["hgnn_latency_avg_ms"] = sum(latencies) / len(latencies)
+                metrics["escalated_latency_avg_ms"] = sum(latencies) / len(latencies)
         
         if metrics.get("escalation_latency_ms"):
             latencies = metrics["escalation_latency_ms"]
@@ -283,18 +283,18 @@ class MetricsTracker:
         total_routed = (
             metrics.get("fast_routed_total", 0) +
             metrics.get("planner_routed_total", 0) +
-            metrics.get("hgnn_routed_total", 0)
+            metrics.get("escalated_routed_total", 0)
         )
         if total_routed > 0:
             metrics["fast_routed_rate"] = metrics.get("fast_routed_total", 0) / total_routed
             metrics["planner_routed_rate"] = metrics.get("planner_routed_total", 0) / total_routed
-            metrics["hgnn_routed_rate"] = metrics.get("hgnn_routed_total", 0) / total_routed
+            metrics["escalated_routed_rate"] = metrics.get("escalated_routed_total", 0) / total_routed
         
-        # Calculate HGNN plan success rate
-        hgnn_routed = metrics.get("hgnn_routed_total", 0)
-        if hgnn_routed > 0:
-            metrics["hgnn_plan_success_rate"] = (
-                metrics.get("hgnn_plan_generated_total", 0) / hgnn_routed
+        # Calculate escalated plan success rate
+        escalated_routed = metrics.get("escalated_routed_total", 0)
+        if escalated_routed > 0:
+            metrics["escalated_plan_success_rate"] = (
+                metrics.get("escalated_plan_generated_total", 0) / escalated_routed
             )
         
         # Calculate execution success rates
@@ -302,7 +302,7 @@ class MetricsTracker:
         if total_tasks > 0:
             metrics["success_rate"] = metrics.get("successful_tasks", 0) / total_tasks
             metrics["fast_path_rate"] = metrics.get("fast_path_tasks", 0) / total_tasks
-            metrics["hgnn_rate"] = metrics.get("hgnn_tasks", 0) / total_tasks
+            metrics["escalated_rate"] = metrics.get("escalated_tasks", 0) / total_tasks
         
         # Add timestamp
         metrics["export_ts"] = time.time()

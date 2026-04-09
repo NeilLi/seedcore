@@ -39,6 +39,14 @@ class Neo4jGraph:
         self.driver: AsyncDriver = AsyncGraphDatabase.driver(uri, auth=auth)
         self.database: str = "neo4j"  # Default database, can be made configurable
 
+    async def ping(self) -> None:
+        """Raise if Bolt is unreachable or the default database cannot run a trivial query."""
+        async with self.driver.session(database=self.database) as session:
+            result = await session.run("RETURN 1 AS ok")
+            rec = await result.single()
+            if rec is None or rec.get("ok") != 1:
+                raise RuntimeError("neo4j ping: unexpected response")
+
     async def _execute_query(self, query: str, params: Optional[dict] = None):
         """Helper to run a query in a managed async session."""
         if params is None:

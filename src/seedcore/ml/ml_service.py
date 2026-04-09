@@ -9,7 +9,10 @@ Architecture:
     - Ray Serve: Distributed deployment and scaling of ML workloads
     - FastAPI: RESTful API layer with async request handling
     - StatusActor: Ray Actor for managing shared job state across processes/threads
-    - PyTorch Geometric: Backend for hypergraph and graph neural network operations
+
+    Graph-side structural embeddings (DGL GraphSAGE, Neo4j k-hop loads) run in the
+    graph dispatcher / ``GraphEmbedder`` Ray actors under ``seedcore.graph``, not as
+    HTTP routes on this ML app.
 
 Core Capabilities:
 
@@ -46,15 +49,6 @@ Core Capabilities:
        Uses FunctionGemma as a low-latency, local intent compiler optimized
        for device/robot/automation commands. Pure inference, no tool execution.
 
-    5. Graph & Hypergraph Learning (/hgnn/*):
-       Deep structural reasoning for the "Escalated" path:
-       - Structural Embedding (/hgnn/embed): Converts hypergraph topology (nodes/edges)
-         and anomaly snapshots into a dense vector space (hgnn_embedding). This allows
-         neuro-symbolic systems to reason about where in the system architecture a
-         failure occurred.
-       - Causal Path Finding (/hgnn/causal-path): Identifies probable root-cause paths
-         by analyzing hyperedge activation patterns during anomaly events.
-
 Key Components:
 
     StatusActor (Ray Actor):
@@ -68,13 +62,6 @@ Key Components:
     XGBoost Service:
         Singleton service for gradient boosting with energy-aware promotion gates.
 
-    HGNN Service (Hypergraph Neural Network):
-        Specialized deep learning service for structural analysis:
-        - Uses incidence matrices to model high-order dependencies (shared resources,
-          multi-service failures)
-        - Provides the hgnn_embedding vector used by the Coordinator to seed deep reasoning
-        - Optimized for inference latency using TorchScript or ONNX Runtime
-
 Integration Points:
 
     Energy Service:
@@ -82,17 +69,17 @@ Integration Points:
 
     Coordinator Service:
         - Consumes /drift/score for routing decisions (Fast vs. Cognitive)
-        - Consumes /hgnn/embed to generate the context vector for "Escalated" tasks
 
     Cognitive Service:
-        Consumes /embeddings for RAG and /hgnn/causal-path for root cause analysis
+        Consumes /embeddings for RAG when configured; escalated / graph context is
+        supplied via coordinator/state payloads (e.g. ``hgnn_embedding`` field), not
+        via ``/hgnn/*`` routes on this service.
 
 Deployment:
     Deployed as a Ray Serve deployment with async request handling, background task
     support, and health/resource monitoring.
 
 Environment Variables:
-    SEEDCORE_HGNN_MODEL_PATH: Path to the pre-trained HGNN weights
     SEEDCORE_PROMOTION_LTOT_CAP: Maximum Lipschitz constant for model promotion
     SEEDCORE_E_GUARD: Energy guard threshold for promotion
     SEEDCORE_FUNCTIONGEMMA_MODEL_PATH: Path to FunctionGemma base model

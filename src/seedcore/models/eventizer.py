@@ -115,7 +115,7 @@ class RedactMode(str, Enum):
 class RouteDecision(str, Enum):
     FAST = "fast"
     PLANNER = "planner"
-    HGNN = "hgnn"
+    ESCALATED = "escalated"
 
 
 class ModalityType(str, Enum):

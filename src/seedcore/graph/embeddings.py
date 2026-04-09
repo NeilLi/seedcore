@@ -62,7 +62,7 @@ DEFAULT_LABEL = os.getenv("GRAPH_EMBEDDING_DEFAULT_LABEL", "default")
 
 
 # ---------- Ray Actor: GraphEmbedder (legacy SAGE over homogeneous graph) ----------
-@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES)
+@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES, max_restarts=3)
 class GraphEmbedder:
     """
     Computes node embeddings using a simple GraphSAGE model over a k-hop
@@ -148,7 +148,7 @@ class GraphEmbedder:
 
 
 # ---------- Ray Actor: NimRetrievalEmbedder ----------
-@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES)
+@ray.remote(num_cpus=0.1, memory=GRAPH_ACTOR_MEMORY_BYTES, max_restarts=3)
 class NimRetrievalEmbedder:
     """
     Ray actor that queries NIM Retrieval service to produce embeddings for text nodes.

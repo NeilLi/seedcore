@@ -11,20 +11,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Type literals for valid metric keys
-RoutingDecision = Literal["fast", "planner", "hgnn"]
+RoutingDecision = Literal["fast", "planner", "escalated"]
 DispatchStatus = Literal["ok", "err"]
 UpsertStatus = Literal["ok", "err", "truncated"]
 EnqueueStatus = Literal["ok", "dup", "err"]
-DispatchRoute = Literal["planner", "hgnn"]
+DispatchRoute = Literal["planner", "escalated"]
 
 
 # Valid metric keys for validation
 VALID_ROUTING_KEYS: Set[str] = {
     "fast_routed_total",
     "planner_routed_total",
-    "hgnn_routed_total",
-    "hgnn_plan_generated_total",
-    "hgnn_plan_empty_total",
+    "escalated_routed_total",
+    "escalated_plan_generated_total",
+    "escalated_plan_empty_total",
 }
 
 VALID_EXECUTION_KEYS: Set[str] = {
@@ -32,13 +32,13 @@ VALID_EXECUTION_KEYS: Set[str] = {
     "successful_tasks",
     "failed_tasks",
     "fast_path_tasks",
-    "hgnn_tasks",
+    "escalated_tasks",
     "escalation_failures",
 }
 
 VALID_LATENCY_KEYS: Set[str] = {
     "fast_path_latency_ms",
-    "hgnn_latency_ms",
+    "escalated_latency_ms",
     "escalation_latency_ms",
     "route_remote_latency_ms",
     "route_and_execute_latency_ms",
@@ -47,8 +47,8 @@ VALID_LATENCY_KEYS: Set[str] = {
 VALID_DISPATCH_KEYS: Set[str] = {
     "dispatch_planner_ok_total",
     "dispatch_planner_err_total",
-    "dispatch_hgnn_ok_total",
-    "dispatch_hgnn_err_total",
+    "dispatch_escalated_ok_total",
+    "dispatch_escalated_err_total",
 }
 
 VALID_PERSISTENCE_KEYS: Set[str] = {
@@ -79,21 +79,21 @@ class RoutingMetrics:
     total: int = 0
     fast: int = 0
     planner: int = 0
-    hgnn: int = 0
-    hgnn_plan_generated: int = 0
-    hgnn_plan_empty: int = 0
+    escalated: int = 0
+    escalated_plan_generated: int = 0
+    escalated_plan_empty: int = 0
     
     def __post_init__(self):
         """Validate routing metrics values."""
         validate_non_negative(self.total, "total")
         validate_non_negative(self.fast, "fast")
         validate_non_negative(self.planner, "planner")
-        validate_non_negative(self.hgnn, "hgnn")
-        validate_non_negative(self.hgnn_plan_generated, "hgnn_plan_generated")
-        validate_non_negative(self.hgnn_plan_empty, "hgnn_plan_empty")
+        validate_non_negative(self.escalated, "escalated")
+        validate_non_negative(self.escalated_plan_generated, "escalated_plan_generated")
+        validate_non_negative(self.escalated_plan_empty, "escalated_plan_empty")
         
         # Validate consistency: total should match sum if set manually
-        calculated_total = self.fast + self.planner + self.hgnn
+        calculated_total = self.fast + self.planner + self.escalated
         if self.total > 0 and calculated_total > 0 and self.total != calculated_total:
             logger.warning(
                 f"RoutingMetrics total ({self.total}) doesn't match sum of routes ({calculated_total})"
@@ -114,18 +114,18 @@ class RoutingMetrics:
         return self.planner / self.total
     
     @property
-    def hgnn_rate(self) -> Optional[float]:
-        """HGNN routing rate."""
+    def escalated_rate(self) -> Optional[float]:
+        """Escalated routing rate."""
         if self.total == 0:
             return None
-        return self.hgnn / self.total
+        return self.escalated / self.total
     
     @property
-    def hgnn_plan_success_rate(self) -> Optional[float]:
-        """HGNN plan generation success rate."""
-        if self.hgnn == 0:
+    def escalated_plan_success_rate(self) -> Optional[float]:
+        """Escalated plan generation success rate."""
+        if self.escalated == 0:
             return None
-        return self.hgnn_plan_generated / self.hgnn
+        return self.escalated_plan_generated / self.escalated
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RoutingMetrics":
@@ -144,19 +144,19 @@ class RoutingMetrics:
         # Extract and validate keys
         fast = data.get("fast_routed_total", 0)
         planner = data.get("planner_routed_total", 0)
-        hgnn = data.get("hgnn_routed_total", 0)
-        hgnn_plan_gen = data.get("hgnn_plan_generated_total", 0)
-        hgnn_plan_empty = data.get("hgnn_plan_empty_total", 0)
+        escalated = data.get("escalated_routed_total", 0)
+        escalated_plan_gen = data.get("escalated_plan_generated_total", 0)
+        escalated_plan_empty = data.get("escalated_plan_empty_total", 0)
         
-        total = data.get("total", fast + planner + hgnn)
+        total = data.get("total", fast + planner + escalated)
         
         return cls(
             total=total,
             fast=fast,
             planner=planner,
-            hgnn=hgnn,
-            hgnn_plan_generated=hgnn_plan_gen,
-            hgnn_plan_empty=hgnn_plan_empty,
+            escalated=escalated,
+            escalated_plan_generated=escalated_plan_gen,
+            escalated_plan_empty=escalated_plan_empty,
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -165,13 +165,13 @@ class RoutingMetrics:
             "total": self.total,
             "fast": self.fast,
             "planner": self.planner,
-            "hgnn": self.hgnn,
-            "hgnn_plan_generated": self.hgnn_plan_generated,
-            "hgnn_plan_empty": self.hgnn_plan_empty,
+            "escalated": self.escalated,
+            "escalated_plan_generated": self.escalated_plan_generated,
+            "escalated_plan_empty": self.escalated_plan_empty,
             "fast_rate": self.fast_rate,
             "planner_rate": self.planner_rate,
-            "hgnn_rate": self.hgnn_rate,
-            "hgnn_plan_success_rate": self.hgnn_plan_success_rate,
+            "escalated_rate": self.escalated_rate,
+            "escalated_plan_success_rate": self.escalated_plan_success_rate,
         }
 
 
@@ -182,7 +182,7 @@ class ExecutionMetrics:
     successful: int = 0
     failed: int = 0
     fast_path: int = 0
-    hgnn: int = 0
+    escalated: int = 0
     escalation_failures: int = 0
     
     def __post_init__(self):
@@ -191,7 +191,7 @@ class ExecutionMetrics:
         validate_non_negative(self.successful, "successful")
         validate_non_negative(self.failed, "failed")
         validate_non_negative(self.fast_path, "fast_path")
-        validate_non_negative(self.hgnn, "hgnn")
+        validate_non_negative(self.escalated, "escalated")
         validate_non_negative(self.escalation_failures, "escalation_failures")
         
         # Validate consistency
@@ -217,11 +217,11 @@ class ExecutionMetrics:
         return self.fast_path / self.total
     
     @property
-    def hgnn_rate(self) -> Optional[float]:
-        """HGNN execution rate."""
+    def escalated_rate(self) -> Optional[float]:
+        """Escalated execution rate."""
         if self.total == 0:
             return None
-        return self.hgnn / self.total
+        return self.escalated / self.total
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ExecutionMetrics":
@@ -242,7 +242,7 @@ class ExecutionMetrics:
             successful=data.get("successful_tasks", 0),
             failed=data.get("failed_tasks", 0),
             fast_path=data.get("fast_path_tasks", 0),
-            hgnn=data.get("hgnn_tasks", 0),
+            escalated=data.get("escalated_tasks", 0),
             escalation_failures=data.get("escalation_failures", 0),
         )
     
@@ -253,11 +253,11 @@ class ExecutionMetrics:
             "successful": self.successful,
             "failed": self.failed,
             "fast_path": self.fast_path,
-            "hgnn": self.hgnn,
+            "escalated": self.escalated,
             "escalation_failures": self.escalation_failures,
             "success_rate": self.success_rate,
             "fast_path_rate": self.fast_path_rate,
-            "hgnn_rate": self.hgnn_rate,
+            "escalated_rate": self.escalated_rate,
         }
 
 
@@ -347,15 +347,15 @@ class DispatchMetrics:
     """Dispatch operation metrics with validation."""
     planner_ok: int = 0
     planner_err: int = 0
-    hgnn_ok: int = 0
-    hgnn_err: int = 0
+    escalated_ok: int = 0
+    escalated_err: int = 0
     
     def __post_init__(self):
         """Validate dispatch metrics values."""
         validate_non_negative(self.planner_ok, "planner_ok")
         validate_non_negative(self.planner_err, "planner_err")
-        validate_non_negative(self.hgnn_ok, "hgnn_ok")
-        validate_non_negative(self.hgnn_err, "hgnn_err")
+        validate_non_negative(self.escalated_ok, "escalated_ok")
+        validate_non_negative(self.escalated_err, "escalated_err")
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DispatchMetrics":
@@ -374,8 +374,8 @@ class DispatchMetrics:
         return cls(
             planner_ok=data.get("dispatch_planner_ok_total", 0),
             planner_err=data.get("dispatch_planner_err_total", 0),
-            hgnn_ok=data.get("dispatch_hgnn_ok_total", 0),
-            hgnn_err=data.get("dispatch_hgnn_err_total", 0),
+            escalated_ok=data.get("dispatch_escalated_ok_total", 0),
+            escalated_err=data.get("dispatch_escalated_err_total", 0),
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -383,8 +383,8 @@ class DispatchMetrics:
         return {
             "planner_ok": self.planner_ok,
             "planner_err": self.planner_err,
-            "hgnn_ok": self.hgnn_ok,
-            "hgnn_err": self.hgnn_err,
+            "escalated_ok": self.escalated_ok,
+            "escalated_err": self.escalated_err,
         }
 
 

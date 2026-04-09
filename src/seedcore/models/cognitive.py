@@ -7,7 +7,7 @@ class DecisionKind(str, Enum):
     """Canonical routing or processing path kinds across Coordinator and Cognitive subsystems."""
     FAST_PATH = "fast"          # Direct organism execution
     COGNITIVE = "planner"       # Reasoning route on cognitive
-    ESCALATED = "hgnn"          # HGNN-based multi-plan decomposition (legacy escalation path)
+    ESCALATED = "escalated"     # Escalated / deep path; not the ML /hgnn HTTP surface
     ERROR = "error"             # Fallback or failure condition
 
 class CognitiveType(Enum):

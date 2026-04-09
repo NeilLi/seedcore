@@ -37,7 +37,7 @@ class PredicateMetrics:
         
         # OCPS and routing signals
         self.p_fast_gauge = create_safe_gauge("coord_p_fast", "OCPS fast-path probability")
-        self.escalation_ratio_gauge = create_safe_gauge("coord_escalation_ratio", "Escalation ratio hgnn/total")
+        self.escalation_ratio_gauge = create_safe_gauge("coord_escalation_ratio", "Escalation ratio escalated/total")
         self.s_drift_gauge = create_safe_gauge("coord_s_drift", "Drift slice gᵀh")
         
         # Energy signals
@@ -53,7 +53,7 @@ class PredicateMetrics:
         
         # System performance signals
         self.fast_path_latency_gauge = create_safe_gauge("coord_fast_path_latency_ms", "Average fast path latency (ms)")
-        self.hgnn_latency_gauge = create_safe_gauge("coord_hgnn_latency_ms", "Average HGNN path latency (ms)")
+        self.escalated_latency_gauge = create_safe_gauge("coord_escalated_latency_ms", "Average escalated path latency (ms)")
         self.success_rate_gauge = create_safe_gauge("coord_success_rate", "Overall task success rate")
         
         # Memory and resource signals
@@ -128,13 +128,13 @@ class PredicateMetrics:
         self.gpu_guard_ok_gauge.set(1 if guard_ok else 0)
     
     def update_performance_signals(self, fast_path_latency_ms: Optional[float] = None,
-                                 hgnn_latency_ms: Optional[float] = None,
+                                 escalated_latency_ms: Optional[float] = None,
                                  success_rate: Optional[float] = None):
         """Update performance signals."""
         if fast_path_latency_ms is not None:
             self.fast_path_latency_gauge.set(fast_path_latency_ms)
-        if hgnn_latency_ms is not None:
-            self.hgnn_latency_gauge.set(hgnn_latency_ms)
+        if escalated_latency_ms is not None:
+            self.escalated_latency_gauge.set(escalated_latency_ms)
         if success_rate is not None:
             self.success_rate_gauge.set(success_rate)
     
@@ -157,7 +157,7 @@ class PredicateMetrics:
         self.total_requests.inc()
         
         # Track escalation ratio
-        if path in ["hgnn", "escalation_failure"]:
+        if path in ["escalated", "escalation_failure"]:
             self.escalation_requests.inc()
     
     def record_routing_decision(self, decision: str, reason: str):

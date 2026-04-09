@@ -5,7 +5,7 @@ import asyncio
 import time
 import logging
 from pydantic import BaseModel, ConfigDict, Field
-from typing import List, Optional, Dict, Any, Iterable
+from typing import List, Optional, Dict, Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -134,9 +134,12 @@ class PgVectorStore:
         vec = query_vec if query_vec is not None else emb
         if vec is None:
             raise ValueError("search requires emb or query_vec")
+        t0 = time.perf_counter()
         where_clauses = []
-        params = [emb]  # First param is always the embedding vector
-        param_idx = 2  # Start from $2 since $1 is the embedding
+        qvec = np.asarray(vec, dtype=np.float32)
+        vec_str = self._embedding_to_str(qvec)
+        params: List[Any] = [vec_str]
+        param_idx = 2  # Start from $2 since $1 is the query vector literal
         
         # Build WHERE clause from filters
         if filters and "or" in filters:
@@ -193,10 +196,17 @@ class PgVectorStore:
         
         try:
             pool = await self._get_pool()
-            vec_str = self._embedding_to_str(vec)
-            params[0] = vec_str  # Replace embedding numpy array with string
             async with pool.acquire() as conn:
-                return await conn.fetch(q, *params)
+                rows = await conn.fetch(q, *params)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            logger.debug(
+                "pgvector holons search k=%s filtered=%s rows=%d latency_ms=%.2f",
+                k,
+                bool(filters and filters.get("or")),
+                len(rows),
+                elapsed_ms,
+            )
+            return list(rows)
         except Exception as e:
             logger.error(f"Vector search failed: {e}", exc_info=True)
             return []

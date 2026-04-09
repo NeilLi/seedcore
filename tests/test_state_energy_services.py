@@ -3,6 +3,8 @@ import os
 import sys
 import types
 import uuid
+
+import numpy as np
 from datetime import datetime, timezone
 
 os.environ.setdefault("RAY_DISABLE_IMPORT_WARNING", "1")
@@ -214,6 +216,17 @@ def test_unified_state_round_trips_assets_in_payload():
     assert restored.assets["lot-9"]["registration_status"] == "approved"
 
 
+def test_unified_state_to_payload_uses_h_agent_centroid():
+    s = UnifiedState(
+        agents={},
+        organs={},
+        system=SystemState(h_agent_centroid=np.asarray([0.5, 0.25], dtype=np.float32)),
+        memory=MemoryVector(),
+    )
+    assert s.to_payload()["system"]["h_agent_centroid"] == [0.5, 0.25]
+    assert "h_hgnn" not in s.to_payload()["system"]
+
+
 @pytest.mark.asyncio
 async def test_build_state_response_publishes_authoritative_assets(monkeypatch):
     class _AgentAggregator:
@@ -224,7 +237,7 @@ async def test_build_state_response_publishes_authoritative_assets(monkeypatch):
                 "avg_memory_util": 0.1,
                 "specialization_load": {"planner": 0.2},
                 "pair_matrix_present": True,
-                "h_hgnn": [0.1, 0.2, 0.3],
+                "h_agent_centroid": [0.1, 0.2, 0.3],
             }
 
         async def get_last_update_time(self):
@@ -287,6 +300,11 @@ async def test_build_state_response_publishes_authoritative_assets(monkeypatch):
     assert response.payload is not None
     assert response.payload.assets["lot-11"]["current_zone"] == "zone-d"
     assert response.payload.to_payload()["assets"]["lot-11"]["registration_status"] == "approved"
+    assert response.metrics is not None
+    assert np.allclose(
+        response.metrics["system"]["h_agent_centroid"],
+        [0.1, 0.2, 0.3],
+    )
 
 
 @pytest.mark.asyncio

@@ -319,8 +319,8 @@ class OrganismRouter(Router):
     NOTE:
     - Uses /route-and-execute endpoint (canonical routing+execution API)
     - If execute_result.decision_kind == "fast": that's a normal success, return it.
-    - If execute_result.decision_kind == "hgnn": that should already be a fully
-      decomposed HGNN-style plan (EscalatedResult). We DO NOT forward again.
+    - If execute_result.decision_kind == "escalated": that should already be a fully
+      decomposed escalated plan (EscalatedResult). We DO NOT forward again.
     - If execute_result.decision_kind == "error": just return it.
     """
 

@@ -28,7 +28,8 @@ The CognitiveOrchestrator acts as the STRATEGY Layer:
 
     The CognitiveCore (Worker) follows data-driven orders:
     - skip_retrieval=True: Skip RAG (Fast/Chat mode)
-    - hgnn_embedding present: Use HGNN context
+    - hgnn_embedding present: Use graph/escalation context (coordinator payload;
+      not an HTTP ``/hgnn/*`` ML route)
     - Otherwise: Run RAG pipeline
 
 -------------------------------------------------------------------------------

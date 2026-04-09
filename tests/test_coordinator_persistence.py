@@ -82,7 +82,7 @@ async def test_task_proto_plan_dao_truncates_large_payload():
     result = await dao.upsert(
         session,
         task_id="00000000-0000-0000-0000-000000000002",
-        route="hgnn",
+        route="escalated",
         proto_plan=proto_plan,
     )
     assert result == {"truncated": True}

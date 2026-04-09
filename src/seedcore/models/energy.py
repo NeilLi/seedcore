@@ -1,5 +1,7 @@
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
+from pydantic import (  # pyright: ignore[reportMissingImports]
+    BaseModel,
+)
 
 from ..models.state import AgentSnapshot
 
@@ -53,7 +55,10 @@ class OrganStatePayload(BaseModel):
     v_pso: Optional[List[float]] = None
 
 class SystemStatePayload(BaseModel):
-    h_hgnn: Optional[List[float]] = None
+    model_config = {"extra": "forbid"}
+
+    # Weighted centroid of agent private vectors.
+    h_agent_centroid: Optional[List[float]] = None
     E_patterns: Optional[List[float]] = None
     w_mode: Optional[List[float]] = None
     ml: Optional[Dict[str, Any]] = None

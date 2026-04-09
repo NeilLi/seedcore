@@ -113,14 +113,16 @@ class OrganState:
 
 @dataclass
 class SystemState:
-    h_hgnn: Optional[np.ndarray] = None
+    # Weighted centroid of agent private vectors (128-d); optional topology-aware weights.
+    # Not a trained HGNN embedding.
+    h_agent_centroid: Optional[np.ndarray] = None
     E_patterns: Optional[np.ndarray] = None  # hyperedge selection/activation
     w_mode: Optional[np.ndarray] = None      # system mode weights (optional)
     ml: Dict[str, Any] = field(default_factory=dict)  # ML annotations (roles, drift, anomaly, scaling)
 
     def __post_init__(self):
-        if self.h_hgnn is not None:
-            self.h_hgnn = _as_f32(self.h_hgnn)
+        if self.h_agent_centroid is not None:
+            self.h_agent_centroid = _as_f32(self.h_agent_centroid)
         if self.E_patterns is not None:
             self.E_patterns = _as_f32(self.E_patterns)
         if self.w_mode is not None:
@@ -343,7 +345,9 @@ class UnifiedState:
                                            c=a.c, mem_util=a.mem_util, lifecycle=a.lifecycle)
         # Clamp E_patterns
         sys = SystemState(
-            h_hgnn=self.system.h_hgnn.copy() if self.system.h_hgnn is not None else None,
+            h_agent_centroid=self.system.h_agent_centroid.copy()
+            if self.system.h_agent_centroid is not None
+            else None,
             E_patterns=self.hyper_selection().copy(),
             w_mode=self.system.w_mode.copy() if self.system.w_mode is not None else None,
         )
@@ -399,7 +403,9 @@ class UnifiedState:
                 for oid, o in self.organs.items()
             },
             "system": {
-                "h_hgnn": None if self.system.h_hgnn is None else _as_f32(self.system.h_hgnn).tolist(),
+                "h_agent_centroid": None
+                if self.system.h_agent_centroid is None
+                else _as_f32(self.system.h_agent_centroid).tolist(),
                 "E_patterns": None if self.system.E_patterns is None else _as_f32(self.system.E_patterns).tolist(),
                 "w_mode": None if self.system.w_mode is None else _as_f32(self.system.w_mode).tolist(),
                 "ml": self.system.ml or {},
@@ -437,7 +443,9 @@ class UnifiedState:
             )
         sysd = payload.get("system") or {}
         system = SystemState(
-            h_hgnn=None if sysd.get("h_hgnn") is None else _as_f32(sysd.get("h_hgnn")),
+            h_agent_centroid=None
+            if sysd.get("h_agent_centroid") is None
+            else _as_f32(sysd.get("h_agent_centroid")),
             E_patterns=None if sysd.get("E_patterns") is None else _as_f32(sysd.get("E_patterns")),
             w_mode=None if sysd.get("w_mode") is None else _as_f32(sysd.get("w_mode")),
             ml=dict(sysd.get("ml") or {}),

@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, List
 from pydantic import BaseModel, Field  # pyright: ignore[reportMissingImports]
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 class HolonType(str, Enum):
@@ -36,7 +36,7 @@ class Holon(BaseModel):
     links: List[Dict[str, str]] = Field(default_factory=list)
     
     # Governance
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     decay_rate: float = Field(0.1, description="Forgetting curve factor")
     confidence: float = 1.0
     access_policy: List[str] = Field(default_factory=list) # e.g. ["security_organ"]

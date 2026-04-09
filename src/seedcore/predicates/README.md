@@ -217,7 +217,7 @@ Key metrics for monitoring:
 coord_p_fast
 
 # Escalation ratio
-rate(coord_requests_total{path="hgnn"}[5m]) / rate(coord_requests_total[5m])
+rate(coord_requests_total{path="escalated"}[5m]) / rate(coord_requests_total[5m])
 
 # GPU guard status
 coord_gpu_guard_ok

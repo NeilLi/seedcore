@@ -66,6 +66,7 @@ class MemoryRuntime:
     async def health(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "semantic": "unknown",
+            "graph": "unknown",
             "vector_pool": self._vec._pool is not None,
         }
         try:
@@ -73,6 +74,11 @@ class MemoryRuntime:
             out["semantic"] = "ok"
         except Exception as e:
             out["semantic"] = f"error:{e}"
+        try:
+            await self._graph.ping()
+            out["graph"] = "ok"
+        except Exception as e:
+            out["graph"] = f"error:{e}"
         return out
 
     async def close(self) -> None:

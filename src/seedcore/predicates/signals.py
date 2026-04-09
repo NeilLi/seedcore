@@ -105,10 +105,10 @@ SIGNALS: Dict[str, SignalSpec] = {
         unit="milliseconds",
         min_value=0.0
     ),
-    "hgnn_latency_ms": SignalSpec(
-        "hgnn_latency_ms", 
+    "escalated_latency_ms": SignalSpec(
+        "escalated_latency_ms", 
         float, 
-        "Average HGNN path latency in milliseconds",
+        "Average escalated-path latency in milliseconds",
         unit="milliseconds",
         min_value=0.0
     ),
