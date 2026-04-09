@@ -14,7 +14,10 @@ from typing import Any, Dict, List, Mapping, Optional
 
 
 def strict_rct_replay_triple_hash_enabled() -> bool:
-    return (os.environ.get("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH") or "").strip().lower() in (
+    raw = os.environ.get("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH")
+    if raw is None:
+        return True
+    return raw.strip().lower() in (
         "1",
         "true",
         "yes",

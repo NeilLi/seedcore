@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import uuid
@@ -242,6 +243,66 @@ def main() -> int:
 
         replay_ready = replay_intent_resp.status_code == 200 or replay_audit_resp.status_code == 200
         replay_pending = replay_intent_resp.status_code == 404 and replay_audit_resp.status_code == 404
+        closure_attempt: dict[str, Any] | None = None
+        if args.strict_replay_ready and replay_pending:
+            closure_id = f"closure-local-{uuid.uuid4().hex[:12]}"
+            closure_payload = {
+                "contract_version": "seedcore.agent_action_gateway.v1",
+                "request_id": request_id,
+                "closure_id": closure_id,
+                "idempotency_key": f"closure-idem-{uuid.uuid4().hex[:12]}",
+                "closed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "outcome": "completed",
+                "evidence_bundle_id": f"evb-local-{uuid.uuid4().hex[:12]}",
+                "transition_receipt_ids": [],
+                "telemetry_refs": [],
+                "node_id": "robot_sim://unit-1",
+                "forensic_block": {
+                    "forensic_block_id": f"fb-{uuid.uuid4().hex[:12]}",
+                    "fingerprint_components": {
+                        "economic_hash": "sha256:shopify-order-local",
+                        "physical_presence_hash": f"sha256:{hashlib.sha256(request_id.encode('utf-8')).hexdigest()}",
+                        "reasoning_hash": f"sha256:{hashlib.sha256((request_id + ':reasoning').encode('utf-8')).hexdigest()}",
+                        "actuator_hash": f"sha256:{hashlib.sha256((request_id + ':actuator').encode('utf-8')).hexdigest()}",
+                    },
+                    "current_coordinate_ref": payload["authority_scope"]["expected_coordinate_ref"],
+                    "current_zone": payload["asset"]["to_zone"],
+                },
+                "summary": {"source": "strict_replay_runtime_probe"},
+            }
+            closure_resp = client.post(
+                f"{args.base_url}/api/v1/agent-actions/{request_id}/closures",
+                json=closure_payload,
+            )
+            closure_body = _json_or_text(closure_resp)
+            closure_attempt = {
+                "status_code": closure_resp.status_code,
+                "body": closure_body,
+            }
+            summary["closure"] = closure_attempt
+            checks.append(
+                CheckResult(
+                    "gateway.closure.accepted",
+                    closure_resp.status_code == 200,
+                    {"status_code": closure_resp.status_code},
+                )
+            )
+            replay_intent_resp = client.get(
+                f"{args.base_url}/api/v1/replay",
+                params={"intent_id": correlation["intent_id"], "projection": "public"},
+            )
+            replay_audit_resp = client.get(
+                f"{args.base_url}/api/v1/replay",
+                params={"audit_id": correlation["audit_id"], "projection": "public"},
+            )
+            replay_intent_body = _json_or_text(replay_intent_resp)
+            replay_audit_body = _json_or_text(replay_audit_resp)
+            summary["replay"] = {
+                "intent": {"status_code": replay_intent_resp.status_code, "body": replay_intent_body},
+                "audit": {"status_code": replay_audit_resp.status_code, "body": replay_audit_body},
+            }
+            replay_ready = replay_intent_resp.status_code == 200 or replay_audit_resp.status_code == 200
+            replay_pending = replay_intent_resp.status_code == 404 and replay_audit_resp.status_code == 404
         if args.strict_replay_ready:
             replay_ok = replay_ready
         else:

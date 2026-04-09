@@ -24,6 +24,44 @@ from seedcore.ops.evidence.signers import (
 )
 
 
+def _verify_asset_fingerprint_proof(model: EvidenceBundle) -> dict[str, Any]:
+    fingerprint = model.asset_fingerprint
+    if fingerprint is None:
+        return {"verified": True}
+
+    derivation_logic = fingerprint.derivation_logic if isinstance(fingerprint.derivation_logic, dict) else {}
+    capture_context = fingerprint.capture_context if isinstance(fingerprint.capture_context, dict) else {}
+    modality_map = fingerprint.modality_map if isinstance(fingerprint.modality_map, dict) else {}
+    expectations = derivation_logic.get("registry_expectations")
+    if not isinstance(expectations, dict) or not expectations:
+        expectations = capture_context.get("registry_expectations")
+    if not isinstance(expectations, dict) or not expectations:
+        return {"verified": True}
+
+    normalized_expectations = {
+        str(key).strip(): str(value).strip()
+        for key, value in expectations.items()
+        if str(key).strip() and value is not None and str(value).strip()
+    }
+    if not normalized_expectations:
+        return {"verified": True}
+
+    missing = sorted(key for key in normalized_expectations.keys() if key not in modality_map)
+    mismatched = sorted(
+        key for key, expected in normalized_expectations.items() if key in modality_map and str(modality_map.get(key)) != expected
+    )
+    verified = not missing and not mismatched
+    result = {
+        "verified": verified,
+        "registry_expectations": normalized_expectations,
+        "missing_modalities": missing,
+        "mismatched_modalities": mismatched,
+    }
+    if not verified:
+        result["error"] = "asset_fingerprint_registry_mismatch"
+    return result
+
+
 def build_signed_artifact(
     *,
     artifact_type: str,
@@ -236,6 +274,13 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
         trust_proof=model.trust_proof,
     )
     if result.get("error") is not None:
+        return result
+
+    fingerprint_result = _verify_asset_fingerprint_proof(model)
+    result["asset_fingerprint_proof"] = fingerprint_result
+    if fingerprint_result.get("error") is not None:
+        result["verified"] = False
+        result["error"] = str(fingerprint_result.get("error"))
         return result
 
     co_signature_result = _verify_evidence_bundle_co_signatures(model)

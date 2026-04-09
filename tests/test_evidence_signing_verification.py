@@ -215,6 +215,30 @@ def test_fingerprint_preserves_metadata_through_bundle_and_replay_summary() -> N
     assert set(summary["modalities"]) >= {"provenance", "visual_hash", "gps_hash"}
 
 
+def test_asset_fingerprint_registry_prover_is_enforced() -> None:
+    envelope = {
+        "payload": {"results": []},
+        "meta": {"exec": {"finished_at": "2026-03-24T10:20:20+00:00"}},
+    }
+    task_dict = _build_task_dict()
+    task_dict["params"]["governance"]["asset_fingerprint_registry"] = {
+        "provenance": "prov-signing-1",
+        "gps_hash": "sha256:mismatch",
+    }
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="actuation_organ",
+        agent_id="agent-1",
+    )["meta"]["evidence_bundle"]
+
+    verification = verify_evidence_bundle_result(bundle)
+    assert verification["verified"] is False
+    assert verification["error"] == "asset_fingerprint_registry_mismatch"
+    assert verification["asset_fingerprint_proof"]["mismatched_modalities"] == ["gps_hash"]
+
+
 def test_signed_artifacts_verify_cleanly() -> None:
     record = _build_audit_record(
         task_id="task-signing-verify",

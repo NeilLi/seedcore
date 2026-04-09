@@ -81,6 +81,7 @@ class AgentActionAsset(BaseModel):
     asset_id: str
     lot_id: Optional[str] = None
     product_ref: Optional[str] = None
+    order_ref: Optional[str] = None
     quote_ref: Optional[str] = None
     from_custodian_ref: Optional[str] = None
     to_custodian_ref: Optional[str] = None
@@ -97,6 +98,7 @@ class AgentActionAsset(BaseModel):
     @field_validator(
         "lot_id",
         "product_ref",
+        "order_ref",
         "quote_ref",
         "from_custodian_ref",
         "to_custodian_ref",

@@ -67,6 +67,7 @@ def _build_audit_record() -> dict:
                 "asset_id": "asset:lot-8841",
                 "lot_id": "lot-8841",
                 "product_ref": "sku:cocoa-bar-72",
+                "order_ref": "shopify:gid://shopify/Order/1002003004",
                 "quote_ref": "quote-2026-0001",
             },
             "action": {
@@ -77,6 +78,8 @@ def _build_audit_record() -> dict:
                         "organization_ref": "org:acme",
                         "hardware_public_key_fingerprint": "sha256:hardware-fingerprint-0001",
                         "facility_ref": "facility:warehouse-a",
+                        "order_ref": "shopify:gid://shopify/Order/1002003004",
+                        "quote_ref": "quote-2026-0001",
                         "expected_coordinate_ref": "coord:warehouse-a:slot-12",
                         "expected_to_zone": "vault-a",
                     }
@@ -119,6 +122,8 @@ def test_materialized_forensic_block_matches_contract_schema() -> None:
     assert forensic_block["forensic_block_id"] == "fb-2026-0001"
     assert forensic_block["decision_linkage"]["request_id"] == "req-transfer-2026-0001"
     assert forensic_block["asset_identity"]["asset_id"] == "asset:lot-8841"
+    assert forensic_block["economic_evidence"]["order_id"] == "shopify:gid://shopify/Order/1002003004"
+    assert forensic_block["economic_evidence"]["quote_hash"] == "quote-2026-0001"
 
 
 def test_materialized_physical_presence_hash_incorporates_signed_telemetry_refs() -> None:

@@ -1256,6 +1256,45 @@ class ReplayService:
     ) -> List[str]:
         return rct_control_fail_closed_issues(record=record)
 
+    def _record_uses_rct_workflow(
+        self,
+        *,
+        record: Mapping[str, Any],
+    ) -> bool:
+        policy_case = record.get("policy_case") if isinstance(record.get("policy_case"), dict) else {}
+        workflow_hints = policy_case.get("workflow_hints") if isinstance(policy_case.get("workflow_hints"), dict) else {}
+        workflow_type = str(workflow_hints.get("workflow_type") or "").strip().lower()
+        if workflow_type in {"custody_transfer", "restricted_custody_transfer"}:
+            return True
+
+        policy_decision = record.get("policy_decision") if isinstance(record.get("policy_decision"), dict) else {}
+        for candidate in (
+            policy_decision.get("workflow_type"),
+            (
+                policy_decision.get("authz_graph", {}).get("workflow_type")
+                if isinstance(policy_decision.get("authz_graph"), dict)
+                else None
+            ),
+            (
+                policy_decision.get("governed_receipt", {}).get("workflow_type")
+                if isinstance(policy_decision.get("governed_receipt"), dict)
+                else None
+            ),
+        ):
+            normalized = str(candidate or "").strip().lower()
+            if normalized in {"custody_transfer", "restricted_custody_transfer"}:
+                return True
+
+        action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
+        action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
+        parameters = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
+        gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), dict) else {}
+        gateway_workflow_type = str(gateway.get("workflow_type") or "").strip().lower()
+        if gateway_workflow_type in {"custody_transfer", "restricted_custody_transfer"}:
+            return True
+        action_type = str(action.get("type") or "").strip().upper()
+        return action_type == "TRANSFER_CUSTODY"
+
     def _build_signer_chain(
         self,
         *,
@@ -1344,7 +1383,8 @@ class ReplayService:
         rct_control_posture_issues = self._rct_control_fail_closed_issues(record=record)
         strict_triple_enabled = strict_rct_replay_triple_hash_enabled()
         strict_triple_required = bool(rct_control_posture_issues)
-        if strict_triple_enabled or strict_triple_required:
+        strict_triple_applicable = strict_triple_required or self._record_uses_rct_workflow(record=record)
+        if strict_triple_applicable and (strict_triple_enabled or strict_triple_required):
             strict_triple = evaluate_strict_rct_replay_triple_hash(
                 record=record,
                 policy_receipt=policy_receipt,

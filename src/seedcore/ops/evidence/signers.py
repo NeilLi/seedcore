@@ -933,7 +933,7 @@ def _requires_restricted_policy_receipt_hardening(
 
 
 def _apply_hardened_signing_requirements(request: SignerRequest) -> SignerRequest:
-    if not _requires_hardened_signing(request):
+    if not (_requires_hardened_signing(request) or _requires_production_hardware_signing(request)):
         return request
     return replace(
         request,
@@ -948,6 +948,11 @@ def _requires_hardened_signing(request: SignerRequest) -> bool:
     if request.artifact_type not in HARDENED_SIGNING_ARTIFACT_TYPES:
         return False
     return _is_attestable_endpoint(request.endpoint_id)
+
+
+def _requires_production_hardware_signing(request: SignerRequest) -> bool:
+    normalized = str(request.trust_level or "").strip().lower()
+    return normalized in {"production", "prod"} and _is_attestable_endpoint(request.endpoint_id)
 
 
 def _required_hardened_trust_anchor(endpoint_id: Optional[str]) -> Optional[str]:

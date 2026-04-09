@@ -542,7 +542,7 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
             "asset_id": asset_id,
             "lot_id": str(resource.get("lot_id") or "").strip() or None,
             "product_ref": str(resource.get("product_ref") or gateway_context.get("product_ref") or "").strip() or None,
-            "quote_ref": str(resource.get("quote_ref") or "").strip() or None,
+            "quote_ref": str(resource.get("quote_ref") or gateway_context.get("quote_ref") or "").strip() or None,
         },
         "authority_context": {
             "@type": "DelegatedAuthority",
@@ -558,9 +558,9 @@ def _resolve_forensic_block(*, audit_record: Dict[str, Any], evidence_bundle: Di
         "economic_evidence": {
             "@type": "CommerceTransaction",
             "platform": "seedcore_rct",
-            "order_id": None,
+            "order_id": str(resource.get("order_ref") or gateway_context.get("order_ref") or "").strip() or None,
             "transaction_hash": derived_components["economic_hash"],
-            "quote_hash": None,
+            "quote_hash": str(resource.get("quote_ref") or gateway_context.get("quote_ref") or "").strip() or None,
             "asset_identity": asset_id,
         },
         "spatial_evidence": {

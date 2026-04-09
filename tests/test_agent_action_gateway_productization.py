@@ -91,6 +91,7 @@ def _base_approval() -> dict:
 def _base_shopify_transaction() -> dict:
     return {
         "product_ref": "shopify:gid://shopify/Product/1234567890",
+        "order_ref": "shopify:gid://shopify/Order/1002003004",
         "quote_ref": "shopify:quote:tea-set-2026-04-01-0001",
         "declared_value_usd": 1500,
         "economic_hash": "sha256:shopify-order",
@@ -120,6 +121,7 @@ def test_shopify_sandbox_adapter_maps_product_quote_value_and_economic_hash() ->
     )
 
     assert req["asset"]["product_ref"] == _base_shopify_transaction()["product_ref"]
+    assert req["asset"]["order_ref"] == _base_shopify_transaction()["order_ref"]
     assert req["asset"]["quote_ref"] == _base_shopify_transaction()["quote_ref"]
     assert req["asset"]["declared_value_usd"] == 1500.0
     assert (

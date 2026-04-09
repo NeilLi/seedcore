@@ -35,6 +35,7 @@ def build_rct_agent_action_evaluate_request_v1(
     """
     commerce = map_shopify_sandbox_transaction_to_gateway_commerce_fields(
         product_ref=shopify_sandbox_transaction.get("product_ref"),
+        order_ref=shopify_sandbox_transaction.get("order_ref"),
         quote_ref=shopify_sandbox_transaction.get("quote_ref"),
         declared_value_usd=shopify_sandbox_transaction.get("declared_value_usd"),
         economic_hash=shopify_sandbox_transaction.get("economic_hash"),
@@ -89,4 +90,3 @@ def build_rct_gateway_correlation_from_evaluate_response(
         request_id=request_id,
         gateway_evaluate_response=gateway_evaluate_response,
     )
-

@@ -690,10 +690,17 @@ def _build_asset_fingerprint(
     action_intent = governance.get("action_intent") if isinstance(governance.get("action_intent"), dict) else {}
     resource = action_intent.get("resource", {}) if isinstance(action_intent.get("resource"), dict) else {}
     multimodal = params.get("multimodal", {}) if isinstance(params.get("multimodal"), dict) else {}
+    registry_expectations = (
+        governance.get("asset_fingerprint_registry")
+        if isinstance(governance.get("asset_fingerprint_registry"), dict)
+        else params.get("asset_fingerprint_registry")
+        if isinstance(params.get("asset_fingerprint_registry"), dict)
+        else {}
+    )
 
     asset_id = resource.get("asset_id") or params.get("asset_id")
     provenance_hash = resource.get("provenance_hash") or params.get("provenance_hash")
-    if not asset_id and not provenance_hash and not multimodal:
+    if not asset_id and not provenance_hash and not multimodal and not registry_expectations:
         return None
 
     modality_map: Dict[str, str] = {}
@@ -707,20 +714,57 @@ def _build_asset_fingerprint(
         modality_map["telemetry_hash"] = _sha256_hex(_canonical_json(multimodal.get("sensor_data")))
     if isinstance(multimodal.get("gps"), dict) and multimodal.get("gps"):
         modality_map["gps_hash"] = _sha256_hex(_canonical_json(multimodal.get("gps")))
+    point_cloud = multimodal.get("point_cloud")
+    if isinstance(point_cloud, dict) and point_cloud:
+        modality_map["point_cloud_hash"] = _sha256_hex(_canonical_json(point_cloud))
+    point_cloud_digest = multimodal.get("point_cloud_digest")
+    if point_cloud_digest is not None and str(point_cloud_digest).strip():
+        modality_map["point_cloud_hash"] = str(point_cloud_digest).strip()
+
+    normalized_registry_expectations = {
+        str(key).strip(): str(value).strip()
+        for key, value in dict(registry_expectations).items()
+        if str(key).strip() and value is not None and str(value).strip()
+    }
+    prover_matches = {
+        key: modality_map.get(key) == expected
+        for key, expected in normalized_registry_expectations.items()
+        if key in modality_map
+    }
+    missing_registry_modalities = sorted(
+        key for key in normalized_registry_expectations.keys() if key not in modality_map
+    )
 
     payload = {
         "asset_id": asset_id,
         "modality_map": modality_map,
+        "registry_expectations": normalized_registry_expectations,
     }
     return AssetFingerprint(
         fingerprint_id=str(uuid.uuid4()),
         fingerprint_hash=_sha256_hex(_canonical_json(payload)),
         modality_map=modality_map,
-        derivation_logic={"algorithm": "sha256", "builder": "ops.evidence.builder"},
+        derivation_logic={
+            "algorithm": "sha256",
+            "builder": "ops.evidence.builder",
+            "registry_expectations": normalized_registry_expectations,
+            "prover": {
+                "name": "asset_fingerprint_registry_matcher",
+                "matched_modalities": sorted(key for key, matched in prover_matches.items() if matched),
+                "mismatched_modalities": sorted(key for key, matched in prover_matches.items() if not matched),
+                "missing_modalities": missing_registry_modalities,
+                "verified": (
+                    bool(normalized_registry_expectations)
+                    and not missing_registry_modalities
+                    and all(prover_matches.values())
+                ),
+            },
+        },
         capture_context={
             "asset_id": asset_id,
             "source_registration_id": resource.get("source_registration_id"),
             "target_zone": resource.get("target_zone"),
+            "registry_expectations": normalized_registry_expectations,
         },
         hardware_witness={"node_id": node_id} if node_id is not None else {},
         captured_at=timestamp,

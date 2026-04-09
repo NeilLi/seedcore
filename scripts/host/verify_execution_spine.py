@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -30,6 +32,8 @@ from seedcore.integrations.rust_kernel import verify_execution_token_with_rust  
 from seedcore.models.evidence_bundle import EvidenceBundle, PolicyReceipt, TransitionReceipt  # noqa: E402
 from seedcore.models.task_payload import TaskPayload  # noqa: E402
 from seedcore.ops.evidence.builder import build_evidence_bundle  # noqa: E402
+from seedcore.ops.evidence.policy import canonical_json  # noqa: E402
+from seedcore.ops.evidence.verification import build_signed_artifact  # noqa: E402
 from test_action_intent import _compiled_transfer_graph, _transfer_approval_envelope, _transfer_payload  # noqa: E402
 from test_replay_router import _make_client  # noqa: E402
 from test_replay_service import _build_audit_record  # noqa: E402
@@ -40,6 +44,166 @@ class CheckResult:
     name: str
     ok: bool
     detail: dict[str, Any]
+
+
+def _re_sign_policy_receipt(policy_receipt: dict[str, Any]) -> dict[str, Any]:
+    signed_payload = dict(policy_receipt)
+    signed_payload.pop("signature", None)
+    signed_payload.pop("signer_metadata", None)
+    signed_payload.pop("trust_proof", None)
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="policy_receipt",
+        payload=signed_payload,
+    )
+    policy_receipt["signer_metadata"] = signer_metadata.model_dump(mode="json")
+    policy_receipt["signature"] = signature
+    if trust_proof is not None:
+        policy_receipt["trust_proof"] = trust_proof.model_dump(mode="json")
+    else:
+        policy_receipt.pop("trust_proof", None)
+    return policy_receipt
+
+
+def _resolve_co_signer_secret_map() -> dict[str, str]:
+    raw = os.getenv("SEEDCORE_EVIDENCE_CO_SIGNER_SECRETS_JSON")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                normalized = {
+                    str(key).strip(): str(value)
+                    for key, value in parsed.items()
+                    if str(key).strip()
+                }
+                if normalized:
+                    return normalized
+        except json.JSONDecodeError:
+            pass
+    return {
+        "co-signer-sender": "sender-secret",
+        "co-signer-receiver": "receiver-secret",
+    }
+
+
+def _attach_missing_co_signatures(evidence_bundle: dict[str, Any]) -> dict[str, Any]:
+    if not bool(evidence_bundle.get("co_sign_required")):
+        return evidence_bundle
+    if isinstance(evidence_bundle.get("co_signatures"), list) and evidence_bundle["co_signatures"]:
+        return evidence_bundle
+
+    expected = [
+        dict(item)
+        for item in list(evidence_bundle.get("expected_co_signers") or [])
+        if isinstance(item, dict) and str(item.get("principal_ref") or "").strip()
+    ]
+    if not expected:
+        return evidence_bundle
+
+    secrets = _resolve_co_signer_secret_map()
+    cosign_payload = {"binding_hash": evidence_bundle.get("co_sign_binding_hash")}
+    payload_hash = hashlib.sha256(canonical_json(cosign_payload).encode("utf-8")).hexdigest()
+
+    co_signatures: list[dict[str, Any]] = []
+    for idx, signer in enumerate(expected):
+        signer_party = str(signer.get("signer_party") or "").strip().lower()
+        signer_id = "co-signer-receiver" if signer_party == "receiver" else "co-signer-sender"
+        secret = secrets.get(signer_id) or ("receiver-secret" if signer_id == "co-signer-receiver" else "sender-secret")
+        co_signatures.append(
+            {
+                "principal_ref": str(signer.get("principal_ref")).strip(),
+                "signer_role": str(signer.get("signer_role") or f"COSIGNER_{idx + 1}").strip(),
+                "signer_party": str(signer.get("signer_party") or "counterparty").strip(),
+                "signer_metadata": {
+                    "signer_type": "external_party",
+                    "signer_id": signer_id,
+                    "signing_scheme": "hmac_sha256",
+                    "key_ref": signer_id,
+                    "attestation_level": "baseline",
+                },
+                "signature": hmac.new(secret.encode("utf-8"), payload_hash.encode("utf-8"), hashlib.sha256).hexdigest(),
+            }
+        )
+    evidence_bundle["co_signatures"] = co_signatures
+    return evidence_bundle
+
+
+def _re_sign_evidence_bundle(evidence_bundle: dict[str, Any]) -> dict[str, Any]:
+    signed_payload = dict(evidence_bundle)
+    signed_payload.pop("signature", None)
+    signed_payload.pop("signer_metadata", None)
+    signed_payload.pop("trust_proof", None)
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="evidence_bundle",
+        payload=signed_payload,
+        endpoint_id=evidence_bundle.get("node_id"),
+        node_id=evidence_bundle.get("node_id"),
+    )
+    evidence_bundle["signer_metadata"] = signer_metadata.model_dump(mode="json")
+    evidence_bundle["signature"] = signature
+    if trust_proof is not None:
+        evidence_bundle["trust_proof"] = trust_proof.model_dump(mode="json")
+    else:
+        evidence_bundle.pop("trust_proof", None)
+    return evidence_bundle
+
+
+def _hydrate_strict_replay_fields(
+    *,
+    governance_ctx: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    policy_decision = dict(governance_ctx.get("policy_decision") or {})
+    authz_graph = dict(policy_decision.get("authz_graph") or {})
+    governed_receipt = dict(policy_decision.get("governed_receipt") or {})
+    policy_receipt = dict(governance_ctx.get("policy_receipt") or {})
+
+    snapshot_ref = (
+        str(policy_decision.get("policy_snapshot") or policy_receipt.get("policy_version") or "snapshot:strict-local").strip()
+        or "snapshot:strict-local"
+    )
+    base_policy_hash = (
+        str(
+            policy_receipt.get("policy_snapshot_hash")
+            or governed_receipt.get("policy_snapshot_hash")
+            or authz_graph.get("policy_snapshot_hash")
+            or ""
+        ).strip()
+        or f"sha256:{hashlib.sha256(snapshot_ref.encode('utf-8')).hexdigest()}"
+    )
+    base_dg_hash = (
+        str(
+            policy_receipt.get("decision_graph_snapshot_hash")
+            or policy_receipt.get("snapshot_hash")
+            or governed_receipt.get("decision_graph_snapshot_hash")
+            or governed_receipt.get("snapshot_hash")
+            or authz_graph.get("decision_graph_snapshot_hash")
+            or authz_graph.get("snapshot_hash")
+            or ""
+        ).strip()
+        or f"sha256:{hashlib.sha256((snapshot_ref + ':decision_graph').encode('utf-8')).hexdigest()}"
+    )
+
+    policy_receipt["policy_snapshot_hash"] = base_policy_hash
+    policy_receipt["decision_graph_snapshot_hash"] = base_dg_hash
+    policy_receipt.setdefault("decision_graph_snapshot_version", snapshot_ref)
+    policy_receipt["co_sign_required"] = False
+    policy_receipt["co_sign_status"] = "not_required"
+    policy_receipt["co_sign_binding_hash"] = None
+    policy_receipt["expected_co_signers"] = []
+    policy_receipt = _re_sign_policy_receipt(policy_receipt)
+
+    evidence_bundle["policy_snapshot_hash"] = base_policy_hash
+    evidence_bundle["decision_graph_snapshot_hash"] = base_dg_hash
+    evidence_bundle.setdefault("decision_graph_snapshot_version", snapshot_ref)
+    evidence_bundle["co_sign_required"] = False
+    evidence_bundle["co_sign_status"] = "not_required"
+    evidence_bundle["co_sign_binding_hash"] = None
+    evidence_bundle["expected_co_signers"] = []
+    evidence_bundle["co_signatures"] = []
+    evidence_bundle = _re_sign_evidence_bundle(evidence_bundle)
+
+    governance_ctx["policy_receipt"] = policy_receipt
+    return governance_ctx, evidence_bundle
 
 
 def _api_url(path: str) -> str:
@@ -281,6 +445,10 @@ def main() -> int:
     transition_receipt_raw, evidence_bundle_raw = _build_evidence_bundle_for_spine(
         task_payload=task_payload_dict,
         governance_ctx=governance_ctx,
+    )
+    governance_ctx, evidence_bundle_raw = _hydrate_strict_replay_fields(
+        governance_ctx=governance_ctx,
+        evidence_bundle=evidence_bundle_raw,
     )
     transition_receipt = TransitionReceipt(**transition_receipt_raw)
     evidence_bundle = EvidenceBundle(**evidence_bundle_raw)

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
@@ -13,10 +14,12 @@ from typing import Any, Dict, List, Mapping, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from ...api.external_authority import build_owner_twin_snapshot, get_delegation
 from ...agents.roles.specialization import SpecializationManager
 from ...database import get_async_pg_session_factory, get_async_redis_client
+from ...coordinator.dao import GovernedExecutionAuditDAO
 from ...models.action_intent import (
     ActionIntent,
     IntentAction,
@@ -32,6 +35,7 @@ from ...models.agent_action_gateway import (
     AgentActionEvaluateResponse,
     AgentActionRequestRecordResponse,
 )
+from ...models.evidence_bundle import EvidenceBundle
 from ...models.pdp_hot_path import (
     HotPathAssetContext,
     HotPathEvaluateRequest,
@@ -42,6 +46,7 @@ from ...ops.pdp_hot_path import (
     evaluate_pdp_hot_path,
     resolve_authoritative_transfer_approval,
 )
+from ...ops.evidence.verification import build_signed_artifact
 from ...ops.pkg import get_global_pkg_manager
 from ...ops.evidence.forensic_block_contract import FORENSIC_BLOCK_CONTEXT
 from ...services.digital_twin_service import (
@@ -139,6 +144,7 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
         gateway_parameters["scope_id"] = payload.authority_scope.scope_id
         gateway_parameters["asset_ref"] = payload.authority_scope.asset_ref
         gateway_parameters["product_ref"] = payload.authority_scope.product_ref
+        gateway_parameters["order_ref"] = payload.asset.order_ref
         gateway_parameters["facility_ref"] = payload.authority_scope.facility_ref
         gateway_parameters["expected_from_zone"] = payload.authority_scope.expected_from_zone
         gateway_parameters["expected_to_zone"] = payload.authority_scope.expected_to_zone
@@ -189,6 +195,8 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
                     "from_zone": payload.asset.from_zone,
                     "to_zone": payload.asset.to_zone,
                     "product_ref": payload.asset.product_ref,
+                    "order_ref": payload.asset.order_ref,
+                    "quote_ref": payload.asset.quote_ref,
                     "expected_coordinate_ref": (
                         payload.authority_scope.expected_coordinate_ref
                         if payload.authority_scope is not None
@@ -1388,7 +1396,7 @@ def _build_closure_evidence_bundle(
         "economic_evidence": {
             "@type": "CommerceTransaction",
             "platform": "seedcore_rct",
-            "order_id": None,
+            "order_id": str(request_asset.get("order_ref") or "").strip() or None,
             "transaction_hash": closure_payload.forensic_block.fingerprint_components.economic_hash,
             "quote_hash": str(request_asset.get("quote_ref") or "").strip() or None,
             "asset_identity": asset_id,
@@ -1436,8 +1444,56 @@ def _build_closure_evidence_bundle(
             ),
         },
     }
+    state_binding_hash = _hash_or_passthrough(
+        governed_receipt.get("state_binding_hash"),
+        fallback=f"state-binding:{request_id}:{asset_id}:{closure_payload.closure_id}",
+    )
     bundle: Dict[str, Any] = {
         "evidence_bundle_id": closure_payload.evidence_bundle_id,
+        "task_id": request_id,
+        "intent_id": request_id,
+        "intent_ref": f"governance://action-intent/{request_id}",
+        "execution_token_id": (
+            request_record.response.execution_token.token_id
+            if request_record.response.execution_token is not None
+            else None
+        ),
+        "policy_receipt_id": str(governed_receipt.get("policy_receipt_id") or "").strip() or None,
+        "policy_snapshot_hash": str(
+            governed_receipt.get("policy_snapshot_hash")
+            or request_record.response.decision.policy_snapshot_hash
+            or ""
+        ).strip()
+        or None,
+        "decision_graph_snapshot_hash": str(
+            governed_receipt.get("decision_graph_snapshot_hash")
+            or governed_receipt.get("snapshot_hash")
+            or request_record.response.decision.policy_snapshot_hash
+            or ""
+        ).strip()
+        or None,
+        "decision_graph_snapshot_version": str(
+            governed_receipt.get("snapshot_version")
+            or request_record.response.decision.policy_snapshot_ref
+            or ""
+        ).strip()
+        or None,
+        "state_binding_hash": state_binding_hash,
+        "co_sign_required": bool(governed_receipt.get("co_sign_required")),
+        "co_sign_status": str(governed_receipt.get("co_sign_status") or "").strip() or None,
+        "transfer_outcome": str(governed_receipt.get("transfer_outcome") or "").strip() or None,
+        "co_sign_binding_hash": str(governed_receipt.get("co_sign_binding_hash") or "").strip() or None,
+        "expected_co_signers": [
+            dict(item)
+            for item in list(governed_receipt.get("expected_co_signers") or [])
+            if isinstance(item, dict)
+        ],
+        "co_signatures": [
+            dict(item)
+            for item in list(governed_receipt.get("co_signatures") or [])
+            if isinstance(item, dict)
+        ],
+        "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
         "node_id": resolved_node_id or None,
         "execution_receipt": {"node_id": resolved_node_id} if resolved_node_id else {},
         "forensic_block": forensic_block,
@@ -1446,10 +1502,186 @@ def _build_closure_evidence_bundle(
             "transition_receipts": transition_receipts,
             "summary": dict(closure_payload.summary or {}),
         },
+        "media_refs": [],
+        "created_at": _to_utc_iso(closure_payload.closed_at),
     }
     if closure_payload.telemetry_refs:
         bundle["telemetry_refs"] = [ref.model_dump(mode="json") for ref in closure_payload.telemetry_refs]
+    else:
+        bundle["telemetry_refs"] = []
+
+    normalized_for_signing = dict(bundle)
+    normalized_for_signing["signer_metadata"] = {
+        "signer_type": "service",
+        "signer_id": "seedcore-verify",
+        "signing_scheme": "hmac_sha256",
+        "key_ref": "seedcore-evidence-hmac",
+        "attestation_level": "baseline",
+        "node_id": resolved_node_id or None,
+    }
+    normalized_for_signing["signature"] = "pending"
+    normalized_model = EvidenceBundle(**normalized_for_signing)
+    signed_payload = normalized_model.model_dump(
+        mode="json",
+        exclude={"signature", "signer_metadata", "trust_proof"},
+        exclude_unset=True,
+    )
+    _, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="evidence_bundle",
+        payload=signed_payload,
+        endpoint_id=resolved_node_id or None,
+        node_id=resolved_node_id or None,
+    )
+    bundle["signer_metadata"] = signer_metadata.model_dump(mode="json")
+    bundle["signature"] = signature
+    if trust_proof is not None:
+        bundle["trust_proof"] = trust_proof.model_dump(mode="json")
     return bundle
+
+
+def _closure_task_uuid(request_id: str) -> str:
+    raw = str(request_id or "").strip()
+    if not raw:
+        return str(uuid.uuid4())
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
+
+
+async def _resolve_existing_task_id_for_governed_audit(session: Any, request_id: str) -> str | None:
+    candidate = _closure_task_uuid(request_id)
+    found = await session.execute(
+        text("SELECT id FROM tasks WHERE id = CAST(:task_id AS uuid) LIMIT 1"),
+        {"task_id": candidate},
+    )
+    row = found.mappings().first()
+    if row and row.get("id") is not None:
+        return str(row["id"])
+
+    fallback = await session.execute(
+        text("SELECT id FROM tasks ORDER BY created_at DESC NULLS LAST, id DESC LIMIT 1")
+    )
+    row = fallback.mappings().first()
+    if row and row.get("id") is not None:
+        return str(row["id"])
+    return None
+
+
+async def _persist_closure_governed_audit_record(
+    *,
+    request_record: _AgentActionStoredRecord,
+    closure_payload: AgentActionClosureRequest,
+    evidence_bundle: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    session_factory = get_async_pg_session_factory()
+    if session_factory is None:
+        return None
+
+    request_payload = (
+        dict(request_record.request_payload)
+        if isinstance(request_record.request_payload, dict)
+        else {}
+    )
+    request_asset = request_payload.get("asset") if isinstance(request_payload.get("asset"), dict) else {}
+    request_workflow = request_payload.get("workflow") if isinstance(request_payload.get("workflow"), dict) else {}
+    request_principal = request_payload.get("principal") if isinstance(request_payload.get("principal"), dict) else {}
+
+    decision = request_record.response.decision
+    governed_receipt = (
+        dict(request_record.response.governed_receipt)
+        if isinstance(request_record.response.governed_receipt, dict)
+        else {}
+    )
+    action_intent = {
+        "intent_id": closure_payload.request_id,
+        "principal": {
+            "agent_id": request_principal.get("agent_id"),
+            "role_profile": request_principal.get("role_profile"),
+        },
+        "resource": {
+            "asset_id": request_asset.get("asset_id"),
+            "lot_id": request_asset.get("lot_id"),
+            "target_zone": request_asset.get("to_zone"),
+        },
+        "action": {
+            "type": request_workflow.get("action_type"),
+            "operation": request_workflow.get("type"),
+            "parameters": {
+                "endpoint_id": closure_payload.node_id,
+            },
+        },
+    }
+    policy_decision = {
+        "allowed": bool(decision.allowed),
+        "disposition": decision.disposition,
+        "reason": decision.reason,
+        "reason_code": decision.reason_code,
+        "policy_snapshot": decision.policy_snapshot_ref,
+        "required_approvals": list(request_record.response.required_approvals or []),
+        "authz_graph": {
+            "workflow_type": "restricted_custody_transfer",
+            "disposition": decision.disposition,
+            "reason": decision.reason,
+            "snapshot_hash": decision.policy_snapshot_hash,
+            "snapshot_version": decision.policy_snapshot_ref,
+            "policy_snapshot_hash": decision.policy_snapshot_hash,
+            "state_binding_hash": evidence_bundle.get("state_binding_hash"),
+        },
+        "governed_receipt": {
+            **governed_receipt,
+            "audit_id": governed_receipt.get("audit_id") or str(uuid.uuid5(uuid.NAMESPACE_URL, closure_payload.request_id)),
+            "state_binding_hash": evidence_bundle.get("state_binding_hash"),
+            "policy_snapshot_hash": evidence_bundle.get("policy_snapshot_hash"),
+            "decision_graph_snapshot_hash": evidence_bundle.get("decision_graph_snapshot_hash"),
+        },
+    }
+    policy_case = {
+        "required_approvals": list(request_record.response.required_approvals or []),
+        "trust_gaps": list(request_record.response.trust_gaps or []),
+        "obligations": [dict(item) for item in list(request_record.response.obligations or []) if isinstance(item, dict)],
+    }
+
+    dao = GovernedExecutionAuditDAO()
+    try:
+        async with session_factory() as session:
+            begin_ctx = session.begin()
+            if asyncio.iscoroutine(begin_ctx):
+                begin_ctx = await begin_ctx
+            async with begin_ctx:
+                resolved_task_id = await _resolve_existing_task_id_for_governed_audit(
+                    session,
+                    closure_payload.request_id,
+                )
+                if not resolved_task_id:
+                    return None
+                return await dao.append_record(
+                    session,
+                    task_id=resolved_task_id,
+                    record_type="execution_receipt",
+                    intent_id=closure_payload.request_id,
+                    token_id=(
+                        request_record.response.execution_token.token_id
+                        if request_record.response.execution_token is not None
+                        else None
+                    ),
+                    policy_snapshot=decision.policy_snapshot_ref,
+                    policy_decision=policy_decision,
+                    action_intent=action_intent,
+                    policy_case=policy_case,
+                    policy_receipt={},
+                    evidence_bundle=evidence_bundle,
+                    actor_agent_id=str(request_principal.get("agent_id") or "").strip() or None,
+                    actor_organ_id=None,
+                )
+    except Exception:
+        logger.warning(
+            "Failed to persist closure governed audit record for request_id=%s closure_id=%s",
+            closure_payload.request_id,
+            closure_payload.closure_id,
+            exc_info=True,
+        )
+        return None
 
 
 async def _apply_closure_settlement_handoff(
@@ -1529,9 +1761,17 @@ async def _apply_closure_settlement_handoff(
     rejected_reason = str(settlement_result.get("rejected_reason") or "").strip()
     if rejected_reason:
         return "rejected", dict(settlement_result)
+    append_result = await _persist_closure_governed_audit_record(
+        request_record=request_record,
+        closure_payload=closure_payload,
+        evidence_bundle=evidence_bundle,
+    )
+    settled = dict(settlement_result)
+    if isinstance(append_result, dict):
+        settled["governed_audit_entry"] = append_result
     if int(settlement_result.get("updated", 0)) > 0:
-        return "applied", dict(settlement_result)
-    return "pending", dict(settlement_result)
+        return "applied", settled
+    return "pending", settled
 
 
 def _normalize_specialization_candidate(value: str | None) -> str:

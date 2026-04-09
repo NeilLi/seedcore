@@ -1139,9 +1139,9 @@ async def test_replay_verification_fails_when_rct_control_posture_is_incomplete(
         "SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE",
         "SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT",
         "SEEDCORE_PKG_RCT_PUBLISH_VALIDATE",
-        "SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH", "true")
     monkeypatch.setenv("PKG_MODE", "control")
 
     record = _apply_transition_metadata(
@@ -1168,7 +1168,4 @@ async def test_replay_verification_fails_when_rct_control_posture_is_incomplete(
     assert replay.verification_status.artifact_results["rct_control_fail_closed_posture"]["error_code"] == (
         "rct_control_fail_closed_posture_invalid"
     )
-    assert any(
-        issue == "rct_control_fail_closed:missing_required_flag:SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH"
-        for issue in replay.verification_status.issues
-    )
+    assert not any("missing_required_flag:SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH" in issue for issue in replay.verification_status.issues)

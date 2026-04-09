@@ -10,9 +10,11 @@ from seedcore.ops.evidence.rct_replay_verification import (
 
 def test_strict_flag_reads_env(monkeypatch):
     monkeypatch.delenv("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH", raising=False)
-    assert strict_rct_replay_triple_hash_enabled() is False
+    assert strict_rct_replay_triple_hash_enabled() is True
     monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH", "1")
     assert strict_rct_replay_triple_hash_enabled() is True
+    monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH", "false")
+    assert strict_rct_replay_triple_hash_enabled() is False
 
 
 def test_evaluate_strict_passes_when_aligned():

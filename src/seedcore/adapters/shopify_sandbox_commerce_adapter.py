@@ -6,6 +6,7 @@ from typing import Any, Dict
 def map_shopify_sandbox_transaction_to_gateway_commerce_fields(
     *,
     product_ref: str,
+    order_ref: str | None = None,
     quote_ref: str,
     declared_value_usd: float | int,
     economic_hash: str,
@@ -45,6 +46,7 @@ def map_shopify_sandbox_transaction_to_gateway_commerce_fields(
     return {
         "asset": {
             "product_ref": product_ref,
+            "order_ref": str(order_ref).strip() if order_ref is not None and str(order_ref).strip() else None,
             "quote_ref": quote_ref,
             "declared_value_usd": declared_value,
         },
@@ -54,4 +56,3 @@ def map_shopify_sandbox_transaction_to_gateway_commerce_fields(
             }
         },
     }
-
