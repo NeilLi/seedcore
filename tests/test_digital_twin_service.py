@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies  # noqa: F401
 
 from seedcore.services.digital_twin_service import DigitalTwinService
+from test_replay_service import _build_audit_record
 
 
 class _SessionCtx:
@@ -137,6 +138,11 @@ async def test_settle_from_evidence_bundle_promotes_to_authoritative():
     session = MagicMock()
     session.begin = MagicMock(return_value=_BeginCtx())
     captured = []
+    record = _build_audit_record(
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        asset_id="asset-1",
+    )
 
     async def _capture_upsert(*_args, **kwargs):
         captured.append(kwargs["twin_snapshot"])
@@ -158,13 +164,154 @@ async def test_settle_from_evidence_bundle_promotes_to_authoritative():
         },
         task_id="123e4567-e89b-12d3-a456-426614174000",
         intent_id="intent-123",
-        execution_token={"constraints": {"endpoint_id": "node-1"}},
-        evidence_bundle={
-            "node_id": "node-1",
-            "evidence_inputs": {"execution_summary": {"node_id": "node-1"}},
-        },
+        execution_token={"constraints": {"endpoint_id": "robot_sim://unit-1"}},
+        evidence_bundle=record["evidence_bundle"],
     )
 
     assert result["updated"] == 1
     assert captured[0]["revision_stage"] == "AUTHORITATIVE"
-    assert captured[0]["custody"]["authoritative_node_id"] == "node-1"
+    assert captured[0]["custody"]["authoritative_node_id"] == "robot_sim://unit-1"
+
+
+@pytest.mark.asyncio
+async def test_transition_recorded_stays_pending_authority_until_settlement():
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+    captured = []
+
+    async def _capture_upsert(*_args, **kwargs):
+        captured.append(kwargs["twin_snapshot"])
+        return {"changed": True}
+
+    service = DigitalTwinService(
+        session_factory=MagicMock(return_value=_SessionCtx(session)),
+        dao=SimpleNamespace(upsert_snapshot=AsyncMock(side_effect=_capture_upsert)),
+        event_dao=SimpleNamespace(append_event=AsyncMock(return_value={"id": "evt-1"})),
+    )
+
+    result = await service.persist_relevant_twins(
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_kind": "asset",
+                "twin_id": "asset:asset-1",
+                "identity": {"asset_id": "asset-1"},
+                "custody": {"asset_id": "asset-1"},
+            }
+        },
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        transition_context={
+            "phase": "transition",
+            "transition_event": {"transition_event_id": "transition-1"},
+        },
+    )
+
+    assert result["updated"] == 1
+    assert captured[0]["revision_stage"] == "EXECUTED"
+    assert captured[0]["custody"]["pending_authority"] is True
+    assert captured[0]["custody"]["transition_event_id"] == "transition-1"
+
+
+@pytest.mark.asyncio
+async def test_settlement_rejects_invalid_bundle_and_records_incident():
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+    dao = SimpleNamespace(upsert_snapshot=AsyncMock())
+    event_dao = SimpleNamespace(append_event=AsyncMock(return_value={"id": "evt-1"}))
+    incident_memory = SimpleNamespace(record_incident=AsyncMock(return_value="incident-1"))
+    service = DigitalTwinService(
+        session_factory=MagicMock(return_value=_SessionCtx(session)),
+        dao=dao,
+        event_dao=event_dao,
+        incident_memory=incident_memory,
+    )
+
+    result = await service.settle_from_evidence_bundle(
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_kind": "asset",
+                "twin_id": "asset:asset-1",
+                "lifecycle_state": "IN_TRANSIT",
+                "revision_stage": "EXECUTED",
+            }
+        },
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        execution_token={"constraints": {"endpoint_id": "robot_sim://unit-1"}},
+        evidence_bundle={"node_id": "robot_sim://unit-1"},
+    )
+
+    assert result["updated"] == 0
+    assert result["rejected_reason"] == "invalid_evidence_bundle"
+    incident_memory.record_incident.assert_awaited_once()
+    dao.upsert_snapshot.assert_not_called()
+    event_dao.append_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_local_ledger_projection_matches_authoritative_snapshot():
+    session = MagicMock()
+    event_dao = SimpleNamespace(
+        list_events=AsyncMock(
+            return_value=[
+                {
+                    "id": "evt-2",
+                    "event_type": "evidence_settled",
+                    "payload": {
+                        "snapshot": {
+                            "twin_kind": "asset",
+                            "twin_id": "asset:asset-1",
+                            "revision_stage": "AUTHORITATIVE",
+                            "lifecycle_state": "CERTIFIED",
+                            "identity": {"asset_id": "asset-1"},
+                            "custody": {"asset_id": "asset-1", "pending_authority": False},
+                        }
+                    },
+                },
+                {
+                    "id": "evt-1",
+                    "event_type": "action_executed",
+                    "payload": {
+                        "snapshot": {
+                            "twin_kind": "asset",
+                            "twin_id": "asset:asset-1",
+                            "revision_stage": "EXECUTED",
+                            "lifecycle_state": "IN_TRANSIT",
+                            "identity": {"asset_id": "asset-1"},
+                            "custody": {"asset_id": "asset-1", "pending_authority": True},
+                        }
+                    },
+                },
+            ]
+        )
+    )
+    dao = SimpleNamespace(
+        get_authoritative_snapshot=AsyncMock(
+            return_value={
+                "state_version": 2,
+                "snapshot": {
+                    "twin_kind": "asset",
+                    "twin_id": "asset:asset-1",
+                    "revision_stage": "AUTHORITATIVE",
+                    "lifecycle_state": "CERTIFIED",
+                    "identity": {"asset_id": "asset-1"},
+                    "custody": {"asset_id": "asset-1", "pending_authority": False},
+                },
+            }
+        )
+    )
+    service = DigitalTwinService(
+        session_factory=MagicMock(return_value=_SessionCtx(session)),
+        dao=dao,
+        event_dao=event_dao,
+    )
+
+    result = await service.verify_local_ledger_projection(
+        twin_type="asset",
+        twin_id="asset:asset-1",
+    )
+
+    assert result["verified"] is True
+    assert result["projection_matches"] is True
+    assert result["event_count"] == 2
+    assert result["last_event_type"] == "evidence_settled"

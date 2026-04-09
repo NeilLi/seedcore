@@ -12,6 +12,7 @@ import mock_ray_dependencies  # noqa: F401
 
 from seedcore.services.custody_graph_service import CustodyGraphService
 from seedcore.services.digital_twin_service import DigitalTwinService
+from test_replay_service import _build_audit_record
 
 
 class _SessionCtx:
@@ -173,6 +174,11 @@ async def test_transitions_are_valid_and_promote_authority() -> None:
     session = MagicMock()
     session.begin = MagicMock(return_value=_BeginCtx())
     captured = []
+    record = _build_audit_record(
+        task_id="task-settlement",
+        intent_id="intent-settlement",
+        asset_id="asset-1",
+    )
 
     async def _capture_upsert(*_args, **kwargs):
         captured.append(kwargs["twin_snapshot"])
@@ -196,16 +202,44 @@ async def test_transitions_are_valid_and_promote_authority() -> None:
         task_id="task-settlement",
         intent_id="intent-settlement",
         execution_token={"constraints": {"endpoint_id": "robot_sim://unit-1"}},
-        evidence_bundle={
-            "node_id": "robot_sim://unit-1",
-            "evidence_inputs": {"execution_summary": {"node_id": "robot_sim://unit-1"}},
-        },
+        evidence_bundle=record["evidence_bundle"],
     )
 
     assert result["updated"] == 1
     assert captured[0]["revision_stage"] == "AUTHORITATIVE"
     assert captured[0]["custody"]["pending_authority"] is False
     assert captured[0]["custody"]["authoritative_node_id"] == "robot_sim://unit-1"
+
+
+@pytest.mark.asyncio
+async def test_transition_recording_does_not_grant_authority() -> None:
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+    captured = []
+
+    async def _capture_upsert(*_args, **kwargs):
+        captured.append(kwargs["twin_snapshot"])
+        return {"changed": True}
+
+    service = DigitalTwinService(
+        session_factory=MagicMock(return_value=_SessionCtx(session)),
+        dao=SimpleNamespace(upsert_snapshot=AsyncMock(side_effect=_capture_upsert)),
+        event_dao=SimpleNamespace(append_event=AsyncMock(return_value={"id": "evt-1"})),
+    )
+
+    result = await service.persist_relevant_twins(
+        relevant_twin_snapshot=_governed_snapshot(),
+        task_id="task-transition",
+        intent_id="intent-transition",
+        transition_context={
+            "phase": "transition",
+            "transition_event": {"transition_event_id": "receipt-1"},
+        },
+    )
+
+    assert result["updated"] == 1
+    assert captured[0]["revision_stage"] == "EXECUTED"
+    assert captured[0]["custody"]["pending_authority"] is True
 
 
 @pytest.mark.asyncio

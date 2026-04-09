@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
@@ -8,6 +9,7 @@ from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
 from seedcore.coordinator.core.governance import build_twin_snapshot, merge_authoritative_twins
 from seedcore.coordinator.dao import DigitalTwinDAO, DigitalTwinEventJournalDAO
 from seedcore.models.action_intent import TwinRevisionStage, TwinSnapshot
+from seedcore.ops.evidence.verification import verify_evidence_bundle_result
 
 if TYPE_CHECKING:
     from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
@@ -76,10 +78,12 @@ class DigitalTwinService:
         session_factory: Any,
         dao: Optional[DigitalTwinDAO] = None,
         event_dao: Optional[DigitalTwinEventJournalDAO] = None,
+        incident_memory: Any = None,
     ) -> None:
         self._session_factory = session_factory
         self._dao = dao or DigitalTwinDAO()
         self._event_dao = event_dao or DigitalTwinEventJournalDAO()
+        self._incident_memory = incident_memory
 
     async def resolve_relevant_twins(
         self,
@@ -164,9 +168,19 @@ class DigitalTwinService:
         context = dict(transition_context or {})
         event_type = self._resolve_event_type(context)
         if event_type == "evidence_settled":
-            verified, reason = self._verify_settlement_node(context=context)
-            if not verified:
-                return {"updated": 0, "version_bumped": 0, "rejected_reason": reason}
+            settlement_verification = await self._verify_settlement(
+                context=context,
+                task_id=task_id,
+                intent_id=intent_id,
+                relevant_twin_snapshot=relevant_twin_snapshot,
+            )
+            if not settlement_verification["verified"]:
+                return {
+                    "updated": 0,
+                    "version_bumped": 0,
+                    "rejected_reason": settlement_verification["reason"],
+                    "verification": settlement_verification,
+                }
 
         updated = 0
         version_bumped = 0
@@ -243,6 +257,102 @@ class DigitalTwinService:
         except Exception:
             logger.warning("Failed to read digital twin history for %s:%s", twin_type, twin_id, exc_info=True)
             return []
+
+    async def verify_local_ledger_projection(
+        self,
+        *,
+        twin_type: str,
+        twin_id: str,
+        limit: int = 500,
+        session: Any = None,
+    ) -> Dict[str, Any]:
+        normalized_type = str(twin_type).strip()
+        normalized_id = str(twin_id).strip()
+        if not normalized_type or not normalized_id:
+            return {"verified": False, "reason": "missing_twin_ref"}
+
+        if session is not None:
+            authoritative_row = await self._dao.get_authoritative_snapshot(
+                session,
+                twin_type=normalized_type,
+                twin_id=normalized_id,
+            )
+            journal_rows = await self._event_dao.list_events(
+                session,
+                twin_type=normalized_type,
+                twin_id=normalized_id,
+                limit=limit,
+            )
+        else:
+            if not self._session_factory:
+                return {"verified": False, "reason": "session_factory_unavailable"}
+            try:
+                async with self._session_factory() as query_session:
+                    authoritative_row = await self._dao.get_authoritative_snapshot(
+                        query_session,
+                        twin_type=normalized_type,
+                        twin_id=normalized_id,
+                    )
+                    journal_rows = await self._event_dao.list_events(
+                        query_session,
+                        twin_type=normalized_type,
+                        twin_id=normalized_id,
+                        limit=limit,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to verify local ledger projection for %s:%s",
+                    normalized_type,
+                    normalized_id,
+                    exc_info=True,
+                )
+                return {"verified": False, "reason": "ledger_lookup_failed"}
+
+        if authoritative_row is None:
+            return {"verified": False, "reason": "authoritative_snapshot_missing"}
+        if not journal_rows:
+            return {"verified": False, "reason": "event_journal_missing"}
+
+        chronological_rows = list(reversed(journal_rows))
+        replayed_snapshot: Optional[Dict[str, Any]] = None
+        last_event_type: Optional[str] = None
+        for row in chronological_rows:
+            payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
+            payload_snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), Mapping) else None
+            if payload_snapshot is None:
+                return {
+                    "verified": False,
+                    "reason": "journal_snapshot_missing",
+                    "event_id": str(row.get("id") or ""),
+                }
+            replayed_snapshot = self._coerce_twin_snapshot(
+                normalized_type,
+                dict(payload_snapshot),
+            ).model_dump(mode="json")
+            last_event_type = str(row.get("event_type") or "") or last_event_type
+
+        authoritative_snapshot = authoritative_row.get("snapshot")
+        if not isinstance(authoritative_snapshot, dict):
+            return {"verified": False, "reason": "authoritative_snapshot_invalid"}
+
+        normalized_authoritative = self._coerce_twin_snapshot(
+            normalized_type,
+            authoritative_snapshot,
+        ).model_dump(mode="json")
+        projection_matches = self._canonicalize_snapshot(replayed_snapshot or {}) == self._canonicalize_snapshot(
+            normalized_authoritative
+        )
+        return {
+            "verified": projection_matches,
+            "projection_matches": projection_matches,
+            "twin_type": normalized_type,
+            "twin_id": normalized_id,
+            "event_count": len(chronological_rows),
+            "last_event_type": last_event_type,
+            "state_version": authoritative_row.get("state_version"),
+            "authoritative_snapshot": normalized_authoritative,
+            "replayed_snapshot": replayed_snapshot,
+        }
 
     async def get_twin_ancestry(self, *, twin_type: str, twin_id: str, max_depth: int = 16) -> list[Dict[str, Any]]:
         lineage: list[Dict[str, Any]] = []
@@ -593,8 +703,8 @@ class DigitalTwinService:
             snapshot.revision_stage = TwinRevisionStage.EXECUTED
             snapshot.custody["pending_authority"] = True
         elif event_type == "transition_recorded":
-            snapshot.revision_stage = TwinRevisionStage.AUTHORITATIVE
-            snapshot.custody["pending_authority"] = False
+            snapshot.revision_stage = TwinRevisionStage.EXECUTED
+            snapshot.custody["pending_authority"] = True
             transition_event = (
                 context.get("transition_event")
                 if isinstance(context.get("transition_event"), Mapping)
@@ -720,6 +830,55 @@ class DigitalTwinService:
                 refs.append(item["transition_receipt_id"])
         return sorted(set(refs))
 
+    async def _verify_settlement(
+        self,
+        *,
+        context: Mapping[str, Any],
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        relevant_twin_snapshot: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        evidence_bundle = context.get("evidence_bundle") if isinstance(context.get("evidence_bundle"), Mapping) else {}
+        bundle_verification = verify_evidence_bundle_result(evidence_bundle)
+        if bundle_verification.get("verified") is not True:
+            reason = str(bundle_verification.get("error") or "evidence_bundle_verification_failed")
+            await self._record_settlement_rejection_incident(
+                reason=reason,
+                context=context,
+                task_id=task_id,
+                intent_id=intent_id,
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                bundle_verification=bundle_verification,
+            )
+            return {
+                "verified": False,
+                "reason": reason,
+                "bundle_verification": bundle_verification,
+            }
+
+        verified, reason = self._verify_settlement_node(context=context)
+        if not verified:
+            await self._record_settlement_rejection_incident(
+                reason=reason,
+                context=context,
+                task_id=task_id,
+                intent_id=intent_id,
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                bundle_verification=bundle_verification,
+            )
+            return {
+                "verified": False,
+                "reason": reason,
+                "bundle_verification": bundle_verification,
+            }
+
+        return {
+            "verified": True,
+            "reason": "ok",
+            "bundle_verification": bundle_verification,
+            "resolved_node_id": self._resolve_settlement_node_id(context=context),
+        }
+
     def _verify_settlement_node(self, *, context: Mapping[str, Any]) -> tuple[bool, str]:
         execution_token = context.get("execution_token") if isinstance(context.get("execution_token"), Mapping) else {}
         constraints = execution_token.get("constraints") if isinstance(execution_token.get("constraints"), Mapping) else {}
@@ -750,6 +909,64 @@ class DigitalTwinService:
             if node_id:
                 return node_id
         return None
+
+    async def _record_settlement_rejection_incident(
+        self,
+        *,
+        reason: str,
+        context: Mapping[str, Any],
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        relevant_twin_snapshot: Mapping[str, Any],
+        bundle_verification: Mapping[str, Any],
+    ) -> None:
+        incident_memory = self._resolve_incident_memory_service()
+        if incident_memory is None:
+            return
+        execution_token = context.get("execution_token") if isinstance(context.get("execution_token"), Mapping) else {}
+        constraints = execution_token.get("constraints") if isinstance(execution_token.get("constraints"), Mapping) else {}
+        evidence_bundle = context.get("evidence_bundle") if isinstance(context.get("evidence_bundle"), Mapping) else {}
+        twin_refs = []
+        for key, value in dict(relevant_twin_snapshot or {}).items():
+            if not isinstance(value, Mapping):
+                continue
+            twin_kind = str(value.get("twin_kind") or key).strip()
+            twin_id = str(value.get("twin_id") or "").strip()
+            if twin_kind and twin_id:
+                twin_refs.append({"twin_kind": twin_kind, "twin_id": twin_id})
+        try:
+            await incident_memory.record_incident(
+                {
+                    "category": "digital_twin_settlement_rejected",
+                    "reason": str(reason),
+                    "task_id": task_id,
+                    "intent_id": intent_id,
+                    "event_type": self._resolve_event_type(context),
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "expected_endpoint_id": constraints.get("endpoint_id"),
+                    "resolved_node_id": self._resolve_settlement_node_id(context=context),
+                    "evidence_bundle_id": evidence_bundle.get("evidence_bundle_id"),
+                    "bundle_verification": dict(bundle_verification),
+                    "twin_refs": twin_refs,
+                },
+                salience_score=0.95,
+            )
+        except Exception:
+            logger.warning("Failed to record settlement rejection incident", exc_info=True)
+
+    def _resolve_incident_memory_service(self) -> Any:
+        candidate = self._incident_memory
+        if candidate is None:
+            return None
+        if hasattr(candidate, "record_incident"):
+            return candidate
+        incident = getattr(candidate, "incident", None)
+        if incident is not None and hasattr(incident, "record_incident"):
+            return incident
+        return None
+
+    def _canonicalize_snapshot(self, snapshot: Mapping[str, Any]) -> str:
+        return json.dumps(dict(snapshot), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
     def _result_verifier_gate_from_snapshot(
         self,
