@@ -133,6 +133,8 @@ class ToolManager:
         # Deprecated: kept for backward compatibility
         self.ltm_manager = None
         self._mcp_client = mcp_client
+        # Lazy MCP tool schema index: refreshed on list_tools(); reused by get_tool_schema().
+        self._mcp_tools_index: Optional[Dict[str, Dict[str, Any]]] = None
         self.cognitive_client = cognitive_client
         self.ml_client = ml_client
         self.rbac_provider = rbac_provider
@@ -1494,6 +1496,35 @@ class ToolManager:
     # Introspection
     # ============================================================
 
+    async def _resolve_mcp_tool_schemas_by_name(
+        self, *, force_refresh: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch MCP tool schemas once (cached) unless force_refresh=True (used by list_tools).
+        """
+        if not self._mcp_client:
+            return {}
+        if not force_refresh and self._mcp_tools_index is not None:
+            return self._mcp_tools_index
+        try:
+            resp = await self._mcp_client.list_tools_async()
+            if resp.get("error"):
+                logger.error("MCP tools/list returned error: %s", resp.get("error"))
+                # Do not overwrite a previously good cache on transient failures.
+                # If no cache exists yet, return empty so callers can retry later.
+                return self._mcp_tools_index or {}
+            idx: Dict[str, Dict[str, Any]] = {}
+            for sch in resp.get("tools", []):
+                n = sch.get("name")
+                if n:
+                    idx[n] = sch
+            self._mcp_tools_index = idx
+            return idx
+        except Exception as e:
+            logger.error(f"Failed to fetch MCP tool list: {e}")
+            # Preserve existing cache; otherwise return empty and allow next call to retry.
+            return self._mcp_tools_index or {}
+
     async def list_tools(self) -> Dict[str, Dict[str, Any]]:
         out: Dict[str, Dict[str, Any]] = {}
 
@@ -1512,16 +1543,12 @@ class ToolManager:
             except Exception:
                 continue
 
-        # External tools
+        # External tools (always refresh index so full listings stay current)
         if self._mcp_client:
-            try:
-                resp = await self._mcp_client.list_tools_async()
-                for sch in resp.get("tools", []):
-                    name = sch.get("name")
-                    if name and name not in out:
-                        out[name] = sch
-            except Exception as e:
-                logger.error(f"Failed to fetch MCP tool list: {e}")
+            mcp_by_name = await self._resolve_mcp_tool_schemas_by_name(force_refresh=True)
+            for name, sch in mcp_by_name.items():
+                if name not in out:
+                    out[name] = sch
 
         if self.mw_manager:
             from .memory_tools import MwReadTool, MwWriteTool, MwHotItemsTool
@@ -1553,9 +1580,66 @@ class ToolManager:
 
         return out
 
+    async def _schema_for_memory_tool(self, name: str) -> Optional[Dict[str, Any]]:
+        """Resolve a single memory-facade tool schema without building the full catalog."""
+        if self.mw_manager:
+            from .memory_tools import MwReadTool, MwWriteTool, MwHotItemsTool
+
+            for factory in (
+                MwReadTool,
+                MwWriteTool,
+                MwHotItemsTool,
+            ):
+                try:
+                    sch = factory(self.mw_manager).schema()
+                    if sch.get("name") == name:
+                        return sch
+                except Exception:
+                    continue
+
+        if self.semantic_memory:
+            from .memory_tools import (
+                LtmQueryTool,
+                LtmSearchTool,
+                LtmStoreTool,
+                LtmRelationshipsTool,
+            )
+
+            for factory in (
+                LtmQueryTool,
+                LtmSearchTool,
+                LtmStoreTool,
+                LtmRelationshipsTool,
+            ):
+                try:
+                    sch = factory(semantic_memory=self.semantic_memory).schema()
+                    if sch.get("name") == name:
+                        return sch
+                except Exception:
+                    continue
+
+        return None
+
     async def get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
-        tools = await self.list_tools()
-        return tools.get(name)
+        """
+        Resolve one tool schema without merging the full internal+MCP catalog on each call.
+        Precedence matches list_tools: internal, MCP, then memory facades (setdefault order).
+        """
+        async with self._lock:
+            tool = self._tools.get(name)
+        if tool:
+            try:
+                return tool.schema()
+            except Exception:
+                pass
+
+        if self._mcp_client:
+            mcp_map = await self._resolve_mcp_tool_schemas_by_name(force_refresh=False)
+            sch = mcp_map.get(name)
+            if sch is not None:
+                return sch
+
+        return await self._schema_for_memory_tool(name)
 
     async def stats(self) -> Dict[str, Any]:
         """
