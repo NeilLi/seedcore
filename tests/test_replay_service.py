@@ -1131,3 +1131,44 @@ async def test_replay_verification_fails_on_authority_state_binding_hash_mismatc
         == "state_binding_hash_mismatch"
     )
     assert "authority_state_binding:state_binding_hash_mismatch" in replay.verification_status.issues
+
+
+@pytest.mark.asyncio
+async def test_replay_verification_fails_when_rct_control_posture_is_incomplete(monkeypatch) -> None:
+    for name in (
+        "SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE",
+        "SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT",
+        "SEEDCORE_PKG_RCT_PUBLISH_VALIDATE",
+        "SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PKG_MODE", "control")
+
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-rct-posture-1",
+            intent_id="intent-rct-posture-1",
+            asset_id="asset-rct-posture-1",
+        ),
+        disposition="quarantine",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=["stale_telemetry"],
+    )
+    record["policy_case"] = {"workflow_hints": {"workflow_type": "restricted_custody_transfer"}}
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-rct-posture-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.verification_status.verified is False
+    assert replay.verification_status.artifact_results["rct_control_fail_closed_posture"]["error_code"] == (
+        "rct_control_fail_closed_posture_invalid"
+    )
+    assert any(
+        issue == "rct_control_fail_closed:missing_required_flag:SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH"
+        for issue in replay.verification_status.issues
+    )

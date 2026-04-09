@@ -52,6 +52,8 @@ def _raise_http_from_service_error(exc: ReplayServiceError) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if exc.code in {"ambiguous_task_id"}:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if exc.code in {"rct_control_fail_closed_posture_invalid"}:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if exc.code in {"missing_evidence_bundle"}:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if exc.code in {"redis_unavailable"}:
@@ -347,12 +349,15 @@ async def publish_trust_reference(
         else []
     )
 
-    reference, public_id = replay_service.build_public_reference(
-        lookup_key=lookup_key,
-        lookup_value=lookup_value,
-        replay=replay,
-        ttl_hours=payload.ttl_hours,
-    )
+    try:
+        reference, public_id = replay_service.build_public_reference(
+            lookup_key=lookup_key,
+            lookup_value=lookup_value,
+            replay=replay,
+            ttl_hours=payload.ttl_hours,
+        )
+    except ReplayServiceError as exc:
+        _raise_http_from_service_error(exc)
     urls = _public_urls(request, public_id)
     return {
         "public_id": public_id,

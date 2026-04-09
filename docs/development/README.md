@@ -148,6 +148,8 @@ Primary planning docs:
   optional LLM copilot brief; links verification API and UI guardrails
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
+- [`rct_control_posture_env_matrix.md`](rct_control_posture_env_matrix.md) - operator
+  env matrix for `dev/advisory` vs fail-closed `control-rct`
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md)
 - [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md)

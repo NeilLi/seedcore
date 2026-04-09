@@ -203,6 +203,34 @@ def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
     assert refresh_body["proof_surface"]["operator_action_codes"] == []
 
 
+def test_rct_control_posture_blocks_trust_publish_and_verify(monkeypatch) -> None:
+    for name in (
+        "SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE",
+        "SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT",
+        "SEEDCORE_PKG_RCT_PUBLISH_VALIDATE",
+        "SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PKG_MODE", "control")
+
+    record = _build_audit_record(
+        task_id="task-router-rct-posture-1",
+        intent_id="intent-router-rct-posture-1",
+        asset_id="asset-router-rct-posture-1",
+    )
+    record["policy_case"] = {"workflow_hints": {"workflow_type": "restricted_custody_transfer"}}
+    client = _make_client(record)
+
+    publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
+    assert publish.status_code == 409
+    assert "RCT CONTROL fail-closed posture invalid" in publish.json()["detail"]
+
+    verify = client.post("/verify", json={"audit_id": record["id"]})
+    assert verify.status_code == 200
+    assert verify.json()["verified"] is False
+    assert verify.json()["reason"] == "rct_control_fail_closed_posture_invalid"
+
+
 def test_replay_lookup_by_subject_id_returns_asset_projection() -> None:
     record = _build_audit_record(task_id="task-router-subject-1", intent_id="intent-router-subject-1", asset_id="asset-lookup-1")
     class _AssetLookupResult:

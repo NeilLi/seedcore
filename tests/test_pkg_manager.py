@@ -505,6 +505,9 @@ async def test_activate_snapshot_version_blocked_by_publish_validation(
 @pytest.mark.asyncio
 async def test_rct_phase2_enforce_rolls_back_when_not_ready(mock_pkg_client, monkeypatch):
     monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE", "1")
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT", "1")
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_PUBLISH_VALIDATE", "1")
+    monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH", "1")
     mock_pkg_client.get_taxonomy_bundle = AsyncMock(
         return_value={
             "reason_codes": [{"code": "r"}],
@@ -552,6 +555,9 @@ async def test_rct_phase2_enforce_rolls_back_when_not_ready(mock_pkg_client, mon
 @pytest.mark.asyncio
 async def test_rct_phase2_enforce_passes_when_ready(mock_pkg_client, monkeypatch):
     monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE", "1")
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT", "1")
+    monkeypatch.setenv("SEEDCORE_PKG_RCT_PUBLISH_VALIDATE", "1")
+    monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH", "1")
     mock_pkg_client.get_taxonomy_bundle = AsyncMock(
         return_value={
             "reason_codes": [{"code": "r"}],
@@ -611,6 +617,43 @@ async def test_rct_preflight_skips_authz_when_manifest_missing(mock_pkg_client, 
 
     assert mgr.get_active_evaluator() is None
     mgr.authz_graph.activate_snapshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rct_control_posture_blocks_activation_when_required_flags_missing(
+    mock_pkg_client, monkeypatch
+):
+    for name in (
+        "SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE",
+        "SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT",
+        "SEEDCORE_PKG_RCT_PUBLISH_VALIDATE",
+        "SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("SEEDCORE_TPM2_ALLOW_SOFTWARE_FALLBACK", raising=False)
+
+    class _Dgs:
+        def to_dict(self):
+            return {
+                "snapshot_hash": "sh",
+                "hot_path_workflow": "restricted_custody_transfer",
+                "trust_gap_taxonomy": ["tg"],
+            }
+
+    class _Compiled:
+        decision_graph_snapshot = _Dgs()
+        compiled_at = "2026-04-03T00:00:00Z"
+        snapshot_hash = "sh"
+        restricted_transfer_ready = True
+
+    mgr = PKGManager(mock_pkg_client, redis_client=None, mode=PKGMode.CONTROL)
+    mgr.authz_graph.activate_snapshot = AsyncMock(return_value=_Compiled())
+
+    snap = make_wasm_snapshot("rules@rct-posture-missing")
+    await mgr._load_and_activate_snapshot(snap, source="test")
+
+    assert mgr.get_active_evaluator() is None
+    assert mgr.get_metadata()["status"]["healthy"] is False
 
 
 # ---------------------------------------------------------------------

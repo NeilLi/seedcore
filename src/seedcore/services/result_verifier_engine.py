@@ -6,6 +6,9 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from seedcore.models.replay import ReplayVerificationStatus
 from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
+from seedcore.ops.evidence.rct_control_posture import (
+    is_restricted_custody_transfer_record as _is_restricted_custody_transfer_record,
+)
 from seedcore.services.replay_service import ReplayService
 
 
@@ -42,17 +45,7 @@ def _collect_evidence_refs(
 
 def is_restricted_custody_transfer_record(record: Mapping[str, Any]) -> bool:
     """v1 automation scope: RCT workflow only."""
-    action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
-    action = action_intent.get("action") if isinstance(action_intent.get("action"), dict) else {}
-    params = action.get("parameters") if isinstance(action.get("parameters"), dict) else {}
-    gateway = params.get("gateway") if isinstance(params.get("gateway"), dict) else {}
-    wt = gateway.get("workflow_type")
-    if isinstance(wt, str) and wt.strip() == "restricted_custody_transfer":
-        return True
-    policy_case = record.get("policy_case") if isinstance(record.get("policy_case"), dict) else {}
-    hints = policy_case.get("workflow_hints") if isinstance(policy_case.get("workflow_hints"), dict) else {}
-    w2 = hints.get("workflow_type")
-    return isinstance(w2, str) and w2.strip() == "restricted_custody_transfer"
+    return _is_restricted_custody_transfer_record(record)
 
 
 def map_replay_verification_to_outcome(

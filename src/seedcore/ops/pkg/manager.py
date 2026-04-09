@@ -44,6 +44,10 @@ from .dao import PKGSnapshotData  # Assuming legacy DAO mapped to new models
 from .capability_registry import CapabilityRegistry
 from .authz_graph import AuthzGraphManager, AuthzGraphProjectionService
 from .rct_publish_validation import gather_rct_publish_validation_errors
+from seedcore.ops.evidence.rct_control_posture import (
+    rct_control_fail_closed_issues,
+    RCT_WORKFLOW_TYPE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +145,51 @@ class PKGManager:
 
     def _rct_publish_validate_enabled(self) -> bool:
         return _pkg_env_truthy("SEEDCORE_PKG_RCT_PUBLISH_VALIDATE")
+
+    def _compiled_hot_path_workflow(self, compiled_authz_index: Optional[Any]) -> Optional[str]:
+        if compiled_authz_index is None:
+            return None
+        dgs = getattr(compiled_authz_index, "decision_graph_snapshot", None)
+        if dgs is None:
+            return None
+        payload: Dict[str, Any]
+        if hasattr(dgs, "to_dict"):
+            raw = dgs.to_dict()
+            payload = raw if isinstance(raw, dict) else {}
+        elif isinstance(dgs, dict):
+            payload = dgs
+        else:
+            payload = {}
+        workflow_type = payload.get("hot_path_workflow")
+        return str(workflow_type).strip() if workflow_type is not None and str(workflow_type).strip() else None
+
+    def _rct_control_fail_closed_issues_for_compiled(
+        self,
+        *,
+        compiled_authz_index: Optional[Any],
+    ) -> List[str]:
+        workflow_type = self._compiled_hot_path_workflow(compiled_authz_index)
+        if workflow_type != RCT_WORKFLOW_TYPE:
+            return []
+        return rct_control_fail_closed_issues(
+            workflow_type=workflow_type,
+            mode=self._mode.value,
+        )
+
+    def _raise_if_rct_control_posture_invalid(
+        self,
+        *,
+        compiled_authz_index: Optional[Any],
+        snapshot_version: str,
+    ) -> None:
+        issues = self._rct_control_fail_closed_issues_for_compiled(
+            compiled_authz_index=compiled_authz_index
+        )
+        if issues:
+            raise ValueError(
+                "RCT CONTROL fail-closed posture invalid for "
+                f"{snapshot_version}: {'; '.join(issues)}"
+            )
 
     def _rollback_pkg_activation_swap(
         self, version: str, prior_active_version: Optional[str]
@@ -369,6 +418,15 @@ class PKGManager:
                 )
             active_contract_artifacts: Dict[str, Any] = {}
             if compiled_authz_index is not None:
+                try:
+                    self._raise_if_rct_control_posture_invalid(
+                        compiled_authz_index=compiled_authz_index,
+                        snapshot_version=snapshot.version,
+                    )
+                except ValueError:
+                    if self._mode == PKGMode.CONTROL:
+                        self._rollback_pkg_activation_swap(version, prior_active_version)
+                    raise
                 persisted = await self._persist_compiled_authz_artifacts(
                     snapshot_id=snapshot.id,
                     snapshot_version=snapshot.version,
@@ -644,6 +702,10 @@ class PKGManager:
                 snapshot_id=snapshot_id,
                 snapshot_version=active_version,
                 snapshot_ref=f"authz_graph@{active_version}",
+            )
+            self._raise_if_rct_control_posture_invalid(
+                compiled_authz_index=compiled,
+                snapshot_version=active_version,
             )
             active_contract_artifacts = await self._persist_compiled_authz_artifacts(
                 snapshot_id=snapshot_id,

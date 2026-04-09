@@ -43,6 +43,9 @@ from seedcore.ops.evidence.rct_replay_verification import (
     evaluate_strict_rct_replay_triple_hash,
     strict_rct_replay_triple_hash_enabled,
 )
+from seedcore.ops.evidence.rct_control_posture import (
+    rct_control_fail_closed_issues,
+)
 from seedcore.ops.evidence.authority_consistency import (
     authority_consistency_summary,
     operator_actions_for_authority_issues,
@@ -457,6 +460,12 @@ class ReplayService:
                 intent_id=intent_id,
                 audit_id=audit_id,
             )
+            posture_issues = self._rct_control_fail_closed_issues(record=replay.audit_record)
+            if posture_issues:
+                raise ReplayServiceError(
+                    "rct_control_fail_closed_posture_invalid",
+                    "RCT CONTROL fail-closed posture invalid: " + "; ".join(posture_issues),
+                )
 
         bundle = self.build_trust_bundle(
             replay=replay,
@@ -698,6 +707,12 @@ class ReplayService:
         replay: ReplayRecord,
         ttl_hours: Optional[int] = None,
     ) -> tuple[PublicTrustReference, str]:
+        posture_issues = self._rct_control_fail_closed_issues(record=replay.audit_record)
+        if posture_issues:
+            raise ReplayServiceError(
+                "rct_control_fail_closed_posture_invalid",
+                "RCT CONTROL fail-closed posture invalid: " + "; ".join(posture_issues),
+            )
         issued_at = self._utcnow().isoformat()
         ttl = max(1, int(ttl_hours or DEFAULT_TRUST_REFERENCE_TTL_HOURS))
         expires_at = (self._utcnow() + timedelta(hours=ttl)).isoformat()
@@ -789,6 +804,17 @@ class ReplayService:
                     verification_time=verification_time,
                     reason=exc.code,
                 )
+            posture_issues = self._rct_control_fail_closed_issues(record=replay.audit_record)
+            if posture_issues:
+                return self._failed_verification_result(
+                    reference_type="audit_id",
+                    reference_id=audit_id.strip(),
+                    verification_time=verification_time,
+                    reason="rct_control_fail_closed_posture_invalid",
+                    subject_id=replay.subject_id,
+                    subject_type=replay.subject_type,
+                    tamper_status="incomplete",
+                )
             return self._verification_result_from_replay(
                 replay=replay,
                 reference_type="audit_id",
@@ -808,6 +834,17 @@ class ReplayService:
                     subject_type=subject_type,
                 )
             _, _, replay = await self.assemble_replay_record(session, audit_record=record)
+            posture_issues = self._rct_control_fail_closed_issues(record=replay.audit_record)
+            if posture_issues:
+                return self._failed_verification_result(
+                    reference_type="subject_id",
+                    reference_id=subject_id.strip(),
+                    verification_time=verification_time,
+                    reason="rct_control_fail_closed_posture_invalid",
+                    subject_id=replay.subject_id,
+                    subject_type=replay.subject_type,
+                    tamper_status="incomplete",
+                )
             return self._verification_result_from_replay(
                 replay=replay,
                 reference_type="subject_id",
@@ -973,6 +1010,18 @@ class ReplayService:
                 subject_id=reference.subject_id,
                 subject_type=reference.subject_type,
                 signature_valid=True,
+            )
+        posture_issues = self._rct_control_fail_closed_issues(record=replay.audit_record)
+        if posture_issues:
+            return self._failed_verification_result(
+                reference_type="trust_token",
+                reference_id=reference_id,
+                verification_time=verification_time,
+                reason="rct_control_fail_closed_posture_invalid",
+                subject_id=reference.subject_id,
+                subject_type=reference.subject_type,
+                signature_valid=True,
+                tamper_status="incomplete",
             )
         if replay.subject_type != reference.subject_type or replay.subject_id != reference.subject_id:
             projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
@@ -1200,6 +1249,13 @@ class ReplayService:
         governed_receipt = policy_decision.get("governed_receipt")
         return dict(governed_receipt) if isinstance(governed_receipt, dict) else {}
 
+    def _rct_control_fail_closed_issues(
+        self,
+        *,
+        record: Mapping[str, Any],
+    ) -> List[str]:
+        return rct_control_fail_closed_issues(record=record)
+
     def _build_signer_chain(
         self,
         *,
@@ -1285,7 +1341,10 @@ class ReplayService:
         artifact_results["authority_state_binding"] = state_binding_result
         if state_binding_result.get("error_code") is not None:
             issues.append(f"authority_state_binding:{state_binding_result['error_code']}")
-        if strict_rct_replay_triple_hash_enabled():
+        rct_control_posture_issues = self._rct_control_fail_closed_issues(record=record)
+        strict_triple_enabled = strict_rct_replay_triple_hash_enabled()
+        strict_triple_required = bool(rct_control_posture_issues)
+        if strict_triple_enabled or strict_triple_required:
             strict_triple = evaluate_strict_rct_replay_triple_hash(
                 record=record,
                 policy_receipt=policy_receipt,
@@ -1295,6 +1354,17 @@ class ReplayService:
             if not strict_triple["verified"]:
                 for item in strict_triple["issues"]:
                     issues.append(f"rct_triple_hash_strict:{item}")
+            if strict_triple_required and not strict_triple_enabled:
+                issues.append("rct_control_fail_closed:missing_required_flag:SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH")
+        if rct_control_posture_issues:
+            artifact_results["rct_control_fail_closed_posture"] = {
+                "artifact_type": "rct_control_fail_closed_posture",
+                "verified": False,
+                "error_code": "rct_control_fail_closed_posture_invalid",
+                "issues": list(rct_control_posture_issues),
+            }
+            for item in rct_control_posture_issues:
+                issues.append(f"rct_control_fail_closed:{item}")
         if not policy_receipt:
             issues.append("missing_policy_receipt")
             artifact_results["policy_receipt"] = {
