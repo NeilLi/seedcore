@@ -920,11 +920,16 @@ class OrganismCore:
         threshold = self.config.get("agent_threshold_for_shards", 100)
 
         if num_agents < threshold:
+            from seedcore.serve.mcp_client import mcp_service_client_from_config
+
             tm_kw: Dict[str, Any] = {
                 "skill_store": self.skill_store,
                 "mw_manager": self.mw_manager,
                 "cognitive_client": self.cognitive_client,
                 "ml_client": self.ml_client,
+                "mcp_client": mcp_service_client_from_config(
+                    self._get_mcp_client_config()
+                ),
             }
             if self.memory_runtime is not None:
                 tm_kw["semantic_memory"] = self.memory_runtime.semantic

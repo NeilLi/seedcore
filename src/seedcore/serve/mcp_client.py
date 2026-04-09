@@ -528,3 +528,42 @@ class MCPServiceClient(BaseServiceClient):
             # No event loop is running. We are in a sync context.
             # It's safe to create a new event loop right here.
             return asyncio.run(_runner())
+
+
+def mcp_service_client_from_config(
+    cfg: Optional[Dict[str, Any]],
+) -> Optional["MCPServiceClient"]:
+    """
+    Construct MCPServiceClient from the same config dict produced by
+    OrganismCore._get_mcp_client_config (shared with ToolManagerShard).
+
+    Returns None when cfg is missing or base_url is empty (MCP not configured).
+    Uses object.__new__ + BaseServiceClient.__init__ so behavior matches
+    Ray actor construction paths.
+    """
+    if not cfg:
+        return None
+    base_url = str(cfg.get("base_url") or "").strip()
+    if not base_url:
+        return None
+
+    circuit_breaker = CircuitBreaker(
+        failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
+        recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
+    )
+    retry_config = RetryConfig(
+        max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
+        base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
+        max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
+    )
+
+    client = object.__new__(MCPServiceClient)
+    BaseServiceClient.__init__(
+        client,
+        service_name="mcp_service",
+        base_url=base_url.rstrip("/"),
+        timeout=float(cfg.get("timeout", 30.0)),
+        circuit_breaker=circuit_breaker,
+        retry_config=retry_config,
+    )
+    return client

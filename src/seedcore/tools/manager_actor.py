@@ -101,32 +101,10 @@ class ToolManagerShard:
     def _get_mcp_client(self):
         """Lazily create MCPServiceClient from config to avoid serialization issues."""
         if self._mcp_client is None and self._mcp_client_cfg:
-            from ..serve.mcp_client import MCPServiceClient
-            from ..serve.base_client import CircuitBreaker, RetryConfig
-            
-            cfg = self._mcp_client_cfg
-            circuit_breaker = CircuitBreaker(
-                failure_threshold=cfg.get("circuit_breaker", {}).get("failure_threshold", 5),
-                recovery_timeout=cfg.get("circuit_breaker", {}).get("recovery_timeout", 30.0),
-            )
-            retry_config = RetryConfig(
-                max_attempts=cfg.get("retry_config", {}).get("max_attempts", 1),
-                base_delay=cfg.get("retry_config", {}).get("base_delay", 1.0),
-                max_delay=cfg.get("retry_config", {}).get("max_delay", 5.0),
-            )
-            
-            # Create client with explicit config
-            self._mcp_client = object.__new__(MCPServiceClient)
-            from ..serve.base_client import BaseServiceClient
-            BaseServiceClient.__init__(
-                self._mcp_client,
-                service_name="mcp_service",
-                base_url=cfg["base_url"],
-                timeout=cfg.get("timeout", 30.0),
-                circuit_breaker=circuit_breaker,
-                retry_config=retry_config,
-            )
-        
+            from ..serve.mcp_client import mcp_service_client_from_config
+
+            self._mcp_client = mcp_service_client_from_config(self._mcp_client_cfg)
+
         return self._mcp_client
     
     def _get_mw_manager(self):
