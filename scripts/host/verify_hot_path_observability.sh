@@ -20,10 +20,19 @@ require_bin() {
 
 require_bin curl
 
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "[FAIL] missing required binary: python3 (or python)" >&2
+  exit 1
+fi
+
 STATUS_JSON="$(curl -fsS "${RUNTIME_API_BASE}/pdp/hot-path/status")"
 METRICS_TEXT="$(curl -fsS "${RUNTIME_API_BASE}/pdp/hot-path/metrics")"
 
-STATUS_JSON="${STATUS_JSON}" METRICS_TEXT="${METRICS_TEXT}" python - <<'PY'
+STATUS_JSON="${STATUS_JSON}" METRICS_TEXT="${METRICS_TEXT}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 import re

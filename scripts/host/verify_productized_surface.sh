@@ -82,6 +82,14 @@ if [[ "${SEEDCORE_SKIP_HOT_PATH_OBSERVABILITY_GATE:-}" != "1" ]]; then
   SEEDCORE_RUNTIME_API_BASE="${RUNTIME_API_BASE}" bash "${ROOT}/scripts/host/verify_hot_path_observability.sh"
 fi
 
+if [[ "${SEEDCORE_RUN_REDIS_DEPENDENCY_DRILL:-}" == "1" ]]; then
+  echo "== Redis dependency-loss live drill =="
+  SEEDCORE_RUNTIME_API_BASE="${RUNTIME_API_BASE}" \
+    SEEDCORE_RUNTIME_HEALTH_URL="${RUNTIME_API_BASE%/api/v1}/health" \
+    SEEDCORE_RUNTIME_READYZ_URL="${RUNTIME_API_BASE%/api/v1}/readyz" \
+    bash "${ROOT}/scripts/host/verify_pkg_redis_resilience.sh"
+fi
+
 AUDIT_ID="$(find_runtime_audit_id || true)"
 if [[ -z "${AUDIT_ID}" ]]; then
   echo "[FAIL] No runtime audit_id discovered. Set SEEDCORE_AUDIT_ID or populate governed_execution_audit before running live sign-off." >&2
