@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
-Date: 2026-04-07
-Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped)
+Date: 2026-04-10
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube hot-path topology validated)
 
 ## Purpose
 
@@ -65,6 +65,40 @@ Remaining Q2 emphasis is now operationalization:
 - define the smallest safe Gemini-visible read surface once the verification
   and hot-path read contracts stop shifting
 
+## Execution Update (2026-04-10, Remote Kube Topology)
+
+The first deployment-realistic Kubernetes topology is now green for the
+runtime-critical Q2 gates:
+
+- remote GCP VM + Kind deployment through `build.sh` and `deploy/` is working
+  for SeedCore API, Ray/KubeRay, ingress, and HAL simulation
+- `/health`, `/readyz`, `/api/v1/pdp/hot-path/status`, and live observability
+  checks are aligned and passing against the kube-backed API
+- the Redis dependency-loss drill now passes in this topology without flipping
+  the runtime into rollback or mismatch posture
+- deployment-realistic hot-path benchmark capture is stable enough to use as a
+  baseline (`40` requests, `0` mismatches, `0` errors, `p50 ~111ms`,
+  `p95 ~139ms`, `p99 ~156ms`)
+
+Important topology limit:
+
+- the current remote Kind topology does **not** yet include Kafka or the
+  verification API deployment, so this is not full external-surface signoff
+
+Decision:
+
+- Q3 bridge work may begin only in the narrow read-oriented form needed for
+  external-agent debugging against the hot-path/runtime read contract
+- the Gemini-visible surface should stay at the exact minimal read-only bundle
+  already defined in `src/seedcore/plugin/mcp_server.py`, and in this topology
+  the safe live subset is only `seedcore.hotpath.status` and
+  `seedcore.hotpath.metrics` until the verification API is also deployed
+
+Checked-in signoff note:
+
+- see
+  [kube_topology_validation_q2_signoff.md](/Users/ningli/project/seedcore/docs/development/kube_topology_validation_q2_signoff.md)
+
 ## Prior Execution Update (2026-04-02)
 
 The highest-priority Q2 contract hardening sequence has now been implemented in
@@ -109,7 +143,11 @@ Status:
 
 - **Implemented (host-first):** acceptance gates are executable and passing in
   both CI and local host verification paths.
-- **Remaining:** topology-specific validation beyond host mode.
+- **Implemented (remote kube path):** first Kind-based runtime topology is now
+  validated for health/readiness/hot-path observability, Redis dependency
+  resilience, ingress, and HAL.
+- **Remaining:** verification API and Kafka deployment validation in the kube
+  topology.
 
 Must land:
 
@@ -149,6 +187,14 @@ Must land:
 Goal:
 
 - start Q3 agent-boundary productization without reopening frozen contracts
+
+Entry condition update:
+
+- this may now begin in a narrow read-only form for the kube topology, because
+  hot-path and observability contracts are stable enough for external-agent
+  debugging there
+- do **not** widen write/control surfaces or claim full verification-surface
+  readiness until the verification API and Kafka are live in-cluster
 
 Must land:
 

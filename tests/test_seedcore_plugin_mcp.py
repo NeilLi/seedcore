@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from seedcore.plugin.mcp_server import (
     GEMINI_MINIMAL_READ_ONLY_BUNDLE,
     PLUGIN_TOOL_NAMES,
+    _compute_live_gemini_read_only_bundle,
     app,
     handle_digital_twin_capture_link,
     handle_evidence_verify,
@@ -80,6 +81,7 @@ def test_plugin_info_lists_seedcore_tools():
     assert body["service"] == "seedcore-plugin-mcp"
     assert body["tools"] == PLUGIN_TOOL_NAMES
     assert tuple(body["gemini_minimal_read_only_bundle"]) == GEMINI_MINIMAL_READ_ONLY_BUNDLE
+    assert set(body["live_gemini_read_only_bundle"]).issubset(set(GEMINI_MINIMAL_READ_ONLY_BUNDLE))
 
 
 def test_gemini_minimal_read_only_bundle_is_exact_blessed_six_tools() -> None:
@@ -92,6 +94,20 @@ def test_gemini_minimal_read_only_bundle_is_exact_blessed_six_tools() -> None:
         "seedcore.hotpath.metrics",
     )
     assert set(GEMINI_MINIMAL_READ_ONLY_BUNDLE).issubset(set(PLUGIN_TOOL_NAMES))
+
+
+def test_compute_live_gemini_read_only_bundle_allows_topology_safe_subset() -> None:
+    assert _compute_live_gemini_read_only_bundle(
+        hotpath_available=True,
+        verification_available=False,
+    ) == (
+        "seedcore.hotpath.status",
+        "seedcore.hotpath.metrics",
+    )
+    assert _compute_live_gemini_read_only_bundle(
+        hotpath_available=True,
+        verification_available=True,
+    ) == GEMINI_MINIMAL_READ_ONLY_BUNDLE
 
 
 def test_plugin_tool_surface_includes_q2_verification_read_tools():

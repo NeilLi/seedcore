@@ -13,6 +13,45 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-04-10, Remote Kube Topology)
+
+Latest live deployment-topology status:
+
+- the remote GCP VM + Kind path is now green for the core runtime topology:
+  - SeedCore API, Ray/KubeRay, ingress, and HAL simulation are live through the
+    checked-in `build.sh` and `deploy/` path
+  - `/health`, `/readyz`, `/api/v1/pdp/hot-path/status`, and
+    `verify_hot_path_observability.sh` are aligned and passing against the
+    kube-backed API
+- degraded coverage has moved beyond host-only verification:
+  - the live Redis dependency-loss drill passes in the kube topology
+  - runtime remains operational through outage and recovery with no mismatches
+    and no rollback trigger
+- the hot-path deployment baseline is now stable enough to guide bridge work in
+  this topology:
+  - latest benchmark: `40` requests, `0` mismatches, `0` errors,
+    `p50 ~111ms`, `p95 ~139ms`, `p99 ~156ms`
+  - live gate posture: `runtime_ready=true`, `authz_graph_ready=true`,
+    `graph_freshness_ok=true`, `alert_level="ok"`
+
+Important boundary:
+
+- this topology still does **not** include Kafka or the verification API, so
+  it is not yet a complete external-surface or productized-verification
+  topology
+
+Immediate decision:
+
+- begin only the narrow, read-only Q3 bridge work needed for external-agent
+  debugging against the hot-path/runtime read contract
+- keep the Gemini-visible surface at the existing minimal read-only bundle, and
+  expose only the live-safe subset in topologies that do not yet have the
+  verification API
+
+Reference:
+
+- [Kube Topology Validation Q2 Signoff](/Users/ningli/project/seedcore/docs/development/kube_topology_validation_q2_signoff.md)
+
 ## Status Update (2026-04-07)
 
 Latest repo-aligned critical-path status:

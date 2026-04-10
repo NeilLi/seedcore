@@ -36,6 +36,12 @@ GEMINI_MINIMAL_READ_ONLY_BUNDLE = (
     "seedcore.hotpath.status",
     "seedcore.hotpath.metrics",
 )
+GEMINI_VERIFICATION_READ_TOOLS = tuple(
+    tool_name for tool_name in GEMINI_MINIMAL_READ_ONLY_BUNDLE if tool_name.startswith("seedcore.verification.")
+)
+GEMINI_HOTPATH_READ_TOOLS = tuple(
+    tool_name for tool_name in GEMINI_MINIMAL_READ_ONLY_BUNDLE if tool_name.startswith("seedcore.hotpath.")
+)
 
 PLUGIN_TOOL_NAMES = [
     "seedcore.health",
@@ -116,6 +122,45 @@ def _authz_graph_highlights(raw: dict[str, Any]) -> dict[str, Any]:
         "graph_edges_count": raw.get("graph_edges_count"),
         "error": raw.get("error"),
     }
+
+
+def _compute_live_gemini_read_only_bundle(
+    *,
+    hotpath_available: bool,
+    verification_available: bool,
+) -> tuple[str, ...]:
+    live_tools: list[str] = []
+    if verification_available:
+        live_tools.extend(GEMINI_VERIFICATION_READ_TOOLS)
+    if hotpath_available:
+        live_tools.extend(GEMINI_HOTPATH_READ_TOOLS)
+    return tuple(live_tools)
+
+
+async def _probe_live_gemini_read_only_bundle() -> tuple[str, ...]:
+    hotpath_available = False
+    verification_available = False
+
+    runtime = SeedcoreRuntimeClient(timeout=1.0)
+    try:
+        await runtime.hotpath_status()
+    except SeedcorePluginError:
+        hotpath_available = False
+    else:
+        hotpath_available = True
+    finally:
+        await runtime.close()
+
+    verification = SeedcoreVerificationReadClient(timeout=1.0)
+    try:
+        verification_available = await verification.probe_status_route()
+    finally:
+        await verification.close()
+
+    return _compute_live_gemini_read_only_bundle(
+        hotpath_available=hotpath_available,
+        verification_available=verification_available,
+    )
 
 
 async def handle_health(runtime: SeedcoreRuntimeClient) -> dict[str, Any]:
@@ -1924,11 +1969,13 @@ async def health() -> dict[str, Any]:
 
 @app.get("/info")
 async def info() -> dict[str, Any]:
+    live_bundle = await _probe_live_gemini_read_only_bundle()
     return {
         "service": "seedcore-plugin-mcp",
         "version": "1.0.0",
         "tools": PLUGIN_TOOL_NAMES,
         "gemini_minimal_read_only_bundle": list(GEMINI_MINIMAL_READ_ONLY_BUNDLE),
+        "live_gemini_read_only_bundle": list(live_bundle),
         "description": "Read-only Seedcore operator tools for Codex and Gemini hosts",
     }
 

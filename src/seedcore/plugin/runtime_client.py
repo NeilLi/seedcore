@@ -223,3 +223,16 @@ class SeedcoreVerificationReadClient:
         if not isinstance(data, dict):
             raise SeedcorePluginError(f"GET {url} returned unexpected payload type")
         return data
+
+    async def probe_status_route(self) -> bool:
+        """Return True when the verification status route is live, even if the probe is rejected."""
+
+        url = self.url("/api/v1/verification/transfers/status")
+        try:
+            response = await self.http.get(
+                url,
+                params={"source": "runtime", "subject_id": "asset:probe"},
+            )
+        except httpx.HTTPError:
+            return False
+        return response.status_code in {200, 422}
