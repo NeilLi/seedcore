@@ -1,7 +1,7 @@
 # Kube Topology Validation Q2 Signoff
 
 Date: 2026-04-10
-Status: Remote Kind topology validated for hot-path, ingress, and HAL; not yet a full verification-surface topology
+Status: Remote Kind topology validated for hot-path, ingress, and HAL; verification API kube deployment lane implemented; live full-surface capture pending
 
 ## Purpose
 
@@ -35,7 +35,7 @@ Present in this topology:
 - `seedcore-hal-bridge`
 - ingress-nginx
 
-Not present in this topology:
+Not present in the last captured live run:
 
 - Kafka broker
 - verification API deployment on `:7071`
@@ -128,6 +128,49 @@ Artifact families captured under the repo runtime directory:
 - `.local-runtime/hot_path_benchmarks/`
 - `.local-runtime/hot_path_baselines/`
 
+## Verification API Integration Update
+
+The deploy/verification lane now has first-class verification API integration:
+
+- dedicated workload manifest:
+  `deploy/k8s/verification-api.yaml` (`Deployment` + `Service` on `7071`)
+- dedicated deploy runner:
+  `deploy/deploy-verification-api.sh`
+- orchestration wiring:
+  `deploy/deploy-all.sh --deploy-verification-api`
+- topology signoff upgrade:
+  `deploy/verify-kube-topology.sh` now runs full
+  `verify_productized_surface.sh` when verification API is reachable, with
+  in-cluster audit-id fallback and full-surface gate reporting.
+
+This means the topology can now promote to full external-agent verification
+signoff as soon as the service is deployed and protocol checks are green.
+
+## Latest Verification-Lane Evidence (2026-04-10)
+
+Live runs on the remote Kind cluster now show the upgraded behavior:
+
+- verification API deployment step succeeds:
+  `deploy/deploy-verification-api.sh` rolled out
+  `seedcore-verification-api` in `seedcore-dev`
+- with verification service present, signoff reports include:
+  - `verification_surface_available=true`
+  - `verification_surface_protocol_passed=false`
+  - `green_enough_for_full_external_agent_debugging=false`
+- with verification service treated as absent (missing service name),
+  signoff reports include:
+  - `verification_surface_available=false`
+  - `verification_surface_protocol_passed=false`
+  - safe Gemini surface remains hot-path-only
+- with `SEEDCORE_ENFORCE_FULL_VERIFICATION_GATE=1`, kube verification exits
+  non-zero exactly as intended when full-surface criteria are not met.
+
+Current full-surface blocker:
+
+- runtime audit source is empty in this topology
+  (`public.governed_execution_audit` has no rows), so the productized
+  verification protocol cannot yet complete against runtime-backed audit IDs.
+
 ## Q3 Bridge Entry Decision
 
 Decision for 2026-04-10:
@@ -141,7 +184,7 @@ Allowed next step:
 - topology-aware read-only bridge work that assumes the current hot-path
   status/metrics semantics are stable enough for operator debugging
 
-Not yet allowed:
+Not yet allowed from the last captured live run:
 
 - bridge work that depends on a live verification API in this topology
 - bridge work that assumes Kafka ingress/egress is available in-cluster
@@ -156,8 +199,8 @@ Operational interpretation:
 
 ## Smallest Safe Gemini-Visible Read Surface
 
-The smallest safe Gemini-visible surface should remain the exact read-only
-bundle already defined in
+The smallest safe Gemini-visible surface remains the exact read-only bundle
+already defined in
 [`src/seedcore/plugin/mcp_server.py`](/Users/ningli/project/seedcore/src/seedcore/plugin/mcp_server.py):
 
 - `seedcore.verification.queue`
@@ -167,18 +210,19 @@ bundle already defined in
 - `seedcore.hotpath.status`
 - `seedcore.hotpath.metrics`
 
-Safety rule:
+Safety rule (topology truth):
 
 - only expose tools whose backing service is actually deployed in the target
   topology
 
-That means:
+Promotion logic:
 
-- in the current remote Kind topology, the safe exposed subset is:
+- verification API unavailable or verification protocol failing:
+  expose only:
   - `seedcore.hotpath.status`
   - `seedcore.hotpath.metrics`
-- the verification read tools should remain disabled in this topology until
-  the verification API is live and validated
+- verification API available and verification protocol passing:
+  expose the full minimal read-only bundle listed above
 
 This keeps Gemini read access aligned with real deployment truth instead of
 advertising tools that only work in fixture or host-only environments.
@@ -187,8 +231,10 @@ advertising tools that only work in fixture or host-only environments.
 
 The next highest-value kube work should be:
 
-1. add the verification API to the remote Kubernetes topology and rerun the
-   productized verification-surface protocol there
+1. run `deploy/deploy-all.sh ... --deploy-verification-api --verify-kube`
+   on the target remote cluster and capture the full-surface signoff report
+   (`verification_surface_available=true`,
+   `verification_surface_protocol_passed=true`)
 2. add Kafka only when the topology is ready to exercise real readiness-gate
    and delegated-intent ingress drills
 3. keep Q3 bridge work read-only until those two topology gaps are closed

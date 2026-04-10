@@ -243,6 +243,11 @@ def _apply_transition_metadata(
     return record
 
 
+def test_coerce_projection_accepts_enum_repr_string() -> None:
+    service = ReplayService()
+    assert service._coerce_projection("ReplayProjectionKind.INTERNAL") == ReplayProjectionKind.INTERNAL
+
+
 def _apply_transfer_workflow_metadata(
     record: Dict[str, Any],
     *,

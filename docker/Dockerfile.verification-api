@@ -1,0 +1,51 @@
+FROM rust:1.87-slim AS rust-builder
+
+WORKDIR /workspace/rust
+COPY rust/Cargo.toml rust/Cargo.lock ./
+COPY rust/crates ./crates
+RUN cargo build --release -p seedcore-verify
+
+FROM node:20-slim AS ts-builder
+
+WORKDIR /workspace
+COPY ts ./ts
+RUN cd ts && npm ci
+RUN cd ts \
+  && npm --workspace @seedcore/contracts run build \
+  && npm --workspace @seedcore/verification-api run build
+
+FROM node:20-slim
+
+ARG BUILD_DATE
+ARG VCS_REF
+ARG ENABLE_ML=0
+LABEL org.opencontainers.image.title="seedcore-verification-api" \
+      org.opencontainers.image.description="SeedCore verification API service" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="seedcore"
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=rust-builder /workspace/rust/target/release/seedcore-verify /usr/local/bin/seedcore-verify
+RUN chmod +x /usr/local/bin/seedcore-verify
+
+COPY --from=ts-builder /workspace/ts ./ts
+COPY rust/fixtures ./rust/fixtures
+
+ENV NODE_ENV=production \
+    PORT=7071 \
+    SEEDCORE_VERIFY_BIN=/usr/local/bin/seedcore-verify \
+    INIT_CWD=/app \
+    SEEDCORE_RUNTIME_API_BASE=http://seedcore-api:8002/api/v1
+
+EXPOSE 7071
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -fsS "http://127.0.0.1:7071/health" >/dev/null || exit 1
+
+WORKDIR /app/ts/services/verification-api
+CMD ["node", "dist/server.js"]

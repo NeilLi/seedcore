@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
 Date: 2026-04-10
-Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane)
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane; verification API kube integration lane implemented)
 
 ## Purpose
 
@@ -146,6 +146,82 @@ Operational consequence:
 - Kafka-dependent readiness/degraded lanes remain blocked until Kafka is
   deployed in-cluster
 
+## Execution Update (2026-04-10, Verification API Kube Integration)
+
+The verification API gap in the Kubernetes deploy/verification surface is now
+implemented in repo scripts/manifests so the topology can promote from
+hot-path-only signoff to full productized verification-surface signoff when
+the service is deployed.
+
+Implemented:
+
+- dedicated verification API image build path:
+  - `docker/Dockerfile.verification-api`
+  - runtime includes `seedcore-verify` binary and fixture assets for
+    fixture-mode verification endpoints
+- dedicated Kubernetes workload:
+  - `deploy/k8s/verification-api.yaml` (`Deployment` + `Service` on `7071`)
+  - runtime API base wired through service-DNS env (`SEEDCORE_RUNTIME_API_BASE`)
+  - readiness/liveness probes on `/health`
+- deploy runner:
+  - `deploy/deploy-verification-api.sh`
+  - supports build + kind image load + rollout wait
+- orchestration integration:
+  - `deploy/deploy-all.sh` adds:
+    - `--deploy-verification-api`
+    - `--verification-api-image <img:tag>`
+    - `--skip-verification-api-build`
+    - `--enforce-kube-full-gate`
+  - default remains soft/non-breaking (verification API deploy opt-in)
+- kube verification lane upgrade:
+  - `deploy/verify-kube-topology.sh` now:
+    - detects/port-forwards verification API when present
+    - runs `scripts/host/verify_productized_surface.sh` automatically when
+      verification API is reachable
+    - resolves `SEEDCORE_AUDIT_ID` via in-cluster Postgres fallback
+      (`kubectl exec ... psql`) for deployment-realistic runs
+    - emits new signoff fields:
+      - `verification_surface_available`
+      - `verification_surface_protocol_passed`
+      - `green_enough_for_full_external_agent_debugging`
+
+Safe-read-surface promotion rule is now topology-driven:
+
+- verification API unavailable or protocol failing:
+  safe surface remains `seedcore.hotpath.status`, `seedcore.hotpath.metrics`
+- verification API available and protocol passing:
+  promote to full minimal read-only bundle
+  (`verification.queue`, `workflow_verification_detail`, `workflow_replay`,
+  `runbook_lookup`, plus hot-path reads)
+
+Validation completed for this implementation slice:
+
+- script contract tests (`tests/test_deploy_kube_verification_scripts.py`)
+- shell syntax checks (`bash -n` on deploy and verification scripts)
+- verification API image/container smoke:
+  - image build from `docker/Dockerfile.verification-api`
+  - `/health` endpoint healthy
+  - fixture verification endpoint responds in-container on `:7071`
+- remote Kind topology run (GCP VM):
+  - `deploy/deploy-verification-api.sh` deployed
+    `seedcore-verification-api` (`Deployment` + `Service`) in `seedcore-dev`
+  - kube verification lane now reports verification-surface availability and
+    full-surface gate status from live topology reports
+  - Scenario B validated:
+    when verification service is not discoverable, report keeps
+    `verification_surface_available=false` and safe read surface remains
+    hot-path-only
+  - Scenario C validated:
+    `SEEDCORE_ENFORCE_FULL_VERIFICATION_GATE=1` fails as intended when
+    verification-surface protocol is not green
+
+Remaining operational closure:
+
+- Scenario A full protocol pass is still blocked by missing runtime audit IDs
+  in the current topology (`public.governed_execution_audit` empty), so
+  `verification_surface_protocol_passed` remains `false` until runtime traffic
+  populates an audit-backed replay path.
+
 ## Prior Execution Update (2026-04-02)
 
 The highest-priority Q2 contract hardening sequence has now been implemented in
@@ -197,7 +273,8 @@ Status:
   into `deploy/` with explicit post-deploy flags and machine-readable signoff
   output.
 - **Remaining:** verification API and Kafka deployment validation in the kube
-  topology.
+  topology (verification API scripts/manifests now implemented; pending live
+  capture in target remote cluster).
 
 Must land:
 

@@ -51,10 +51,14 @@ DEPLOY_HAL_BRIDGE="${DEPLOY_HAL_BRIDGE:-true}"
 HAL_IMAGE="${HAL_IMAGE:-${SEEDCORE_IMAGE}}"
 HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
 HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
+DEPLOY_VERIFICATION_API="${DEPLOY_VERIFICATION_API:-false}"
+VERIFICATION_API_IMAGE="${VERIFICATION_API_IMAGE:-seedcore-verification-api:latest}"
+BUILD_VERIFICATION_API_IMAGE="${BUILD_VERIFICATION_API_IMAGE:-true}"
 RUN_KUBE_VERIFICATION="${RUN_KUBE_VERIFICATION:-false}"
 RUN_KUBE_DEGRADED_DRILLS="${RUN_KUBE_DEGRADED_DRILLS:-true}"
 RUN_KUBE_BENCHMARK_BASELINE="${RUN_KUBE_BENCHMARK_BASELINE:-true}"
 ENFORCE_KUBE_Q3_GATE="${ENFORCE_KUBE_Q3_GATE:-false}"
+ENFORCE_KUBE_FULL_GATE="${ENFORCE_KUBE_FULL_GATE:-false}"
 KUBE_VERIFY_REPORT_DIR="${KUBE_VERIFY_REPORT_DIR:-}"
 
 usage() {
@@ -86,12 +90,20 @@ Options:
       --skip-load            Skip kind image loads in downstream scripts
       --skip-hal             Skip HAL bridge deployment
       --skip-ingress         Skip ingress deployment
+      --deploy-verification-api
+                             Deploy in-cluster verification API service
+      --verification-api-image <img:tag>
+                             Verification API image (default: ${VERIFICATION_API_IMAGE})
+      --skip-verification-api-build
+                             Skip verification API image build in deploy step
       --verify-kube          Run post-deploy kube topology verification lane
       --verify-kube-no-degraded
                              Skip degraded-edge drills in kube verification lane
       --verify-kube-no-benchmark
                              Skip benchmark/baseline capture in kube verification lane
       --enforce-kube-q3-gate Fail deploy if narrow Q3 readiness gate is not green
+      --enforce-kube-full-gate
+                             Fail deploy if full verification-surface gate is not green
       --kube-verify-report-dir <path>
                              Override kube verification report output directory
       --skip-wait            Skip the post-Ray stabilization sleep
@@ -158,10 +170,14 @@ while [[ $# -gt 0 ]]; do
     --skip-load) SKIP_KIND_LOAD=true; shift ;;
     --skip-hal) SKIP_HAL=true; DEPLOY_HAL_BRIDGE=false; shift ;;
     --skip-ingress) DEPLOY_INGRESS_ENABLED=false; shift ;;
+    --deploy-verification-api) DEPLOY_VERIFICATION_API=true; shift ;;
+    --verification-api-image) VERIFICATION_API_IMAGE="$2"; shift 2 ;;
+    --skip-verification-api-build) BUILD_VERIFICATION_API_IMAGE=false; shift ;;
     --verify-kube) RUN_KUBE_VERIFICATION=true; shift ;;
     --verify-kube-no-degraded) RUN_KUBE_DEGRADED_DRILLS=false; shift ;;
     --verify-kube-no-benchmark) RUN_KUBE_BENCHMARK_BASELINE=false; shift ;;
     --enforce-kube-q3-gate) ENFORCE_KUBE_Q3_GATE=true; shift ;;
+    --enforce-kube-full-gate) ENFORCE_KUBE_FULL_GATE=true; shift ;;
     --kube-verify-report-dir) KUBE_VERIFY_REPORT_DIR="$2"; shift 2 ;;
     --skip-wait) SKIP_WAIT=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -445,6 +461,23 @@ deploy_hal_bridge() {
   "${DEPLOY_DIR}/deploy-hal.sh"
 }
 
+deploy_verification_api() {
+  if ! is_true "${DEPLOY_VERIFICATION_API}"; then
+    log "Skipping verification API deployment (DEPLOY_VERIFICATION_API=${DEPLOY_VERIFICATION_API})"
+    return 0
+  fi
+
+  log "Deploying verification API service"
+  CLUSTER_NAME="${CLUSTER_NAME}" \
+  NAMESPACE="${NAMESPACE}" \
+  VERIFICATION_API_IMAGE="${VERIFICATION_API_IMAGE}" \
+  BUILD_IMAGE="${BUILD_VERIFICATION_API_IMAGE}" \
+  BUILD_PLATFORM="${BUILD_PLATFORM}" \
+  BUILD_NO_CACHE="${BUILD_NO_CACHE}" \
+  SKIP_LOAD="${SKIP_KIND_LOAD}" \
+  "${DEPLOY_DIR}/deploy-verification-api.sh"
+}
+
 deploy_ingress() {
   log "Deploying ingress configuration"
 
@@ -489,10 +522,14 @@ verify_kube_topology() {
   SEEDCORE_RUNTIME_API_BASE="${runtime_api_base}" \
   SEEDCORE_RUNTIME_HEALTH_URL="${runtime_health_url}" \
   SEEDCORE_RUNTIME_READYZ_URL="${runtime_readyz_url}" \
+  SEEDCORE_VERIFICATION_API_BASE="http://127.0.0.1:7071" \
+  SEEDCORE_VERIFICATION_SERVICE_NAME="seedcore-verification-api" \
+  SEEDCORE_ENABLE_VERIFICATION_PORT_FORWARD=1 \
   SEEDCORE_RUN_DEGRADED_DRILLS="${RUN_KUBE_DEGRADED_DRILLS}" \
   SEEDCORE_RUN_REDIS_DEPENDENCY_DRILL="${RUN_KUBE_DEGRADED_DRILLS}" \
   SEEDCORE_RUN_BENCHMARK_BASELINE="${RUN_KUBE_BENCHMARK_BASELINE}" \
   SEEDCORE_ENFORCE_Q3_GATE="${ENFORCE_KUBE_Q3_GATE}" \
+  SEEDCORE_ENFORCE_FULL_VERIFICATION_GATE="${ENFORCE_KUBE_FULL_GATE}" \
   SEEDCORE_KUBE_VERIFY_REPORT_DIR="${KUBE_VERIFY_REPORT_DIR}" \
   "${DEPLOY_DIR}/verify-kube-topology.sh"
 }
@@ -522,10 +559,14 @@ main() {
   echo "Skip API:         ${SKIP_API}"
   echo "Skip PKG:         ${SKIP_PKG}"
   echo "Skip HAL:         ${SKIP_HAL}"
+  echo "Deploy verify API:${DEPLOY_VERIFICATION_API}"
+  echo "Verify API image: ${VERIFICATION_API_IMAGE}"
+  echo "Build verify API: ${BUILD_VERIFICATION_API_IMAGE}"
   echo "Run kube verify:  ${RUN_KUBE_VERIFICATION}"
   echo "Verify degraded:  ${RUN_KUBE_DEGRADED_DRILLS}"
   echo "Verify benchmark: ${RUN_KUBE_BENCHMARK_BASELINE}"
   echo "Enforce Q3 gate:  ${ENFORCE_KUBE_Q3_GATE}"
+  echo "Enforce full gate:${ENFORCE_KUBE_FULL_GATE}"
   echo "Skip wait:        ${SKIP_WAIT}"
   echo "HAL image:        ${HAL_IMAGE}"
   echo "HAL mode:         ${HAL_DRIVER_MODE}"
@@ -550,6 +591,7 @@ main() {
 
   bootstrap_components
   deploy_seedcore_api
+  deploy_verification_api
   deploy_hal_bridge
   if is_true "${DEPLOY_INGRESS_ENABLED}"; then
     deploy_ingress

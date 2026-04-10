@@ -3721,7 +3721,10 @@ class ReplayService:
     def _coerce_projection(self, projection: ReplayProjectionKind | str) -> ReplayProjectionKind:
         if isinstance(projection, ReplayProjectionKind):
             return projection
-        return ReplayProjectionKind(str(projection).strip().lower())
+        raw = str(projection).strip().lower()
+        if raw.startswith("replayprojectionkind."):
+            raw = raw.split(".", 1)[1]
+        return ReplayProjectionKind(raw)
 
     def _b64url_encode(self, raw: bytes) -> str:
         return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")

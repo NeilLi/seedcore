@@ -278,6 +278,21 @@ smart_kind_load() {
   local img="$1" cluster="$2"
   [[ "$SKIP_LOAD" -eq 1 ]] && return 0
   
+  # If requested cluster name is wrong but exactly one Kind cluster exists,
+  # fallback automatically to avoid silent ImagePullBackOff on rollout.
+  if ! kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+    local clusters
+    clusters="$(kind get clusters 2>/dev/null || true)"
+    local cluster_count
+    cluster_count="$(printf '%s\n' "$clusters" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+    if [[ "$cluster_count" == "1" ]]; then
+      local detected_cluster
+      detected_cluster="$(printf '%s\n' "$clusters" | sed '/^$/d' | head -n 1)"
+      log WARN "Kind cluster '$cluster' not found; auto-falling back to '$detected_cluster'."
+      cluster="$detected_cluster"
+    fi
+  fi
+
   # Get actual Kind node names dynamically (works regardless of naming scheme)
   local nodes; nodes=$(kind get nodes --name "$cluster" 2>/dev/null || :)
   if [[ -z "$nodes" ]]; then
