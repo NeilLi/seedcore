@@ -83,6 +83,13 @@ Kafka integration tests (real broker, opt-in):
 SEEDCORE_RUN_KAFKA_INTEGRATION=1 ./.venv/bin/pytest -q tests/test_kafka_local_integration.py
 ```
 
+Host drill for fail-closed readiness semantics when Kafka is a required
+dependency:
+
+```bash
+bash scripts/host/verify_kafka_readyz_gate.sh
+```
+
 External assistant Kafka contract:
 
 - See [kafka_delegated_intent_ingress.md](/Users/ningli/project/seedcore/docs/development/kafka_delegated_intent_ingress.md)

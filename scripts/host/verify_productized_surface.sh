@@ -90,6 +90,11 @@ if [[ "${SEEDCORE_RUN_REDIS_DEPENDENCY_DRILL:-}" == "1" ]]; then
     bash "${ROOT}/scripts/host/verify_pkg_redis_resilience.sh"
 fi
 
+if [[ "${SEEDCORE_RUN_KAFKA_DEPENDENCY_DRILL:-}" == "1" ]]; then
+  echo "== Kafka readiness-gate live drill =="
+  bash "${ROOT}/scripts/host/verify_kafka_readyz_gate.sh"
+fi
+
 AUDIT_ID="$(find_runtime_audit_id || true)"
 if [[ -z "${AUDIT_ID}" ]]; then
   echo "[FAIL] No runtime audit_id discovered. Set SEEDCORE_AUDIT_ID or populate governed_execution_audit before running live sign-off." >&2
