@@ -177,8 +177,10 @@ spec:
                   value: '{"head_node": 1}'
                 - name: XGB_STORAGE_PATH
                   value: "/app/data/models"
+                - name: RAY_TMPDIR
+                  value: "/home/ray/tmp"
                 - name: RAY_object_spilling_config
-                  value: '{"type":"filesystem","params":{"directory_path":"/tmp/ray/spill"}}'
+                  value: '{"type":"filesystem","params":{"directory_path":"/home/ray/tmp"}}'
               ports:
                 - name: gcs
                   containerPort: 6379
@@ -204,7 +206,7 @@ spec:
                 - name: project-src
                   mountPath: /app
                 - name: ray-spill
-                  mountPath: /tmp/ray/spill
+                  mountPath: /home/ray/tmp
               # Probes are good practice for production readiness.
               startupProbe:
                 exec:
@@ -279,8 +281,10 @@ spec:
                     value: "/usr/local/bin/seedcore-verify"
                   - name: XGB_STORAGE_PATH
                     value: "/app/data/models"
+                  - name: RAY_TMPDIR
+                    value: "/home/ray/tmp"
                   - name: RAY_object_spilling_config
-                    value: '{"type":"filesystem","params":{"directory_path":"/tmp/ray/spill"}}'
+                    value: '{"type":"filesystem","params":{"directory_path":"/home/ray/tmp"}}'
                 resources:
                   requests:
                     cpu: "500m"
@@ -294,7 +298,7 @@ spec:
                   - name: project-src
                     mountPath: /app
                   - name: ray-spill
-                    mountPath: /tmp/ray/spill
+                    mountPath: /home/ray/tmp
                 readinessProbe:
                   exec:
                     command:
