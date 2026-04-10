@@ -83,4 +83,5 @@ SeedCore is the zero-trust runtime that allows AI assistants to safely publish, 
 For an implementation-oriented mapping of the Owner / Creator layer as a Gemini extension, see:
 
 - [Gemini Extension: Owner / Creator Layer Implementation](./gemini_owner_creator_extension.md)
+- [Owner / Creator External SDK and Plugin Surface](/Users/ningli/project/seedcore/docs/development/owner_creator_external_sdk_and_plugin_surface.md)
 - [Sequence Of Trust: Zero-Trust Physical Custody](./sequence_of_trust_zero_trust_physical_custody.md)
