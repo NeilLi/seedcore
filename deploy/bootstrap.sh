@@ -104,7 +104,7 @@ wait_for_service_endpoints() {
 
 render_job_manifest() {
   local dst="$1"
-  local ray_address="ray://${RAY_HEAD_SVC}:10001"
+  local ray_address="ray://${RAY_HEAD_SVC}.${NAMESPACE}.svc.cluster.local:10001"
   local serve_base_url="http://${RAY_HEAD_SVC}.${NAMESPACE}.svc.cluster.local:8000"
   local organism_url="${serve_base_url}/organism"
   local pg_dsn="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_SERVICE}.${NAMESPACE}.svc.cluster.local:${PG_PORT}/${PG_DB}"

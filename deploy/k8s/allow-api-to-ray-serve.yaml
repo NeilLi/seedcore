@@ -18,6 +18,26 @@ spec:
     ports:
     - protocol: TCP
       port: 8000 # For HTTP
-    # ✅ ADDED: Also allow traffic to the Ray Client port
+  # Allow in-namespace control-plane and bootstrap traffic required by Ray/KubeRay.
+  - from:
+    - podSelector: {}
+    ports:
     - protocol: TCP
-      port: 10001 # For Ray Client
+      port: 6379   # GCS
+    - protocol: TCP
+      port: 8265   # Dashboard / control-plane checks
+    - protocol: TCP
+      port: 10001  # Ray Client
+    - protocol: TCP
+      port: 8000   # Serve
+  # KubeRay operator (different namespace) needs dashboard access to manage Serve apps.
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kuberay-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kuberay-operator
+    ports:
+    - protocol: TCP
+      port: 8265
