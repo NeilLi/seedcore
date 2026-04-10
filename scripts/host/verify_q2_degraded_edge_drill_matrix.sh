@@ -5,6 +5,7 @@
 # - intermittent connectivity (synthetic flaky transport benchmark)
 # - coordinate tamper (agent action gateway coordinate mismatch)
 # - replay injection / authority mismatch (replay router tamper surfaces)
+# - repeatable forensic/evidence export checks for quarantine / rollback investigations
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -18,5 +19,9 @@ python -m pytest -q tests/test_replay_router.py::test_verify_by_audit_id_surface
 python -m pytest -q tests/test_replay_router.py::test_verify_token_surfaces_reference_subject_mismatch
 python -m pytest -q tests/test_benchmark_rct_hot_path.py
 python -m pytest -q tests/test_coordinator_dao.py::TestTransferApprovalEnvelopeDAO
+python -m pytest -q tests/test_replay_router.py::test_materialized_custody_event_includes_forensic_block_when_present
+python -m pytest -q tests/test_replay_router.py::test_governance_search_filters_quarantine_and_trust_gap_records
+python -m pytest -q tests/test_forensic_block_contract.py
+python -m pytest -q tests/test_end_to_end_product_verification.py
 
 echo "Q2 degraded-edge drill matrix passed."

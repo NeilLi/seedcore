@@ -36,12 +36,6 @@ jobs:
         run: |
           pytest -q tests
 
-      - name: Run authz parity matrix
-        env:
-          PYTHONWARNINGS: "ignore::DeprecationWarning"
-        run: |
-          pytest -q tests/test_authz_parity_service.py
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -49,18 +43,37 @@ jobs:
           cache: npm
           cache-dependency-path: ts/package-lock.json
 
-      - name: TypeScript — typecheck and Q2 verification contracts
+      - name: Install TypeScript dependencies
         run: |
           cd ts
           npm ci
-          npm run typecheck
-          npm test
 
-      - name: Q2 verification API HTTP fixture matrix
-        run: bash scripts/ci/q2_verification_api_fixture_gate.sh
+      - name: Start Postgres for RESULT_VERIFIER integration lane
+        run: |
+          docker run -d \
+            --name seedcore-result-verifier-pg \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=seedcore_test \
+            -p 55432:5432 \
+            postgres:16
+          for i in $(seq 1 60); do
+            if docker exec seedcore-result-verifier-pg pg_isready -U postgres -d seedcore_test >/dev/null 2>&1; then
+              echo "Result verifier Postgres is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Result verifier Postgres failed to become ready" >&2
+          docker logs seedcore-result-verifier-pg >&2 || true
+          exit 1
 
-      - name: Q2 degraded-edge drill matrix
-        run: bash scripts/ci/q2_degraded_edge_drill_matrix.sh
+      - name: Q2 local verification gate (canonical host script)
+        env:
+          PYTHONWARNINGS: "ignore::DeprecationWarning"
+          SEEDCORE_ENABLE_RESULT_VERIFIER_PG_TESTS: "1"
+          SEEDCORE_RESULT_VERIFIER_TEST_DSN: "postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/seedcore_test"
+        run: bash scripts/host/verify_q2_verification_contracts.sh
 
   kafka-smoke:
     runs-on: ubuntu-latest

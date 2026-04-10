@@ -62,3 +62,26 @@ def test_verify_productized_surface_can_enable_kafka_dependency_drill() -> None:
 
     assert 'SEEDCORE_RUN_KAFKA_DEPENDENCY_DRILL' in script
     assert 'verify_kafka_readyz_gate.sh' in script
+
+
+def test_verify_q2_verification_contracts_is_canonical_local_ci_gate() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_q2_verification_contracts.sh").read_text()
+
+    assert "tests/test_authz_parity_service.py" in script
+    assert "tests/test_replay_service.py" in script
+    assert "tests/test_rct_replay_verification_phase4.py" in script
+    assert "npm run typecheck" in script
+    assert "npm test" in script
+    assert "q2_verification_api_fixture_gate.sh" in script
+    assert "verify_hot_path_alert_rules.sh" in script
+    assert "verify_hot_path_benchmark_lane.sh" in script
+    assert "verify_q2_degraded_edge_drill_matrix.sh" in script
+    assert "verify_result_verifier_postgres_integration.sh" in script
+
+
+def test_result_verifier_postgres_integration_script_is_opt_in_but_hard_fails_when_enabled_without_dsn() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_result_verifier_postgres_integration.sh").read_text()
+
+    assert "SEEDCORE_ENABLE_RESULT_VERIFIER_PG_TESTS" in script
+    assert "SEEDCORE_RESULT_VERIFIER_TEST_DSN" in script
+    assert "tests/test_result_verifier_postgres_integration.py" in script
