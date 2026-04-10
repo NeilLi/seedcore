@@ -350,16 +350,41 @@ def _baseline_for_parity_recording(
     baseline: PolicyDecision,
     candidate: PolicyDecision,
 ) -> PolicyDecision:
+    normalized = baseline
+    baseline_ref = str(baseline.policy_snapshot or "").strip()
+    candidate_ref = str(candidate.policy_snapshot or "").strip()
+    baseline_hash = _snapshot_hash(baseline)
+    candidate_hash = _snapshot_hash(candidate)
+    if baseline_ref and baseline_ref == candidate_ref and not baseline_hash and candidate_hash:
+        authz_graph = (
+            dict(baseline.authz_graph)
+            if isinstance(baseline.authz_graph, Mapping)
+            else {}
+        )
+        governed_receipt = (
+            dict(baseline.governed_receipt)
+            if isinstance(baseline.governed_receipt, Mapping)
+            else {}
+        )
+        authz_graph.setdefault("snapshot_hash", candidate_hash)
+        governed_receipt.setdefault("snapshot_hash", candidate_hash)
+        normalized = baseline.model_copy(
+            deep=True,
+            update={
+                "authz_graph": authz_graph,
+                "governed_receipt": governed_receipt,
+            },
+        )
     if not _parity_drill_stable_path_shift_enabled():
-        return baseline
-    b_disp = str(baseline.disposition or "deny").strip().lower()
+        return normalized
+    b_disp = str(normalized.disposition or "deny").strip().lower()
     c_disp = str(candidate.disposition or "deny").strip().lower()
     if c_disp == "allow" and b_disp == "allow":
         logger.warning(
             "%s active: recording synthetic stable-path deny against hot-path allow for parity evidence",
             HOT_PATH_PARITY_DRILL_STABLE_DENY_ENV,
         )
-        return baseline.model_copy(
+        return normalized.model_copy(
             deep=True,
             update={
                 "disposition": "deny",
@@ -368,7 +393,7 @@ def _baseline_for_parity_recording(
                 "reason": "Parity drill: simulated stable-path policy deny (env parity drill).",
             },
         )
-    return baseline
+    return normalized
 
 
 def _parity_persist_event(*, parity: Mapping[str, Any], latency_ms: int) -> None:

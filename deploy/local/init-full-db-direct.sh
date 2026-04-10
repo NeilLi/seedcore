@@ -44,6 +44,10 @@ MIGRATIONS=(
   126_digital_twin_persistence.sql
   127_digital_twin_event_journal.sql
   128_custody_graph.sql
+  129_phase_a_trust_receipt_counter.sql
+  130_transfer_approval_runtime.sql
+  131_source_registration_settlement_statuses.sql
+  132_pkg_rct_contract_phase1.sql
   133_result_verifier.sql
   134_result_verifier_runtime_state.sql
 )

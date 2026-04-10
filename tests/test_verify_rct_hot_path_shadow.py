@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime, timezone
 from pathlib import Path
 
 from seedcore.models.pdp_hot_path import HotPathEvaluateRequest
@@ -15,6 +16,7 @@ _SPEC.loader.exec_module(_MODULE)
 CANONICAL_CASES = _MODULE.CANONICAL_CASES
 FIXTURE_ROOT = _MODULE.FIXTURE_ROOT
 _build_request = _MODULE._build_request
+_prepare_runtime_approval_envelope = _MODULE._prepare_runtime_approval_envelope
 _read_json = _MODULE._read_json
 
 
@@ -60,3 +62,21 @@ def test_shadow_builder_can_attach_active_contract_bundles() -> None:
 
     assert request.request_schema_bundle["artifact_type"] == "request_schema_bundle"
     assert request.taxonomy_bundle["artifact_type"] == "taxonomy_bundle"
+
+
+def test_runtime_approval_rebase_refreshes_snapshot_and_time_sensitive_fields() -> None:
+    case_dir = FIXTURE_ROOT / CANONICAL_CASES[0]
+    approval_envelope = _read_json(case_dir / "input.approval_envelope.json")
+    now = datetime(2026, 4, 10, 4, 45, tzinfo=timezone.utc)
+
+    rebased = _prepare_runtime_approval_envelope(
+        approval_envelope,
+        active_snapshot="runtime-baseline-gcp-v1",
+        now=now,
+    )
+
+    assert rebased["policy_snapshot_ref"] == "runtime-baseline-gcp-v1"
+    assert rebased["created_at"] == "2026-04-10T04:44:30Z"
+    assert rebased["expires_at"] == "2026-04-10T04:50:00Z"
+    assert "approval_binding_hash" not in rebased
+    assert rebased["required_approvals"][0]["approved_at"] == "2026-04-10T04:44:35Z"

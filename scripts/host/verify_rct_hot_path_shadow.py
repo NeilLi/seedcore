@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib import request
@@ -139,7 +139,51 @@ def _approved_by(approval_envelope: dict[str, Any]) -> list[str]:
 def _persist_authoritative_approval(base_url: str, case_dir: Path) -> dict[str, Any]:
     create_url = f"{base_url.rstrip('/')}/transfer-approvals"
     approval_envelope = _read_json(case_dir / "input.approval_envelope.json")
+    active_snapshot = _resolve_active_snapshot(base_url)
+    approval_envelope = _prepare_runtime_approval_envelope(
+        approval_envelope,
+        active_snapshot=active_snapshot,
+    )
     return _post_json(create_url, {"envelope": approval_envelope})
+
+
+def _prepare_runtime_approval_envelope(
+    approval_envelope: dict[str, Any],
+    *,
+    active_snapshot: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    normalized = dict(approval_envelope)
+    current_time = now or datetime.now(timezone.utc)
+    created_at = current_time - timedelta(seconds=30)
+    expires_at = current_time + timedelta(minutes=5)
+
+    normalized["created_at"] = created_at.isoformat().replace("+00:00", "Z")
+    normalized["expires_at"] = expires_at.isoformat().replace("+00:00", "Z")
+    if active_snapshot:
+        normalized["policy_snapshot_ref"] = str(active_snapshot)
+
+    approvals = []
+    approved_offset = 5
+    for item in normalized.get("required_approvals") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if str(row.get("status") or "").strip().upper() == "APPROVED":
+            row["approved_at"] = (
+                created_at + timedelta(seconds=approved_offset)
+            ).isoformat().replace("+00:00", "Z")
+            approved_offset += 7
+        else:
+            row["approved_at"] = None
+        approvals.append(row)
+    if approvals:
+        normalized["required_approvals"] = approvals
+
+    # Force the runtime DAO to recompute the binding hash from the rebased
+    # envelope rather than trust a fixture hash bound to older timestamps.
+    normalized.pop("approval_binding_hash", None)
+    return normalized
 
 
 def _build_request(
@@ -148,6 +192,7 @@ def _build_request(
     persisted_approval: dict[str, Any],
     active_contract_bundles: dict[str, Any] | None = None,
     request_id_suffix: str | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     action_intent_input = _read_json(case_dir / "input.action_intent.json")
     asset_state = _read_json(case_dir / "input.asset_state.json")
@@ -157,6 +202,7 @@ def _build_request(
         if isinstance(persisted_approval.get("envelope"), dict)
         else _read_json(case_dir / "input.approval_envelope.json")
     )
+    current_time = now or datetime.now(timezone.utc)
     request_id = f"shadow:{case_dir.name}"
     if request_id_suffix:
         request_id = f"{request_id}:{request_id_suffix.strip()}"
@@ -187,6 +233,14 @@ def _build_request(
     max_allowed_age_seconds = telemetry.get("max_allowed_age_seconds")
     if max_allowed_age_seconds is None:
         max_allowed_age_seconds = 300
+    if telemetry.get("stale") is True:
+        telemetry_observed_at = (
+            current_time - timedelta(seconds=max_allowed_age_seconds + 1)
+        ).isoformat().replace("+00:00", "Z")
+    else:
+        telemetry_observed_at = (
+            current_time - timedelta(seconds=min(int(freshness_seconds), max_allowed_age_seconds, 5))
+        ).isoformat().replace("+00:00", "Z")
     parameters: dict[str, Any] = {
         "endpoint_id": action_intent_input.get("endpoint_id"),
         "approval_context": {
@@ -327,6 +381,7 @@ def run_verification(
             persisted_approval=persisted_approval,
             active_contract_bundles=active_contract_bundles,
             request_id_suffix=request_id_suffix,
+            now=datetime.now(timezone.utc),
         )
         if active_snapshot:
             payload["policy_snapshot_ref"] = active_snapshot

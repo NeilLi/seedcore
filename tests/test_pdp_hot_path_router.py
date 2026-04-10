@@ -200,6 +200,28 @@ def test_pdp_hot_path_terminal_quarantine_updates_shadow_stats(monkeypatch):
     assert body["recent_results"][-1]["parity_ok"] is True
 
 
+def test_baseline_parity_recording_backfills_missing_snapshot_hash_from_candidate() -> None:
+    baseline = PolicyDecision(
+        allowed=True,
+        reason="restricted_custody_transfer_allowed",
+        disposition="allow",
+        policy_snapshot="snapshot:pkg-prod-2026-04-02",
+    )
+    candidate = PolicyDecision(
+        allowed=True,
+        reason="restricted_custody_transfer_allowed",
+        disposition="allow",
+        policy_snapshot="snapshot:pkg-prod-2026-04-02",
+        authz_graph={"snapshot_hash": "sha256:snapshot-hash-transfer-001"},
+        governed_receipt={"snapshot_hash": "sha256:snapshot-hash-transfer-001"},
+    )
+
+    normalized = pdp_hot_path._baseline_for_parity_recording(baseline, candidate)
+
+    assert normalized.authz_graph["snapshot_hash"] == "sha256:snapshot-hash-transfer-001"
+    assert normalized.governed_receipt["snapshot_hash"] == "sha256:snapshot-hash-transfer-001"
+
+
 def test_pdp_hot_path_terminal_quarantine_publishes_policy_outcome(monkeypatch):
     manager = _manager()
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
