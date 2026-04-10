@@ -6,16 +6,14 @@ kind: Ingress
 metadata:
   name: seedcore-ingress
   namespace: ${NAMESPACE}
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
+  ingressClassName: nginx
   rules:
   - host: ${INGRESS_HOST}
     http:
       paths:
       # Route API requests to seedcore-api (System of Record)
-      - path: /api/v1(/|$)(.*)
+      - path: /api/v1
         pathType: Prefix
         backend:
           service:
@@ -24,7 +22,7 @@ spec:
               number: 8002
       
       # Route organism control to Ray Serve (Ray Control Plane)
-      - path: /organism(/|$)(.*)
+      - path: /organism
         pathType: Prefix
         backend:
           service:
@@ -33,7 +31,7 @@ spec:
               number: 8000
       
       # Route pipeline operations to Ray Serve
-      - path: /pipeline(/|$)(.*)
+      - path: /pipeline
         pathType: Prefix
         backend:
           service:
@@ -42,7 +40,7 @@ spec:
               number: 8000
       
       # Route orchestrator operations to Ray Serve
-      - path: /orchestrator(/|$)(.*)
+      - path: /orchestrator
         pathType: Prefix
         backend:
           service:
@@ -60,7 +58,7 @@ spec:
               number: 8002
       
       # Default route to seedcore-api for docs, root, etc.
-      - path: /(.*)
+      - path: /
         pathType: Prefix
         backend:
           service:
@@ -75,16 +73,14 @@ kind: Ingress
 metadata:
   name: orchestrator-ingress
   namespace: ${NAMESPACE}
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
+  ingressClassName: nginx
   rules:
   - host: orchestrator.localhost
     http:
       paths:
       # All organism control routes
-      - path: /organism(/|$)(.*)
+      - path: /organism
         pathType: Prefix
         backend:
           service:
@@ -93,7 +89,7 @@ spec:
               number: 8000
       
       # Pipeline operations
-      - path: /pipeline(/|$)(.*)
+      - path: /pipeline
         pathType: Prefix
         backend:
           service:
@@ -102,7 +98,7 @@ spec:
               number: 8000
       
       # Orchestrator operations
-      - path: /orchestrator(/|$)(.*)
+      - path: /orchestrator
         pathType: Prefix
         backend:
           service:
