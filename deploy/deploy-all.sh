@@ -51,6 +51,11 @@ DEPLOY_HAL_BRIDGE="${DEPLOY_HAL_BRIDGE:-true}"
 HAL_IMAGE="${HAL_IMAGE:-${SEEDCORE_IMAGE}}"
 HAL_DRIVER_MODE="${HAL_DRIVER_MODE:-simulation}"
 HAL_SIM_BACKEND="${HAL_SIM_BACKEND:-robot_sim}"
+RUN_KUBE_VERIFICATION="${RUN_KUBE_VERIFICATION:-false}"
+RUN_KUBE_DEGRADED_DRILLS="${RUN_KUBE_DEGRADED_DRILLS:-true}"
+RUN_KUBE_BENCHMARK_BASELINE="${RUN_KUBE_BENCHMARK_BASELINE:-true}"
+ENFORCE_KUBE_Q3_GATE="${ENFORCE_KUBE_Q3_GATE:-false}"
+KUBE_VERIFY_REPORT_DIR="${KUBE_VERIFY_REPORT_DIR:-}"
 
 usage() {
   cat <<EOF
@@ -81,6 +86,14 @@ Options:
       --skip-load            Skip kind image loads in downstream scripts
       --skip-hal             Skip HAL bridge deployment
       --skip-ingress         Skip ingress deployment
+      --verify-kube          Run post-deploy kube topology verification lane
+      --verify-kube-no-degraded
+                             Skip degraded-edge drills in kube verification lane
+      --verify-kube-no-benchmark
+                             Skip benchmark/baseline capture in kube verification lane
+      --enforce-kube-q3-gate Fail deploy if narrow Q3 readiness gate is not green
+      --kube-verify-report-dir <path>
+                             Override kube verification report output directory
       --skip-wait            Skip the post-Ray stabilization sleep
   -h, --help                  Show this help
 EOF
@@ -145,6 +158,11 @@ while [[ $# -gt 0 ]]; do
     --skip-load) SKIP_KIND_LOAD=true; shift ;;
     --skip-hal) SKIP_HAL=true; DEPLOY_HAL_BRIDGE=false; shift ;;
     --skip-ingress) DEPLOY_INGRESS_ENABLED=false; shift ;;
+    --verify-kube) RUN_KUBE_VERIFICATION=true; shift ;;
+    --verify-kube-no-degraded) RUN_KUBE_DEGRADED_DRILLS=false; shift ;;
+    --verify-kube-no-benchmark) RUN_KUBE_BENCHMARK_BASELINE=false; shift ;;
+    --enforce-kube-q3-gate) ENFORCE_KUBE_Q3_GATE=true; shift ;;
+    --kube-verify-report-dir) KUBE_VERIFY_REPORT_DIR="$2"; shift 2 ;;
     --skip-wait) SKIP_WAIT=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: Unknown argument '$1'"; usage; exit 1 ;;
@@ -455,6 +473,30 @@ deploy_ingress() {
   fi
 }
 
+verify_kube_topology() {
+  if ! is_true "${RUN_KUBE_VERIFICATION}"; then
+    log "Skipping kube topology verification lane (RUN_KUBE_VERIFICATION=${RUN_KUBE_VERIFICATION})"
+    return 0
+  fi
+
+  log "Running kube topology verification lane"
+
+  local runtime_api_base="http://127.0.0.1:8002/api/v1"
+  local runtime_health_url="http://127.0.0.1:8002/health"
+  local runtime_readyz_url="http://127.0.0.1:8002/readyz"
+
+  NAMESPACE="${NAMESPACE}" \
+  SEEDCORE_RUNTIME_API_BASE="${runtime_api_base}" \
+  SEEDCORE_RUNTIME_HEALTH_URL="${runtime_health_url}" \
+  SEEDCORE_RUNTIME_READYZ_URL="${runtime_readyz_url}" \
+  SEEDCORE_RUN_DEGRADED_DRILLS="${RUN_KUBE_DEGRADED_DRILLS}" \
+  SEEDCORE_RUN_REDIS_DEPENDENCY_DRILL="${RUN_KUBE_DEGRADED_DRILLS}" \
+  SEEDCORE_RUN_BENCHMARK_BASELINE="${RUN_KUBE_BENCHMARK_BASELINE}" \
+  SEEDCORE_ENFORCE_Q3_GATE="${ENFORCE_KUBE_Q3_GATE}" \
+  SEEDCORE_KUBE_VERIFY_REPORT_DIR="${KUBE_VERIFY_REPORT_DIR}" \
+  "${DEPLOY_DIR}/verify-kube-topology.sh"
+}
+
 main() {
   require docker
   require kind
@@ -480,6 +522,10 @@ main() {
   echo "Skip API:         ${SKIP_API}"
   echo "Skip PKG:         ${SKIP_PKG}"
   echo "Skip HAL:         ${SKIP_HAL}"
+  echo "Run kube verify:  ${RUN_KUBE_VERIFICATION}"
+  echo "Verify degraded:  ${RUN_KUBE_DEGRADED_DRILLS}"
+  echo "Verify benchmark: ${RUN_KUBE_BENCHMARK_BASELINE}"
+  echo "Enforce Q3 gate:  ${ENFORCE_KUBE_Q3_GATE}"
   echo "Skip wait:        ${SKIP_WAIT}"
   echo "HAL image:        ${HAL_IMAGE}"
   echo "HAL mode:         ${HAL_DRIVER_MODE}"
@@ -510,6 +556,7 @@ main() {
   else
     log "Skipping ingress deployment"
   fi
+  verify_kube_topology
 
   log "SeedCore deployment completed successfully!"
 }

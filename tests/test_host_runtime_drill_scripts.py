@@ -20,6 +20,12 @@ def test_verify_pkg_redis_resilience_covers_outage_and_recovery() -> None:
 
     assert 'docker stop "${REDIS_CONTAINER}"' in script
     assert 'docker start "${REDIS_CONTAINER}"' in script
+    assert 'REDIS_DRILL_MODE="${SEEDCORE_REDIS_DRILL_MODE:-auto}"' in script
+    assert 'REDIS_KUBE_NAMESPACE="${SEEDCORE_REDIS_KUBE_NAMESPACE:-seedcore-dev}"' in script
+    assert 'REDIS_KUBE_DEPLOYMENT="${SEEDCORE_REDIS_KUBE_DEPLOYMENT:-redis}"' in script
+    assert 'kubectl -n "${REDIS_KUBE_NAMESPACE}" scale deployment "${REDIS_KUBE_DEPLOYMENT}" --replicas=0' in script
+    assert 'kubectl -n "${REDIS_KUBE_NAMESPACE}" scale deployment "${REDIS_KUBE_DEPLOYMENT}" --replicas="${redis_kube_original_replicas}"' in script
+    assert 'resolve_redis_mode "${REDIS_DRILL_MODE}"' in script
     assert 'trap cleanup EXIT' in script
     assert '/health' in script
     assert '/readyz' in script
