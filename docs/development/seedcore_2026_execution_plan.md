@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
 Date: 2026-04-10
-Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube hot-path topology validated)
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane)
 
 ## Purpose
 
@@ -99,6 +99,53 @@ Checked-in signoff note:
 - see
   [kube_topology_validation_q2_signoff.md](/Users/ningli/project/seedcore/docs/development/kube_topology_validation_q2_signoff.md)
 
+## Execution Update (2026-04-10, Kube Verification Lane Hardening)
+
+The kube validation path is now implemented as a first-class deployment
+verification lane rather than a manual sequence.
+
+Implemented:
+
+- `deploy/verify-kube-topology.sh` now orchestrates:
+  - aligned gate checks (`/health`, `/readyz`, hot-path status)
+  - status/metrics observability parity check
+  - optional degraded-edge drills
+  - benchmark + baseline capture
+  - topology signoff report generation with Q3-readiness and Gemini-safe
+    read-surface output
+- `deploy/deploy-all.sh` now supports post-deploy verification controls:
+  - `--verify-kube`
+  - `--verify-kube-no-degraded`
+  - `--verify-kube-no-benchmark`
+  - `--enforce-kube-q3-gate`
+  - `--kube-verify-report-dir`
+- `scripts/host/verify_pkg_redis_resilience.sh` now supports
+  deployment-realistic Redis outage drills in Kubernetes mode
+  (`SEEDCORE_REDIS_DRILL_MODE=auto|kube|docker`) in addition to local docker
+  mode.
+
+Latest live run (remote GCP Kind topology):
+
+- gates: passed
+- degraded Redis drill (kube scale down/up): passed
+- benchmark (`40` requests): `0` mismatches, `0` errors
+- latest benchmark latency sample:
+  - `p50=153.79ms`
+  - `p95=386.25ms`
+  - `p99=400.15ms`
+- signoff report outcome:
+  - `green_enough_for_narrow_q3_bridge=true`
+  - `verification_api_available=false`
+  - `safe_gemini_read_surface=["seedcore.hotpath.status","seedcore.hotpath.metrics"]`
+
+Operational consequence:
+
+- narrow Q3 bridge work remains allowed from this topology
+- verification-surface bridge work remains blocked until the verification API
+  is deployed in-cluster
+- Kafka-dependent readiness/degraded lanes remain blocked until Kafka is
+  deployed in-cluster
+
 ## Prior Execution Update (2026-04-02)
 
 The highest-priority Q2 contract hardening sequence has now been implemented in
@@ -146,6 +193,9 @@ Status:
 - **Implemented (remote kube path):** first Kind-based runtime topology is now
   validated for health/readiness/hot-path observability, Redis dependency
   resilience, ingress, and HAL.
+- **Implemented (scripted deployment lane):** kube verification is now wired
+  into `deploy/` with explicit post-deploy flags and machine-readable signoff
+  output.
 - **Remaining:** verification API and Kafka deployment validation in the kube
   topology.
 
