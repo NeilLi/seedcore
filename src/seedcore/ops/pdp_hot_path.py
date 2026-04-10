@@ -29,8 +29,16 @@ from seedcore.models.pdp_hot_path import (
     HotPathTelemetryContext,
 )
 from seedcore.ops.evidence.rct_replay_verification import apply_rct_triple_hash_fields
-from seedcore.ops.pkg.manager import get_global_pkg_manager
 from seedcore.ops.hot_path_parity_log import get_hot_path_parity_logger, parity_db_file_path, parity_log_file_path
+
+try:
+    # Keep the module namespace aligned with the current package import path.
+    from .pkg.manager import get_global_pkg_manager as _get_global_pkg_manager
+except ImportError:  # pragma: no cover - fallback for alternate import roots
+    from seedcore.ops.pkg.manager import get_global_pkg_manager as _get_global_pkg_manager
+
+# Backward-compatible symbol for tests/monkeypatch hooks.
+get_global_pkg_manager = _get_global_pkg_manager
 
 HOT_PATH_CONTRACT_VERSION = "pdp.hot_path.asset_transfer.v1"
 HOT_PATH_MODE_ENV = "SEEDCORE_RCT_HOT_PATH_MODE"
@@ -61,6 +69,22 @@ REASON_CODE_DEFAULTS = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_pkg_manager():
+    manager = get_global_pkg_manager()
+    if manager is not None:
+        return manager
+    # Some runtimes import SeedCore under "src.seedcore.*" while others use
+    # "seedcore.*"; probe both globals to avoid split-manager false negatives.
+    try:  # pragma: no cover - depends on runtime package root
+        from src.seedcore.ops.pkg.manager import get_global_pkg_manager as _get_src_manager
+    except Exception:
+        return manager
+    try:
+        return _get_src_manager()
+    except Exception:
+        return manager
 
 
 @dataclass
@@ -579,7 +603,7 @@ def build_governance_context_from_hot_path_response(
 def _resolve_active_hot_path_contract_bundles(
     policy_case: PolicyCase,
 ) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
-    manager = get_global_pkg_manager()
+    manager = _resolve_pkg_manager()
     if manager is None:
         return None, None
 
@@ -1033,7 +1057,7 @@ def _resolve_compiled_authz_index() -> Any | None:
 
 
 def _resolve_hot_path_runtime_status() -> dict[str, Any]:
-    manager = get_global_pkg_manager()
+    manager = _resolve_pkg_manager()
     current_mode = resolve_hot_path_mode()
     if manager is None:
         return {

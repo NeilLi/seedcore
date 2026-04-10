@@ -1,37 +1,84 @@
 #!/usr/bin/env bash
 # Deployment-realistic kube verification lane for Q2/Q3 gate validation.
-# This script validates aligned runtime gates, runs optional degraded drills,
-# captures benchmark + baseline artifacts, and emits a topology signoff report.
+# Validates runtime gates, degraded drills, benchmark/baseline artifacts, and
+# conditionally upgrades to full verification-surface protocol checks when the
+# verification API is available in the topology.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 NAMESPACE="${NAMESPACE:-seedcore-dev}"
+
 RUNTIME_LOCAL_PORT="${SEEDCORE_RUNTIME_LOCAL_PORT:-8002}"
 RUNTIME_API_BASE="${SEEDCORE_RUNTIME_API_BASE:-http://127.0.0.1:${RUNTIME_LOCAL_PORT}/api/v1}"
 RUNTIME_HEALTH_URL="${SEEDCORE_RUNTIME_HEALTH_URL:-http://127.0.0.1:${RUNTIME_LOCAL_PORT}/health}"
 RUNTIME_READYZ_URL="${SEEDCORE_RUNTIME_READYZ_URL:-http://127.0.0.1:${RUNTIME_LOCAL_PORT}/readyz}"
-VERIFICATION_API_BASE="${SEEDCORE_VERIFICATION_API_BASE:-http://127.0.0.1:7071}"
-PLUGIN_INFO_URL="${SEEDCORE_PLUGIN_INFO_URL:-}"
+ENABLE_RUNTIME_PORT_FORWARD="${SEEDCORE_ENABLE_PORT_FORWARD:-1}"
+RUNTIME_PORT_FORWARD_LOG="${SEEDCORE_KUBE_PORT_FORWARD_LOG:-${ROOT}/.local-runtime/kube_topology/seedcore_api_port_forward.log}"
+
+VERIFICATION_LOCAL_PORT="${SEEDCORE_VERIFICATION_LOCAL_PORT:-7071}"
+VERIFICATION_API_BASE="${SEEDCORE_VERIFICATION_API_BASE:-http://127.0.0.1:${VERIFICATION_LOCAL_PORT}}"
+VERIFICATION_SERVICE_NAME="${SEEDCORE_VERIFICATION_SERVICE_NAME:-seedcore-verification-api}"
+ENABLE_VERIFICATION_PORT_FORWARD="${SEEDCORE_ENABLE_VERIFICATION_PORT_FORWARD:-1}"
+VERIFICATION_PORT_FORWARD_LOG="${SEEDCORE_VERIFICATION_PORT_FORWARD_LOG:-${ROOT}/.local-runtime/kube_topology/verification_api_port_forward.log}"
+
 REPORT_DIR="${SEEDCORE_KUBE_VERIFY_REPORT_DIR:-${ROOT}/.local-runtime/kube_topology}"
 RUN_DEGRADED_DRILLS="${SEEDCORE_RUN_DEGRADED_DRILLS:-1}"
 RUN_REDIS_DEPENDENCY_DRILL="${SEEDCORE_RUN_REDIS_DEPENDENCY_DRILL:-1}"
 RUN_BENCHMARK_BASELINE="${SEEDCORE_RUN_BENCHMARK_BASELINE:-1}"
+RUN_FULL_VERIFICATION_SURFACE_CHECK="${SEEDCORE_RUN_FULL_VERIFICATION_SURFACE_CHECK:-1}"
 ENFORCE_Q3_GATE="${SEEDCORE_ENFORCE_Q3_GATE:-0}"
-ENABLE_PORT_FORWARD="${SEEDCORE_ENABLE_PORT_FORWARD:-1}"
+ENFORCE_FULL_VERIFICATION_GATE="${SEEDCORE_ENFORCE_FULL_VERIFICATION_GATE:-0}"
+CONSTRUCT_RUNTIME_AUDIT_FIXTURE="${SEEDCORE_CONSTRUCT_RUNTIME_AUDIT_FIXTURE:-}"
+CONSTRUCT_PKG_MINIMAL_CONTRACT_FIXTURE="${SEEDCORE_CONSTRUCT_PKG_MINIMAL_CONTRACT_FIXTURE:-}"
 BENCH_REQUESTS="${SEEDCORE_BENCH_REQUESTS:-40}"
 BENCH_WARMUP="${SEEDCORE_BENCH_WARMUP:-4}"
 BENCH_CONCURRENCY="${SEEDCORE_BENCH_CONCURRENCY:-4}"
-PORT_FORWARD_LOG="${SEEDCORE_KUBE_PORT_FORWARD_LOG:-${ROOT}/.local-runtime/kube_topology/seedcore_api_port_forward.log}"
 
-PORT_FORWARD_PID=""
+POSTGRES_POD_SELECTORS="${SEEDCORE_POSTGRES_POD_SELECTORS:-app=postgres,app.kubernetes.io/name=postgres,app.kubernetes.io/name=postgresql,app=postgresql}"
+POSTGRES_DB_NAME="${SEEDCORE_DB_NAME:-seedcore}"
+POSTGRES_USER="${SEEDCORE_POSTGRES_USER:-postgres}"
+POSTGRES_PASSWORD="${SEEDCORE_POSTGRES_PASSWORD:-password}"
+
+RUNTIME_PORT_FORWARD_PID=""
+VERIFICATION_PORT_FORWARD_PID=""
 
 require_bin() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "[FAIL] missing required binary: $1" >&2
     exit 1
   fi
+}
+
+is_loopback_url() {
+  local url="$1"
+  [[ "${url}" == http://127.0.0.1* || "${url}" == http://localhost* || "${url}" == https://127.0.0.1* || "${url}" == https://localhost* ]]
+}
+
+is_ipv4_loopback_url() {
+  local url="$1"
+  [[ "${url}" == http://127.0.0.1* || "${url}" == https://127.0.0.1* ]]
+}
+
+port_forward_running_for() {
+  local service_name="$1"
+  local local_port="$2"
+  local remote_port="$3"
+  pgrep -f "kubectl .*port-forward .*svc/${service_name} ${local_port}:${remote_port}" >/dev/null 2>&1
+}
+
+ipv4_loopback_port_bound_by_non_kubectl() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP@"127.0.0.1:${port}" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 && $1 != "kubectl" {found=1} END {exit found ? 0 : 1}'
+    return $?
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | grep -F "127.0.0.1:${port}" | grep -v "kubectl" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
 }
 
 is_true() {
@@ -51,7 +98,7 @@ wait_for_status() {
   local expected="$2"
   local attempts="${3:-45}"
   local i
-  for ((i=0; i<attempts; i+=1)); do
+  for ((i = 0; i < attempts; i += 1)); do
     if [[ "$(status_code "${url}")" == "${expected}" ]]; then
       return 0
     fi
@@ -68,32 +115,51 @@ latest_json_path() {
   ls -1t "${dir}"/*.json 2>/dev/null | head -n 1 || true
 }
 
+verification_health_url() {
+  local root="${VERIFICATION_API_BASE%/api/v1}"
+  echo "${root}/health"
+}
+
 cleanup() {
-  if [[ -n "${PORT_FORWARD_PID}" ]]; then
-    kill "${PORT_FORWARD_PID}" >/dev/null 2>&1 || true
+  if [[ -n "${RUNTIME_PORT_FORWARD_PID}" ]]; then
+    kill "${RUNTIME_PORT_FORWARD_PID}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${VERIFICATION_PORT_FORWARD_PID}" ]]; then
+    kill "${VERIFICATION_PORT_FORWARD_PID}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
 
-start_port_forward_if_needed() {
+start_runtime_port_forward_if_needed() {
   if [[ "$(status_code "${RUNTIME_HEALTH_URL}")" == "200" ]]; then
+    if is_ipv4_loopback_url "${RUNTIME_HEALTH_URL}" && ipv4_loopback_port_bound_by_non_kubectl "${RUNTIME_LOCAL_PORT}"; then
+      echo "[FAIL] non-kubectl process is bound on 127.0.0.1:${RUNTIME_LOCAL_PORT}; kube verification would be shadowed." >&2
+      echo "Choose a different SEEDCORE_RUNTIME_LOCAL_PORT or stop the local runtime service." >&2
+      exit 1
+    fi
+    if is_true "${ENABLE_RUNTIME_PORT_FORWARD}" && is_loopback_url "${RUNTIME_HEALTH_URL}" && \
+      ! port_forward_running_for "seedcore-api" "${RUNTIME_LOCAL_PORT}" "8002"; then
+      echo "[FAIL] ${RUNTIME_HEALTH_URL} is already served locally without kube port-forward; this can shadow kube verification." >&2
+      echo "Set SEEDCORE_RUNTIME_LOCAL_PORT to a free port or stop the local runtime before verifying kube topology." >&2
+      exit 1
+    fi
     return 0
   fi
-  if ! is_true "${ENABLE_PORT_FORWARD}"; then
+  if ! is_true "${ENABLE_RUNTIME_PORT_FORWARD}"; then
     echo "[FAIL] runtime endpoint ${RUNTIME_HEALTH_URL} is unreachable and SEEDCORE_ENABLE_PORT_FORWARD=0" >&2
     exit 1
   fi
 
   require_bin kubectl
-  mkdir -p "$(dirname "${PORT_FORWARD_LOG}")"
+  mkdir -p "$(dirname "${RUNTIME_PORT_FORWARD_LOG}")"
   echo "Starting kube port-forward for seedcore-api on :${RUNTIME_LOCAL_PORT}..."
-  kubectl -n "${NAMESPACE}" port-forward svc/seedcore-api "${RUNTIME_LOCAL_PORT}:8002" >"${PORT_FORWARD_LOG}" 2>&1 &
-  PORT_FORWARD_PID="$!"
+  kubectl -n "${NAMESPACE}" port-forward svc/seedcore-api "${RUNTIME_LOCAL_PORT}:8002" >"${RUNTIME_PORT_FORWARD_LOG}" 2>&1 &
+  RUNTIME_PORT_FORWARD_PID="$!"
 
   if ! wait_for_status "${RUNTIME_HEALTH_URL}" "200" 45; then
     echo "[FAIL] could not reach runtime /health after starting port-forward" >&2
-    echo "--- port-forward log ---" >&2
-    tail -n 80 "${PORT_FORWARD_LOG}" >&2 || true
+    echo "--- runtime port-forward log ---" >&2
+    tail -n 80 "${RUNTIME_PORT_FORWARD_LOG}" >&2 || true
     exit 1
   fi
 }
@@ -104,6 +170,169 @@ probe_verification_api() {
   [[ "${code}" == "200" ]]
 }
 
+verification_service_exists() {
+  kubectl -n "${NAMESPACE}" get svc "${VERIFICATION_SERVICE_NAME}" >/dev/null 2>&1
+}
+
+start_verification_port_forward_if_needed() {
+  if probe_verification_api; then
+    if is_ipv4_loopback_url "${VERIFICATION_API_BASE}" && ipv4_loopback_port_bound_by_non_kubectl "${VERIFICATION_LOCAL_PORT}"; then
+      echo "[FAIL] non-kubectl process is bound on 127.0.0.1:${VERIFICATION_LOCAL_PORT}; verification-surface checks would be shadowed." >&2
+      echo "Choose a different SEEDCORE_VERIFICATION_LOCAL_PORT or stop the local verification service." >&2
+      exit 1
+    fi
+    if is_true "${ENABLE_VERIFICATION_PORT_FORWARD}" && is_loopback_url "${VERIFICATION_API_BASE}" && \
+      ! port_forward_running_for "${VERIFICATION_SERVICE_NAME}" "${VERIFICATION_LOCAL_PORT}" "7071"; then
+      echo "[FAIL] ${VERIFICATION_API_BASE} is already served locally without kube port-forward; this can shadow verification-surface checks." >&2
+      echo "Set SEEDCORE_VERIFICATION_LOCAL_PORT to a free port or stop the local service before verifying kube topology." >&2
+      exit 1
+    fi
+    return 0
+  fi
+  if ! verification_service_exists; then
+    return 1
+  fi
+  if ! is_true "${ENABLE_VERIFICATION_PORT_FORWARD}"; then
+    return 1
+  fi
+
+  mkdir -p "$(dirname "${VERIFICATION_PORT_FORWARD_LOG}")"
+  echo "Starting kube port-forward for ${VERIFICATION_SERVICE_NAME} on :${VERIFICATION_LOCAL_PORT}..."
+  kubectl -n "${NAMESPACE}" port-forward svc/"${VERIFICATION_SERVICE_NAME}" "${VERIFICATION_LOCAL_PORT}:7071" >"${VERIFICATION_PORT_FORWARD_LOG}" 2>&1 &
+  VERIFICATION_PORT_FORWARD_PID="$!"
+
+  if ! wait_for_status "$(verification_health_url)" "200" 45; then
+    echo "⚠️  verification API port-forward did not become healthy on ${VERIFICATION_API_BASE}" >&2
+    echo "--- verification port-forward log ---" >&2
+    tail -n 80 "${VERIFICATION_PORT_FORWARD_LOG}" >&2 || true
+    return 1
+  fi
+
+  probe_verification_api
+}
+
+find_runtime_audit_id_from_kube_postgres() {
+  if [[ -n "${SEEDCORE_AUDIT_ID:-}" ]]; then
+    echo "${SEEDCORE_AUDIT_ID}"
+    return 0
+  fi
+
+  local pod_name=""
+  local selector
+  IFS=',' read -r -a selectors <<<"${POSTGRES_POD_SELECTORS}"
+  for selector in "${selectors[@]}"; do
+    selector="$(echo "${selector}" | xargs)"
+    [[ -n "${selector}" ]] || continue
+    pod_name="$(
+      kubectl -n "${NAMESPACE}" get pods -l "${selector}" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+    )"
+    if [[ -n "${pod_name}" ]]; then
+      break
+    fi
+  done
+  if [[ -z "${pod_name}" ]]; then
+    return 1
+  fi
+
+  local candidates=(
+    "${POSTGRES_USER}:${POSTGRES_PASSWORD}:${POSTGRES_DB_NAME}"
+    "postgres:password:seedcore"
+    "postgres:password:postgres"
+    "seedcore:seedcore:seedcore"
+    "seedcore:seedcore:postgres"
+  )
+  local candidate user password db_name audit_id
+  for candidate in "${candidates[@]}"; do
+    IFS=':' read -r user password db_name <<<"${candidate}"
+    audit_id="$(
+      kubectl -n "${NAMESPACE}" exec "${pod_name}" -- \
+        env PGPASSWORD="${password}" \
+        psql -U "${user}" -d "${db_name}" -Atc \
+          "select id::text from public.governed_execution_audit order by recorded_at desc limit 1;" 2>/dev/null | head -n 1 || true
+    )"
+    if [[ -n "${audit_id}" ]]; then
+      echo "${audit_id}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_runtime_audit_id_available() {
+  local audit_id
+  audit_id="$(find_runtime_audit_id_from_kube_postgres || true)"
+  if [[ -n "${audit_id}" ]]; then
+    echo "${audit_id}"
+    return 0
+  fi
+
+  if [[ -z "${CONSTRUCT_RUNTIME_AUDIT_FIXTURE}" ]]; then
+    return 1
+  fi
+
+  echo "No governed execution audit rows found; seeding fixture '${CONSTRUCT_RUNTIME_AUDIT_FIXTURE}' for runtime verification..."
+  python3 "${ROOT}/scripts/host/seed_kube_runtime_audit_fixture.py" \
+    --namespace "${NAMESPACE}" \
+    --fixture-case "${CONSTRUCT_RUNTIME_AUDIT_FIXTURE}" \
+    --db-name "${POSTGRES_DB_NAME}" \
+    --db-user "${POSTGRES_USER}" \
+    --db-password "${POSTGRES_PASSWORD}" \
+    --postgres-pod-selectors "${POSTGRES_POD_SELECTORS}" >/dev/null
+
+  audit_id="$(find_runtime_audit_id_from_kube_postgres || true)"
+  if [[ -n "${audit_id}" ]]; then
+    echo "${audit_id}"
+    return 0
+  fi
+  return 1
+}
+
+runtime_status_gate_ok() {
+  local status_json="$1"
+  jq -e '.runtime_ready == true and .authz_graph_ready == true and .graph_freshness_ok == true' >/dev/null <<<"${status_json}"
+}
+
+attempt_pkg_minimal_contract_seed() {
+  if [[ -z "${CONSTRUCT_PKG_MINIMAL_CONTRACT_FIXTURE}" ]]; then
+    return 1
+  fi
+  echo "Runtime status gate failed; seeding minimal PKG contract/taxonomy fixture (${CONSTRUCT_PKG_MINIMAL_CONTRACT_FIXTURE})..."
+  python3 "${ROOT}/scripts/host/seed_kube_pkg_minimal_contract.py" \
+    --namespace "${NAMESPACE}" \
+    --source-tag "${CONSTRUCT_PKG_MINIMAL_CONTRACT_FIXTURE}" \
+    --db-name "${POSTGRES_DB_NAME}" \
+    --db-user "${POSTGRES_USER}" \
+    --db-password "${POSTGRES_PASSWORD}" \
+    --postgres-pod-selectors "${POSTGRES_POD_SELECTORS}" >/dev/null
+}
+
+run_productized_surface_protocol() {
+  local audit_id
+  audit_id="$(ensure_runtime_audit_id_available || true)"
+  if [[ -z "${audit_id}" ]]; then
+    echo "⚠️  unable to discover runtime audit id; skipping full productized verification protocol" >&2
+    return 1
+  fi
+
+  local protocol_log="${REPORT_DIR}/verification_surface_protocol_$(date -u +%Y%m%dT%H%M%SZ).log"
+  mkdir -p "${REPORT_DIR}"
+  if SEEDCORE_VERIFICATION_API_BASE="${VERIFICATION_API_BASE}" \
+    SEEDCORE_RUNTIME_API_BASE="${RUNTIME_API_BASE}" \
+    SEEDCORE_AUDIT_ID="${audit_id}" \
+    SEEDCORE_SKIP_HOT_PATH_OBSERVABILITY_GATE=1 \
+    SEEDCORE_RUN_REDIS_DEPENDENCY_DRILL=0 \
+    SEEDCORE_RUN_KAFKA_DEPENDENCY_DRILL=0 \
+    bash "${ROOT}/scripts/host/verify_productized_surface.sh" >"${protocol_log}" 2>&1; then
+    echo "Productized verification-surface protocol passed (log: ${protocol_log})"
+    return 0
+  fi
+
+  echo "⚠️  productized verification-surface protocol failed (log: ${protocol_log})" >&2
+  tail -n 80 "${protocol_log}" >&2 || true
+  return 1
+}
+
 build_report() {
   local status_json="$1"
   local observability_ok="$2"
@@ -111,7 +340,7 @@ build_report() {
   local benchmark_path="$4"
   local baseline_path="$5"
   local verification_api_available="$6"
-  local plugin_bundle_json="$7"
+  local verification_surface_protocol_passed="$7"
 
   local benchmark_payload="{}"
   local benchmark_error_count=0
@@ -133,88 +362,75 @@ build_report() {
   graph_freshness_ok="$(jq -r '.graph_freshness_ok // false' <<<"${status_json}")"
 
   local q3_ready=true
-  local reasons=()
+  local q3_reasons=()
   if [[ "${runtime_ready}" != "true" ]]; then
     q3_ready=false
-    reasons+=("runtime_not_ready")
+    q3_reasons+=("runtime_not_ready")
   fi
   if [[ "${authz_graph_ready}" != "true" ]]; then
     q3_ready=false
-    reasons+=("authz_graph_not_ready")
+    q3_reasons+=("authz_graph_not_ready")
   fi
   if [[ "${graph_freshness_ok}" != "true" ]]; then
     q3_ready=false
-    reasons+=("graph_not_fresh")
+    q3_reasons+=("graph_not_fresh")
   fi
   if [[ "${observability_ok}" != "true" ]]; then
     q3_ready=false
-    reasons+=("observability_gate_failed")
+    q3_reasons+=("observability_gate_failed")
   fi
   if [[ "${redis_drill_ok}" != "true" ]]; then
     q3_ready=false
-    reasons+=("redis_drill_failed")
+    q3_reasons+=("redis_drill_failed")
   fi
   if [[ "${benchmark_error_count}" != "0" ]]; then
     q3_ready=false
-    reasons+=("benchmark_errors_present")
+    q3_reasons+=("benchmark_errors_present")
   fi
   if [[ "${benchmark_mismatch_count}" != "0" ]]; then
     q3_ready=false
-    reasons+=("benchmark_mismatch_present")
+    q3_reasons+=("benchmark_mismatch_present")
   fi
   if [[ "${benchmark_graph_freshness_ok}" != "true" ]]; then
     q3_ready=false
-    reasons+=("benchmark_graph_not_fresh")
+    q3_reasons+=("benchmark_graph_not_fresh")
   fi
   if [[ "${benchmark_authz_graph_ready}" != "true" ]]; then
     q3_ready=false
-    reasons+=("benchmark_authz_graph_not_ready")
+    q3_reasons+=("benchmark_authz_graph_not_ready")
+  fi
+
+  local full_ready=true
+  local full_reasons=()
+  if [[ "${q3_ready}" != "true" ]]; then
+    full_ready=false
+  fi
+  if [[ "${verification_api_available}" != "true" ]]; then
+    full_ready=false
+    full_reasons+=("verification_surface_unavailable")
+  fi
+  if [[ "${verification_surface_protocol_passed}" != "true" ]]; then
+    full_ready=false
+    full_reasons+=("verification_surface_protocol_failed")
+  fi
+
+  local q3_reasons_json full_reasons_json
+  if [[ ${#q3_reasons[@]} -eq 0 ]]; then
+    q3_reasons_json='[]'
+  else
+    q3_reasons_json="$(printf '%s\n' "${q3_reasons[@]}" | jq -R . | jq -s .)"
+  fi
+  if [[ ${#full_reasons[@]} -eq 0 ]]; then
+    full_reasons_json='[]'
+  else
+    full_reasons_json="$(printf '%s\n' "${full_reasons[@]}" | jq -R . | jq -s .)"
   fi
 
   local safe_tools_json
-  safe_tools_json="$(
-    VERIFICATION_API_AVAILABLE="${verification_api_available}" \
-    PLUGIN_BUNDLE_JSON="${plugin_bundle_json}" \
-    python3 - <<'PY'
-import json
-import os
-
-verification_available = os.environ.get("VERIFICATION_API_AVAILABLE", "false").lower() == "true"
-plugin_bundle_raw = os.environ.get("PLUGIN_BUNDLE_JSON", "").strip()
-
-if plugin_bundle_raw:
-    try:
-        payload = json.loads(plugin_bundle_raw)
-    except Exception:
-        payload = {}
-else:
-    payload = {}
-
-live_bundle = payload.get("live_gemini_read_only_bundle")
-if isinstance(live_bundle, list):
-    print(json.dumps(live_bundle))
-    raise SystemExit(0)
-
-tools = []
-if verification_available:
-    tools.extend(
-        [
-            "seedcore.verification.queue",
-            "seedcore.verification.workflow_verification_detail",
-            "seedcore.verification.workflow_replay",
-            "seedcore.verification.runbook_lookup",
-        ]
-    )
-tools.extend(["seedcore.hotpath.status", "seedcore.hotpath.metrics"])
-print(json.dumps(tools))
-PY
-  )"
-
-  local reasons_json
-  if [[ ${#reasons[@]} -eq 0 ]]; then
-    reasons_json='[]'
+  if [[ "${verification_surface_protocol_passed}" == "true" ]]; then
+    safe_tools_json='["seedcore.verification.queue","seedcore.verification.workflow_verification_detail","seedcore.verification.workflow_replay","seedcore.verification.runbook_lookup","seedcore.hotpath.status","seedcore.hotpath.metrics"]'
   else
-    reasons_json="$(printf '%s\n' "${reasons[@]}" | jq -R . | jq -s .)"
+    safe_tools_json='["seedcore.hotpath.status","seedcore.hotpath.metrics"]'
   fi
 
   mkdir -p "${REPORT_DIR}"
@@ -231,8 +447,12 @@ PY
     --arg baseline_artifact "${baseline_path}" \
     --argjson benchmark_payload "${benchmark_payload}" \
     --argjson verification_api_available "${verification_api_available}" \
+    --argjson verification_surface_available "${verification_api_available}" \
+    --argjson verification_surface_protocol_passed "${verification_surface_protocol_passed}" \
     --argjson q3_green_enough "${q3_ready}" \
-    --argjson q3_blockers "${reasons_json}" \
+    --argjson q3_blockers "${q3_reasons_json}" \
+    --argjson full_green_enough "${full_ready}" \
+    --argjson full_blockers "${full_reasons_json}" \
     --argjson safe_gemini_read_surface "${safe_tools_json}" \
     '{
       captured_at: $captured_at,
@@ -246,10 +466,14 @@ PY
       baseline_artifact: $baseline_artifact,
       benchmark_payload: $benchmark_payload,
       verification_api_available: $verification_api_available,
+      verification_surface_available: $verification_surface_available,
+      verification_surface_protocol_passed: $verification_surface_protocol_passed,
       green_enough_for_narrow_q3_bridge: $q3_green_enough,
       q3_blockers: $q3_blockers,
+      green_enough_for_full_external_agent_debugging: $full_green_enough,
+      full_external_agent_blockers: $full_blockers,
       safe_gemini_read_surface: $safe_gemini_read_surface
-    }' > "${report_path}"
+    }' >"${report_path}"
 
   echo "${report_path}"
 }
@@ -257,8 +481,8 @@ PY
 main() {
   require_bin curl
   require_bin jq
-  require_bin python3
   require_bin kubectl
+  require_bin python3
 
   echo "== Kube topology verification lane =="
   echo "Namespace: ${NAMESPACE}"
@@ -266,8 +490,9 @@ main() {
   echo "Verification API: ${VERIFICATION_API_BASE}"
   echo "Run degraded drills: ${RUN_DEGRADED_DRILLS}"
   echo "Run benchmark/baseline: ${RUN_BENCHMARK_BASELINE}"
+  echo "Run full verification-surface check: ${RUN_FULL_VERIFICATION_SURFACE_CHECK}"
 
-  start_port_forward_if_needed
+  start_runtime_port_forward_if_needed
 
   local health_code ready_code status_json
   health_code="$(status_code "${RUNTIME_HEALTH_URL}")"
@@ -276,11 +501,19 @@ main() {
 
   [[ "${health_code}" == "200" ]] || { echo "[FAIL] /health=${health_code}" >&2; exit 1; }
   [[ "${ready_code}" == "200" ]] || { echo "[FAIL] /readyz=${ready_code}" >&2; exit 1; }
-  jq -e '.runtime_ready == true and .authz_graph_ready == true and .graph_freshness_ok == true' >/dev/null <<<"${status_json}" || {
-    echo "[FAIL] runtime status gate failed" >&2
-    echo "${status_json}" | jq .
-    exit 1
-  }
+  if ! runtime_status_gate_ok "${status_json}"; then
+    if ! attempt_pkg_minimal_contract_seed; then
+      echo "[FAIL] runtime status gate failed" >&2
+      echo "${status_json}" | jq .
+      exit 1
+    fi
+    status_json="$(curl -fsS "${RUNTIME_API_BASE}/pdp/hot-path/status")"
+    if ! runtime_status_gate_ok "${status_json}"; then
+      echo "[FAIL] runtime status gate failed after minimal PKG contract/taxonomy seeding" >&2
+      echo "${status_json}" | jq .
+      exit 1
+    fi
+  fi
 
   SEEDCORE_RUNTIME_API_BASE="${RUNTIME_API_BASE}" bash "${ROOT}/scripts/host/verify_hot_path_observability.sh"
   local observability_ok=true
@@ -311,31 +544,41 @@ main() {
   fi
 
   local verification_api_available=false
-  if probe_verification_api; then
+  if start_verification_port_forward_if_needed; then
     verification_api_available=true
   fi
 
-  local plugin_bundle_json=""
-  if [[ -n "${PLUGIN_INFO_URL}" ]] && [[ "$(status_code "${PLUGIN_INFO_URL}")" == "200" ]]; then
-    plugin_bundle_json="$(curl -fsS "${PLUGIN_INFO_URL}")"
+  local verification_surface_protocol_passed=false
+  if is_true "${RUN_FULL_VERIFICATION_SURFACE_CHECK}" && [[ "${verification_api_available}" == "true" ]]; then
+    if run_productized_surface_protocol; then
+      verification_surface_protocol_passed=true
+    fi
   fi
 
   local report_path
-  report_path="$(build_report \
-    "${status_json}" \
-    "${observability_ok}" \
-    "${redis_drill_ok}" \
-    "${benchmark_artifact}" \
-    "${baseline_artifact}" \
-    "${verification_api_available}" \
-    "${plugin_bundle_json}")"
+  report_path="$(
+    build_report \
+      "${status_json}" \
+      "${observability_ok}" \
+      "${redis_drill_ok}" \
+      "${benchmark_artifact}" \
+      "${baseline_artifact}" \
+      "${verification_api_available}" \
+      "${verification_surface_protocol_passed}"
+  )"
 
   echo "Kube topology verification report: ${report_path}"
-  jq '. | {green_enough_for_narrow_q3_bridge, q3_blockers, verification_api_available, safe_gemini_read_surface}' "${report_path}"
+  jq '. | {green_enough_for_narrow_q3_bridge, q3_blockers, verification_surface_available, verification_surface_protocol_passed, green_enough_for_full_external_agent_debugging, safe_gemini_read_surface}' "${report_path}"
 
   if is_true "${ENFORCE_Q3_GATE}"; then
     jq -e '.green_enough_for_narrow_q3_bridge == true' "${report_path}" >/dev/null || {
       echo "[FAIL] Q3 readiness gate is not green enough" >&2
+      exit 1
+    }
+  fi
+  if is_true "${ENFORCE_FULL_VERIFICATION_GATE}"; then
+    jq -e '.green_enough_for_full_external_agent_debugging == true' "${report_path}" >/dev/null || {
+      echo "[FAIL] full verification-surface gate is not green enough" >&2
       exit 1
     }
   fi
