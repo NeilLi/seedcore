@@ -46,7 +46,9 @@ else
   VCS_REF="unknown"
 fi
 
+USING_BUILDX=0
 if docker buildx version >/dev/null 2>&1; then
+  USING_BUILDX=1
   build_cmd=(docker buildx build)
 else
   export DOCKER_BUILDKIT=1
@@ -64,7 +66,7 @@ build_cmd+=(
   --progress "${PROGRESS}"
 )
 
-if [[ "${LOAD_IMAGE}" == "1" ]]; then
+if [[ "${LOAD_IMAGE}" == "1" && "${USING_BUILDX}" == "1" ]]; then
   build_cmd+=(--load)
 fi
 

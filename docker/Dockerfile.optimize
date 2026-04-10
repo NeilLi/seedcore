@@ -73,17 +73,12 @@ RUN python -m pip install --upgrade pip wheel setuptools --user
 # ---- Clean Pre-installed DGL/CUDA (Crucial for CPU images) ----
 RUN set -eux; \
   pip freeze | awk -F'[= ]' '/^dgl($|==)|^dgl-cu/ {print $1}' | xargs -r pip uninstall -y || true; \
-  python - <<'PY'
-import site, glob, os, shutil
-paths = set(site.getsitepackages() + [site.getusersitepackages()])
-for s in paths:
-    if not s or not os.path.isdir(s):
-        continue
-    for pat in ("*-gl*", "dgl*.dist-info", "dgl*.egg-info"):
-        for p in glob.glob(os.path.join(s, pat)):
-            print(f"Cleaning {p}")
-            shutil.rmtree(p, ignore_errors=True)
-PY
+  python -c "import os, site; print('\n'.join(s for s in dict.fromkeys(site.getsitepackages() + [site.getusersitepackages()]) if s and os.path.isdir(s)))" \
+    | while IFS= read -r site_dir; do \
+        find "$site_dir" -maxdepth 1 \
+          \( -name '*-gl*' -o -name 'dgl*.dist-info' -o -name 'dgl*.egg-info' \) \
+          -exec sh -c 'for path do echo \"Cleaning $path\"; rm -rf \"$path\"; done' sh {} +; \
+      done
 
 # ---- Application Requirements ----
 COPY docker/requirements.base.txt /tmp/requirements.base.txt
