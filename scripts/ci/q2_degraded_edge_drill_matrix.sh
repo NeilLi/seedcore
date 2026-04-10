@@ -10,6 +10,6 @@ python -m pytest -q tests/test_agent_actions_router.py::test_agent_actions_evalu
 python -m pytest -q tests/test_replay_router.py::test_verify_by_audit_id_surfaces_owner_identity_mismatch
 python -m pytest -q tests/test_replay_router.py::test_verify_token_surfaces_reference_subject_mismatch
 python -m pytest -q tests/test_benchmark_rct_hot_path.py
+python -m pytest -q tests/test_coordinator_dao.py::TestTransferApprovalEnvelopeDAO
 
 echo "CI Q2 degraded-edge drill matrix passed."
-

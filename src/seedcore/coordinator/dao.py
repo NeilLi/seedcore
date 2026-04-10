@@ -930,6 +930,7 @@ class TransferApprovalEnvelopeDAO:
         approval_envelope_id = str(envelope.get("approval_envelope_id") or "").strip()
         if not approval_envelope_id:
             raise ValueError("approval_envelope_id is required")
+        await self._lock_envelope_key(session, approval_envelope_id=approval_envelope_id)
         version = int(envelope.get("version") or 1)
         current = await self.get_current(
             session,
@@ -1029,6 +1030,7 @@ class TransferApprovalEnvelopeDAO:
         actor_ref: Optional[str] = None,
         occurred_at: Optional[str] = None,
     ) -> Dict[str, Any]:
+        await self._lock_envelope_key(session, approval_envelope_id=approval_envelope_id)
         current = await self.get_current(session, approval_envelope_id=approval_envelope_id)
         if current is None:
             raise ValueError(f"approval envelope '{approval_envelope_id}' not found")
@@ -1227,6 +1229,10 @@ class TransferApprovalEnvelopeDAO:
               AND is_current = TRUE
             """
         )
+        await session.execute(stmt, {"approval_envelope_id": str(approval_envelope_id)})
+
+    async def _lock_envelope_key(self, session, *, approval_envelope_id: str) -> None:
+        stmt = text("SELECT pg_advisory_xact_lock(hashtext(:approval_envelope_id))")
         await session.execute(stmt, {"approval_envelope_id": str(approval_envelope_id)})
 
     def _normalize_envelope(self, envelope: Dict[str, Any]) -> Dict[str, Any]:

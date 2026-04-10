@@ -16,6 +16,7 @@ from seedcore.coordinator.dao import (
     TaskRouterTelemetryDAO,
     TaskOutboxDAO,
     TaskProtoPlanDAO,
+    TransferApprovalEnvelopeDAO,
 )
 
 
@@ -268,6 +269,87 @@ class TestTaskProtoPlanDAO:
         result = await dao.get_by_task_id(session, task_id="123")
         
         assert result is None
+
+
+class TestTransferApprovalEnvelopeDAO:
+    @pytest.mark.asyncio
+    async def test_create_or_update_envelope_acquires_advisory_lock_before_read(self):
+        dao = TransferApprovalEnvelopeDAO()
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        current = {
+            "approval_envelope_id": "approval-transfer-001",
+            "version": 2,
+        }
+        create_result = {
+            "approval_envelope_id": "approval-transfer-001",
+            "version": 3,
+        }
+
+        dao.get_current = AsyncMock(return_value=current)
+        dao.create_envelope = AsyncMock(return_value=create_result)
+
+        result = await dao.create_or_update_envelope(
+            session,
+            envelope={"approval_envelope_id": "approval-transfer-001", "version": 1},
+        )
+
+        assert result == create_result
+        assert session.execute.await_count == 1
+        stmt = session.execute.await_args.args[0]
+        params = session.execute.await_args.args[1]
+        assert "pg_advisory_xact_lock" in str(stmt)
+        assert params["approval_envelope_id"] == "approval-transfer-001"
+        dao.get_current.assert_awaited_once()
+        dao.create_envelope.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_apply_transition_acquires_advisory_lock_before_loading_current(self):
+        dao = TransferApprovalEnvelopeDAO()
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        current = {
+            "approval_envelope_id": "approval-transfer-001",
+            "version": 1,
+            "status": "APPROVED",
+            "envelope": {"approval_envelope_id": "approval-transfer-001", "status": "APPROVED"},
+        }
+        dao.get_current = AsyncMock(return_value=current)
+        dao.list_transition_events = AsyncMock(return_value=[])
+        dao._history_payload = MagicMock(return_value={"events": [], "chain_head": None})
+        dao.supersede_current_version = AsyncMock()
+        dao.create_envelope = AsyncMock(
+            return_value={"approval_envelope_id": "approval-transfer-001", "version": 2}
+        )
+        dao.append_transition_event = AsyncMock(return_value={"event_id": "approval-transition-event:001"})
+
+        with patch(
+            "seedcore.coordinator.dao.verify_approval_transition_history_with_rust",
+            return_value={"valid": True},
+        ), patch(
+            "seedcore.coordinator.dao.apply_transfer_approval_transition_with_rust",
+            return_value={
+                "valid": True,
+                "approval_envelope": {"status": "APPROVED"},
+                "transition_event": {"event_id": "approval-transition-event:001"},
+                "history": {"events": [], "chain_head": "sha256:head-001"},
+                "binding_hash": "sha256:binding-001",
+            },
+        ):
+            await dao.apply_transition(
+                session,
+                approval_envelope_id="approval-transfer-001",
+                transition={"type": "noop"},
+            )
+
+        assert session.execute.await_count == 1
+        stmt = session.execute.await_args.args[0]
+        params = session.execute.await_args.args[1]
+        assert "pg_advisory_xact_lock" in str(stmt)
+        assert params["approval_envelope_id"] == "approval-transfer-001"
+        dao.get_current.assert_awaited_once()
 
 
 class TestGovernedExecutionAuditDAO:
