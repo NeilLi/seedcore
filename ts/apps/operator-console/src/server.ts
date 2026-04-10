@@ -12,6 +12,7 @@ import {
   renderRunbooksPage,
   renderTransferPage,
 } from "./ui.js";
+import { resolveOperatorShellExperiment } from "./experiments.js";
 
 const apiBase = process.env.SEEDCORE_VERIFICATION_API_BASE ?? "http://127.0.0.1:7071";
 const runtimeBase = process.env.SEEDCORE_RUNTIME_API_BASE ?? "http://127.0.0.1:8002/api/v1";
@@ -53,8 +54,9 @@ function operatorShell(
   nav: OperatorShellOptions["nav"],
   listQuery: string,
   hotPath: HotPathBanner | null,
+  experiment: OperatorShellOptions["experiment"],
 ): OperatorShellOptions {
-  return { nav, listQuery, hotPath };
+  return { nav, listQuery, hotPath, experiment };
 }
 
 function queryString(url: URL, mode: "catalog" | "single" | "replay"): string {
@@ -91,6 +93,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    const experiment = await resolveOperatorShellExperiment(req, res, url);
     if (url.pathname === "/search") {
       const q = url.searchParams.get("q")?.trim() ?? "";
       if (!q) {
@@ -147,7 +150,7 @@ const server = http.createServer(async (req, res) => {
       const catalog = await fetchJson(`/api/v1/verification/transfers/catalog?${qs}`);
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderCatalogPage(catalog, qs, operatorShell("transfers", qs, hotPath)));
+      res.end(renderCatalogPage(catalog, qs, operatorShell("transfers", qs, hotPath, experiment)));
       return;
     }
 
@@ -156,7 +159,7 @@ const server = http.createServer(async (req, res) => {
       const queue = await fetchJson(`/api/v1/verification/transfers/queue?${qs}`);
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderQueuePage(queue, qs, operatorShell("verification", qs, hotPath)));
+      res.end(renderQueuePage(queue, qs, operatorShell("verification", qs, hotPath, experiment)));
       return;
     }
 
@@ -164,7 +167,14 @@ const server = http.createServer(async (req, res) => {
       const idx = await fetchJson("/api/v1/verification/runbook");
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderRunbooksPage(idx, operatorShell("runbooks", DEFAULT_LIST_QS, hotPath), apiBase, DEFAULT_LIST_QS));
+      res.end(
+        renderRunbooksPage(
+          idx,
+          operatorShell("runbooks", DEFAULT_LIST_QS, hotPath, experiment),
+          apiBase,
+          DEFAULT_LIST_QS,
+        ),
+      );
       return;
     }
 
@@ -181,7 +191,7 @@ const server = http.createServer(async (req, res) => {
       );
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderReplayPage(detail, qs, wf, operatorShell("verification", qs, hotPath)));
+      res.end(renderReplayPage(detail, qs, wf, operatorShell("verification", qs, hotPath, experiment)));
       return;
     }
 
@@ -190,7 +200,7 @@ const server = http.createServer(async (req, res) => {
       const review = await fetchJson(`/api/v1/verification/transfers/review?${qs}`);
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderTransferPage(review, qs, operatorShell("verification", qs, hotPath)));
+      res.end(renderTransferPage(review, qs, operatorShell("verification", qs, hotPath, experiment)));
       return;
     }
 
@@ -199,7 +209,7 @@ const server = http.createServer(async (req, res) => {
       const forensics = await fetchJson(`/api/v1/verification/assets/forensics?${qs}`);
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderForensicsPage(forensics, qs, operatorShell("verification", qs, hotPath)));
+      res.end(renderForensicsPage(forensics, qs, operatorShell("verification", qs, hotPath, experiment)));
       return;
     }
 

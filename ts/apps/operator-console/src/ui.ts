@@ -44,9 +44,19 @@ export type OperatorShellOptions = {
   nav: OperatorNavKey;
   listQuery: string;
   hotPath: HotPathBanner | null;
+  experiment?: {
+    key: string;
+    variant: "control" | "treatment";
+    source: string;
+  };
 };
 
-function renderOperatorShell(nav: OperatorNavKey, listQuery: string, hotPath: HotPathBanner | null): string {
+function renderOperatorShell(
+  nav: OperatorNavKey,
+  listQuery: string,
+  hotPath: HotPathBanner | null,
+  experiment?: OperatorShellOptions["experiment"],
+): string {
   const q = escapeHtml(listQuery);
   const item = (key: OperatorNavKey, label: string, href: string) =>
     `<a class="topnav-link${nav === key ? " topnav-active" : ""}" href="${href}">${escapeHtml(label)}</a>`;
@@ -57,6 +67,11 @@ function renderOperatorShell(nav: OperatorNavKey, listQuery: string, hotPath: Ho
       `<span class="status ${modeCls}">Hot path · ${escapeHtml(hotPath.resolved_mode)}</span>`,
       `<span class="status ${hotPath.graph_freshness_ok ? "ok" : "bad"}">Graph fresh · ${String(hotPath.graph_freshness_ok)}</span>`,
       `<span class="status">Observability · ${escapeHtml(hotPath.alert_level)}</span>`,
+    );
+  }
+  if (experiment) {
+    parts.push(
+      `<span class="status">Experiment · ${escapeHtml(experiment.variant)} · ${escapeHtml(experiment.source)}</span>`,
     );
   }
   return `
@@ -73,7 +88,10 @@ function renderOperatorShell(nav: OperatorNavKey, listQuery: string, hotPath: Ho
 }
 
 export function page(title: string, body: string, shell?: OperatorShellOptions): string {
-  const shellBlock = shell ? renderOperatorShell(shell.nav, shell.listQuery, shell.hotPath) : "";
+  const shellBlock = shell
+    ? renderOperatorShell(shell.nav, shell.listQuery, shell.hotPath, shell.experiment)
+    : "";
+  const pageMode = shell?.experiment?.variant === "treatment" ? "exp-treatment" : "exp-control";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -91,6 +109,17 @@ export function page(title: string, body: string, shell?: OperatorShellOptions):
       --ok: #198754;
       --warn: #b45f06;
       --bad: #a61b1b;
+    }
+    body.exp-treatment {
+      --paper: #edf2fb;
+      --ink: #10243a;
+      --muted: #425b72;
+      --panel: #fdfefe;
+      --edge: #bfd3ea;
+      --accent: #0e4aa8;
+      --ok: #1f7a4d;
+      --warn: #9f4d0b;
+      --bad: #a12525;
     }
     * { box-sizing: border-box; }
     body {
@@ -246,7 +275,7 @@ export function page(title: string, body: string, shell?: OperatorShellOptions):
     .flag-warn code { color: var(--warn); font-weight: 700; }
   </style>
 </head>
-<body>
+<body class="${pageMode}">
   ${shellBlock}
   <main>${body}</main>
 </body>
