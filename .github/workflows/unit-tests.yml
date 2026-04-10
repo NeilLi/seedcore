@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_kafka_local_integration:
+        description: "Run local Kafka broker-backed integration tests"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   tests:
@@ -55,3 +61,89 @@ jobs:
 
       - name: Q2 degraded-edge drill matrix
         run: bash scripts/ci/q2_degraded_edge_drill_matrix.sh
+
+  kafka-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start local Kafka (KRaft)
+        run: docker compose -f deploy/local/docker-compose.kafka.yml up -d
+
+      - name: Wait for broker
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec seedcore-kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1; then
+              echo "Kafka is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Kafka failed to become ready" >&2
+          docker logs seedcore-kafka >&2 || true
+          exit 1
+
+      - name: Create stream topics
+        run: bash deploy/local/init-kafka-topics.sh
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and dev deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Kafka streams smoke (produce + consume)
+        env:
+          KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:9092
+          KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+        run: python scripts/kafka/smoke_kafka_streams.py
+
+  kafka-local-integration:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_kafka_local_integration == true || inputs.run_kafka_local_integration == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start local Kafka (KRaft)
+        run: docker compose -f deploy/local/docker-compose.kafka.yml up -d
+
+      - name: Wait for broker
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec seedcore-kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1; then
+              echo "Kafka is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Kafka failed to become ready" >&2
+          docker logs seedcore-kafka >&2 || true
+          exit 1
+
+      - name: Create stream topics
+        run: bash deploy/local/init-kafka-topics.sh
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and dev deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run Kafka local integration tests
+        env:
+          KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:9092
+          KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+          SEEDCORE_RUN_KAFKA_INTEGRATION: "1"
+        run: pytest -q tests/test_kafka_local_integration.py

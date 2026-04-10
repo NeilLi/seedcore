@@ -19,6 +19,7 @@ def test_active_router_specs_preserve_mount_order():
         ("Advisory", "advisory_router"),
         ("PKG", "pkg_router"),
         ("Capabilities", "capabilities_router"),
+        ("Policy Assistant", "policy_assistant_router"),
     )
 
 

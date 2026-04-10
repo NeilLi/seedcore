@@ -22,10 +22,8 @@ Use **JSON** payloads in Phase 0–1 (align with existing `KafkaProducer.send`);
 
 **Goal:** One command brings up Kafka (+ ZooKeeper or KRaft) on `localhost` for dev/CI.
 
-- Add **`deploy/local/docker-compose.kafka.yml`** (or profile under `deploy/local/`) with:
-  - Apache Kafka in **KRaft** mode (single broker) *or* Confluent Platform **cp-kafka** + **cp-zookeeper** if team standardizes on CP images.
-  - Expose `9092` (plaintext for local only).
-- Document env vars: `KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092`, optional `KAFKA_SECURITY_PROTOCOL=PLAINTEXT`.
+- **Implemented:** `deploy/local/docker-compose.kafka.yml` (Apache Kafka **KRaft**, single broker, **9092** plaintext), `scripts/kafka/smoke_kafka_streams.py`, and env documentation in `deploy/local/README.md` (`KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_SECURITY_PROTOCOL`).
+- **Implemented (local Python setup):** `deploy/local/setup-kafka-python.sh` prepares `.venv` with `confluent-kafka` and Kafka test dependencies for local smoke and integration runs.
 - **Acceptance:** `kafka-topics.sh` (or container exec) can list topics; producer/consumer smoke from `seedcore` Python using `confluent-kafka` (reuse `KafkaProducer` / `KafkaConsumer`).
 - **Out of scope:** TLS, ACLs, multi-broker (defer to “prod-like” track).
 
@@ -35,6 +33,7 @@ Use **JSON** payloads in Phase 0–1 (align with existing `KafkaProducer.send`);
 
 **Goal:** Create the three topics and consume without changing authoritative paths.
 
+- **Implemented:** `deploy/local/init-kafka-topics.sh`, envelope helper `seedcore.infra.kafka.envelope.build_stream_envelope`, topic constants in `seedcore.infra.kafka.topics`, passive bridge `python -m seedcore.infra.kafka.bridge` (optional JSONL under `artifacts/kafka_streams/` when `SEEDCORE_KAFKA_BRIDGE_APPEND_FILE=1`).
 - Create topics (script or compose init):  
   `seedcore.intent.v1`, `seedcore.telemetry.v1`, `seedcore.policy_outcome.v1`  
   Optional: compacted topic for latest intent per key (`cleanup.policy=compact`) — only if you define a stable keying scheme (`intent_id` / `workflow_id`).
@@ -55,11 +54,14 @@ Pick **one** stream first (recommended: **policy_outcome**) because it is smalle
 
 - After a synchronous PDP decision (or governed receipt mint), **optionally** publish a redacted outcome event (disposition, reason code, snapshot ref hash, **no** raw secrets).
 - Feature flag: `SEEDCORE_KAFKA_POLICY_OUTCOME_ENABLE=1`.
+- **Implemented:** PDP **hot path** (`evaluate_pdp_hot_path`) publishes to `seedcore.policy_outcome.v1` via `seedcore.infra.kafka.policy_outcome` when the flag is set (best-effort producer).
 - **Acceptance:** Q2 operator or MCP can correlate HTTP/API truth with Kafka timeline for the same `workflow_id` / `audit_id`.
 
 ### 2b. Intent (second)
 
 - Publish when ActionIntent is accepted or rejected at the gateway boundary (before or after PDP — document which).
+- **Implemented (external ingress path):** `seedcore.infra.kafka.intent_ingress` consumes delegated intent events from `seedcore.intent.v1`, validates `seedcore.intent.delegated.v0` payloads, runs owner-context preflight through the authoritative API surface, and forwards valid events to `/api/v1/agent-actions/evaluate`.
+- **Implemented (contract helper):** `seedcore.infra.kafka.delegated_intent.DelegatedIntentPayload` and `build_delegated_intent_envelope` define the external assistant payload/envelope shape used by Kafka producers.
 - **Acceptance:** Intent stream count matches gateway logs for a fixture drill.
 
 ### 2c. Telemetry (third)
@@ -75,7 +77,9 @@ Pick **one** stream first (recommended: **policy_outcome**) because it is smalle
 
 - Document **fail-closed vs fail-open** for publishing:
   - Default: if Kafka is down, **core path still completes** (HTTP/DB); publisher drops or buffers with bounded queue (prefer drop + metric for local).
+  - **Repo default (implemented):** optional publishers are **fail-open** (errors logged; hot path never raises). `/readyz` treats Kafka as **optional** unless `SEEDCORE_KAFKA_READYZ_CHECK=1`, in which case readiness is **fail-closed on Kafka** for deployments that require the broker up.
 - Add health: small **`kafka_ping`** or reuse `/readyz` dependency optional flag.
+  - **Implemented:** `seedcore.infra.kafka.health.kafka_ping` and `GET /readyz` when `SEEDCORE_KAFKA_READYZ_CHECK=1`.
 - **Acceptance:** Kill broker mid-run; RCT / PDP path still passes host acceptance; publisher surfaces clear error without crashing coordinator.
 
 ---
@@ -83,6 +87,8 @@ Pick **one** stream first (recommended: **policy_outcome**) because it is smalle
 ## Phase 4 — CI and drills (Week 7+)
 
 - Optional **GitHub Actions** job: compose up Kafka, run smoke producer/consumer + one integration test.
+- **Implemented (smoke path):** workflow job `kafka-smoke` in `.github/workflows/unit-tests.yml` (compose up → topic init → `scripts/kafka/smoke_kafka_streams.py`).
+- **Implemented (on-demand integration path):** workflow-dispatch flag `run_kafka_local_integration` enables separate job `kafka-local-integration` in `.github/workflows/unit-tests.yml` to run `tests/test_kafka_local_integration.py` against a real broker on demand.
 - Align with [north_star_autonomous_trade_environment.md](north_star_autonomous_trade_environment.md) **verifier** story: stub `RESULT_VERIFIER` consumer reads `policy_outcome` + `telemetry` and triggers **quarantine signal** only through existing APIs (not by writing Kafka).
 
 ---
@@ -101,9 +107,11 @@ Pick **one** stream first (recommended: **policy_outcome**) because it is smalle
 
 ## Dependencies and repo touchpoints
 
-- **Clients:** `src/seedcore/infra/kafka/producer.py`, `consumer.py` (`confluent-kafka` already in `pyproject.toml`).
-- **Deploy:** new compose fragment under `deploy/local/` (keep separate from full DB stack until stable).
+- **Clients:** `src/seedcore/infra/kafka/` — `producer.py` (incl. `KafkaProducerBestEffort`), `consumer.py`, `config.py`, `envelope.py`, `delegated_intent.py`, `topics.py`, `health.py`, `policy_outcome.py`, `bridge.py`, `intent_ingress.py` (`confluent-kafka` in `pyproject.toml`).
+- **Deploy:** `deploy/local/docker-compose.kafka.yml`, `deploy/local/init-kafka-topics.sh` (separate from full DB stack).
+- **Local setup:** `deploy/local/setup-kafka-python.sh` for repo-local Python client install and verification.
 - **Docs:** cross-link from [north_star_autonomous_trade_environment.md](north_star_autonomous_trade_environment.md) “Cluster Service Posture” row to this file for **local** parity.
+- **Tests:** `tests/test_kafka_stream_envelope.py`, `tests/test_kafka_streams_runtime.py`, `tests/test_kafka_local_integration.py`, `tests/test_kafka_delegated_intent.py`.
 
 ---
 

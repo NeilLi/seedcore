@@ -11,6 +11,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI  # pyright: ignore[reportMissingImports]
+from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingImports]
 from fastapi.middleware.cors import CORSMiddleware  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncEngine  # pyright: ignore[reportMissingImports]
 from sqlalchemy import text  # pyright: ignore[reportMissingImports]
@@ -170,9 +171,30 @@ async def ready_check():
     except Exception as e:
         deps["db"] = f"error: {e}"
         all_ready = False
-    
+
+    if str(os.getenv("SEEDCORE_KAFKA_READYZ_CHECK", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        try:
+            from seedcore.infra.kafka.health import kafka_ping
+
+            if kafka_ping():
+                deps["kafka"] = "ok"
+            else:
+                deps["kafka"] = "error: broker unreachable"
+                all_ready = False
+        except Exception as e:
+            deps["kafka"] = f"error: {e}"
+            all_ready = False
+
     status = "ready" if all_ready else "not_ready"
-    return {"status": status, "deps": deps}
+    body = {"status": status, "deps": deps}
+    if all_ready:
+        return body
+    return JSONResponse(status_code=503, content=body)
 
 @app.get("/")
 async def root():

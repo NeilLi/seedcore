@@ -24,7 +24,7 @@ def test_cognitive_package_import_is_safe_without_dspy(monkeypatch):
 
 def test_cognitive_core_export_raises_clear_error_without_dspy(monkeypatch):
     _clear_seedcore_cognitive_modules()
-    monkeypatch.delitem(sys.modules, "dspy", raising=False)
+    monkeypatch.setitem(sys.modules, "dspy", None)
 
     cognitive = importlib.import_module("seedcore.cognitive")
 

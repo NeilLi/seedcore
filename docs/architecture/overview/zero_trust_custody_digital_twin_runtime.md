@@ -40,6 +40,8 @@ flowchart TB
 
 Represents the agentic future across proprietary and open ecosystems. Assistants generate intents (publish, list, buy, unlock, release, move custody) but do not execute directly. All execution must pass through SeedCore governance.
 
+In the current SeedCore runtime, delegated intent can enter through the authoritative API surface or through Kafka transport. The Kafka path is an ingress mechanism, not an alternate policy engine: delegated intent events are preflighted for owner context and delegation validity, then forwarded into the same `agent-actions` evaluation path used by direct API callers.
+
 ### Owner / Creator Layer
 
 Each owner has a digital twin that defines delegated permissions, purchase policies, publishing authority, risk thresholds, and custody preferences. Assistants can only act inside this delegated authority.
@@ -50,6 +52,7 @@ This is the trust and execution control core:
 
 - `Policy Decision Engine (PDP)`: evaluates authority, trust level, provenance requirements, commerce rules, and custody conditions.
 - PDP decision semantics: final authorization is synchronous and stateless at decision time over pinned policy/context inputs; approval/custody/telemetry state and replay evidence are managed by surrounding runtime services.
+- Delegated intent ingress semantics: when intent arrives over Kafka, SeedCore treats Kafka as transport only. The ingress worker performs owner-context preflight, then forwards the request into the authoritative `agent-actions` runtime before any decision or token minting occurs.
 - `Execution Token Service`: issues short-lived execution tokens when policy passes; endpoints reject unauthorized calls.
 - `Digital Twin Engine`: keeps governed state for owners, assistants, products, batches, edge nodes, transactions, and assets.
 - `Custody Graph`: records ownership, storage, transfer, release, and handling transitions for provenance and disputes.

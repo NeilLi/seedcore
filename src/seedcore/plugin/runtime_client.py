@@ -53,10 +53,13 @@ class SeedcoreRuntimeClient:
         url: str,
         payload: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        accepted_statuses: set[int] | None = None,
     ) -> dict[str, Any]:
         try:
             response = await self.http.request(method, url, json=payload, params=params)
-            response.raise_for_status()
+            allowed = accepted_statuses or {200}
+            if response.status_code not in allowed:
+                response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code if exc.response is not None else "unknown"
@@ -74,7 +77,7 @@ class SeedcoreRuntimeClient:
         return await self._request_json(method="GET", url=self.root_url("/health"))
 
     async def readyz(self) -> dict[str, Any]:
-        return await self._request_json(method="GET", url=self.root_url("/readyz"))
+        return await self._request_json(method="GET", url=self.root_url("/readyz"), accepted_statuses={200, 503})
 
     async def pkg_status(self) -> dict[str, Any]:
         return await self._request_json(method="GET", url=self.api_url("/pkg/status"))
@@ -141,6 +144,13 @@ class SeedcoreRuntimeClient:
             method="POST",
             url=self.api_url(f"/delegations/{delegation_id}/revoke"),
             payload=payload or {},
+        )
+
+    async def owner_context_preflight(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json(
+            method="POST",
+            url=self.api_url("/owner-context/preflight"),
+            payload=payload,
         )
 
     async def evaluate_agent_action(

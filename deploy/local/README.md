@@ -34,6 +34,59 @@ These scripts are intentionally separate from the main `deploy/` entrypoints bec
 
 `host-env.sh` and `run-api.sh` set `SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE` to **`host`** by default so `/api/v1/pdp/hot-path/status` and `/api/v1/pdp/hot-path/metrics` agree on the `deployment_role` label (see `scripts/host/verify_hot_path_observability.sh`). Kubernetes and Helm use **`kubernetes`**, Ray head **`ray`**, Docker image / `docker/env.example` **`docker`**.
 
+## Local Kafka (optional streams)
+
+For intent / telemetry / policy-outcome transport parity with production posture, see `docs/development/local_kafka_streams_schedule.md`.
+
+Bring up a single KRaft broker:
+
+```bash
+docker compose -f deploy/local/docker-compose.kafka.yml up -d
+bash deploy/local/init-kafka-topics.sh
+```
+
+Set up local Python client (`confluent-kafka`) in the repo virtualenv:
+
+```bash
+bash deploy/local/setup-kafka-python.sh
+```
+
+Common environment variables:
+
+- `KAFKA_BOOTSTRAP_SERVERS` — default `127.0.0.1:9092`
+- `KAFKA_SECURITY_PROTOCOL` — default `PLAINTEXT` (local only)
+- `SEEDCORE_KAFKA_POLICY_OUTCOME_ENABLE` — set to `1` to emit redacted PDP hot-path outcomes to `seedcore.policy_outcome.v1`
+- `SEEDCORE_KAFKA_READYZ_CHECK` — set to `1` to include broker reachability in `GET /readyz`
+- `SEEDCORE_KAFKA_BRIDGE_APPEND_FILE` — set to `1` when running the streams bridge to append JSONL under `artifacts/kafka_streams/bridge.jsonl`
+
+Passive consumer (subscribes to all three topics, structured logs; optional file append):
+
+```bash
+python -m seedcore.infra.kafka.bridge
+```
+
+Delegated intent ingress worker (consumes `seedcore.intent.v1`, runs owner-context preflight, then forwards to `/api/v1/agent-actions/evaluate`):
+
+```bash
+python -m seedcore.infra.kafka.intent_ingress
+```
+
+Smoke produce/consume (requires topics and a running broker):
+
+```bash
+./.venv/bin/python scripts/kafka/smoke_kafka_streams.py
+```
+
+Kafka integration tests (real broker, opt-in):
+
+```bash
+SEEDCORE_RUN_KAFKA_INTEGRATION=1 ./.venv/bin/pytest -q tests/test_kafka_local_integration.py
+```
+
+External assistant Kafka contract:
+
+- See [kafka_delegated_intent_ingress.md](/Users/ningli/project/seedcore/docs/development/kafka_delegated_intent_ingress.md)
+
 ## Restart Sequence
 
 ### Lean local mode

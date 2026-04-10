@@ -32,6 +32,9 @@ docker/artifacts/
 !docker/artifacts/holon_ids.jsonl
 docker/test.txt
 
+# Local Kafka bridge drill output (see deploy/local/docker-compose.kafka.yml)
+artifacts/kafka_streams/
+
 # Log files
 *.log
 assertion.log

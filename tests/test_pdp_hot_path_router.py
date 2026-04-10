@@ -200,6 +200,29 @@ def test_pdp_hot_path_terminal_quarantine_updates_shadow_stats(monkeypatch):
     assert body["recent_results"][-1]["parity_ok"] is True
 
 
+def test_pdp_hot_path_terminal_quarantine_publishes_policy_outcome(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    published: list[tuple[str, str, str]] = []
+
+    def fake_publish(request, response):
+        published.append((request.request_id, response.request_id, response.decision.disposition))
+
+    monkeypatch.setattr(pdp_hot_path, "publish_pdp_hot_path_policy_outcome_best_effort", fake_publish)
+    client = _make_client()
+
+    payload = _base_payload()
+    payload["request_id"] = "pdp-req-stale-publish-001"
+    payload["telemetry_context"]["freshness_seconds"] = 301
+    payload["telemetry_context"]["max_allowed_age_seconds"] = 300
+
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["decision"]["disposition"] == "quarantine"
+    assert published == [("pdp-req-stale-publish-001", "pdp-req-stale-publish-001", "quarantine")]
+
+
 def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monkeypatch):
     manager = _manager()
     monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
@@ -240,6 +263,37 @@ def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monke
     assert body["execution_token"]["token_id"] == "token-transfer-001"
     assert body["signer_provenance"][0]["artifact_type"] == "execution_token"
     assert body["signer_provenance"][0]["signer_id"] == "seedcore-verify"
+
+
+def test_pdp_hot_path_allow_publishes_policy_outcome(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+
+    fake_decision = PolicyDecision(
+        allowed=True,
+        reason="restricted_custody_transfer_allowed",
+        disposition="allow",
+        policy_snapshot="snapshot:pkg-prod-2026-04-02",
+        governed_receipt={
+            "decision_hash": "receipt-transfer-001",
+            "snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+            "snapshot_hash": "sha256:snapshot-hash-transfer-001",
+        },
+    )
+    monkeypatch.setattr(pdp_hot_path, "evaluate_intent", lambda *args, **kwargs: fake_decision)
+    published: list[tuple[str, str, str]] = []
+
+    def fake_publish(request, response):
+        published.append((request.action_intent.intent_id, response.request_id, response.decision.disposition))
+
+    monkeypatch.setattr(pdp_hot_path, "publish_pdp_hot_path_policy_outcome_best_effort", fake_publish)
+    client = _make_client()
+
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=_base_payload())
+
+    assert response.status_code == 200
+    assert response.json()["decision"]["disposition"] == "allow"
+    assert published == [("intent-transfer-001", "pdp-req-test-001", "allow")]
 
 
 def test_pdp_hot_path_request_includes_active_contract_bundles(monkeypatch):

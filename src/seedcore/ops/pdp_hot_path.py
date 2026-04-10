@@ -17,6 +17,7 @@ from seedcore.coordinator.core.governance import (
     prepare_policy_case,
 )
 from seedcore.database import get_async_pg_session_factory
+from seedcore.infra.kafka.policy_outcome import publish_pdp_hot_path_policy_outcome_best_effort
 from seedcore.models.action_intent import ExecutionToken, PolicyCase, PolicyDecision
 from seedcore.models.pdp_hot_path import (
     HotPathAssetContext,
@@ -673,6 +674,7 @@ def evaluate_pdp_hot_path(
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
         _record_terminal_shadow_result(request=request, response=response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
         return response
 
     freshness_ok = True
@@ -697,6 +699,7 @@ def evaluate_pdp_hot_path(
             trust_gaps=["stale_telemetry"],
         )
         _record_terminal_shadow_result(request=request, response=response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
         return response
 
     runtime_status = _resolve_hot_path_runtime_status()
@@ -713,6 +716,7 @@ def evaluate_pdp_hot_path(
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
         _record_terminal_shadow_result(request=request, response=response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
         return response
 
     graph_freshness_ok = bool(runtime_status.get("graph_freshness_ok", True))
@@ -734,6 +738,7 @@ def evaluate_pdp_hot_path(
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
         _record_terminal_shadow_result(request=request, response=response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
         return response
 
     compiled_snapshot = str(runtime_status.get("active_snapshot_version") or "").strip() or (
@@ -756,6 +761,7 @@ def evaluate_pdp_hot_path(
             policy_snapshot_ref=request.policy_snapshot_ref,
         )
         _record_terminal_shadow_result(request=request, response=response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
         return response
 
     approved_source_registrations: dict[str, str | None] = {}
@@ -841,6 +847,7 @@ def evaluate_pdp_hot_path(
             candidate=decision,
         ),
     )
+    publish_pdp_hot_path_policy_outcome_best_effort(request, response)
     return response
 
 
