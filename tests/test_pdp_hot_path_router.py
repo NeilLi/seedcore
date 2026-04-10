@@ -522,6 +522,50 @@ def test_pdp_hot_path_status_reports_runtime_readiness_and_mode(monkeypatch):
     assert gauges.get("rollback_triggered") is True
 
 
+@pytest.mark.asyncio
+async def test_pdp_hot_path_status_refreshes_stale_graph_for_read_surface(monkeypatch):
+    class _RefreshingManager:
+        def __init__(self) -> None:
+            self.compiled_at = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()
+            self.refresh_calls = 0
+
+        def get_metadata(self) -> dict:
+            return {
+                "authz_graph": {
+                    "healthy": True,
+                    "active_snapshot_version": "snapshot:pkg-prod-2026-04-02",
+                    "compiled_at": self.compiled_at,
+                    "restricted_transfer_ready": True,
+                }
+            }
+
+        def get_active_compiled_authz_index(self):
+            return SimpleNamespace(
+                snapshot_version="snapshot:pkg-prod-2026-04-02",
+                compiled_at=self.compiled_at,
+                restricted_transfer_ready=True,
+            )
+
+        async def refresh_active_authz_graph(self) -> dict:
+            self.refresh_calls += 1
+            self.compiled_at = datetime.now(timezone.utc).isoformat()
+            return {"success": True, "compiled_at": self.compiled_at}
+
+    manager = _RefreshingManager()
+    monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", pdp_hot_path.HotPathShadowStats())
+    monkeypatch.setenv("SEEDCORE_RCT_HOT_PATH_MODE", "shadow")
+
+    body = await pkg_router.pdp_hot_path_status()
+
+    assert manager.refresh_calls == 1
+    assert body["authz_graph_ready"] is True
+    assert body["graph_freshness_ok"] is True
+    assert body["runtime_ready"] is True
+    assert body["rollback_triggered"] is False
+
+
 def test_pdp_hot_path_route_resolves_and_forwards_authoritative_approval(monkeypatch):
     async def fake_resolve(request):
         assert request.action_intent.action.parameters["approval_context"]["approval_envelope_id"] == "approval-transfer-001"

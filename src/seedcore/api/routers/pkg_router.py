@@ -33,6 +33,7 @@ from ...ops.pdp_hot_path import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_HOT_PATH_STATUS_REFRESH_LOCK = asyncio.Lock()
 
 
 class PKGActivateSnapshotRequest(BaseModel):
@@ -90,13 +91,49 @@ async def pdp_hot_path_evaluate(
 
 @router.get("/pdp/hot-path/status", response_model=Dict[str, Any])
 async def pdp_hot_path_status() -> Dict[str, Any]:
+    await _refresh_hot_path_authz_graph_if_stale()
     return hot_path_shadow_status()
 
 
 @router.get("/pdp/hot-path/metrics")
 async def pdp_hot_path_metrics() -> PlainTextResponse:
     """Prometheus text exposition derived from the same snapshot as /pdp/hot-path/status."""
+    await _refresh_hot_path_authz_graph_if_stale()
     return PlainTextResponse(hot_path_prometheus_text(), media_type="text/plain; version=0.0.4")
+
+
+async def _refresh_hot_path_authz_graph_if_stale() -> None:
+    """
+    Keep the read surface aligned with live deployments by refreshing a stale
+    but otherwise healthy compiled authz graph before rendering status/metrics.
+    """
+    status = hot_path_shadow_status()
+    if bool(status.get("graph_freshness_ok")):
+        return
+    if not bool(status.get("authz_graph_ready")) or not bool(status.get("restricted_transfer_ready")):
+        return
+
+    pkg_mgr = get_global_pkg_manager()
+    refresher = getattr(pkg_mgr, "refresh_active_authz_graph", None) if pkg_mgr is not None else None
+    if not callable(refresher):
+        return
+
+    async with _HOT_PATH_STATUS_REFRESH_LOCK:
+        current = hot_path_shadow_status()
+        if bool(current.get("graph_freshness_ok")):
+            return
+        if not bool(current.get("authz_graph_ready")) or not bool(current.get("restricted_transfer_ready")):
+            return
+        try:
+            result = await refresher()
+        except Exception as exc:
+            logger.warning("Hot-path status refresh failed while recovering stale authz graph: %s", exc, exc_info=True)
+            return
+        if not bool(result.get("success")):
+            logger.warning(
+                "Hot-path status refresh did not recover stale authz graph: %s",
+                result.get("error") or result,
+            )
 
 
 async def _resolve_pkg_client() -> PKGClient:
