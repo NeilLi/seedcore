@@ -25,6 +25,7 @@ env/
 # Local config
 local_*.yaml
 .local-runtime/
+artifacts/
 
 # Docker artifacts and generated files
 docker/artifacts/

@@ -46,6 +46,7 @@ from ...ops.pdp_hot_path import (
     evaluate_pdp_hot_path,
     resolve_authoritative_transfer_approval,
 )
+from ...hal.custody.transition_receipts import build_transition_receipt
 from ...ops.evidence.verification import build_signed_artifact
 from ...ops.pkg import get_global_pkg_manager
 from ...ops.evidence.forensic_block_contract import FORENSIC_BLOCK_CONTEXT
@@ -1277,11 +1278,6 @@ def _build_closure_evidence_bundle(
     closure_payload: AgentActionClosureRequest,
     request_record: _AgentActionStoredRecord,
 ) -> Dict[str, Any]:
-    transition_receipts = [
-        {"transition_receipt_id": str(ref).strip()}
-        for ref in closure_payload.transition_receipt_ids
-        if str(ref).strip()
-    ]
     execution_token_constraints = (
         dict(request_record.response.execution_token.constraints)
         if request_record.response.execution_token is not None
@@ -1307,11 +1303,7 @@ def _build_closure_evidence_bundle(
         if isinstance(request_payload.get("authority_scope"), dict)
         else {}
     )
-    request_workflow = (
-        request_payload.get("workflow")
-        if isinstance(request_payload.get("workflow"), dict)
-        else {}
-    )
+    request_workflow = request_payload.get("workflow") if isinstance(request_payload.get("workflow"), dict) else {}
     hardware = (
         request_principal.get("hardware_fingerprint")
         if isinstance(request_principal.get("hardware_fingerprint"), dict)
@@ -1448,6 +1440,68 @@ def _build_closure_evidence_bundle(
         governed_receipt.get("state_binding_hash"),
         fallback=f"state-binding:{request_id}:{asset_id}:{closure_payload.closure_id}",
     )
+    resolved_policy_receipt_id = (
+        str(governed_receipt.get("policy_receipt_id") or "").strip()
+        or f"policy-receipt:{request_id}"
+    )
+    resolved_policy_snapshot_hash = str(
+        governed_receipt.get("snapshot_hash")
+        or governed_receipt.get("policy_snapshot_hash")
+        or request_record.response.decision.policy_snapshot_hash
+        or ""
+    ).strip() or None
+    resolved_decision_graph_snapshot_hash = str(
+        governed_receipt.get("decision_graph_snapshot_hash")
+        or governed_receipt.get("snapshot_hash")
+        or request_record.response.decision.policy_snapshot_hash
+        or ""
+    ).strip() or None
+    resolved_decision_graph_snapshot_version = str(
+        governed_receipt.get("snapshot_version")
+        or request_record.response.decision.policy_snapshot_ref
+        or ""
+    ).strip() or None
+
+    requested_transition_receipts = [
+        str(ref).strip()
+        for ref in closure_payload.transition_receipt_ids
+        if str(ref).strip()
+    ]
+    if not requested_transition_receipts:
+        requested_transition_receipts = [f"transition:{request_id}:{closure_payload.closure_id}"]
+
+    resolved_execution_token_id = (
+        request_record.response.execution_token.token_id
+        if request_record.response.execution_token is not None
+        else f"execution-token:{request_id}"
+    )
+    resolved_hardware_uuid = str(
+        hardware.get("fingerprint_id")
+        or hardware.get("node_id")
+        or "hardware:unknown"
+    ).strip() or "hardware:unknown"
+
+    transition_receipts: List[Dict[str, Any]] = []
+    for index, requested_transition_receipt_id in enumerate(requested_transition_receipts):
+        transition_receipt = build_transition_receipt(
+            intent_id=request_id,
+            token_id=resolved_execution_token_id,
+            actuator_endpoint=resolved_node_id or "hal://seedcore/unknown",
+            hardware_uuid=resolved_hardware_uuid,
+            actuator_result_hash=closure_payload.forensic_block.fingerprint_components.actuator_hash,
+            target_zone=str(request_asset.get("to_zone") or "").strip() or None,
+            from_zone=str(request_asset.get("from_zone") or "").strip() or None,
+            to_zone=str(request_asset.get("to_zone") or "").strip() or None,
+            executed_at=_to_utc_iso(closure_payload.closed_at),
+            receipt_nonce=f"{closure_payload.closure_id}:{index}",
+            # Keep workflow_type unset so local showcase receipts can validate
+            # without restricted attestation requirements.
+            workflow_type=None,
+        )
+        if requested_transition_receipt_id != str(transition_receipt.get("transition_receipt_id") or "").strip():
+            transition_receipt["requested_transition_receipt_id"] = requested_transition_receipt_id
+        transition_receipts.append(transition_receipt)
+
     bundle: Dict[str, Any] = {
         "evidence_bundle_id": closure_payload.evidence_bundle_id,
         "task_id": request_id,
@@ -1458,26 +1512,10 @@ def _build_closure_evidence_bundle(
             if request_record.response.execution_token is not None
             else None
         ),
-        "policy_receipt_id": str(governed_receipt.get("policy_receipt_id") or "").strip() or None,
-        "policy_snapshot_hash": str(
-            governed_receipt.get("policy_snapshot_hash")
-            or request_record.response.decision.policy_snapshot_hash
-            or ""
-        ).strip()
-        or None,
-        "decision_graph_snapshot_hash": str(
-            governed_receipt.get("decision_graph_snapshot_hash")
-            or governed_receipt.get("snapshot_hash")
-            or request_record.response.decision.policy_snapshot_hash
-            or ""
-        ).strip()
-        or None,
-        "decision_graph_snapshot_version": str(
-            governed_receipt.get("snapshot_version")
-            or request_record.response.decision.policy_snapshot_ref
-            or ""
-        ).strip()
-        or None,
+        "policy_receipt_id": resolved_policy_receipt_id,
+        "policy_snapshot_hash": resolved_policy_snapshot_hash,
+        "decision_graph_snapshot_hash": resolved_decision_graph_snapshot_hash,
+        "decision_graph_snapshot_version": resolved_decision_graph_snapshot_version,
         "state_binding_hash": state_binding_hash,
         "co_sign_required": bool(governed_receipt.get("co_sign_required")),
         "co_sign_status": str(governed_receipt.get("co_sign_status") or "").strip() or None,
@@ -1493,7 +1531,11 @@ def _build_closure_evidence_bundle(
             for item in list(governed_receipt.get("co_signatures") or [])
             if isinstance(item, dict)
         ],
-        "transition_receipt_ids": [item["transition_receipt_id"] for item in transition_receipts],
+        "transition_receipt_ids": [
+            str(item.get("transition_receipt_id"))
+            for item in transition_receipts
+            if str(item.get("transition_receipt_id") or "").strip()
+        ],
         "node_id": resolved_node_id or None,
         "execution_receipt": {"node_id": resolved_node_id} if resolved_node_id else {},
         "forensic_block": forensic_block,
@@ -1537,6 +1579,93 @@ def _build_closure_evidence_bundle(
     if trust_proof is not None:
         bundle["trust_proof"] = trust_proof.model_dump(mode="json")
     return bundle
+
+
+def _build_closure_policy_receipt(
+    *,
+    request_record: _AgentActionStoredRecord,
+    closure_payload: AgentActionClosureRequest,
+    evidence_bundle: Mapping[str, Any],
+) -> Dict[str, Any]:
+    request_payload = dict(request_record.request_payload) if isinstance(request_record.request_payload, dict) else {}
+    request_asset = request_payload.get("asset") if isinstance(request_payload.get("asset"), dict) else {}
+    governed_receipt = (
+        dict(request_record.response.governed_receipt)
+        if isinstance(request_record.response.governed_receipt, dict)
+        else {}
+    )
+    request_id = str(closure_payload.request_id or "").strip() or "unknown_request"
+    asset_ref = str(request_asset.get("asset_id") or governed_receipt.get("asset_ref") or "").strip() or None
+    policy_receipt_id = str(
+        evidence_bundle.get("policy_receipt_id")
+        or governed_receipt.get("policy_receipt_id")
+        or f"policy-receipt:{request_id}"
+    ).strip()
+    policy_payload: Dict[str, Any] = {
+        "policy_receipt_id": policy_receipt_id,
+        "policy_decision_id": str(governed_receipt.get("decision_hash") or f"decision:{request_id}").strip(),
+        "task_id": request_id,
+        "intent_id": request_id,
+        "policy_version": str(
+            request_record.response.decision.policy_snapshot_ref
+            or governed_receipt.get("snapshot_version")
+            or ""
+        ).strip() or None,
+        "decision": {
+            "allowed": bool(request_record.response.decision.allowed),
+            "disposition": request_record.response.decision.disposition,
+            "reason": request_record.response.decision.reason,
+            "reason_code": request_record.response.decision.reason_code,
+        },
+        "evaluated_rules": list(request_record.response.required_approvals or []),
+        "subject_ref": asset_ref,
+        "asset_ref": asset_ref,
+        "authz_disposition": request_record.response.decision.disposition,
+        "governed_receipt_hash": _hash_or_passthrough(
+            governed_receipt.get("decision_hash"),
+            fallback=f"governed-receipt:{policy_receipt_id}",
+        ),
+        "policy_snapshot_hash": str(
+            evidence_bundle.get("policy_snapshot_hash")
+            or request_record.response.decision.policy_snapshot_hash
+            or ""
+        ).strip() or None,
+        "decision_graph_snapshot_hash": str(
+            evidence_bundle.get("decision_graph_snapshot_hash")
+            or request_record.response.decision.policy_snapshot_hash
+            or ""
+        ).strip() or None,
+        "decision_graph_snapshot_version": str(
+            evidence_bundle.get("decision_graph_snapshot_version")
+            or request_record.response.decision.policy_snapshot_ref
+            or ""
+        ).strip() or None,
+        "state_binding_hash": str(evidence_bundle.get("state_binding_hash") or "").strip() or None,
+        "co_sign_required": bool(evidence_bundle.get("co_sign_required")),
+        "co_sign_status": str(evidence_bundle.get("co_sign_status") or "").strip() or None,
+        "transfer_outcome": str(evidence_bundle.get("transfer_outcome") or "").strip() or None,
+        "co_sign_binding_hash": str(evidence_bundle.get("co_sign_binding_hash") or "").strip() or None,
+        "expected_co_signers": [
+            dict(item)
+            for item in list(evidence_bundle.get("expected_co_signers") or [])
+            if isinstance(item, dict)
+        ],
+        "trust_gap_codes": list(request_record.response.trust_gaps or []),
+        "timestamp": _to_utc_iso(closure_payload.closed_at),
+    }
+    payload_hash, signer_metadata, signature, trust_proof = build_signed_artifact(
+        artifact_type="policy_receipt",
+        payload=dict(policy_payload),
+        endpoint_id=str(closure_payload.node_id or "").strip() or None,
+        workflow_type="restricted_custody_transfer",
+        disposition=str(request_record.response.decision.disposition or "").strip() or None,
+    )
+    policy_payload["signature"] = signature
+    policy_payload["signer_metadata"] = signer_metadata.model_dump(mode="json")
+    policy_payload["payload_hash"] = payload_hash
+    if trust_proof is not None:
+        policy_payload["trust_proof"] = trust_proof.model_dump(mode="json")
+    return policy_payload
 
 
 def _closure_task_uuid(request_id: str) -> str:
@@ -1612,6 +1741,11 @@ async def _persist_closure_governed_audit_record(
             },
         },
     }
+    policy_receipt = _build_closure_policy_receipt(
+        request_record=request_record,
+        closure_payload=closure_payload,
+        evidence_bundle=evidence_bundle,
+    )
     policy_decision = {
         "allowed": bool(decision.allowed),
         "disposition": decision.disposition,
@@ -1634,6 +1768,7 @@ async def _persist_closure_governed_audit_record(
             "state_binding_hash": evidence_bundle.get("state_binding_hash"),
             "policy_snapshot_hash": evidence_bundle.get("policy_snapshot_hash"),
             "decision_graph_snapshot_hash": evidence_bundle.get("decision_graph_snapshot_hash"),
+            "policy_receipt_id": policy_receipt.get("policy_receipt_id"),
         },
     }
     policy_case = {
@@ -1669,7 +1804,7 @@ async def _persist_closure_governed_audit_record(
                     policy_decision=policy_decision,
                     action_intent=action_intent,
                     policy_case=policy_case,
-                    policy_receipt={},
+                    policy_receipt=policy_receipt,
                     evidence_bundle=evidence_bundle,
                     actor_agent_id=str(request_principal.get("agent_id") or "").strip() or None,
                     actor_organ_id=None,
