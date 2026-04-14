@@ -76,6 +76,32 @@ Goal:
 - decide whether the live demo will run in local host mode or remote kube
 - freeze the exact ports, routes, and UI surfaces used on stage
 
+Step-by-step checklist:
+1. Create a timestamped demo folder for this run:
+```bash
+mkdir -p artifacts/demo/$(date +%Y%m%d)_baseline
+```
+2. Run all three signoff checks in order and save logs:
+```bash
+python scripts/tools/verify_phase0_contract_freeze.py | tee artifacts/demo/$(date +%Y%m%d)_baseline/01_phase0_contract_freeze.log
+bash scripts/host/verify_q2_verification_contracts.sh | tee artifacts/demo/$(date +%Y%m%d)_baseline/02_q2_verification_contracts.log
+python scripts/tools/verify_rct_signoff_bundle.py | tee artifacts/demo/$(date +%Y%m%d)_baseline/03_rct_signoff_bundle.log
+```
+3. Confirm all three commands return exit code `0`.
+4. Decide environment:
+   - choose local host mode by default
+   - choose remote kube only if all verification-surface checks are still green in that environment
+5. Freeze the stage surfaces and ports in your demo notes:
+   - runtime API: `127.0.0.1:8002`
+   - verification API: `serve:verification-api`
+   - proof surface: `serve:proof-surface`
+   - operator console: `serve:operator-console`
+
+Exit criteria:
+- all baseline checks are green
+- demo environment choice is locked
+- baseline logs are saved under `artifacts/demo/<date>_baseline/`
+
 ### T-3 days
 
 Capture fresh live evidence for the exact demo environment.
@@ -94,6 +120,29 @@ Goal:
 Recommended toxic path:
 - wrong serialized item or stale telemetry leading to quarantine or verification failure
 
+Step-by-step checklist:
+1. Create an evidence folder:
+```bash
+mkdir -p artifacts/demo/$(date +%Y%m%d)_evidence
+```
+2. Run hot-path and productized-surface checks:
+```bash
+python scripts/host/verify_rct_hot_path_shadow.py | tee artifacts/demo/$(date +%Y%m%d)_evidence/01_hot_path_shadow.log
+bash scripts/host/verify_productized_surface.sh | tee artifacts/demo/$(date +%Y%m%d)_evidence/02_productized_surface.log
+```
+3. Capture one candidate happy-path `audit_id` from logs or API output and store it in your run notes.
+4. Verify that same `audit_id` is resolvable in:
+   - replay/detail view
+   - verification API response
+   - proof surface UI
+   - operator console
+5. Select exactly one toxic path and pre-generate its ID/artifact reference.
+
+Exit criteria:
+- one happy-path `audit_id` is confirmed across all surfaces
+- one toxic-path case is selected and reproducible
+- evidence logs are saved under `artifacts/demo/<date>_evidence/`
+
 ### T-1 day
 
 Dry-run the exact talk track with the exact operator clicks.
@@ -104,6 +153,27 @@ Lock:
 - one toxic-path workflow id or `audit_id`
 - one offline verification command
 - one fallback artifact bundle
+
+Step-by-step checklist:
+1. Timebox and run the full script once at normal speed (`10` to `12` minutes).
+2. Run a second pass with a deliberate pause at each handoff:
+   - governance freeze
+   - allow decision
+   - proof surface
+   - offline verification
+   - toxic fail-closed result
+3. Lock final IDs in a single cheat sheet:
+   - happy path `audit_id`
+   - toxic path `audit_id`
+   - approval envelope id
+   - receipt ids
+4. Validate fallback bundle exists and is readable offline.
+5. Freeze narrative wording for opening and close.
+
+Exit criteria:
+- two successful dry runs completed
+- all IDs and links are frozen in one cheat sheet
+- fallback assets are ready if any live surface degrades
 
 ### Day of demo
 
@@ -127,6 +197,64 @@ bash scripts/host/verify_hot_path_observability.sh
 Goal:
 - confirm all partner-visible surfaces are warm before the audience joins
 - avoid any live debugging on stage
+
+Step-by-step checklist:
+1. Open four terminals before start:
+   - runtime API
+   - verification API
+   - proof surface
+   - operator console
+2. Start services in this order:
+```bash
+uvicorn seedcore.main:app --host 127.0.0.1 --port 8002
+npm --prefix ts run serve:verification-api
+npm --prefix ts run serve:proof-surface
+npm --prefix ts run serve:operator-console
+```
+3. Run preflight checks:
+```bash
+curl http://127.0.0.1:8002/health
+curl http://127.0.0.1:8002/readyz
+bash scripts/host/verify_hot_path_observability.sh
+```
+4. Open all URLs and keep tabs preloaded to the first scene.
+5. Keep fallback artifacts open in a backup tab/window.
+
+Exit criteria:
+- all health checks are green
+- all demo tabs are preloaded and responsive
+- no pending command output indicates startup warnings requiring intervention
+
+## Freeze checklist (single-page)
+
+Use this exact checklist as a gate before the demo starts:
+
+- [ ] baseline signoff scripts green (T-7)
+- [ ] happy-path `audit_id` verified across all surfaces (T-3)
+- [ ] toxic-path case selected and reproducible (T-3)
+- [ ] two successful dry runs completed (T-1)
+- [ ] final cheat sheet with IDs and command snippets prepared (T-1)
+- [ ] fallback artifact bundle ready and accessible (T-1)
+- [ ] runtime + three partner-visible services running (Day 0)
+- [ ] `/health` + `/readyz` + observability preflight green (Day 0)
+- [ ] all required browser tabs preloaded before audience joins (Day 0)
+
+## Fallback plan (if anything breaks live)
+
+If one surface is degraded, do not debug live. Switch immediately:
+
+1. Verification API down:
+   - use proof surface + replay detail view for the same `audit_id`
+2. Proof surface down:
+   - use verification API + offline verifier output artifact
+3. Operator console down:
+   - continue with runtime API result + replay + verifier artifacts
+4. Runtime restart required:
+   - switch to pre-captured evidence bundle and continue narrative
+
+Rule:
+- never pause the demo for infrastructure diagnosis
+- keep the trust-boundary narrative moving with pre-verified artifacts
 
 ## Live demo schedule
 
