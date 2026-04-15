@@ -32,6 +32,7 @@ pub struct ExecutionRequestContext {
     pub source_registration_id: Option<String>,
     pub registration_decision_id: Option<String>,
     pub endpoint_id: Option<String>,
+    pub payload_hash: Option<String>,
 }
 
 /// Verification result for a token artifact.
@@ -154,6 +155,12 @@ pub fn enforce_constraints(
         request.endpoint_id.as_deref(),
     ) {
         return deny("endpoint_id_mismatch");
+    }
+    if mismatch(
+        token.constraints.payload_hash.as_deref(),
+        request.payload_hash.as_deref(),
+    ) {
+        return deny("payload_hash_mismatch");
     }
 
     TokenEnforcementReport {
@@ -290,6 +297,7 @@ mod tests {
                 source_registration_id: Some("registration:approved-001".to_string()),
                 registration_decision_id: Some("decision:registration-001".to_string()),
                 endpoint_id: Some("hal://robot_sim/1".to_string()),
+                payload_hash: Some("sha256:payload-transfer-001".to_string()),
             },
         }
     }
@@ -303,6 +311,7 @@ mod tests {
             source_registration_id: Some("registration:approved-001".to_string()),
             registration_decision_id: Some("decision:registration-001".to_string()),
             endpoint_id: Some("hal://robot_sim/1".to_string()),
+            payload_hash: Some("sha256:payload-transfer-001".to_string()),
         }
     }
 
@@ -352,5 +361,19 @@ mod tests {
         );
         assert!(!report.allowed);
         assert_eq!(report.error_code.as_deref(), Some("endpoint_id_mismatch"));
+    }
+
+    #[test]
+    fn enforce_constraints_rejects_payload_hash_mismatch() {
+        let token = mint_token(sample_claims(), &DebugSigner).expect("token should mint");
+        let mut request = sample_request();
+        request.payload_hash = Some("sha256:payload-transfer-002".to_string());
+        let report = enforce_constraints(
+            &token,
+            &request,
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        );
+        assert!(!report.allowed);
+        assert_eq!(report.error_code.as_deref(), Some("payload_hash_mismatch"));
     }
 }

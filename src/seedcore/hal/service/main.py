@@ -15,6 +15,7 @@ import json
 import os
 import uuid
 import logging
+from threading import Lock
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional, List
@@ -66,7 +67,13 @@ EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY = os.getenv(
     "SEEDCORE_EXECUTION_TOKEN_CRL_CUTOFF_KEY",
     "seedcore:execution_token:revoked_before",
 )
+EXECUTION_TOKEN_CONSUMED_PREFIX = os.getenv(
+    "SEEDCORE_EXECUTION_TOKEN_CONSUMED_PREFIX",
+    "seedcore:execution_token:consumed:",
+)
 DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS = 300
+_LOCAL_EXECUTION_TOKEN_CLAIMS: Dict[str, datetime] = {}
+_LOCAL_EXECUTION_TOKEN_CLAIMS_LOCK = Lock()
 
 # Global driver instance (initialized in lifespan)
 driver: Optional[BaseRobotDriver] = None
@@ -320,13 +327,25 @@ async def actuate(request: ActuationRequest):
         driver.config["warmth"] = request.warmth_override
 
     # 2. Move / Execute behavior
+    claimed_execution_token = False
+    actuation_committed = False
     try:
         if _requires_token(driver):
-            token_error = _validate_execution_token(request.execution_token, driver)
+            token_error = _validate_execution_token(
+                request.execution_token,
+                driver,
+                request=request,
+            )
             if token_error is not None:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Execution blocked: {token_error}",
+                )
+            claimed_execution_token = _claim_execution_token(request.execution_token)
+            if not claimed_execution_token:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Execution blocked: replayed ExecutionToken",
                 )
 
         endpoint_response: Dict[str, Any]
@@ -341,6 +360,7 @@ async def actuate(request: ActuationRequest):
                 behavior_params=behavior_params,
                 execution_token=request.execution_token,
             )
+            actuation_committed = True
         else:
             if request.instant:
                 # High-frequency VLA path (20Hz)
@@ -353,6 +373,7 @@ async def actuate(request: ActuationRequest):
                 if not success:
                     logger.error("actuate: Motion command rejected by driver")
                     raise HTTPException(status_code=500, detail="Motion command rejected")
+            actuation_committed = True
             endpoint_response = {
                 "status": "success",
                 "behavior": "move_instant" if request.instant else "move_smooth",
@@ -380,11 +401,17 @@ async def actuate(request: ActuationRequest):
             "endpoint_response": endpoint_response,
         }
     except HTTPException:
+        if claimed_execution_token and not actuation_committed:
+            _release_claimed_execution_token(request.execution_token)
         raise
     except PermissionError as e:
+        if claimed_execution_token and not actuation_committed:
+            _release_claimed_execution_token(request.execution_token)
         logger.warning("Actuation blocked by governance token validation: %s", e)
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
+        if claimed_execution_token and not actuation_committed:
+            _release_claimed_execution_token(request.execution_token)
         logger.error(f"Actuation Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -471,12 +498,12 @@ def _is_valid_execution_token(
     return _validate_execution_token(token, active_driver) is None
 
 
-def _execution_token_max_validity_seconds() -> int:
-    raw = os.getenv("SEEDCORE_EXECUTION_TOKEN_MAX_TTL_SECONDS", "10")
+def _execution_token_max_validity_seconds() -> float:
+    raw = os.getenv("SEEDCORE_EXECUTION_TOKEN_MAX_TTL_SECONDS", "1.0")
     try:
-        return max(1, int(str(raw).strip()))
+        return max(0.001, float(str(raw).strip()))
     except (TypeError, ValueError):
-        return 10
+        return 1.0
 
 
 def _legacy_dev_hmac_execution_token(token: Dict[str, Any]) -> bool:
@@ -526,6 +553,7 @@ def _validate_execution_token_constraints_legacy(
     *,
     constraints: Dict[str, Any],
     active_driver: Optional[BaseRobotDriver],
+    request: Optional[ActuationRequest],
 ) -> Optional[str]:
     if active_driver is None:
         return None
@@ -542,12 +570,23 @@ def _validate_execution_token_constraints_legacy(
     if isinstance(target_zone, str) and target_zone.strip():
         if configured_zones and target_zone not in configured_zones:
             return "ExecutionToken target zone mismatch"
+    payload_hash = constraints.get("payload_hash")
+    actual_payload_hash = _canonical_actuation_payload_hash(request)
+    if (
+        isinstance(payload_hash, str)
+        and payload_hash.strip()
+        and actual_payload_hash is not None
+        and payload_hash != actual_payload_hash
+    ):
+        return "ExecutionToken payload mismatch"
     return None
 
 
 def _validate_execution_token(
     token: Optional[Dict[str, Any]],
     active_driver: Optional[BaseRobotDriver] = None,
+    *,
+    request: Optional[ActuationRequest] = None,
 ) -> Optional[str]:
     if not isinstance(token, dict):
         return "invalid ExecutionToken"
@@ -618,6 +657,7 @@ def _validate_execution_token(
         token=token,
         constraints=constraints,
         active_driver=active_driver,
+        request=request,
     )
     if constraint_error is not None:
         return constraint_error
@@ -694,6 +734,8 @@ def _validate_execution_token_revocation(
     try:
         if redis_client.exists(f"{EXECUTION_TOKEN_REVOCATION_PREFIX}{token_id}"):
             return "revoked ExecutionToken"
+        if redis_client.exists(f"{EXECUTION_TOKEN_CONSUMED_PREFIX}{token_id}"):
+            return "replayed ExecutionToken"
 
         revoked_before = redis_client.get(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY)
         if isinstance(revoked_before, str) and revoked_before.strip():
@@ -704,6 +746,9 @@ def _validate_execution_token_revocation(
                 return "revoked ExecutionToken"
     except Exception as exc:
         logger.warning("Execution token revocation check unavailable: %s", exc)
+
+    if _is_execution_token_claimed_locally(token_id):
+        return "replayed ExecutionToken"
 
     return None
 
@@ -832,6 +877,7 @@ def _validate_execution_token_constraints(
     token: Dict[str, Any],
     constraints: Dict[str, Any],
     active_driver: Optional[BaseRobotDriver],
+    request: Optional[ActuationRequest],
 ) -> Optional[str]:
     if active_driver is None:
         return None
@@ -840,6 +886,7 @@ def _validate_execution_token_constraints(
         return _validate_execution_token_constraints_legacy(
             constraints=constraints,
             active_driver=active_driver,
+            request=request,
         )
 
     endpoint_constraint = constraints.get("endpoint_id") or constraints.get("actuator_endpoint")
@@ -859,6 +906,7 @@ def _validate_execution_token_constraints(
         "source_registration_id": constraints.get("source_registration_id"),
         "registration_decision_id": constraints.get("registration_decision_id"),
         "endpoint_id": expected_endpoint,
+        "payload_hash": _canonical_actuation_payload_hash(request),
     }
     rust_enforcement = enforce_execution_token_with_rust(
         token,
@@ -880,6 +928,93 @@ def _validate_execution_token_constraints(
             return "ExecutionToken target zone mismatch"
 
     return None
+
+
+def _canonical_actuation_payload_hash(request: Optional[ActuationRequest]) -> Optional[str]:
+    if request is None:
+        return None
+    payload = {
+        "pose_type": request.pose_type,
+        "target": request.target,
+        "energy_override": request.energy_override,
+        "warmth_override": request.warmth_override,
+        "instant": request.instant,
+        "behavior_name": request.behavior_name,
+        "behavior_params": request.behavior_params,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _claim_execution_token(token: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(token, dict):
+        return False
+    token_id = str(token.get("token_id") or "").strip()
+    valid_until = _parse_optional_iso8601(token.get("valid_until"))
+    if not token_id or valid_until is None:
+        return False
+    ttl_seconds = max(
+        1,
+        int(max((valid_until - datetime.now(timezone.utc)).total_seconds(), 0.0) + 1),
+    )
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        try:
+            claimed = redis_client.set(
+                f"{EXECUTION_TOKEN_CONSUMED_PREFIX}{token_id}",
+                "1",
+                ex=ttl_seconds,
+                nx=True,
+            )
+            return bool(claimed)
+        except Exception as exc:
+            logger.warning("Execution token replay claim store unavailable: %s", exc)
+    return _claim_execution_token_locally(token_id, valid_until)
+
+
+def _release_claimed_execution_token(token: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(token, dict):
+        return
+    token_id = str(token.get("token_id") or "").strip()
+    if not token_id:
+        return
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        try:
+            redis_client.delete(f"{EXECUTION_TOKEN_CONSUMED_PREFIX}{token_id}")
+            return
+        except Exception as exc:
+            logger.warning("Execution token replay claim release unavailable: %s", exc)
+    with _LOCAL_EXECUTION_TOKEN_CLAIMS_LOCK:
+        _LOCAL_EXECUTION_TOKEN_CLAIMS.pop(token_id, None)
+
+
+def _claim_execution_token_locally(token_id: str, valid_until: datetime) -> bool:
+    now = datetime.now(timezone.utc)
+    with _LOCAL_EXECUTION_TOKEN_CLAIMS_LOCK:
+        expired = [
+            key
+            for key, value in _LOCAL_EXECUTION_TOKEN_CLAIMS.items()
+            if value <= now
+        ]
+        for key in expired:
+            _LOCAL_EXECUTION_TOKEN_CLAIMS.pop(key, None)
+        if token_id in _LOCAL_EXECUTION_TOKEN_CLAIMS:
+            return False
+        _LOCAL_EXECUTION_TOKEN_CLAIMS[token_id] = valid_until
+        return True
+
+
+def _is_execution_token_claimed_locally(token_id: str) -> bool:
+    now = datetime.now(timezone.utc)
+    with _LOCAL_EXECUTION_TOKEN_CLAIMS_LOCK:
+        expires_at = _LOCAL_EXECUTION_TOKEN_CLAIMS.get(token_id)
+        if expires_at is None:
+            return False
+        if expires_at <= now:
+            _LOCAL_EXECUTION_TOKEN_CLAIMS.pop(token_id, None)
+            return False
+        return True
 
 
 def _configured_target_zones() -> set[str]:

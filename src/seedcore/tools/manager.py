@@ -2,7 +2,7 @@
 # seedcore/tools/manager.py
 
 from __future__ import annotations
-from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable
+from typing import Dict, Any, Optional, Protocol, List, TYPE_CHECKING, Callable, Mapping
 import asyncio
 import inspect
 import time
@@ -506,7 +506,7 @@ class ToolManager:
             # 0. Built-in custody ledger tools
             if name.startswith("custody.ledger."):
                 if name == "custody.ledger.record":
-                    self._validate_execution_token(name, governance_ctx)
+                    self._validate_execution_token(name, governance_ctx, tool_args=safe_args)
                 return await self._execute_custody(
                     name,
                     safe_args,
@@ -516,7 +516,7 @@ class ToolManager:
 
             # 0.5 Governance gate for all side-effecting tools
             if self._requires_execution_token(name):
-                self._validate_execution_token(name, governance_ctx)
+                self._validate_execution_token(name, governance_ctx, tool_args=safe_args)
                 if isinstance(governance_ctx, dict):
                     token = governance_ctx.get("execution_token")
                     if isinstance(token, dict) and "execution_token" not in safe_args:
@@ -640,7 +640,13 @@ class ToolManager:
             
         return False
 
-    def _validate_execution_token(self, tool_name: str, governance_ctx: Any) -> None:
+    def _validate_execution_token(
+        self,
+        tool_name: str,
+        governance_ctx: Any,
+        *,
+        tool_args: Mapping[str, Any] | None = None,
+    ) -> None:
         if not isinstance(governance_ctx, dict):
             raise ToolError(tool_name, "missing_execution_token")
 
@@ -698,6 +704,7 @@ class ToolManager:
             if isinstance(action_params, dict)
             else None
         )
+        expected_pairs["payload_hash"] = self._execution_payload_hash(tool_args)
         request_context = {
             key: expected_pairs.get(key) if expected_pairs.get(key) is not None else constraints.get(key)
             for key in (
@@ -708,6 +715,7 @@ class ToolManager:
                 "source_registration_id",
                 "registration_decision_id",
                 "endpoint_id",
+                "payload_hash",
             )
         }
         rust_enforcement = enforce_execution_token_with_rust(
@@ -718,6 +726,17 @@ class ToolManager:
         if not bool(rust_enforcement.get("allowed")):
             error_code = str(rust_enforcement.get("error_code") or "constraint_mismatch")
             raise ToolError(tool_name, f"execution_token_constraint_mismatch:{error_code}")
+
+    def _execution_payload_hash(self, tool_args: Mapping[str, Any] | None) -> str | None:
+        if not isinstance(tool_args, Mapping):
+            return None
+        payload = {
+            str(key): value
+            for key, value in tool_args.items()
+            if key != "execution_token"
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
     async def _execute_custody(
         self,

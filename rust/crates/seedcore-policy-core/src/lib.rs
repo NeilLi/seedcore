@@ -120,15 +120,10 @@ pub fn evaluate(input: &FrozenDecisionInput) -> Result<PolicyEvaluation, PolicyE
         .as_ref()
         .map(|ctx| ctx.validated)
         .unwrap_or(false);
-    let zone_admin_override = input
-        .action_intent
-        .principal
-        .role_refs
-        .iter()
-        .any(|role| {
-            let normalized = role.trim().to_ascii_uppercase();
-            normalized == "ROLE:ZONE_ADMIN" || normalized == "ROLE:ZONE_ADMINISTRATOR"
-        });
+    let zone_admin_override = input.action_intent.principal.role_refs.iter().any(|role| {
+        let normalized = role.trim().to_ascii_uppercase();
+        normalized == "ROLE:ZONE_ADMIN" || normalized == "ROLE:ZONE_ADMINISTRATOR"
+    });
 
     let emergency_override = break_glass_validated && zone_admin_override;
 
@@ -256,15 +251,10 @@ fn build_explanation(input: &FrozenDecisionInput, disposition: Disposition) -> E
             .as_ref()
             .map(|ctx| ctx.validated)
             .unwrap_or(false)
-        && input
-            .action_intent
-            .principal
-            .role_refs
-            .iter()
-            .any(|role| {
-                let normalized = role.trim().to_ascii_uppercase();
-                normalized == "ROLE:ZONE_ADMIN" || normalized == "ROLE:ZONE_ADMINISTRATOR"
-            })
+        && input.action_intent.principal.role_refs.iter().any(|role| {
+            let normalized = role.trim().to_ascii_uppercase();
+            normalized == "ROLE:ZONE_ADMIN" || normalized == "ROLE:ZONE_ADMINISTRATOR"
+        })
     {
         explanation.obligations.push(Obligation {
             obligation_type: "emergency_override_review".to_string(),

@@ -25,13 +25,16 @@ def _token_dict(
     token_id: str = "tok-zero-trust",
     *,
     endpoint_id: str | None = None,
+    payload_hash: str | None = None,
     target_zone: str | None = None,
-    ttl_seconds: int = 5,
+    ttl_seconds: float = 1.0,
 ) -> dict[str, object]:
     issued_at = datetime.now(timezone.utc)
     constraints: dict[str, str] = {}
     if endpoint_id is not None:
         constraints["endpoint_id"] = endpoint_id
+    if payload_hash is not None:
+        constraints["payload_hash"] = payload_hash
     if target_zone is not None:
         constraints["target_zone"] = target_zone
 
@@ -45,6 +48,10 @@ def _token_dict(
     }
     payload["signature"] = _sign_token_payload(payload)
     return payload
+
+
+def _payload_hash_for(request: hal_main.ActuationRequest) -> str:
+    return hal_main._canonical_actuation_payload_hash(request)  # noqa: SLF001 - boundary contract test
 
 
 @pytest.mark.asyncio
@@ -114,6 +121,79 @@ async def test_invalid_forged_execution_token_is_rejected() -> None:
                 )
             )
         assert "forged ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_payload_tampering_with_bound_execution_token_is_rejected() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        baseline_request = hal_main.ActuationRequest(
+            behavior_name="move_forward",
+            behavior_params={"distance": 1},
+            execution_token=None,
+        )
+        tampered_request = hal_main.ActuationRequest(
+            behavior_name="move_forward",
+            behavior_params={"distance": 2},
+            execution_token=_token_dict(
+                "tok-payload-boundary",
+                endpoint_id=hal_main._derive_actuator_endpoint(driver),  # noqa: SLF001
+                payload_hash=_payload_hash_for(baseline_request),
+            ),
+        )
+
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(tampered_request)
+        assert "ExecutionToken payload mismatch" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_execution_token_is_single_use() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        request = hal_main.ActuationRequest(
+            behavior_name="move_forward",
+            behavior_params={"distance": 1},
+            execution_token=None,
+        )
+        token = _token_dict(
+            "tok-single-use",
+            endpoint_id=hal_main._derive_actuator_endpoint(driver),  # noqa: SLF001
+            payload_hash=_payload_hash_for(request),
+        )
+
+        first = await hal_main.actuate(
+            hal_main.ActuationRequest(
+                behavior_name="move_forward",
+                behavior_params={"distance": 1},
+                execution_token=token,
+            )
+        )
+        assert first["status"] == "accepted"
+
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=token,
+                )
+            )
+        assert "replayed ExecutionToken" in str(exc.value)
     finally:
         driver.disconnect()
         hal_main.driver = original

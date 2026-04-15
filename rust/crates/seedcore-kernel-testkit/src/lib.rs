@@ -32,6 +32,7 @@ pub struct ActionIntentFixture {
     pub source_registration_id: Option<String>,
     pub registration_decision_id: Option<String>,
     pub endpoint_id: Option<String>,
+    pub payload_hash: Option<String>,
 }
 
 /// Explicit expected execution-token assertion policy.
@@ -278,6 +279,7 @@ pub fn run_transfer_fixture(
                 source_registration_id: fixture.action_intent.source_registration_id.clone(),
                 registration_decision_id: fixture.action_intent.registration_decision_id.clone(),
                 endpoint_id: fixture.action_intent.endpoint_id.clone(),
+                payload_hash: fixture.action_intent.payload_hash.clone(),
             },
         };
 
@@ -306,6 +308,7 @@ pub fn run_transfer_fixture(
                 source_registration_id: fixture.action_intent.source_registration_id.clone(),
                 registration_decision_id: fixture.action_intent.registration_decision_id.clone(),
                 endpoint_id: fixture.action_intent.endpoint_id.clone(),
+                payload_hash: fixture.action_intent.payload_hash.clone(),
             },
             fixed_ts("2026-04-02T08:00:30Z")?,
         );

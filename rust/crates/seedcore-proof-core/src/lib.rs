@@ -409,27 +409,15 @@ fn verify_signature_envelope(
                 }
             }
         }
-        "hmac_sha256" => verify_hmac_signature(
-            signature,
-            artifact_hash,
-            artifact_type,
-            resolver,
-            key_ref,
-        ),
-        "ed25519" => verify_ed25519_signature(
-            signature,
-            artifact_hash,
-            artifact_type,
-            resolver,
-            key_ref,
-        ),
-        "ecdsa_p256_sha256" => verify_p256_signature(
-            signature,
-            artifact_hash,
-            artifact_type,
-            resolver,
-            key_ref,
-        ),
+        "hmac_sha256" => {
+            verify_hmac_signature(signature, artifact_hash, artifact_type, resolver, key_ref)
+        }
+        "ed25519" => {
+            verify_ed25519_signature(signature, artifact_hash, artifact_type, resolver, key_ref)
+        }
+        "ecdsa_p256_sha256" => {
+            verify_p256_signature(signature, artifact_hash, artifact_type, resolver, key_ref)
+        }
         _ => VerificationReport {
             verified: false,
             artifact_type,
@@ -507,10 +495,16 @@ fn verify_ed25519_signature(
             return resolver_error_report(artifact_type, error.to_string(), key_ref);
         }
     };
-    let signature_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature.signature) {
-        Ok(bytes) => bytes,
-        Err(_) => return signature_mismatch_report(artifact_type, "ed25519_signature_decode_failed".to_string()),
-    };
+    let signature_bytes =
+        match base64::engine::general_purpose::STANDARD.decode(&signature.signature) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return signature_mismatch_report(
+                    artifact_type,
+                    "ed25519_signature_decode_failed".to_string(),
+                )
+            }
+        };
     let public_key_pem = match public_material_to_pem(&key_material.public_material, "ed25519") {
         Ok(value) => value,
         Err(error) => return invalid_key_material_report(artifact_type, error),
@@ -521,10 +515,11 @@ fn verify_ed25519_signature(
         artifact_hash.to_string().as_bytes(),
         "ed25519",
     ) {
-        Ok(true) => {
-        success_report(artifact_type)
-        }
-        Ok(false) => signature_mismatch_report(artifact_type, "ed25519 signature verification failed".to_string()),
+        Ok(true) => success_report(artifact_type),
+        Ok(false) => signature_mismatch_report(
+            artifact_type,
+            "ed25519 signature verification failed".to_string(),
+        ),
         Err(error) => invalid_key_material_report(artifact_type, error),
     }
 }
@@ -542,10 +537,16 @@ fn verify_p256_signature(
             return resolver_error_report(artifact_type, error.to_string(), key_ref);
         }
     };
-    let signature_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature.signature) {
-        Ok(bytes) => bytes,
-        Err(_) => return signature_mismatch_report(artifact_type, "p256_signature_decode_failed".to_string()),
-    };
+    let signature_bytes =
+        match base64::engine::general_purpose::STANDARD.decode(&signature.signature) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return signature_mismatch_report(
+                    artifact_type,
+                    "p256_signature_decode_failed".to_string(),
+                )
+            }
+        };
     let public_key_pem = match public_material_to_pem(&key_material.public_material, "p256") {
         Ok(value) => value,
         Err(error) => return invalid_key_material_report(artifact_type, error),
@@ -557,7 +558,10 @@ fn verify_p256_signature(
         "p256",
     ) {
         Ok(true) => success_report(artifact_type),
-        Ok(false) => signature_mismatch_report(artifact_type, "ecdsa_p256 signature verification failed".to_string()),
+        Ok(false) => signature_mismatch_report(
+            artifact_type,
+            "ecdsa_p256 signature verification failed".to_string(),
+        ),
         Err(error) => invalid_key_material_report(artifact_type, error),
     }
 }
@@ -610,7 +614,11 @@ fn invalid_key_material_report(artifact_type: String, detail: String) -> Verific
     }
 }
 
-fn resolver_error_report(artifact_type: String, error: String, key_ref: &str) -> VerificationReport {
+fn resolver_error_report(
+    artifact_type: String,
+    error: String,
+    key_ref: &str,
+) -> VerificationReport {
     VerificationReport {
         verified: false,
         artifact_type,
@@ -664,8 +672,8 @@ fn public_material_to_pem(public_material: &str, scheme: &str) -> Result<String,
             prefix
         }
         "ed25519" => {
-            let mut prefix =
-                hex::decode("302a300506032b6570032100").map_err(|_| "ed25519_prefix_invalid".to_string())?;
+            let mut prefix = hex::decode("302a300506032b6570032100")
+                .map_err(|_| "ed25519_prefix_invalid".to_string())?;
             prefix.extend(raw);
             prefix
         }

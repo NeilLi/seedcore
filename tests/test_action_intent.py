@@ -78,6 +78,8 @@ def _transfer_payload() -> dict:
         "action": {
             "type": "TRANSFER_CUSTODY",
             "parameters": {
+                "endpoint_id": "hal://robot_sim/1",
+                "payload_hash": "sha256:transfer-payload-001",
                 "approval_context": {
                     "approval_envelope_id": "approval-transfer-001",
                     "approval_envelope_version": 1,

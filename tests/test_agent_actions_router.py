@@ -269,6 +269,10 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
     assert response.status_code == 200
 
     mapped_request = captured["request"]
+    expected_request_hash = agent_actions_router._canonical_gateway_payload_hash(
+        agent_actions_router.AgentActionEvaluateRequest.model_validate(payload),
+        requested_no_execute=False,
+    )
     assert mapped_request.request_id == payload["request_id"]
     assert mapped_request.policy_snapshot_ref == "rules@8.0.0"
     assert mapped_request.asset_context.asset_ref == "asset:lot-8841"
@@ -277,6 +281,8 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
         mapped_request.action_intent.action.parameters["approval_context"]["approval_envelope_id"]
         == "approval-transfer-001"
     )
+    assert mapped_request.action_intent.action.parameters["endpoint_id"] == "node:jetson-orin-01"
+    assert mapped_request.action_intent.action.parameters["payload_hash"] == f"sha256:{expected_request_hash}"
     assert mapped_request.action_intent.resource.lot_id == "lot-8841"
     assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
     assert mapped_request.action_intent.action.parameters["value_usd"] == 1500.0
@@ -374,6 +380,7 @@ def test_agent_actions_evaluate_maps_scope_and_fingerprint_fields(monkeypatch):
     assert gateway_params["expected_coordinate_ref"] == "gazebo://warehouse/shelf/A3"
     assert gateway_params["hardware_fingerprint_id"] == "fp:jetson-orin-01"
     assert gateway_params["reason_trace_ref"] == "reason:trace-1"
+    assert mapped_request.action_intent.action.parameters["endpoint_id"] == "node:jetson-orin-01"
     body = response.json()
     assert body["authority_scope_verdict"]["status"] == "matched"
     assert body["fingerprint_verdict"]["status"] == "matched"

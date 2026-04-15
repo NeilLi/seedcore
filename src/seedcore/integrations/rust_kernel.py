@@ -284,6 +284,8 @@ def map_token_error_for_hal(error_code: str | None) -> str:
         return "ExecutionToken endpoint mismatch"
     if error_code in {"target_zone_mismatch"}:
         return "ExecutionToken target zone mismatch"
+    if error_code in {"payload_hash_mismatch"}:
+        return "ExecutionToken payload mismatch"
     return "invalid ExecutionToken"
 
 

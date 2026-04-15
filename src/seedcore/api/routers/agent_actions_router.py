@@ -129,7 +129,16 @@ def _to_utc_iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
-def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEvaluateRequest:
+def _map_to_hot_path_request(
+    payload: AgentActionEvaluateRequest,
+    *,
+    request_hash: str | None = None,
+) -> HotPathEvaluateRequest:
+    hardware_fingerprint = payload.principal.hardware_fingerprint
+    execution_endpoint_id = (
+        str(hardware_fingerprint.endpoint_id or hardware_fingerprint.node_id or "").strip()
+        or None
+    )
     gateway_parameters: Dict[str, Any] = {
         "idempotency_key": payload.idempotency_key,
         "owner_id": payload.principal.owner_id,
@@ -137,10 +146,13 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
         "organization_ref": payload.principal.organization_ref,
         "workflow_type": payload.workflow.type,
     }
-    if payload.principal.hardware_fingerprint is not None:
-        gateway_parameters["hardware_fingerprint_id"] = payload.principal.hardware_fingerprint.fingerprint_id
-        gateway_parameters["hardware_public_key_fingerprint"] = payload.principal.hardware_fingerprint.public_key_fingerprint
-        gateway_parameters["hardware_node_id"] = payload.principal.hardware_fingerprint.node_id
+    if hardware_fingerprint is not None:
+        gateway_parameters["hardware_fingerprint_id"] = hardware_fingerprint.fingerprint_id
+        gateway_parameters["hardware_public_key_fingerprint"] = hardware_fingerprint.public_key_fingerprint
+        gateway_parameters["hardware_node_id"] = hardware_fingerprint.node_id
+        gateway_parameters["hardware_endpoint_id"] = hardware_fingerprint.endpoint_id
+    if request_hash:
+        gateway_parameters["request_hash"] = request_hash
     if payload.authority_scope is not None:
         gateway_parameters["scope_id"] = payload.authority_scope.scope_id
         gateway_parameters["asset_ref"] = payload.authority_scope.asset_ref
@@ -175,6 +187,8 @@ def _map_to_hot_path_request(payload: AgentActionEvaluateRequest) -> HotPathEval
                 version=payload.security_contract.version,
             ),
             parameters={
+                "endpoint_id": execution_endpoint_id,
+                "payload_hash": f"sha256:{request_hash}" if request_hash else None,
                 "approval_context": {
                     "approval_envelope_id": payload.approval.approval_envelope_id,
                     "expected_envelope_version": payload.approval.expected_envelope_version,
@@ -2164,7 +2178,7 @@ async def evaluate_agent_action(
             if isinstance(owner_twin_snapshot, dict)
             else None
         )
-        hot_path_request = _map_to_hot_path_request(payload)
+        hot_path_request = _map_to_hot_path_request(payload, request_hash=request_hash)
         # Keep v1 gateway semantics as a contract wrapper around the existing hot-path path.
         authoritative_transfer_approval = await resolve_authoritative_transfer_approval(hot_path_request)
         hot_path_result = evaluate_pdp_hot_path(

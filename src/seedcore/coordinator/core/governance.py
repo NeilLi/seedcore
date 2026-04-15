@@ -116,8 +116,9 @@ EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "source_registration_id",
     "registration_decision_id",
     "endpoint_id",
+    "payload_hash",
 )
-DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 5
+DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 0.5
 RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE = "custody_transfer"
 RESTRICTED_CUSTODY_TRANSFER_ACTION_TYPES = {"TRANSFER_CUSTODY"}
 
@@ -1108,11 +1109,7 @@ def evaluate_intent(
                 "action": {
                     "action_type": action_intent.action.type,
                     "target_zone": action_intent.resource.target_zone,
-                    "endpoint_id": (
-                        action_intent.action.parameters.get("endpoint_id")
-                        if isinstance(action_intent.action.parameters, Mapping)
-                        else None
-                    ),
+                    "endpoint_id": _resolve_execution_endpoint_id(action_intent),
                 },
                 "resource": {
                     "asset_ref": action_intent.resource.asset_id,
@@ -1489,13 +1486,13 @@ def _derive_action_parameters(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _execution_token_ttl_seconds() -> int:
+def _execution_token_ttl_seconds() -> float:
     raw = os.getenv(
         "SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS",
         str(DEFAULT_EXECUTION_TOKEN_TTL_SECONDS),
     )
     try:
-        return max(1, int(raw))
+        return max(0.001, float(str(raw).strip()))
     except (TypeError, ValueError):
         return DEFAULT_EXECUTION_TOKEN_TTL_SECONDS
 
@@ -3913,7 +3910,8 @@ def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
         "principal_agent_id": action_intent.principal.agent_id,
         "source_registration_id": action_intent.resource.source_registration_id,
         "registration_decision_id": action_intent.resource.registration_decision_id,
-        "endpoint_id": parameters.get("endpoint_id"),
+        "endpoint_id": _resolve_execution_endpoint_id(action_intent),
+        "payload_hash": _resolve_execution_payload_hash(action_intent),
     }
     return {
         key: values[key]
@@ -3937,6 +3935,11 @@ def _mint_execution_token(
                 if value is not None
             }
         )
+    if _is_restricted_custody_transfer(action_intent):
+        if not str(constraints.get("endpoint_id") or "").strip():
+            raise ValueError("execution_token_endpoint_required")
+        if not str(constraints.get("payload_hash") or "").strip():
+            raise ValueError("execution_token_payload_hash_required")
     token_payload = {
         "token_id": str(uuid.uuid4()),
         "intent_id": action_intent.intent_id,
@@ -4103,6 +4106,40 @@ def _transition_execution_constraints(
             }
         )
     return payload
+
+
+def _payload_hash_material(parameters: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        str(key): value
+        for key, value in parameters.items()
+        if key != "payload_hash"
+    }
+
+
+def _resolve_execution_endpoint_id(action_intent: ActionIntent) -> str | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, Mapping) else {}
+    endpoint_id = parameters.get("endpoint_id")
+    if isinstance(endpoint_id, str) and endpoint_id.strip():
+        return endpoint_id.strip()
+    gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
+    hardware_endpoint_id = gateway.get("hardware_endpoint_id")
+    if isinstance(hardware_endpoint_id, str) and hardware_endpoint_id.strip():
+        return hardware_endpoint_id.strip()
+    hardware_node_id = gateway.get("hardware_node_id")
+    if isinstance(hardware_node_id, str) and hardware_node_id.strip():
+        return hardware_node_id.strip()
+    return None
+
+
+def _resolve_execution_payload_hash(action_intent: ActionIntent) -> str | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, Mapping) else {}
+    payload_hash = parameters.get("payload_hash")
+    if isinstance(payload_hash, str) and payload_hash.strip():
+        return payload_hash.strip()
+    gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
+    if not gateway:
+        return None
+    return f"sha256:{_sha256_hex(_canonical_json(_payload_hash_material(parameters)))}"
 
 
 def _merge_action_intent_payload(

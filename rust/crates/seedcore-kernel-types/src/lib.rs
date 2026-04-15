@@ -465,6 +465,7 @@ pub struct TokenConstraints {
     pub source_registration_id: Option<String>,
     pub registration_decision_id: Option<String>,
     pub endpoint_id: Option<String>,
+    pub payload_hash: Option<String>,
 }
 
 /// Canonical execution-token artifact.
