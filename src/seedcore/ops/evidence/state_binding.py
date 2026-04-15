@@ -223,3 +223,60 @@ def compute_authority_state_binding_hash(
         return None
     payload = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def build_twin_state_binding(
+    *,
+    twin_type: Any = None,
+    twin_id: Any = None,
+    state_version: Any = None,
+    authority_source: Any = None,
+    snapshot: Any = None,
+) -> Optional[Dict[str, Any]]:
+    snapshot_map = _to_mapping(snapshot)
+    normalized_twin_type = _norm_str(twin_type) or _norm_str(
+        snapshot_map.get("twin_kind") or snapshot_map.get("twin_type")
+    )
+    normalized_twin_id = _norm_str(twin_id) or _norm_str(snapshot_map.get("twin_id"))
+    normalized_state_version = _norm_int(state_version)
+    normalized_authority_source = _norm_str(authority_source)
+
+    snapshot_hash = None
+    if snapshot_map:
+        snapshot_payload = json.dumps(
+            snapshot_map,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        snapshot_hash = f"sha256:{hashlib.sha256(snapshot_payload).hexdigest()}"
+
+    material = _compact_dict(
+        {
+            "binding_scope": "digital_twin_state",
+            "binding_version": "v1",
+            "twin_type": normalized_twin_type,
+            "twin_id": normalized_twin_id,
+            "state_version": normalized_state_version,
+            "authority_source": normalized_authority_source,
+            "snapshot_hash": snapshot_hash,
+            "snapshot": snapshot_map,
+        }
+    )
+    if not material:
+        return None
+
+    payload = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    binding_hash = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    return _compact_dict(
+        {
+            "binding_scope": "digital_twin_state",
+            "binding_version": "v1",
+            "twin_type": normalized_twin_type,
+            "twin_id": normalized_twin_id,
+            "state_version": normalized_state_version,
+            "authority_source": normalized_authority_source,
+            "snapshot_hash": snapshot_hash,
+            "binding_hash": binding_hash,
+        }
+    )

@@ -120,6 +120,68 @@ async def test_persist_relevant_twins_sets_pending_stage_for_policy_events():
 
 
 @pytest.mark.asyncio
+async def test_persist_relevant_twins_records_prior_and_result_state_bindings_in_event_payload():
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+
+    dao = SimpleNamespace(
+        upsert_snapshot=AsyncMock(
+            return_value={
+                "changed": True,
+                "prior_state": {
+                    "twin_type": "asset",
+                    "twin_id": "asset:asset-1",
+                    "state_version": 1,
+                    "authority_source": "coordinator.pdp",
+                    "snapshot": {
+                        "twin_kind": "asset",
+                        "twin_id": "asset:asset-1",
+                        "revision_stage": "PENDING",
+                        "identity": {"asset_id": "asset-1"},
+                    },
+                },
+                "result_state": {
+                    "twin_type": "asset",
+                    "twin_id": "asset:asset-1",
+                    "state_version": 2,
+                    "authority_source": "coordinator.pdp",
+                    "snapshot": {
+                        "twin_kind": "asset",
+                        "twin_id": "asset:asset-1",
+                        "revision_stage": "EXECUTED",
+                        "identity": {"asset_id": "asset-1"},
+                    },
+                },
+            }
+        )
+    )
+    event_dao = SimpleNamespace(append_event=AsyncMock(return_value={"id": "evt-1"}))
+    session_factory = MagicMock(return_value=_SessionCtx(session))
+    service = DigitalTwinService(session_factory=session_factory, dao=dao, event_dao=event_dao)
+
+    await service.persist_relevant_twins(
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_kind": "asset",
+                "twin_id": "asset:asset-1",
+                "identity": {"asset_id": "asset-1"},
+            }
+        },
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        transition_context={"phase": "transition"},
+    )
+
+    payload = event_dao.append_event.await_args.kwargs["payload"]
+    assert payload["prior_state_binding"]["twin_id"] == "asset:asset-1"
+    assert payload["prior_state_binding"]["state_version"] == 1
+    assert payload["prior_state_binding"]["binding_hash"].startswith("sha256:")
+    assert payload["result_state_binding"]["twin_id"] == "asset:asset-1"
+    assert payload["result_state_binding"]["state_version"] == 2
+    assert payload["result_state_binding"]["binding_hash"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
 async def test_get_twin_ancestry_follows_lineage_refs():
     service = DigitalTwinService(session_factory=MagicMock(), dao=SimpleNamespace(), event_dao=SimpleNamespace())
     service.get_authoritative_twin = AsyncMock(  # type: ignore[method-assign]

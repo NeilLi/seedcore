@@ -1318,6 +1318,11 @@ def _build_closure_evidence_bundle(
         else {}
     )
     request_workflow = request_payload.get("workflow") if isinstance(request_payload.get("workflow"), dict) else {}
+    request_approval = (
+        request_payload.get("approval")
+        if isinstance(request_payload.get("approval"), dict)
+        else {}
+    )
     hardware = (
         request_principal.get("hardware_fingerprint")
         if isinstance(request_principal.get("hardware_fingerprint"), dict)
@@ -1483,6 +1488,10 @@ def _build_closure_evidence_bundle(
     ]
     if not requested_transition_receipts:
         requested_transition_receipts = [f"transition:{request_id}:{closure_payload.closure_id}"]
+    causal_parent_refs = _closure_causal_parent_refs(
+        request_approval=request_approval,
+        governed_receipt=governed_receipt,
+    )
 
     resolved_execution_token_id = (
         request_record.response.execution_token.token_id
@@ -1545,6 +1554,7 @@ def _build_closure_evidence_bundle(
             for item in list(governed_receipt.get("co_signatures") or [])
             if isinstance(item, dict)
         ],
+        "causal_parent_refs": causal_parent_refs,
         "transition_receipt_ids": [
             str(item.get("transition_receipt_id"))
             for item in transition_receipts
@@ -1593,6 +1603,36 @@ def _build_closure_evidence_bundle(
     if trust_proof is not None:
         bundle["trust_proof"] = trust_proof.model_dump(mode="json")
     return bundle
+
+
+def _closure_causal_parent_refs(
+    *,
+    request_approval: Mapping[str, Any],
+    governed_receipt: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    refs: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _append(relation: str, artifact_type: str, artifact_id: Any) -> None:
+        normalized_id = str(artifact_id or "").strip()
+        if not normalized_id:
+            return
+        key = (relation, artifact_type, normalized_id)
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append(
+            {
+                "relation": relation,
+                "artifact_type": artifact_type,
+                "artifact_id": normalized_id,
+            }
+        )
+
+    _append("approved_by", "approval_envelope", request_approval.get("approval_envelope_id"))
+    _append("authorized_by", "policy_receipt", governed_receipt.get("policy_receipt_id"))
+    _append("authorized_by", "governed_receipt", governed_receipt.get("decision_hash"))
+    return refs
 
 
 def _build_closure_policy_receipt(
@@ -1789,6 +1829,10 @@ async def _persist_closure_governed_audit_record(
         "required_approvals": list(request_record.response.required_approvals or []),
         "trust_gaps": list(request_record.response.trust_gaps or []),
         "obligations": [dict(item) for item in list(request_record.response.obligations or []) if isinstance(item, dict)],
+        "workflow_hints": {
+            "workflow_type": "restricted_custody_transfer",
+            "strict_state_transition_fields": True,
+        },
     }
 
     dao = GovernedExecutionAuditDAO()

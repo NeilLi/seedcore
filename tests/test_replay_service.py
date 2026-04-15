@@ -413,6 +413,70 @@ async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified
 
 
 @pytest.mark.asyncio
+async def test_replay_surfaces_prior_and_result_state_bindings_from_twin_history():
+    record = _build_audit_record(task_id="task-bind-1", intent_id="intent-bind-1", asset_id="asset-bind-1")
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type(
+            "TwinDAO",
+            (),
+            {
+                "list_history": AsyncMock(
+                    side_effect=[
+                        [
+                            {
+                                "id": "asset-hist-1",
+                                "twin_type": "asset",
+                                "twin_id": "asset:asset-bind-1",
+                                "state_version": 1,
+                                "authority_source": "pdp",
+                                "snapshot": {
+                                    "twin_kind": "asset",
+                                    "twin_id": "asset:asset-bind-1",
+                                    "revision_stage": "PENDING",
+                                    "identity": {"asset_id": "asset-bind-1"},
+                                },
+                                "recorded_at": "2026-03-20T10:05:00+00:00",
+                            },
+                            {
+                                "id": "asset-hist-2",
+                                "twin_type": "asset",
+                                "twin_id": "asset:asset-bind-1",
+                                "state_version": 2,
+                                "authority_source": "settlement",
+                                "snapshot": {
+                                    "twin_kind": "asset",
+                                    "twin_id": "asset:asset-bind-1",
+                                    "revision_stage": "AUTHORITATIVE",
+                                    "identity": {"asset_id": "asset-bind-1"},
+                                },
+                                "recorded_at": "2026-03-20T10:06:00+00:00",
+                            },
+                        ],
+                        [],
+                    ]
+                )
+            },
+        )(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-bind-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay.prior_state_binding is not None
+    assert replay.result_state_binding is not None
+    assert replay.prior_state_binding["state_version"] == 1
+    assert replay.result_state_binding["state_version"] == 2
+    assert replay.internal_projection["prior_state_binding"]["binding_hash"].startswith("sha256:")
+    assert replay.internal_projection["result_state_binding"]["binding_hash"].startswith("sha256:")
+    assert replay.public_projection["custody_summary"]["prior_state_binding"]["state_version"] == 1
+    assert replay.public_projection["custody_summary"]["result_state_binding"]["state_version"] == 2
+    twin_events = [item for item in replay.replay_timeline if item.event_type == "digital_twin_updated"]
+    assert twin_events[-1].details["prior_state_binding"]["state_version"] == 1
+    assert twin_events[-1].details["result_state_binding"]["state_version"] == 2
+
+
+@pytest.mark.asyncio
 async def test_assemble_replay_record_for_transaction_defaults_to_transaction_subject():
     record = _build_audit_record(task_id="task-tx-1", intent_id="intent-tx-1", asset_id=None)
     record["action_intent"] = {"intent_id": "intent-tx-1", "resource": {}}
@@ -460,6 +524,10 @@ async def test_replay_surfaces_authz_transition_metadata_for_quarantine() -> Non
     record = _apply_transition_metadata(
         _build_audit_record(task_id="task-graph-1", intent_id="intent-graph-1", asset_id="asset-graph-1")
     )
+    record["evidence_bundle"]["causal_parent_refs"] = [
+        {"relation": "approved_by", "artifact_type": "approval_envelope", "artifact_id": "approval-transfer-001"},
+        {"relation": "authorized_by", "artifact_type": "policy_receipt", "artifact_id": "policy-intent-graph-1"},
+    ]
     service = ReplayService(
         governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
         digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
@@ -479,6 +547,11 @@ async def test_replay_surfaces_authz_transition_metadata_for_quarantine() -> Non
     assert replay.public_projection["custody_summary"]["quarantined"] is True
     assert replay.public_projection["custody_summary"]["state_binding_hash"] == "sha256:state-binding-intent-graph-1"
     assert replay.public_projection["custody_summary"]["custody_proof_count"] == 2
+    assert replay.causal_parent_refs == record["evidence_bundle"]["causal_parent_refs"]
+    assert replay.internal_projection["causal_parent_refs"] == record["evidence_bundle"]["causal_parent_refs"]
+    assert replay.public_projection["authorization"]["causal_parent_refs"] == record["evidence_bundle"]["causal_parent_refs"]
+    evidence_events = [item for item in replay.replay_timeline if item.event_type == "evidence_materialized"]
+    assert evidence_events[0].details["causal_parent_refs"] == record["evidence_bundle"]["causal_parent_refs"]
     assert any(item.event_type == "authz_transition_evaluated" for item in replay.replay_timeline)
 
 
@@ -1174,3 +1247,101 @@ async def test_replay_verification_fails_when_rct_control_posture_is_incomplete(
         "rct_control_fail_closed_posture_invalid"
     )
     assert not any("missing_required_flag:SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH" in issue for issue in replay.verification_status.issues)
+
+
+@pytest.mark.asyncio
+async def test_replay_opt_in_state_transition_validation_only_applies_when_flag_enabled(monkeypatch) -> None:
+    monkeypatch.delenv("SEEDCORE_RCT_REPLAY_STRICT_STATE_TRANSITION_FIELDS", raising=False)
+
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-rct-state-fields-1",
+            intent_id="intent-rct-state-fields-1",
+            asset_id="asset-rct-state-fields-1",
+        ),
+        disposition="quarantine",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=["stale_telemetry"],
+    )
+    record["policy_case"] = {
+        "workflow_hints": {
+            "workflow_type": "restricted_custody_transfer",
+            "strict_state_transition_fields": True,
+        }
+    }
+    record["evidence_bundle"]["causal_parent_refs"] = [
+        {"relation": "approved_by", "artifact_type": "approval_envelope", "artifact_id": ""}
+    ]
+
+    twin_history = [
+        {
+            "id": "asset-hist-1",
+            "twin_type": "asset",
+            "twin_id": "asset:asset-rct-state-fields-1",
+            "state_version": 1,
+            "authority_source": "pdp",
+            "snapshot": {
+                "twin_kind": "asset",
+                "twin_id": "asset:asset-rct-state-fields-1",
+                "revision_stage": "PENDING",
+            },
+            "result_state_binding": {"binding_hash": "sha256:result"},
+            "recorded_at": "2026-03-20T10:05:00+00:00",
+        }
+    ]
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(side_effect=[twin_history, []])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-rct-state-fields-1"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert "rct_state_transition_fields_opt_in" not in replay.verification_status.artifact_results
+    assert not any("rct_state_transition_fields_opt_in:" in issue for issue in replay.verification_status.issues)
+
+    monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_STATE_TRANSITION_FIELDS", "true")
+
+    service_enabled = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(side_effect=[twin_history, []])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-rct-state-fields-1"})})(),
+    )
+
+    _, _, replay_enabled = await service_enabled.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert replay_enabled.verification_status.artifact_results["rct_state_transition_fields_opt_in"]["available"] is True
+    assert "rct_state_transition_fields_opt_in:causal_parent_ref_missing_artifact_id" in replay_enabled.verification_status.issues
+    assert "rct_state_transition_fields_opt_in:digital_twin_history_incomplete_state_transition_binding" in replay_enabled.verification_status.issues
+
+
+@pytest.mark.asyncio
+async def test_replay_state_transition_validation_does_not_apply_with_env_only_without_workflow_hint(monkeypatch) -> None:
+    monkeypatch.setenv("SEEDCORE_RCT_REPLAY_STRICT_STATE_TRANSITION_FIELDS", "true")
+
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="task-rct-state-fields-2",
+            intent_id="intent-rct-state-fields-2",
+            asset_id="asset-rct-state-fields-2",
+        ),
+        disposition="quarantine",
+        reason="restricted_custody_transfer",
+        trust_gap_codes=["stale_telemetry"],
+    )
+    record["policy_case"] = {"workflow_hints": {"workflow_type": "restricted_custody_transfer"}}
+    record["evidence_bundle"]["causal_parent_refs"] = [
+        {"relation": "approved_by", "artifact_type": "approval_envelope", "artifact_id": ""}
+    ]
+
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value={"asset_id": "asset-rct-state-fields-2"})})(),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+
+    assert "rct_state_transition_fields_opt_in" not in replay.verification_status.artifact_results
+    assert not any("rct_state_transition_fields_opt_in:" in issue for issue in replay.verification_status.issues)

@@ -146,6 +146,53 @@ def test_evidence_bundle_binds_transition_receipt_ids():
     assert bundle["evidence_inputs"]["transition_receipts"][0]["transition_receipt_id"] == transition_receipt["transition_receipt_id"]
 
 
+def test_evidence_bundle_includes_causal_parent_refs_from_governance_context():
+    task_dict = {
+        "task_id": "task-e-6",
+        "type": "action",
+        "params": {
+            "governance": {
+                "action_intent": {
+                    "intent_id": "intent-e-6",
+                    "action": {
+                        "type": "MOVE",
+                        "parameters": {
+                            "approval_context": {
+                                "approval_envelope_id": "approval-transfer-001",
+                                "approval_transition_head": "sha256:approval-head-1",
+                                "approval_binding_hash": "sha256:approval-binding-1",
+                            }
+                        },
+                    },
+                    "resource": {"asset_id": "asset-6", "provenance_hash": "prov-6"},
+                },
+                "execution_token": {"token_id": "token-e-6"},
+                "policy_decision": {
+                    "allowed": True,
+                    "reason": "zone_match",
+                    "governed_receipt": {"decision_hash": "sha256:governed-receipt-1"},
+                },
+            }
+        },
+    }
+    envelope = {"payload": {"results": []}, "meta": {"exec": {"finished_at": "2026-03-10T10:12:12+00:00"}}}
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="organ-r",
+        agent_id="agent-r",
+    )["meta"]["evidence_bundle"]
+
+    assert bundle["causal_parent_refs"] == [
+        {"relation": "approved_by", "artifact_type": "approval_envelope", "artifact_id": "approval-transfer-001"},
+        {"relation": "approved_by", "artifact_type": "approval_transition", "artifact_id": "sha256:approval-head-1"},
+        {"relation": "approved_by", "artifact_type": "approval_binding", "artifact_id": "sha256:approval-binding-1"},
+        {"relation": "authorized_by", "artifact_type": "policy_receipt", "artifact_id": bundle["policy_receipt_id"]},
+        {"relation": "authorized_by", "artifact_type": "governed_receipt", "artifact_id": "sha256:governed-receipt-1"},
+    ]
+
+
 def test_evidence_bundle_can_select_ed25519_when_policy_allows(monkeypatch):
     private_key = Ed25519PrivateKey.generate()
     private_bytes = private_key.private_bytes(

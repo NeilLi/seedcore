@@ -9,6 +9,7 @@ from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
 from seedcore.coordinator.core.governance import build_twin_snapshot, merge_authoritative_twins
 from seedcore.coordinator.dao import DigitalTwinDAO, DigitalTwinEventJournalDAO
 from seedcore.models.action_intent import TwinRevisionStage, TwinSnapshot
+from seedcore.ops.evidence.state_binding import build_twin_state_binding
 from seedcore.ops.evidence.verification import verify_evidence_bundle_result
 
 if TYPE_CHECKING:
@@ -195,6 +196,14 @@ class DigitalTwinService:
                 source_intent_id=intent_id,
                 change_reason=change_reason,
             )
+            prior_state_binding = self._state_binding_from_row(outcome.get("prior_state"))
+            result_state_binding = self._state_binding_from_row(
+                outcome.get("result_state"),
+                fallback_snapshot=snapshot.model_dump(mode="json"),
+                fallback_authority_source=authority_source,
+                fallback_twin_kind=snapshot.twin_kind,
+                fallback_twin_id=snapshot.twin_id,
+            )
             try:
                 await self._event_dao.append_event(
                     session,
@@ -208,6 +217,8 @@ class DigitalTwinService:
                     payload={
                         "snapshot": snapshot.model_dump(mode="json"),
                         "context": context,
+                        "prior_state_binding": prior_state_binding,
+                        "result_state_binding": result_state_binding,
                     },
                 )
             except Exception:
@@ -216,6 +227,27 @@ class DigitalTwinService:
             if outcome.get("changed"):
                 version_bumped += 1
         return {"updated": updated, "version_bumped": version_bumped}
+
+    def _state_binding_from_row(
+        self,
+        row: Optional[Mapping[str, Any]],
+        *,
+        fallback_snapshot: Optional[Mapping[str, Any]] = None,
+        fallback_authority_source: Optional[str] = None,
+        fallback_twin_kind: Optional[str] = None,
+        fallback_twin_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        payload = dict(row or {})
+        snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), Mapping) else dict(fallback_snapshot or {})
+        twin_type = payload.get("twin_type") or payload.get("twin_kind") or fallback_twin_kind
+        twin_id = payload.get("twin_id") or fallback_twin_id
+        return build_twin_state_binding(
+            twin_type=twin_type,
+            twin_id=twin_id,
+            state_version=payload.get("state_version"),
+            authority_source=payload.get("authority_source") or fallback_authority_source,
+            snapshot=snapshot,
+        )
 
     async def load_authoritative_snapshots(
         self,

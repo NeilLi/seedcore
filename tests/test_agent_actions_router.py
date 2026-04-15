@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -1088,8 +1089,12 @@ def test_build_closure_evidence_bundle_includes_forensic_block():
                 contract_version="rules@8.0.0",
                 constraints={"endpoint_id": "node-x"},
             ),
+            governed_receipt={
+                "policy_receipt_id": "receipt-policy-1",
+                "decision_hash": "sha256:governed-receipt-1",
+            },
         ),
-        request_payload={},
+        request_payload={"approval": {"approval_envelope_id": "approval-transfer-001"}},
     )
     closure_payload = AgentActionClosureRequest.model_validate(
         {
@@ -1118,6 +1123,102 @@ def test_build_closure_evidence_bundle_includes_forensic_block():
     )
     assert bundle["forensic_block"]["@type"] == "ForensicBlock"
     assert bundle["forensic_block"]["forensic_block_id"] == "fb-2026-0001"
+    assert bundle["causal_parent_refs"] == [
+        {"relation": "approved_by", "artifact_type": "approval_envelope", "artifact_id": "approval-transfer-001"},
+        {"relation": "authorized_by", "artifact_type": "policy_receipt", "artifact_id": "receipt-policy-1"},
+        {"relation": "authorized_by", "artifact_type": "governed_receipt", "artifact_id": "sha256:governed-receipt-1"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persist_closure_governed_audit_record_sets_strict_state_transition_workflow_hint(monkeypatch):
+    class _BeginCtx:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _SessionCtx:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    captured = {}
+
+    class _FakeAuditDAO:
+        async def append_record(self, session, **kwargs):
+            captured.update(kwargs)
+            return {"id": "audit-1"}
+
+    session = SimpleNamespace(begin=lambda: _BeginCtx())
+    monkeypatch.setattr(
+        agent_actions_router,
+        "get_async_pg_session_factory",
+        lambda: (lambda: _SessionCtx(session)),
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_existing_task_id_for_governed_audit",
+        AsyncMock(return_value="123e4567-e89b-12d3-a456-426614174000"),
+    )
+    monkeypatch.setattr(agent_actions_router, "GovernedExecutionAuditDAO", lambda: _FakeAuditDAO())
+
+    request_record = agent_actions_router._AgentActionStoredRecord(
+        request_id="req-transfer-2026-0001",
+        idempotency_key="idem-transfer-2026-0001",
+        request_hash="hash-1",
+        recorded_at=datetime.now(timezone.utc),
+        response=agent_actions_router.AgentActionEvaluateResponse(
+            request_id="req-transfer-2026-0001",
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=10,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="ok",
+                reason="ok",
+                policy_snapshot_ref="snapshot:1",
+                policy_snapshot_hash="sha256:policy-snapshot-1",
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-1",
+                intent_id="req-transfer-2026-0001",
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:00:06Z",
+                contract_version="rules@8.0.0",
+                constraints={"endpoint_id": "node-x"},
+            ),
+            governed_receipt={
+                "asset_ref": "asset:lot-8841",
+                "policy_receipt_id": "receipt-policy-1",
+                "decision_hash": "sha256:governed-receipt-1",
+            },
+        ),
+        request_payload=_base_payload(),
+    )
+    closure_payload = AgentActionClosureRequest.model_validate(_base_closure_payload())
+    evidence_bundle = agent_actions_router._build_closure_evidence_bundle(
+        closure_payload=closure_payload,
+        request_record=request_record,
+    )
+
+    result = await agent_actions_router._persist_closure_governed_audit_record(
+        request_record=request_record,
+        closure_payload=closure_payload,
+        evidence_bundle=evidence_bundle,
+    )
+
+    assert result == {"id": "audit-1"}
+    assert captured["policy_case"]["workflow_hints"] == {
+        "workflow_type": "restricted_custody_transfer",
+        "strict_state_transition_fields": True,
+    }
 
 
 def _sample_signed_telemetry_ref(*, asset_ref: str = "asset:lot-8841", telemetry_id: str = "tel-1") -> dict:

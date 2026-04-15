@@ -25,6 +25,18 @@ def strict_rct_replay_triple_hash_enabled() -> bool:
     )
 
 
+def strict_rct_replay_state_transition_enabled() -> bool:
+    raw = os.environ.get("SEEDCORE_RCT_REPLAY_STRICT_STATE_TRANSITION_FIELDS")
+    if raw is None:
+        return False
+    return raw.strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _norm(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -165,3 +177,58 @@ def evaluate_strict_rct_replay_triple_hash(
         },
     }
     return {"verified": verified, "issues": issues, "artifact": artifact}
+
+
+def evaluate_opt_in_rct_replay_state_transition_fields(
+    *,
+    evidence_bundle: Mapping[str, Any],
+    digital_twin_history_refs: List[Mapping[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    issues: List[str] = []
+    eb = evidence_bundle if isinstance(evidence_bundle, Mapping) else {}
+    history = list(digital_twin_history_refs or [])
+
+    causal_parent_refs = [
+        dict(item)
+        for item in list(eb.get("causal_parent_refs") or [])
+        if isinstance(item, Mapping)
+    ]
+    prior_bindings = [
+        item.get("prior_state_binding")
+        for item in history
+        if isinstance(item, Mapping) and isinstance(item.get("prior_state_binding"), Mapping)
+    ]
+    result_bindings = [
+        item.get("result_state_binding")
+        for item in history
+        if isinstance(item, Mapping) and isinstance(item.get("result_state_binding"), Mapping)
+    ]
+
+    available = bool(causal_parent_refs or prior_bindings or result_bindings)
+
+    for ref in causal_parent_refs:
+        if not _norm(ref.get("relation")):
+            issues.append("causal_parent_ref_missing_relation")
+        if not _norm(ref.get("artifact_type")):
+            issues.append("causal_parent_ref_missing_artifact_type")
+        if not _norm(ref.get("artifact_id")):
+            issues.append("causal_parent_ref_missing_artifact_id")
+
+    for item in history:
+        if not isinstance(item, Mapping):
+            continue
+        has_prior = isinstance(item.get("prior_state_binding"), Mapping)
+        has_result = isinstance(item.get("result_state_binding"), Mapping)
+        if has_prior != has_result:
+            issues.append("digital_twin_history_incomplete_state_transition_binding")
+            break
+
+    artifact = {
+        "artifact_type": "rct_state_transition_fields_opt_in",
+        "verified": len(issues) == 0,
+        "available": available,
+        "error_code": None if len(issues) == 0 else "rct_state_transition_fields_invalid",
+        "causal_parent_ref_count": len(causal_parent_refs),
+        "digital_twin_history_binding_count": max(len(prior_bindings), len(result_bindings)),
+    }
+    return {"verified": len(issues) == 0, "issues": issues, "artifact": artifact}

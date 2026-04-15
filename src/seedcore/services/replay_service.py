@@ -40,7 +40,9 @@ from seedcore.models.replay import (
 )
 from seedcore.ops.evidence.materializer import materialize_seedcore_custody_event_payload
 from seedcore.ops.evidence.rct_replay_verification import (
+    evaluate_opt_in_rct_replay_state_transition_fields,
     evaluate_strict_rct_replay_triple_hash,
+    strict_rct_replay_state_transition_enabled,
     strict_rct_replay_triple_hash_enabled,
 )
 from seedcore.ops.evidence.rct_control_posture import (
@@ -52,6 +54,7 @@ from seedcore.ops.evidence.authority_consistency import (
 )
 from seedcore.ops.evidence.owner_context import owner_context_hash as _owner_context_hash_value
 from seedcore.ops.evidence.policy import build_policy_summary, canonical_json, sha256_hex
+from seedcore.ops.evidence.state_binding import build_twin_state_binding
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
     verify_artifact_signature,
@@ -254,6 +257,7 @@ class ReplayService:
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
+            digital_twin_history_refs=digital_twin_history_refs,
         )
         replay_timeline = self._build_replay_timeline(
             record=record,
@@ -279,6 +283,19 @@ class ReplayService:
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
+            causal_parent_refs=[
+                dict(item)
+                for item in list(evidence_bundle.get("causal_parent_refs") or [])
+                if isinstance(item, Mapping)
+            ],
+            prior_state_binding=self._resolve_prior_state_binding(
+                evidence_bundle=evidence_bundle,
+                digital_twin_history_refs=digital_twin_history_refs,
+            ),
+            result_state_binding=self._resolve_result_state_binding(
+                evidence_bundle=evidence_bundle,
+                digital_twin_history_refs=digital_twin_history_refs,
+            ),
             custody_transition_refs=custody_transition_refs,
             digital_twin_history_refs=digital_twin_history_refs,
             dispute_refs=dispute_refs,
@@ -315,6 +332,9 @@ class ReplayService:
                 "policy_receipt": replay.policy_receipt,
                 "evidence_bundle": replay.evidence_bundle,
                 "transition_receipts": replay.transition_receipts,
+                "causal_parent_refs": replay.causal_parent_refs,
+                "prior_state_binding": replay.prior_state_binding,
+                "result_state_binding": replay.result_state_binding,
                 "asset_custody_state": replay.asset_custody_state,
                 "custody_transition_refs": replay.custody_transition_refs,
                 "dispute_refs": replay.dispute_refs,
@@ -337,6 +357,9 @@ class ReplayService:
                 "policy_receipt": replay.policy_receipt,
                 "evidence_bundle": self._auditor_safe_evidence_bundle(replay.evidence_bundle),
                 "transition_receipts": replay.transition_receipts,
+                "causal_parent_refs": replay.causal_parent_refs,
+                "prior_state_binding": replay.prior_state_binding,
+                "result_state_binding": replay.result_state_binding,
                 "asset_custody_state": replay.asset_custody_state,
                 "custody_transition_refs": replay.custody_transition_refs,
                 "dispute_refs": replay.dispute_refs,
@@ -1101,7 +1124,35 @@ class ReplayService:
                     if lineage_type in {"batch", "product"} and (lineage_type, ref) not in seen_queries:
                         twin_queries.append((lineage_type, ref))
         refs.sort(key=lambda item: item.get("recorded_at") or "")
-        return refs
+        latest_binding_by_twin: Dict[tuple[str, str], Dict[str, Any]] = {}
+        enriched_refs: List[Dict[str, Any]] = []
+        for item in refs:
+            twin_type = str(item.get("twin_type") or "").strip()
+            twin_id = str(item.get("twin_id") or "").strip()
+            twin_key = (twin_type, twin_id)
+            prior_state_binding = (
+                dict(item.get("prior_state_binding"))
+                if isinstance(item.get("prior_state_binding"), Mapping)
+                else latest_binding_by_twin.get(twin_key)
+            )
+            result_state_binding = (
+                dict(item.get("result_state_binding"))
+                if isinstance(item.get("result_state_binding"), Mapping)
+                else build_twin_state_binding(
+                    twin_type=twin_type,
+                    twin_id=twin_id,
+                    state_version=item.get("state_version"),
+                    authority_source=item.get("authority_source"),
+                    snapshot=item.get("snapshot"),
+                )
+            )
+            enriched_item = dict(item)
+            enriched_item["prior_state_binding"] = prior_state_binding
+            enriched_item["result_state_binding"] = result_state_binding
+            if isinstance(result_state_binding, Mapping):
+                latest_binding_by_twin[twin_key] = dict(result_state_binding)
+            enriched_refs.append(enriched_item)
+        return enriched_refs
 
     async def _load_custody_transition_refs(
         self,
@@ -1236,6 +1287,7 @@ class ReplayService:
             policy_receipt=policy_receipt,
             evidence_bundle=evidence_bundle,
             transition_receipts=transition_receipts,
+            digital_twin_history_refs=[],
         )
         return status, evidence_bundle, policy_receipt, transition_receipts
 
@@ -1295,6 +1347,24 @@ class ReplayService:
         action_type = str(action.get("type") or "").strip().upper()
         return action_type == "TRANSFER_CUSTODY"
 
+    def _record_opted_in_strict_state_transition_fields(
+        self,
+        *,
+        record: Mapping[str, Any],
+    ) -> bool:
+        policy_case = record.get("policy_case") if isinstance(record.get("policy_case"), dict) else {}
+        workflow_hints = (
+            policy_case.get("workflow_hints")
+            if isinstance(policy_case.get("workflow_hints"), dict)
+            else {}
+        )
+        raw = workflow_hints.get("strict_state_transition_fields")
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return False
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
     def _build_signer_chain(
         self,
         *,
@@ -1339,6 +1409,7 @@ class ReplayService:
         policy_receipt: Mapping[str, Any],
         evidence_bundle: Mapping[str, Any],
         transition_receipts: Sequence[Mapping[str, Any]],
+        digital_twin_history_refs: Sequence[Mapping[str, Any]],
     ) -> ReplayVerificationStatus:
         issues: List[str] = []
         artifact_results: Dict[str, Any] = {}
@@ -1396,6 +1467,17 @@ class ReplayService:
                     issues.append(f"rct_triple_hash_strict:{item}")
             if strict_triple_required and not strict_triple_enabled:
                 issues.append("rct_control_fail_closed:missing_required_flag:SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH")
+        strict_state_transition_enabled = strict_rct_replay_state_transition_enabled()
+        strict_state_transition_opt_in = self._record_opted_in_strict_state_transition_fields(record=record)
+        if strict_triple_applicable and strict_state_transition_enabled and strict_state_transition_opt_in:
+            strict_state_transition = evaluate_opt_in_rct_replay_state_transition_fields(
+                evidence_bundle=evidence_bundle,
+                digital_twin_history_refs=list(digital_twin_history_refs),
+            )
+            artifact_results["rct_state_transition_fields_opt_in"] = strict_state_transition["artifact"]
+            if strict_state_transition["artifact"].get("available") and not strict_state_transition["verified"]:
+                for item in strict_state_transition["issues"]:
+                    issues.append(f"rct_state_transition_fields_opt_in:{item}")
         if rct_control_posture_issues:
             artifact_results["rct_control_fail_closed_posture"] = {
                 "artifact_type": "rct_control_fail_closed_posture",
@@ -1770,7 +1852,14 @@ class ReplayService:
                     timestamp=str(evidence_bundle.get("created_at")),
                     summary="Evidence bundle sealed for replay",
                     artifact_ref=str(evidence_bundle.get("evidence_bundle_id") or ""),
-                    details={"node_id": evidence_bundle.get("node_id")},
+                    details={
+                        "node_id": evidence_bundle.get("node_id"),
+                        "causal_parent_refs": [
+                            dict(item)
+                            for item in list(evidence_bundle.get("causal_parent_refs") or [])
+                            if isinstance(item, Mapping)
+                        ],
+                    },
                 )
             )
         for twin_event in digital_twin_history_refs:
@@ -1788,6 +1877,8 @@ class ReplayService:
                         "twin_type": twin_event.get("twin_type"),
                         "state_version": twin_event.get("state_version"),
                         "authority_source": twin_event.get("authority_source"),
+                        "prior_state_binding": twin_event.get("prior_state_binding"),
+                        "result_state_binding": twin_event.get("result_state_binding"),
                     },
                 )
             )
@@ -1940,6 +2031,8 @@ class ReplayService:
             "current_custodian": replay.authz_graph.get("current_custodian"),
             "decision_graph_snapshot_hash": replay.governed_receipt.get("snapshot_hash") or replay.authz_graph.get("snapshot_hash"),
             "state_binding_hash": self._resolve_state_binding_hash(replay),
+            "prior_state_binding": replay.prior_state_binding,
+            "result_state_binding": replay.result_state_binding,
             "custody_proof_count": len(replay.governed_receipt.get("custody_proof") or []),
             "trust_gap_codes": trust_gap_codes,
         }
@@ -1988,6 +2081,8 @@ class ReplayService:
                 or replay.evidence_bundle.get("decision_graph_snapshot_version")
             ),
             "state_binding_hash": self._resolve_state_binding_hash(replay),
+            "prior_state_binding": replay.prior_state_binding,
+            "result_state_binding": replay.result_state_binding,
             "trust_gap_codes": trust_gap_codes,
             "trust_gap_details": self._trust_gap_details(
                 trust_gap_codes,
@@ -3014,6 +3109,7 @@ class ReplayService:
                 for item in replay.transition_receipts
                 if item.get("transition_receipt_id") is not None and str(item.get("transition_receipt_id")).strip()
             ],
+            "causal_parent_refs": list(replay.causal_parent_refs),
             "asset_custody_state": {
                 "current_custodian_ref": replay.asset_custody_state.get("current_custodian_ref") if isinstance(replay.asset_custody_state, dict) else None,
                 "current_zone_ref": (
@@ -3190,6 +3286,36 @@ class ReplayService:
             or self._optional_str(replay.policy_receipt.get("state_binding_hash"))
             or self._optional_str(replay.evidence_bundle.get("state_binding_hash"))
         )
+
+    def _resolve_prior_state_binding(
+        self,
+        *,
+        evidence_bundle: Mapping[str, Any],
+        digital_twin_history_refs: Sequence[Mapping[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        bundle_binding = evidence_bundle.get("prior_state_binding")
+        if isinstance(bundle_binding, Mapping):
+            return dict(bundle_binding)
+        for item in reversed(list(digital_twin_history_refs)):
+            binding = item.get("prior_state_binding")
+            if isinstance(binding, Mapping):
+                return dict(binding)
+        return None
+
+    def _resolve_result_state_binding(
+        self,
+        *,
+        evidence_bundle: Mapping[str, Any],
+        digital_twin_history_refs: Sequence[Mapping[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        bundle_binding = evidence_bundle.get("result_state_binding")
+        if isinstance(bundle_binding, Mapping):
+            return dict(bundle_binding)
+        for item in reversed(list(digital_twin_history_refs)):
+            binding = item.get("result_state_binding")
+            if isinstance(binding, Mapping):
+                return dict(binding)
+        return None
 
     def _resolve_trust_gap_taxonomy(self, replay: ReplayRecord) -> Dict[str, Dict[str, str]]:
         taxonomy = dict(TRUST_GAP_TAXONOMY)

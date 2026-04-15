@@ -236,6 +236,15 @@ def build_evidence_bundle(
             ],
         },
     )
+    causal_parent_refs = _extract_causal_parent_refs(
+        approval_context=approval_context if isinstance(approval_context, dict) else {},
+        policy_receipt=(
+            policy_receipt.model_dump(mode="json")
+            if policy_receipt is not None
+            else {}
+        ),
+        governed_receipt=governed_receipt,
+    )
     payload = {
         "evidence_bundle_id": str(uuid.uuid4()),
         "task_id": str(task_dict.get("task_id") or task_dict.get("id") or "unknown_task"),
@@ -295,6 +304,7 @@ def build_evidence_bundle(
         "co_sign_binding_hash": co_sign_contract["co_sign_binding_hash"],
         "expected_co_signers": co_sign_contract["expected_co_signers"],
         "co_signatures": co_sign_contract["co_signatures"],
+        "causal_parent_refs": causal_parent_refs,
         "transition_receipt_ids": [
             receipt.transition_receipt_id
             for receipt in transition_receipts
@@ -413,6 +423,39 @@ def _extract_trust_gap_codes(
                 codes.append(str(item.get("code")))
         return codes
     return []
+
+
+def _extract_causal_parent_refs(
+    *,
+    approval_context: Dict[str, Any],
+    policy_receipt: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    refs: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _append(relation: str, artifact_type: str, artifact_id: Any) -> None:
+        normalized_id = str(artifact_id or "").strip()
+        if not normalized_id:
+            return
+        key = (relation, artifact_type, normalized_id)
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append(
+            {
+                "relation": relation,
+                "artifact_type": artifact_type,
+                "artifact_id": normalized_id,
+            }
+        )
+
+    _append("approved_by", "approval_envelope", approval_context.get("approval_envelope_id"))
+    _append("approved_by", "approval_transition", approval_context.get("approval_transition_head"))
+    _append("approved_by", "approval_binding", approval_context.get("approval_binding_hash"))
+    _append("authorized_by", "policy_receipt", policy_receipt.get("policy_receipt_id"))
+    _append("authorized_by", "governed_receipt", governed_receipt.get("decision_hash"))
+    return refs
 
 
 def _resolve_request_schema_bundle(

@@ -1496,8 +1496,15 @@ class DigitalTwinDAO:
                 source_task_id=source_task_uuid,
                 source_intent_id=source_intent_id,
             )
-            return {**self._state_to_dict(row), "changed": True}
+            result_state = self._state_to_dict(row)
+            return {
+                **result_state,
+                "changed": True,
+                "prior_state": None,
+                "result_state": result_state,
+            }
 
+        prior_state = self._state_to_dict(row)
         previous_snapshot = dict(row.snapshot or {})
         changed = _canonical_json(previous_snapshot) != _canonical_json(normalized)
 
@@ -1521,7 +1528,13 @@ class DigitalTwinDAO:
         else:
             await session.flush()
 
-        return {**self._state_to_dict(row), "changed": changed}
+        result_state = self._state_to_dict(row)
+        return {
+            **result_state,
+            "changed": changed,
+            "prior_state": prior_state,
+            "result_state": result_state,
+        }
 
     async def list_history(
         self,

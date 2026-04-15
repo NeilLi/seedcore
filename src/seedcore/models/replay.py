@@ -46,6 +46,9 @@ class ReplayRecord(BaseModel):
     policy_receipt: Dict[str, Any] = Field(default_factory=dict)
     evidence_bundle: Dict[str, Any] = Field(default_factory=dict)
     transition_receipts: List[Dict[str, Any]] = Field(default_factory=list)
+    causal_parent_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    prior_state_binding: Optional[Dict[str, Any]] = None
+    result_state_binding: Optional[Dict[str, Any]] = None
     digital_twin_history_refs: List[Dict[str, Any]] = Field(default_factory=list)
     signer_chain: List[Dict[str, Any]] = Field(default_factory=list)
     verification_status: ReplayVerificationStatus = Field(default_factory=ReplayVerificationStatus)

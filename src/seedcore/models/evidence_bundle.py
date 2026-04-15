@@ -194,6 +194,7 @@ class EvidenceBundle(BaseModel):
     co_sign_binding_hash: Optional[str] = None
     expected_co_signers: List[Dict[str, Any]] = Field(default_factory=list)
     co_signatures: List[CoSignature] = Field(default_factory=list)
+    causal_parent_refs: List[Dict[str, Any]] = Field(default_factory=list)
     transition_receipt_ids: List[str] = Field(default_factory=list)
     asset_fingerprint: Optional[AssetFingerprint] = None
     evidence_inputs: Dict[str, Any] = Field(default_factory=dict)
