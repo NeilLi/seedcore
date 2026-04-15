@@ -82,6 +82,16 @@ What is now in place:
     replay if any of the three hashes is missing on `policy_receipt` or
     `evidence_bundle`, or if interior `policy_decision` hashes disagree with
     signed artifacts.
+  - Additive governed-transition replay fields are now present in the codebase:
+    lightweight prior/result state bindings, minimal causal parent references,
+    and an **opt-in** validator for those fields behind
+    `SEEDCORE_RCT_REPLAY_STRICT_STATE_TRANSITION_FIELDS`.
+  - That validator is additionally gated by
+    `policy_case.workflow_hints.strict_state_transition_fields = true`, so the
+    current rollout is a **record-level canary**, not a fleet-wide RCT change.
+  - The first canary producer is the **agent-action gateway restricted-custody
+    closure** path, which now persists that workflow hint on governed audit
+    records created from closure settlement evidence.
   - Host helper: `scripts/host/verify_rct_replay_strict.py` (stdin JSON record).
 
 What remains for later phases:

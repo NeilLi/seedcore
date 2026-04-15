@@ -43,6 +43,8 @@ Decision records:
 - [ADR 0001 - Keep the PDP Stateless and Synchronous at Decision Time](docs/architecture/adr/adr-0001-pdp-hot-path.md)
 - [ADR 0002 - Use Google IAP as the First-Mile Identity Gate for Non-Public SeedCore Ingress](docs/architecture/adr/adr-0002-iap-edge-identity.md)
 - [ADR 0003 - Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](docs/architecture/adr/adr-0003-igx-thor-trusted-edge-profile.md)
+- [ADR 0004 - Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](docs/architecture/adr/adr-0004-result-verifier-runtime.md)
+- [ADR 0005 - Preserve Replayable Evidence for Governed Digital Twin State Transitions](docs/architecture/adr/adr-0005-replayable-evidence-governed-state-transitions.md)
 
 ## Where SeedCore Sits
 

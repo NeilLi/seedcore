@@ -6,6 +6,7 @@ This overview captures the current Q2 “verification-surface” architecture en
 
 For the decision record behind the current PDP shape, see [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](../adr/adr-0001-pdp-hot-path.md).
 For the post-decision fail-closed verifier runtime, see [ADR 0004: Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](../adr/adr-0004-result-verifier-runtime.md).
+For the replayable governed-transition evidence contract, see [ADR 0005: Preserve Replayable Evidence for Governed Digital Twin State Transitions](../adr/adr-0005-replayable-evidence-governed-state-transitions.md).
 For the ADR index, see [Architecture ADR Index](../adr/README.md).
 In this architecture, "stateless PDP" means stateless at decision time: the final authorization call is synchronous and deterministic over pinned snapshot/context inputs, while surrounding systems manage state assembly and evidence persistence.
 
