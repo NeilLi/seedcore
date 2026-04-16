@@ -15,6 +15,15 @@ from seedcore.integrations.rust_kernel import (
     enforce_execution_token_with_rust,
     verify_execution_token_with_rust,
 )
+from seedcore.models.governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
+)
+from seedcore.services.governed_mutation_service import (
+    GovernedMutationError,
+    governed_mutation_wrapper,
+)
 from seedcore.hal.custody.transition_receipts import (
     is_attestable_transition_endpoint,
     verify_transition_receipt,
@@ -43,6 +52,8 @@ class Tool(Protocol):
     async def execute(self, **kwargs: Any) -> Any: ...
 
     def schema(self) -> Dict[str, Any]: ...
+
+    def governance_contract(self) -> Optional[GovernedMutationContract]: ...
 
 
 # ============================================================
@@ -111,6 +122,7 @@ class ToolManager:
         """
         # Internal tool registry
         self._tools: Dict[str, Tool] = {}
+        self._tool_contracts: Dict[str, GovernedMutationContract] = {}
         self._lock = asyncio.Lock()  # Lock for tool registry operations
 
         # Separate lock for metrics to reduce contention
@@ -169,10 +181,16 @@ class ToolManager:
     # ============================================================
 
     async def register(self, name: str, tool: Tool) -> None:
+        contract = self._contract_from_tool(name=name, tool=tool)
+        self._enforce_contract_registration_rules(name=name, contract=contract)
         async with self._lock:
             if name in self._tools:
                 logger.warning(f"⚠️ Tool overwritten: {name}")
             self._tools[name] = tool
+            if contract is not None:
+                self._tool_contracts[name] = contract
+            else:
+                self._tool_contracts.pop(name, None)
         logger.info(f"Tool registered: {name}")
 
     async def register_internal(self, tool: Tool) -> None:
@@ -186,10 +204,16 @@ class ToolManager:
         if not name:
             logger.error("Tool schema missing 'name' field.")
             return
+        contract = self._contract_from_tool(name=name, tool=tool)
+        self._enforce_contract_registration_rules(name=name, contract=contract)
         async with self._lock:
             if name in self._tools:
                 logger.warning(f"⚠️ Overwriting internal tool: {name}")
             self._tools[name] = tool
+            if contract is not None:
+                self._tool_contracts[name] = contract
+            else:
+                self._tool_contracts.pop(name, None)
         logger.debug(f"Registered internal tool: {name}")
 
     async def register_namespace(self, prefix: str, builder: Callable[[], Tool]):
@@ -210,6 +234,7 @@ class ToolManager:
         async with self._lock:
             if name in self._tools:
                 del self._tools[name]
+                self._tool_contracts.pop(name, None)
                 return True
             return False
 
@@ -270,6 +295,113 @@ class ToolManager:
             return True
         
         return False
+
+    def _legacy_mutating_tool_name(self, name: str) -> bool:
+        """
+        Transitional detector for known mutating paths during contract rollout.
+        """
+        if name.startswith("custody.ledger."):
+            return True
+        if (
+            name.startswith("reachy.")
+            or name == "tuya.send_command"
+            or name.startswith("actuator.")
+            or name.startswith("robot.")
+        ):
+            return True
+        if name in {
+            "memory.mw.write",
+            "memory.holon.store",
+            "memory.ltm.store",
+            "memory.graph.write",
+        }:
+            return True
+        if name.startswith("finance.") or name.startswith("transaction.") or name.startswith("payment."):
+            return True
+        return False
+
+    def _contract_from_tool(
+        self,
+        *,
+        name: str,
+        tool: Tool,
+    ) -> Optional[GovernedMutationContract]:
+        contract_obj: Any = None
+        try:
+            if hasattr(tool, "governance_contract"):
+                contract_obj = tool.governance_contract()
+        except Exception as exc:
+            raise ValueError(f"tool governance contract resolution failed for '{name}': {exc}") from exc
+
+        if contract_obj is not None:
+            return contract_obj if isinstance(contract_obj, GovernedMutationContract) else GovernedMutationContract.model_validate(contract_obj)
+
+        # Schema-level metadata fallback for tools that cannot implement governance_contract().
+        try:
+            schema = tool.schema()
+        except Exception:
+            return None
+        raw = schema.get("x_governed_mutation_contract")
+        if raw is None:
+            return None
+        return GovernedMutationContract.model_validate(raw)
+
+    def _enforce_contract_registration_rules(
+        self,
+        *,
+        name: str,
+        contract: Optional[GovernedMutationContract],
+    ) -> None:
+        if self._legacy_mutating_tool_name(name):
+            if contract is None or not contract.is_mutating():
+                raise ValueError(
+                    f"Mutating tool '{name}' must declare a valid GovernedMutationContract."
+                )
+
+    async def _runtime_contract_for_tool(self, name: str) -> Optional[GovernedMutationContract]:
+        async with self._lock:
+            contract = self._tool_contracts.get(name)
+        if contract is not None:
+            return contract
+
+        # Built-in governed runtime paths (not internal tool registrations).
+        if name == "custody.ledger.record":
+            return GovernedMutationContract(
+                effect_class=MutationEffectClass.DIGITAL_STATE,
+                requires_execution_token=True,
+                requires_policy_receipt=False,
+                requires_signed_receipt=True,
+                snapshot_binding_required=False,
+                replay_mode=MutationReplayMode.HASH_STABLE,
+            )
+        if name == "custody.ledger.list":
+            return GovernedMutationContract(
+                effect_class=MutationEffectClass.READ_ONLY,
+                requires_execution_token=False,
+                requires_policy_receipt=False,
+                requires_signed_receipt=False,
+                snapshot_binding_required=False,
+                replay_mode=MutationReplayMode.NONE,
+            )
+        if name in {"memory.mw.write", "memory.holon.store", "memory.ltm.store", "memory.graph.write"}:
+            return GovernedMutationContract(
+                effect_class=MutationEffectClass.DIGITAL_STATE,
+                requires_execution_token=True,
+                requires_policy_receipt=False,
+                requires_signed_receipt=False,
+                snapshot_binding_required=False,
+                replay_mode=MutationReplayMode.HASH_STABLE,
+            )
+        if name.startswith("finance.") or name.startswith("transaction.") or name.startswith("payment."):
+            return GovernedMutationContract(
+                effect_class=MutationEffectClass.FINANCIAL_STATE,
+                requires_execution_token=True,
+                requires_policy_receipt=True,
+                requires_signed_receipt=True,
+                snapshot_binding_required=True,
+                replay_mode=MutationReplayMode.BYTE_STABLE,
+            )
+        return None
 
     # ============================================================
     # Capability Management
@@ -492,21 +624,35 @@ class ToolManager:
         failed = False
         safe_args = dict(args or {})
         governance_ctx = safe_args.pop("_governance", None)
+        contract = await self._runtime_contract_for_tool(name)
+        is_governed_mutation = bool(contract and contract.is_mutating())
+        requires_execution_token = bool(
+            contract and contract.is_mutating() and contract.requires_execution_token and self._requires_execution_token(name)
+        )
 
-        # RBAC (optional)
+        if self._legacy_mutating_tool_name(name) and contract is None:
+            raise ToolError(name, "missing_governed_mutation_contract")
+
+        # RBAC
         if self.rbac_provider:
             try:
                 allowed = await self.rbac_provider.allowed(agent_id, name)
                 if not allowed:
                     raise ToolError(name, "rbac_denied")
-            except Exception:
+            except ToolError:
+                raise
+            except Exception as exc:
+                if is_governed_mutation:
+                    raise ToolError(name, f"rbac_denied:provider_error:{type(exc).__name__}", exc)
                 logger.debug("RBAC check skipped or failed")
 
         try:
             # 0. Built-in custody ledger tools
             if name.startswith("custody.ledger."):
-                if name == "custody.ledger.record":
+                if requires_execution_token:
                     self._validate_execution_token(name, governance_ctx, tool_args=safe_args)
+                if contract and contract.requires_policy_receipt:
+                    self._validate_policy_receipt(name, governance_ctx)
                 return await self._execute_custody(
                     name,
                     safe_args,
@@ -514,14 +660,16 @@ class ToolManager:
                     governance_ctx=governance_ctx,
                 )
 
-            # 0.5 Governance gate for all side-effecting tools
-            if self._requires_execution_token(name):
+            # 0.5 Governance gate for governed mutations
+            if requires_execution_token:
                 self._validate_execution_token(name, governance_ctx, tool_args=safe_args)
                 if isinstance(governance_ctx, dict):
                     token = governance_ctx.get("execution_token")
                     if isinstance(token, dict) and "execution_token" not in safe_args:
                         # Forward token to endpoints for governed execution.
                         safe_args["execution_token"] = dict(token)
+            if contract and contract.is_mutating() and contract.requires_policy_receipt:
+                self._validate_policy_receipt(name, governance_ctx)
 
             # 1. Internal tools (includes all query tools registered via register_query_tools)
             # Query tools are registered as internal tools with names like:
@@ -613,32 +761,42 @@ class ToolManager:
 
     def _requires_execution_token(self, name: str) -> bool:
         """
-        Universal side-effect gate: Determine if a tool modifies physical,
-        financial, or critical digital state.
+        Deprecated compatibility hook for legacy call sites/tests.
+        Contract-aware callers should use `_runtime_contract_for_tool`.
         """
-        # 1. Physical Actuation (Robotics, IoT)
-        if (
-            name.startswith("reachy.")
-            or name == "tuya.send_command"
-            or name.startswith("actuator.")
-            or name.startswith("robot.")
-        ):
+        contract = self._tool_contracts.get(name)
+        if contract is not None:
+            return bool(contract.requires_execution_token and contract.is_mutating())
+        if self._legacy_mutating_tool_name(name):
+            # During rollout we conservatively require tokens for known mutating paths.
             return True
-            
-        # 2. Persistent Memory / State Modifications
-        if name in (
-            "memory.mw.write",
-            "memory.holon.store",
-            "memory.ltm.store",
-            "memory.graph.write",
-        ):
-            return True
-            
-        # 3. External integrations with material impact
-        if name.startswith("finance.") or name.startswith("transaction.") or name.startswith("payment."):
-            return True
-            
         return False
+
+    def _validate_policy_receipt(self, tool_name: str, governance_ctx: Any) -> None:
+        if not isinstance(governance_ctx, dict):
+            raise ToolError(tool_name, "missing_policy_receipt")
+        policy_receipt = governance_ctx.get("policy_receipt")
+        if not isinstance(policy_receipt, dict):
+            raise ToolError(tool_name, "missing_policy_receipt")
+        if not policy_receipt.get("receipt_id"):
+            raise ToolError(tool_name, "invalid_policy_receipt")
+
+    def _validate_snapshot_binding(self, tool_name: str, governance_ctx: Any) -> None:
+        if not isinstance(governance_ctx, dict):
+            raise ToolError(tool_name, "missing_snapshot_binding")
+        action_intent = governance_ctx.get("action_intent")
+        resource = action_intent.get("resource") if isinstance(action_intent, dict) and isinstance(action_intent.get("resource"), dict) else {}
+        if isinstance(resource.get("snapshot_id"), int):
+            return
+        policy_case = governance_ctx.get("policy_case")
+        twin_snapshot = (
+            policy_case.get("relevant_twin_snapshot")
+            if isinstance(policy_case, dict) and isinstance(policy_case.get("relevant_twin_snapshot"), dict)
+            else {}
+        )
+        if isinstance(twin_snapshot.get("snapshot_id"), int):
+            return
+        raise ToolError(tool_name, "missing_snapshot_binding")
 
     def _validate_execution_token(
         self,
@@ -738,6 +896,51 @@ class ToolManager:
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
+    def _normalize_audit_task_id(self, task_id: Any) -> str:
+        raw = str(task_id)
+        try:
+            return str(uuid.UUID(raw))
+        except Exception:
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, f"seedcore-task:{raw}"))
+
+    async def _previous_mutation_receipt_chain_or_raise(
+        self,
+        *,
+        tool_name: str,
+        task_id: str,
+    ) -> tuple[Optional[str], Optional[int]]:
+        session_factory = self._get_db_session_factory()
+        dao = self._get_governance_audit_dao()
+        if session_factory is None or dao is None:
+            raise ToolError(tool_name, "mutation_receipt_chain_store_unavailable")
+
+        try:
+            async with session_factory() as session:
+                latest = await dao.get_latest_for_task(session, task_id=task_id)
+        except Exception as exc:
+            raise ToolError(tool_name, "mutation_receipt_chain_lookup_failed", exc) from exc
+
+        if not isinstance(latest, dict):
+            return None, None
+        evidence_bundle = latest.get("evidence_bundle")
+        if not isinstance(evidence_bundle, dict):
+            return None, None
+        previous_receipt = evidence_bundle.get("mutation_receipt")
+        if previous_receipt is None:
+            return None, None
+        if not isinstance(previous_receipt, dict):
+            raise ToolError(tool_name, "invalid_previous_mutation_receipt")
+        previous_hash = previous_receipt.get("payload_hash")
+        previous_counter = previous_receipt.get("receipt_counter")
+        if previous_hash is not None and (not isinstance(previous_hash, str) or not previous_hash.strip()):
+            raise ToolError(tool_name, "invalid_previous_mutation_receipt")
+        if previous_counter is not None and not isinstance(previous_counter, int):
+            raise ToolError(tool_name, "invalid_previous_mutation_receipt")
+        return (
+            str(previous_hash) if isinstance(previous_hash, str) else None,
+            int(previous_counter) if isinstance(previous_counter, int) else None,
+        )
+
     async def _execute_custody(
         self,
         name: str,
@@ -750,71 +953,198 @@ class ToolManager:
             entry = args.get("entry")
             if not isinstance(entry, dict):
                 raise ToolError(name, "entry_required")
+            contract = await self._runtime_contract_for_tool(name)
+            if contract is None:
+                raise ToolError(name, "missing_governed_mutation_contract")
             record = dict(entry)
             record.setdefault("entry_id", str(uuid.uuid4()))
             record.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
             if agent_id and not record.get("agent_id"):
                 record["agent_id"] = agent_id
-            persisted = False
-            try:
-                persisted = await self._persist_governance_audit_record(
+            action_intent = (
+                governance_ctx.get("action_intent")
+                if isinstance(governance_ctx, dict) and isinstance(governance_ctx.get("action_intent"), dict)
+                else {}
+            )
+            execution_token = (
+                governance_ctx.get("execution_token")
+                if isinstance(governance_ctx, dict) and isinstance(governance_ctx.get("execution_token"), dict)
+                else {}
+            )
+            resource = (
+                action_intent.get("resource")
+                if isinstance(action_intent.get("resource"), dict)
+                else {}
+            )
+            snapshot_id = (
+                int(resource.get("snapshot_id"))
+                if isinstance(resource.get("snapshot_id"), int)
+                else None
+            )
+            audit_task_id = self._normalize_audit_task_id(record.get("task_id"))
+            mutation_state: Dict[str, Any] = {}
+
+            async def _mutation_operation() -> Dict[str, Any]:
+                async with self._custody_lock:
+                    self._custody_ledger.append(record)
+                try:
+                    custody_sync_local = await self._sync_asset_custody_state(record, governance_ctx)
+                except ToolError:
+                    raise
+                except Exception:
+                    custody_sync_local = None
+                    logger.warning(
+                        "Asset custody state sync failed after ledger record",
+                        exc_info=True,
+                    )
+                graph_projection_local = await self._persist_custody_graph_projection(
                     record,
                     governance_ctx,
+                    custody_sync=custody_sync_local,
                 )
-            except Exception:
-                logger.warning(
-                    "Governance audit persistence failed; retaining in-process ledger",
-                    exc_info=True,
+                execution_twin_update_local = await self._persist_digital_twin_stage(
+                    record,
+                    governance_ctx,
+                    event_type="action_executed",
+                    phase="execution",
+                    authority_source="governed_execution_receipt",
+                    change_reason="execution_completed",
                 )
-            async with self._custody_lock:
-                self._custody_ledger.append(record)
+                transition_twin_update_local = await self._persist_digital_twin_stage(
+                    record,
+                    governance_ctx,
+                    event_type="transition_recorded",
+                    phase="transition",
+                    authority_source="governed_transition_receipt",
+                    change_reason="custody_transition_recorded",
+                    extra_context={
+                        "transition_event": (
+                            graph_projection_local.get("transition_event")
+                            if isinstance(graph_projection_local.get("transition_event"), dict)
+                            else {}
+                        ),
+                    },
+                )
+                settlement_local = await self._settle_digital_twin_state(record, governance_ctx)
+                mutation_state.update(
+                    {
+                        "custody_transition": graph_projection_local,
+                        "twin_execution": execution_twin_update_local,
+                        "twin_transition": transition_twin_update_local,
+                        "twin_settlement": settlement_local,
+                    }
+                )
+                return {"entry_id": record["entry_id"], **mutation_state}
+
+            async def _rbac_check() -> None:
+                if self.rbac_provider is None:
+                    return
+                try:
+                    allowed = await self.rbac_provider.allowed(agent_id, name)
+                except Exception as exc:
+                    raise GovernedMutationError("rbac_denied", str(exc)) from exc
+                if not allowed:
+                    raise GovernedMutationError("rbac_denied")
+
+            async def _load_previous_chain() -> tuple[Optional[str], Optional[int]]:
+                return await self._previous_mutation_receipt_chain_or_raise(
+                    tool_name=name,
+                    task_id=audit_task_id,
+                )
+
+            async def _append_audit(evidence_bundle: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                record["evidence_bundle"] = evidence_bundle
+                persisted_local = await self._persist_governance_audit_record(
+                    record,
+                    governance_ctx,
+                    strict=True,
+                )
+                return {
+                    "persisted": persisted_local,
+                    "entry_id": record.get("entry_id"),
+                    "input_hash": record.get("input_hash"),
+                    "evidence_hash": record.get("evidence_hash"),
+                }
+
             try:
-                custody_sync = await self._sync_asset_custody_state(record, governance_ctx)
-            except ToolError:
-                raise
-            except Exception:
-                custody_sync = None
-                logger.warning(
-                    "Asset custody state sync failed after ledger record",
-                    exc_info=True,
-                )
-            graph_projection = await self._persist_custody_graph_projection(
-                record,
-                governance_ctx,
-                custody_sync=custody_sync,
-            )
-            execution_twin_update = await self._persist_digital_twin_stage(
-                record,
-                governance_ctx,
-                event_type="action_executed",
-                phase="execution",
-                authority_source="governed_execution_receipt",
-                change_reason="execution_completed",
-            )
-            transition_twin_update = await self._persist_digital_twin_stage(
-                record,
-                governance_ctx,
-                event_type="transition_recorded",
-                phase="transition",
-                authority_source="governed_transition_receipt",
-                change_reason="custody_transition_recorded",
-                extra_context={
-                    "transition_event": (
-                        graph_projection.get("transition_event")
-                        if isinstance(graph_projection.get("transition_event"), dict)
+                governed_result = await governed_mutation_wrapper.execute(
+                    entrypoint_id=name,
+                    contract=contract,
+                    payload_for_hash={
+                        "entry": dict(record),
+                        "action_intent": action_intent,
+                    },
+                    mutation_operation=_mutation_operation,
+                    receipt_kind=f"tool.{name}",
+                    actor_ref=str(record.get("agent_id")) if record.get("agent_id") is not None else None,
+                    target_ref=(
+                        str(resource.get("asset_id"))
+                        if resource.get("asset_id") is not None
+                        else f"task:{record.get('task_id')}"
+                    ),
+                    intent_id=(
+                        str(action_intent.get("intent_id"))
+                        if action_intent.get("intent_id") is not None
+                        else None
+                    ),
+                    token_id=(
+                        str(execution_token.get("token_id"))
+                        if execution_token.get("token_id") is not None
+                        else None
+                    ),
+                    policy_receipt_id=(
+                        str(governance_ctx.get("policy_receipt", {}).get("policy_receipt_id"))
+                        if isinstance(governance_ctx, dict)
+                        and isinstance(governance_ctx.get("policy_receipt"), dict)
+                        and governance_ctx.get("policy_receipt", {}).get("policy_receipt_id") is not None
+                        else None
+                    ),
+                    snapshot_id=snapshot_id,
+                    rbac_check=_rbac_check,
+                    execution_token_check=lambda: self._validate_execution_token(
+                        name,
+                        governance_ctx,
+                        tool_args={"entry": dict(record)},
+                    ),
+                    policy_receipt_check=lambda: self._validate_policy_receipt(name, governance_ctx),
+                    snapshot_binding_check=lambda: self._validate_snapshot_binding(name, governance_ctx),
+                    load_previous_receipt_chain=_load_previous_chain,
+                    append_audit_record=_append_audit,
+                    evidence_bundle_base=(
+                        record.get("evidence_bundle")
+                        if isinstance(record.get("evidence_bundle"), dict)
                         else {}
                     ),
-                },
-            )
-            settlement = await self._settle_digital_twin_state(record, governance_ctx)
+                )
+            except GovernedMutationError as exc:
+                raise ToolError(name, exc.code)
+
+            if isinstance(governed_result.mutation_receipt, dict):
+                record["mutation_receipt"] = governed_result.mutation_receipt
+                evidence_bundle = (
+                    dict(record.get("evidence_bundle"))
+                    if isinstance(record.get("evidence_bundle"), dict)
+                    else {}
+                )
+                evidence_bundle["mutation_receipt"] = governed_result.mutation_receipt
+                record["evidence_bundle"] = evidence_bundle
+
             return {
                 "ok": True,
                 "entry_id": record["entry_id"],
-                "persisted": persisted,
-                "custody_transition": graph_projection,
-                "twin_execution": execution_twin_update,
-                "twin_transition": transition_twin_update,
-                "twin_settlement": settlement,
+                "persisted": bool(
+                    isinstance(governed_result.audit_result, dict)
+                    and governed_result.audit_result.get("persisted")
+                ),
+                "mutation_receipt": (
+                    record.get("mutation_receipt")
+                    if isinstance(record.get("mutation_receipt"), dict)
+                    else None
+                ),
+                "custody_transition": mutation_state.get("custody_transition"),
+                "twin_execution": mutation_state.get("twin_execution"),
+                "twin_transition": mutation_state.get("twin_transition"),
+                "twin_settlement": mutation_state.get("twin_settlement"),
             }
 
         if name == "custody.ledger.list":
@@ -841,19 +1171,30 @@ class ToolManager:
         self,
         record: Dict[str, Any],
         governance_ctx: Any,
+        *,
+        strict: bool = False,
     ) -> bool:
         if not isinstance(governance_ctx, dict):
+            if strict:
+                raise ToolError("custody.ledger.record", "missing_governance_context")
             return False
         action_intent = governance_ctx.get("action_intent", {})
         if not isinstance(action_intent, dict) or not action_intent.get("intent_id"):
+            if strict:
+                raise ToolError("custody.ledger.record", "missing_action_intent")
             return False
         task_id = record.get("task_id")
         if task_id is None:
+            if strict:
+                raise ToolError("custody.ledger.record", "missing_task_id")
             return False
+        audit_task_id = self._normalize_audit_task_id(task_id)
 
         session_factory = self._get_db_session_factory()
         dao = self._get_governance_audit_dao()
         if session_factory is None or dao is None:
+            if strict:
+                raise ToolError("custody.ledger.record", "governance_audit_unavailable")
             return False
 
         execution_token = governance_ctx.get("execution_token", {})
@@ -866,7 +1207,7 @@ class ToolManager:
             async with session.begin():
                 persisted = await dao.append_record(
                     session,
-                    task_id=str(task_id),
+                    task_id=audit_task_id,
                     record_type=str(record.get("record_type") or "execution_receipt"),
                     intent_id=str(action_intent.get("intent_id")),
                     token_id=(

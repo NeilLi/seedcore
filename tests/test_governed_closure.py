@@ -1,6 +1,7 @@
 # Import mock dependencies BEFORE any other imports
 import os
 import sys
+from contextlib import asynccontextmanager
 
 sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies  # noqa: F401
@@ -21,11 +22,77 @@ def _stub_rust_execution_token_for_tool_manager(monkeypatch):
         lambda token, request_context, now=None: {"allowed": True},
     )
 
+    class _InMemoryAuditDAO:
+        def __init__(self):
+            self._rows = {}
+
+        async def append_record(self, session, **kwargs):
+            task_id = str(kwargs.get("task_id"))
+            row = {
+                "entry_id": str(len(self._rows.get(task_id, [])) + 1),
+                "recorded_at": "2026-01-01T00:00:00+00:00",
+                "input_hash": "input-hash",
+                "evidence_hash": "evidence-hash",
+                "task_id": task_id,
+                "record_type": kwargs.get("record_type"),
+                "intent_id": kwargs.get("intent_id"),
+                "token_id": kwargs.get("token_id"),
+                "policy_snapshot": kwargs.get("policy_snapshot"),
+                "policy_decision": kwargs.get("policy_decision") or {},
+                "action_intent": kwargs.get("action_intent") or {},
+                "policy_case": kwargs.get("policy_case") or {},
+                "policy_receipt": kwargs.get("policy_receipt") or {},
+                "evidence_bundle": kwargs.get("evidence_bundle") or {},
+                "actor_agent_id": kwargs.get("actor_agent_id"),
+                "actor_organ_id": kwargs.get("actor_organ_id"),
+            }
+            self._rows.setdefault(task_id, []).append(row)
+            return {
+                "entry_id": row["entry_id"],
+                "recorded_at": row["recorded_at"],
+                "input_hash": row["input_hash"],
+                "evidence_hash": row["evidence_hash"],
+            }
+
+        async def list_for_task(self, session, *, task_id, limit=50):
+            rows = list(self._rows.get(str(task_id), []))
+            rows.reverse()
+            return rows[:limit]
+
+        async def get_latest_for_task(self, session, *, task_id):
+            rows = self._rows.get(str(task_id), [])
+            return rows[-1] if rows else None
+
+    in_memory_dao = _InMemoryAuditDAO()
+
+    class _FakeSession:
+        @asynccontextmanager
+        async def begin(self):
+            yield self
+
+    @asynccontextmanager
+    async def _session_factory():
+        yield _FakeSession()
+
+    monkeypatch.setattr(
+        "seedcore.tools.manager.ToolManager._get_db_session_factory",
+        lambda self: _session_factory,
+    )
+    monkeypatch.setattr(
+        "seedcore.tools.manager.ToolManager._get_governance_audit_dao",
+        lambda self: in_memory_dao,
+    )
+
 
 def _stub_token_signature() -> dict:
     return {"signer_type": "test", "signing_scheme": "stub"}
 from seedcore.agents.base import BaseAgent
 from seedcore.agents.roles import RoleProfile, RoleRegistry, Specialization
+from seedcore.models.governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
+)
 from seedcore.models.task_payload import TaskPayload
 from seedcore.tools.base import ToolBase
 from seedcore.tools.manager import ToolError, ToolManager
@@ -35,12 +102,30 @@ class DummyReachyMotionTool(ToolBase):
     name = "reachy.motion"
     description = "Dummy actuation tool for tests"
 
+    def governance_contract(self) -> GovernedMutationContract:
+        return GovernedMutationContract(
+            effect_class=MutationEffectClass.PHYSICAL_ACTUATION,
+            requires_execution_token=True,
+            requires_policy_receipt=False,
+            requires_signed_receipt=True,
+            snapshot_binding_required=True,
+            replay_mode=MutationReplayMode.HASH_STABLE,
+        )
+
     async def run(self, **kwargs):
         return {
             "status": "ok",
             "robot_state": {"head": kwargs.get("head", {})},
             "execution_token_id": (kwargs.get("execution_token") or {}).get("token_id"),
         }
+
+
+class DummyUngovernedReachyTool(ToolBase):
+    name = "reachy.motion"
+    description = "Missing governance contract by design"
+
+    async def run(self, **kwargs):
+        return {"status": "ok"}
 
 
 @pytest.mark.asyncio
@@ -383,3 +468,100 @@ def test_tool_manager_rejects_replayed_transition_receipt():
             },
         )
     assert "replayed_transition_receipt" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_tool_manager_rejects_mutating_tool_registration_without_contract():
+    manager = ToolManager()
+    with pytest.raises(ValueError) as exc:
+        await manager.register_internal(DummyUngovernedReachyTool())
+    assert "GovernedMutationContract" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_governed_mutation_rbac_provider_error_fails_closed():
+    class _BrokenRBAC:
+        async def allowed(self, agent_id, tool_name):
+            raise RuntimeError("rbac backend unavailable")
+
+    manager = ToolManager(rbac_provider=_BrokenRBAC())
+    await manager.register_internal(DummyReachyMotionTool())
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-rbac-1",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "MOVE"},
+            "resource": {"asset_id": "asset-1", "target_zone": "zone-a"},
+        },
+        "execution_token": {
+            "token_id": "tok-rbac-1",
+            "intent_id": "intent-rbac-1",
+            "valid_until": "2099-01-01T00:00:00+00:00",
+            "signature": _stub_token_signature(),
+            "constraints": {
+                "action_type": "MOVE",
+                "target_zone": "zone-a",
+                "asset_id": "asset-1",
+                "principal_agent_id": "agent-1",
+            },
+        },
+    }
+
+    with pytest.raises(ToolError) as exc:
+        await manager.execute(
+            "reachy.motion",
+            {"head": {"yaw": 0.2}, "_governance": governance},
+            agent_id="agent-1",
+        )
+    assert "rbac_denied:provider_error" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_custody_mutation_receipt_chain_uses_persisted_previous_hash():
+    manager = ToolManager()
+    await manager.register_internal(DummyReachyMotionTool())
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-chain-1",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "RECORD"},
+            "resource": {"asset_id": "asset-chain-1", "target_zone": "zone-a"},
+        },
+        "execution_token": {
+            "token_id": "tok-chain-1",
+            "intent_id": "intent-chain-1",
+            "valid_until": "2099-01-01T00:00:00+00:00",
+            "signature": _stub_token_signature(),
+            "constraints": {
+                "action_type": "RECORD",
+                "asset_id": "asset-chain-1",
+                "principal_agent_id": "agent-1",
+            },
+        },
+    }
+
+    first = await manager.execute(
+        "custody.ledger.record",
+        {
+            "entry": {"task_id": "task-chain", "intent_ref": "governance://action-intent/intent-chain-1"},
+            "_governance": governance,
+        },
+        agent_id="agent-1",
+    )
+    first_receipt = first["mutation_receipt"]
+    assert first_receipt["receipt_counter"] == 1
+    assert first_receipt.get("previous_receipt_hash") is None
+
+    second = await manager.execute(
+        "custody.ledger.record",
+        {
+            "entry": {"task_id": "task-chain", "intent_ref": "governance://action-intent/intent-chain-1"},
+            "_governance": governance,
+        },
+        agent_id="agent-1",
+    )
+    second_receipt = second["mutation_receipt"]
+    assert second_receipt["receipt_counter"] == 2
+    assert second_receipt["previous_receipt_hash"] == first_receipt["payload_hash"]

@@ -93,6 +93,7 @@ from .replay import (
     TrustPageProjection,
     VerificationResult,
 )
+from .mutation_receipt import MutationReceipt
 from .pdp_hot_path import (
     HotPathAssetContext,
     HotPathCheckResult,
@@ -109,6 +110,11 @@ from .edge_telemetry import (
     EdgeTelemetrySignerV0,
     SignedEdgeTelemetryRefV0,
     signed_telemetry_ref_from_envelope_v0,
+)
+from .governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
 )
 from .task_api import Task
 from .task_payload import TaskPayload
@@ -150,6 +156,7 @@ __all__ = [
     "ReplayRecord",
     "ReplayTimelineEvent",
     "ReplayVerificationStatus",
+    "MutationReceipt",
     "TransparencyProof",
     "TrustCertificate",
     "TrustBundle",
@@ -171,6 +178,9 @@ __all__ = [
     "EdgeTelemetrySignerV0",
     "SignedEdgeTelemetryRefV0",
     "signed_telemetry_ref_from_envelope_v0",
+    "GovernedMutationContract",
+    "MutationEffectClass",
+    "MutationReplayMode",
     "Task",
     "TaskPayload",
     "VerificationResult",

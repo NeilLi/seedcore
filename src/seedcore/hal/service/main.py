@@ -30,6 +30,7 @@ from ...integrations.rust_kernel import (
     map_token_error_for_hal,
     verify_execution_token_with_rust,
 )
+from ...services.mutation_receipt_service import mutation_receipt_service
 
 # Internal SeedCore HAL imports
 from ..drivers.reachy_mini import ReachyMiniDriver
@@ -54,7 +55,12 @@ DRIVER_MODE = os.getenv("HAL_DRIVER_MODE", "physical").lower()  # "physical" or 
 ROBOT_HOST = os.getenv("ROBOT_HOST", "localhost")
 SIM_GRPC_ADDRESS = os.getenv("REACHY_SIM_ADDRESS", "localhost:50055")  # Default matches demo_simulator.py
 SIM_BACKEND = os.getenv("HAL_SIM_BACKEND", "reachy_grpc").lower()  # "reachy_grpc" | "robot_sim"
-HAL_REQUIRE_EXECUTION_TOKEN = os.getenv("HAL_REQUIRE_EXECUTION_TOKEN", "false").lower() in {
+HAL_REQUIRE_EXECUTION_TOKEN = os.getenv("HAL_REQUIRE_EXECUTION_TOKEN", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+HAL_ALLOW_UNGOVERNED_ACTUATION = os.getenv("HAL_ALLOW_UNGOVERNED_ACTUATION", "false").lower() in {
     "1",
     "true",
     "yes",
@@ -126,7 +132,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"HAL: ❌ Failed to connect ({DRIVER_MODE} mode, state: {driver.state.value})")
         if DRIVER_MODE == "simulation":
             logger.error(f"HAL: Make sure simulation server is running at {SIM_GRPC_ADDRESS}")
-            logger.error(f"HAL: Check container logs for 'RobotSim gRPC server listening' message")
+            logger.error("HAL: Check container logs for 'RobotSim gRPC server listening' message")
         
     yield
     
@@ -188,7 +194,7 @@ async def get_status():
     if driver.state in (RobotState.CONNECTED, RobotState.MOVING):
         try:
             proprioception = driver.get_proprioception().__dict__
-            logger.debug(f"get_status: Retrieved proprioception data")
+            logger.debug("get_status: Retrieved proprioception data")
         except Exception as e:
             logger.warning(f"Failed to get proprioception: {e}", exc_info=True)
     
@@ -383,11 +389,27 @@ async def actuate(request: ActuationRequest):
 
         actuator_endpoint = _derive_actuator_endpoint(driver)
         result_hash = _hash_result(endpoint_response)
+        mutation_receipt = _build_actuation_mutation_receipt(
+            request=request,
+            actuator_endpoint=actuator_endpoint,
+            actuator_result_hash=result_hash,
+        )
+        if mutation_receipt is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Execution blocked: missing mutation receipt context",
+            )
         transition_receipt = _build_actuation_transition_receipt(
             execution_token=request.execution_token,
             actuator_endpoint=actuator_endpoint,
             actuator_result_hash=result_hash,
         )
+        if transition_receipt is None:
+            transition_receipt = _transition_receipt_from_mutation_receipt(
+                mutation_receipt=mutation_receipt,
+                actuator_endpoint=actuator_endpoint,
+                actuator_result_hash=result_hash,
+            )
         final_state = driver.state.value
         logger.info("actuate: Motion completed successfully, final_state=%s", final_state)
         return {
@@ -397,6 +419,7 @@ async def actuate(request: ActuationRequest):
             "result_hash": result_hash,
             "execution_token_id": (request.execution_token or {}).get("token_id"),
             "robot_state": final_state,
+            "mutation_receipt": mutation_receipt,
             "transition_receipt": transition_receipt,
             "endpoint_response": endpoint_response,
         }
@@ -488,6 +511,8 @@ async def clear_emergency_stop_execution_tokens(
     }
 
 def _requires_token(active_driver: BaseRobotDriver) -> bool:
+    if HAL_ALLOW_UNGOVERNED_ACTUATION:
+        return False
     return HAL_REQUIRE_EXECUTION_TOKEN or isinstance(active_driver, RobotSimExecutionDriver)
 
 
@@ -499,11 +524,12 @@ def _is_valid_execution_token(
 
 
 def _execution_token_max_validity_seconds() -> float:
-    raw = os.getenv("SEEDCORE_EXECUTION_TOKEN_MAX_TTL_SECONDS", "1.0")
+    # Default allows short-lived control windows while avoiding sub-second expiry flakiness.
+    raw = os.getenv("SEEDCORE_EXECUTION_TOKEN_MAX_TTL_SECONDS", "10.0")
     try:
         return max(0.001, float(str(raw).strip()))
     except (TypeError, ValueError):
-        return 1.0
+        return 10.0
 
 
 def _legacy_dev_hmac_execution_token(token: Dict[str, Any]) -> bool:
@@ -828,6 +854,84 @@ def _build_actuation_transition_receipt(
             if constraints.get("previous_receipt_counter") is not None
             else None
         ),
+    )
+
+
+def _build_actuation_mutation_receipt(
+    *,
+    request: ActuationRequest,
+    actuator_endpoint: str,
+    actuator_result_hash: str,
+) -> Optional[Dict[str, Any]]:
+    execution_token = request.execution_token if isinstance(request.execution_token, dict) else {}
+    intent_id = execution_token.get("intent_id")
+    token_id = execution_token.get("token_id")
+    if (
+        (not isinstance(intent_id, str) or not intent_id.strip())
+        or (not isinstance(token_id, str) or not token_id.strip())
+    ):
+        if not HAL_ALLOW_UNGOVERNED_ACTUATION:
+            return None
+        # Dev/test-only fallback path when explicit ungoverned actuation is enabled.
+        # This preserves signed mutation receipts even without an execution token.
+        seed_payload = {
+            "pose_type": request.pose_type,
+            "target": dict(request.target or {}),
+            "behavior_name": request.behavior_name,
+            "behavior_params": dict(request.behavior_params or {}),
+            "actuator_endpoint": actuator_endpoint,
+            "actuator_result_hash": actuator_result_hash,
+            "hardware_uuid": HARDWARE_UUID,
+        }
+        seed = hashlib.sha256(
+            json.dumps(seed_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        intent_id = f"hal:ungoverned:{seed}"
+        token_id = f"hal-ungoverned-{seed[:32]}"
+    constraints = (
+        execution_token.get("constraints")
+        if isinstance(execution_token.get("constraints"), dict)
+        else {}
+    )
+    actor_ref = constraints.get("principal_agent_id")
+    payload = {
+        "pose_type": request.pose_type,
+        "target": dict(request.target or {}),
+        "behavior_name": request.behavior_name,
+        "behavior_params": dict(request.behavior_params or {}),
+        "actuator_endpoint": actuator_endpoint,
+        "actuator_result_hash": actuator_result_hash,
+        "hardware_uuid": HARDWARE_UUID,
+    }
+    return mutation_receipt_service.build_signed_receipt(
+        receipt_kind="hal.actuation",
+        intent_id=str(intent_id),
+        token_id=str(token_id),
+        actor_ref=str(actor_ref) if actor_ref is not None else None,
+        target_ref=actuator_endpoint,
+        mutation_payload=payload,
+    )
+
+
+def _transition_receipt_from_mutation_receipt(
+    *,
+    mutation_receipt: Dict[str, Any],
+    actuator_endpoint: str,
+    actuator_result_hash: str,
+) -> Dict[str, Any]:
+    intent_id = mutation_receipt.get("intent_id")
+    token_id = mutation_receipt.get("token_id")
+    if not isinstance(intent_id, str) or not intent_id.strip():
+        intent_id = "hal:unknown-intent"
+    if not isinstance(token_id, str) or not token_id.strip():
+        token_id = "hal:unknown-token"
+    return build_transition_receipt(
+        intent_id=intent_id,
+        token_id=token_id,
+        actuator_endpoint=actuator_endpoint,
+        hardware_uuid=HARDWARE_UUID,
+        actuator_result_hash=actuator_result_hash,
+        workflow_type="hal_actuation",
     )
 
 
