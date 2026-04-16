@@ -2,6 +2,14 @@
 """
 Specialization taxonomy, role profiles, and RoleRegistry.
 Aligned with SeedCore v2 TaskPayload and Organism Configuration.
+
+Skill modeling note:
+- This module defines runtime Skill identity for internal agent routing/planning
+  context (advisory intelligence plane), not policy authority.
+- Versioned, hashable package/export semantics belong to Artifact modeling
+  (for example synthetic skill packages), not RoleProfile itself.
+- Governed execution authority still flows through policy validation,
+  ActionIntent boundaries, and tokenized handoff.
 """
 
 from __future__ import annotations

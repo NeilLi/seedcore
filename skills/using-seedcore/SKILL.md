@@ -7,6 +7,14 @@ description: Use when the task is about SeedCore runtime operations, hot-path pr
 
 Use this skill at the start of SeedCore-specific work.
 
+## Modeling boundary note
+
+When describing capabilities and artifacts in SeedCore:
+
+- Treat `Skill` as routing/planning identity and `Artifact` as package/provenance identity.
+- Do not imply package presence grants authority; governed actions still require policy-verified authorization.
+- Keep final authority language aligned to `ActionIntent -> PDP -> tokenized handoff`.
+
 ## Rules
 
 - Prefer `seedcore.*` MCP tools first.
