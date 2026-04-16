@@ -165,6 +165,7 @@ def test_receipt_chains_validate_and_detect_tamper() -> None:
         policy_receipt=record["policy_receipt"],
         evidence_bundle=record["evidence_bundle"],
         transition_receipts=transition_results,
+        digital_twin_history_refs=[],
     )
 
     assert [item["artifact_type"] for item in signer_chain] == [

@@ -8,7 +8,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import String, select, text
 
@@ -119,10 +119,14 @@ class ReplayService:
         asset_custody_dao: Optional[AssetCustodyStateDAO] = None,
         custody_transition_dao: Optional[CustodyTransitionDAO] = None,
         custody_dispute_dao: Optional[CustodyDisputeDAO] = None,
+        clock: Optional[Callable[[], datetime]] = None,
+        id_generator: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._governance_audit_dao = governance_audit_dao or GovernedExecutionAuditDAO()
         self._digital_twin_dao = digital_twin_dao or DigitalTwinDAO()
         self._asset_custody_dao = asset_custody_dao or AssetCustodyStateDAO()
+        self._clock = clock
+        self._id_generator = id_generator
         self._custody_graph_service = CustodyGraphService(
             transition_dao=custody_transition_dao,
             dispute_dao=custody_dispute_dao,
@@ -497,7 +501,7 @@ class ReplayService:
             revoked_nodes=revoked_nodes,
             revocation_cutoffs=revocation_cutoffs,
         )
-        bundle_id = f"tb-{self._utcnow().strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+        bundle_id = f"tb-{self._utcnow().strftime('%Y%m%dT%H%M%SZ')}-{self._new_id_hex(8)}"
         published_at = self._utcnow().isoformat()
         snapshot: Dict[str, Any] = {
             "bundle_id": bundle_id,
@@ -740,7 +744,7 @@ class ReplayService:
         ttl = max(1, int(ttl_hours or DEFAULT_TRUST_REFERENCE_TTL_HOURS))
         expires_at = (self._utcnow() + timedelta(hours=ttl)).isoformat()
         reference = PublicTrustReference(
-            jti=str(uuid.uuid4()),
+            jti=self._new_id(),
             lookup_key=lookup_key,
             lookup_value=lookup_value,
             audit_id=replay.audit_record_id,
@@ -900,7 +904,7 @@ class ReplayService:
         owner_context = self._owner_context_summary(replay)
         owner_context_hash = self._owner_context_hash(owner_context)
         certificate_payload = {
-            "certificate_id": str(uuid.uuid4()),
+            "certificate_id": self._new_id(),
             "public_id": public_id,
             "subject_type": replay.subject_type,
             "subject_id": replay.subject_id,
@@ -1050,7 +1054,7 @@ class ReplayService:
             projection = self._build_trust_page_projection(replay=replay, audience=ReplayProjectionKind.PUBLIC)
             authority_consistency = self._authority_consistency_summary(replay)
             return VerificationResult(
-                verification_id=str(uuid.uuid4()),
+                verification_id=self._new_id(),
                 reference_type="trust_token",
                 reference_id=reference_id,
                 subject_id=reference.subject_id,
@@ -1828,11 +1832,23 @@ class ReplayService:
                     details={"record_type": record.get("record_type")},
                 )
             )
-        for receipt in transition_receipts:
+        for index, receipt in enumerate(transition_receipts):
             if receipt.get("executed_at"):
                 events.append(
                     ReplayTimelineEvent(
-                        event_id=str(receipt.get("transition_receipt_id") or f"transition:{uuid.uuid4()}"),
+                        event_id=str(
+                            receipt.get("transition_receipt_id")
+                            or self._timeline_fallback_event_id(
+                                prefix="transition",
+                                index=index,
+                                payload={
+                                    "executed_at": receipt.get("executed_at"),
+                                    "from_zone": receipt.get("from_zone"),
+                                    "to_zone": receipt.get("to_zone"),
+                                    "endpoint_id": receipt.get("endpoint_id"),
+                                },
+                            )
+                        ),
                         event_type="transition_executed",
                         timestamp=str(receipt.get("executed_at")),
                         summary="Controlled transition receipt captured",
@@ -1862,13 +1878,26 @@ class ReplayService:
                     },
                 )
             )
-        for twin_event in digital_twin_history_refs:
+        for index, twin_event in enumerate(digital_twin_history_refs):
             recorded_at = twin_event.get("recorded_at")
             if not recorded_at:
                 continue
             events.append(
                 ReplayTimelineEvent(
-                    event_id=str(twin_event.get("id") or f"twin:{uuid.uuid4()}"),
+                    event_id=str(
+                        twin_event.get("id")
+                        or self._timeline_fallback_event_id(
+                            prefix="twin",
+                            index=index,
+                            payload={
+                                "recorded_at": recorded_at,
+                                "twin_ref": twin_event.get("twin_ref"),
+                                "twin_type": twin_event.get("twin_type"),
+                                "state_version": twin_event.get("state_version"),
+                                "authority_source": twin_event.get("authority_source"),
+                            },
+                        )
+                    ),
                     event_type="digital_twin_updated",
                     timestamp=str(recorded_at),
                     summary="Authoritative digital twin history recorded",
@@ -1882,13 +1911,25 @@ class ReplayService:
                     },
                 )
             )
-        for transition_event in custody_transition_refs:
+        for index, transition_event in enumerate(custody_transition_refs):
             recorded_at = transition_event.get("recorded_at")
             if not recorded_at:
                 continue
             events.append(
                 ReplayTimelineEvent(
-                    event_id=str(transition_event.get("transition_event_id") or f"custody-transition:{uuid.uuid4()}"),
+                    event_id=str(
+                        transition_event.get("transition_event_id")
+                        or self._timeline_fallback_event_id(
+                            prefix="custody-transition",
+                            index=index,
+                            payload={
+                                "recorded_at": recorded_at,
+                                "transition_seq": transition_event.get("transition_seq"),
+                                "lineage_status": transition_event.get("lineage_status"),
+                                "asset_id": transition_event.get("asset_id"),
+                            },
+                        )
+                    ),
                     event_type="custody_lineage_recorded",
                     timestamp=str(recorded_at),
                     summary="Custody lineage chain updated",
@@ -1899,13 +1940,25 @@ class ReplayService:
                     },
                 )
             )
-        for dispute in dispute_refs:
+        for index, dispute in enumerate(dispute_refs):
             recorded_at = dispute.get("recorded_at") or dispute.get("updated_at")
             if not recorded_at:
                 continue
             events.append(
                 ReplayTimelineEvent(
-                    event_id=str(dispute.get("dispute_id") or f"dispute:{uuid.uuid4()}"),
+                    event_id=str(
+                        dispute.get("dispute_id")
+                        or self._timeline_fallback_event_id(
+                            prefix="dispute",
+                            index=index,
+                            payload={
+                                "recorded_at": recorded_at,
+                                "status": dispute.get("status"),
+                                "title": dispute.get("title"),
+                                "asset_id": dispute.get("asset_id"),
+                            },
+                        )
+                    ),
                     event_type="custody_dispute_linked",
                     timestamp=str(recorded_at),
                     summary="Custody dispute linked to replay subject",
@@ -1919,7 +1972,7 @@ class ReplayService:
         approval_context = parameters.get("approval_context") if isinstance(parameters.get("approval_context"), dict) else {}
         approval_history = approval_context.get("approval_transition_history")
         if isinstance(approval_history, list):
-            for item in approval_history:
+            for index, item in enumerate(approval_history):
                 if not isinstance(item, dict):
                     continue
                 occurred_at = item.get("occurred_at")
@@ -1932,7 +1985,22 @@ class ReplayService:
                     summary = f"Approval transition applied: {previous_status} -> {next_status}."
                 events.append(
                     ReplayTimelineEvent(
-                        event_id=str(item.get("event_id") or item.get("event_hash") or f"approval-transition:{uuid.uuid4()}"),
+                        event_id=str(
+                            item.get("event_id")
+                            or item.get("event_hash")
+                            or self._timeline_fallback_event_id(
+                                prefix="approval-transition",
+                                index=index,
+                                payload={
+                                    "occurred_at": occurred_at,
+                                    "transition_type": item.get("transition_type"),
+                                    "envelope_id": item.get("envelope_id"),
+                                    "previous_status": item.get("previous_status"),
+                                    "next_status": item.get("next_status"),
+                                    "previous_event_hash": item.get("previous_event_hash"),
+                                },
+                            )
+                        ),
                         event_type="approval_transition_applied",
                         timestamp=occurred_at,
                         summary=summary,
@@ -3517,7 +3585,7 @@ class ReplayService:
         consistency_issues = self._owner_delegation_consistency_issues(replay)
         verified = replay.verification_status.verified and not consistency_issues
         return VerificationResult(
-            verification_id=str(uuid.uuid4()),
+            verification_id=self._new_id(),
             reference_type=reference_type,
             reference_id=reference_id,
             subject_id=replay.subject_id,
@@ -3560,7 +3628,7 @@ class ReplayService:
         tamper_status: str = "unknown",
     ) -> VerificationResult:
         return VerificationResult(
-            verification_id=str(uuid.uuid4()),
+            verification_id=self._new_id(),
             reference_type=reference_type,
             reference_id=reference_id,
             subject_id=subject_id,
@@ -3860,7 +3928,54 @@ class ReplayService:
         return base64.urlsafe_b64decode((value + padding).encode("ascii"))
 
     def _utcnow(self) -> datetime:
+        if callable(self._clock):
+            try:
+                now = self._clock()
+            except Exception:
+                now = None
+            if isinstance(now, datetime):
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=timezone.utc)
+                return now.astimezone(timezone.utc)
         return datetime.now(timezone.utc)
+
+    def _new_id(self) -> str:
+        if callable(self._id_generator):
+            try:
+                candidate = self._id_generator()
+            except Exception:
+                candidate = None
+            if isinstance(candidate, uuid.UUID):
+                return str(candidate)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return str(uuid.uuid4())
+
+    def _new_id_hex(self, length: int) -> str:
+        normalized_length = max(1, int(length))
+        generated_id = self._new_id()
+        try:
+            return uuid.UUID(generated_id).hex[:normalized_length]
+        except ValueError:
+            return sha256_hex(generated_id)[:normalized_length]
+
+    def _timeline_fallback_event_id(
+        self,
+        *,
+        prefix: str,
+        index: int,
+        payload: Mapping[str, Any],
+    ) -> str:
+        canonical_payload = {
+            "prefix": str(prefix),
+            "index": int(index),
+            "payload": dict(payload),
+        }
+        try:
+            serialized = canonical_json(canonical_payload)
+        except Exception:
+            serialized = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"), default=str)
+        return f"{prefix}:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()[:24]}"
 
     def _parse_datetime(self, value: str) -> datetime:
         normalized = str(value).replace("Z", "+00:00")

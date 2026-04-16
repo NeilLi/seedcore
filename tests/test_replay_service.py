@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock
 
@@ -246,6 +247,90 @@ def _apply_transition_metadata(
 def test_coerce_projection_accepts_enum_repr_string() -> None:
     service = ReplayService()
     assert service._coerce_projection("ReplayProjectionKind.INTERNAL") == ReplayProjectionKind.INTERNAL
+
+
+def test_replay_timeline_fallback_event_ids_are_deterministic() -> None:
+    service = ReplayService()
+    record = {
+        "id": "audit-fallback-1",
+        "record_type": "execution_receipt",
+        "recorded_at": "2026-04-02T08:00:30+00:00",
+        "action_intent": {
+            "action": {
+                "parameters": {
+                    "approval_context": {
+                        "approval_transition_history": [
+                            {
+                                "occurred_at": "2026-04-02T08:01:10Z",
+                                "transition_type": "add_approval",
+                                "envelope_id": "approval-transfer-001",
+                                "previous_status": "PARTIALLY_APPROVED",
+                                "next_status": "APPROVED",
+                                "previous_event_hash": "sha256:previous",
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    timeline_kwargs = {
+        "record": record,
+        "authz_graph": {},
+        "governed_receipt": {},
+        "policy_receipt": {
+            "policy_receipt_id": "policy-fallback-1",
+            "timestamp": "2026-04-02T08:00:00+00:00",
+        },
+        "evidence_bundle": {
+            "evidence_bundle_id": "bundle-fallback-1",
+            "created_at": "2026-04-02T08:00:20+00:00",
+        },
+        "transition_receipts": [
+            {
+                "executed_at": "2026-04-02T08:00:10+00:00",
+                "from_zone": "staging-a",
+                "to_zone": "vault-a",
+                "endpoint_id": "robot_sim://unit-1",
+            }
+        ],
+        "custody_transition_refs": [
+            {
+                "recorded_at": "2026-04-02T08:00:50+00:00",
+                "transition_seq": 1,
+                "lineage_status": "authoritative",
+                "asset_id": "asset-1",
+            }
+        ],
+        "digital_twin_history_refs": [
+            {
+                "recorded_at": "2026-04-02T08:00:40+00:00",
+                "twin_ref": "asset:asset-1",
+                "twin_type": "asset",
+                "state_version": 3,
+                "authority_source": "pdp",
+            }
+        ],
+        "dispute_refs": [
+            {
+                "recorded_at": "2026-04-02T08:01:00+00:00",
+                "status": "OPEN",
+                "title": "Seal mismatch",
+                "asset_id": "asset-1",
+            }
+        ],
+    }
+
+    first = service._build_replay_timeline(**timeline_kwargs)  # noqa: SLF001
+    second = service._build_replay_timeline(**timeline_kwargs)  # noqa: SLF001
+
+    assert [(item.event_type, item.event_id) for item in first] == [(item.event_type, item.event_id) for item in second]
+    event_ids = {item.event_type: item.event_id for item in first}
+    assert event_ids["transition_executed"].startswith("transition:")
+    assert event_ids["digital_twin_updated"].startswith("twin:")
+    assert event_ids["custody_lineage_recorded"].startswith("custody-transition:")
+    assert event_ids["custody_dispute_linked"].startswith("dispute:")
+    assert event_ids["approval_transition_applied"].startswith("approval-transition:")
 
 
 def _apply_transfer_workflow_metadata(
@@ -790,6 +875,40 @@ async def test_public_reference_lifecycle_supports_decode_revoke_and_failed_veri
     assert verification.operator_actions == []
     assert verification.authority_consistency == {}
     assert verification.authority_consistency_hash is None
+
+
+@pytest.mark.asyncio
+async def test_replay_service_supports_injected_clock_and_id_generator() -> None:
+    record = _build_audit_record(task_id="task-deterministic-1", intent_id="intent-deterministic-1", asset_id="asset-deterministic-1")
+    fixed_now = datetime(2026, 4, 16, 9, 30, tzinfo=timezone.utc)
+    generated_ids = iter(
+        [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+        ]
+    )
+    service = ReplayService(
+        governance_audit_dao=type("DAO", (), {"get_by_entry_id": AsyncMock(return_value=record)})(),
+        digital_twin_dao=type("TwinDAO", (), {"list_history": AsyncMock(return_value=[])})(),
+        asset_custody_dao=type("AssetDAO", (), {"get_snapshot": AsyncMock(return_value=None)})(),
+        clock=lambda: fixed_now,
+        id_generator=lambda: next(generated_ids),
+    )
+
+    _, _, replay = await service.assemble_replay_record(_DummySession(), audit_id=record["id"])
+    reference, _ = service.build_public_reference(
+        lookup_key="audit_id",
+        lookup_value=record["id"],
+        replay=replay,
+        ttl_hours=2,
+    )
+    verification = await service.verify_reference(_DummySession(), audit_id=record["id"])
+
+    assert reference.jti == "00000000-0000-0000-0000-000000000001"
+    assert reference.issued_at == fixed_now.isoformat()
+    assert reference.expires_at == (fixed_now + timedelta(hours=2)).isoformat()
+    assert verification.verification_id == "00000000-0000-0000-0000-000000000002"
+    assert verification.verification_time == fixed_now.isoformat()
 
 
 @pytest.mark.asyncio
