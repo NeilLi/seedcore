@@ -72,76 +72,76 @@ must-win product workflow:
 
 - **Agent-Governed Restricted Custody Transfer**
 
-This is now the repository's clearest milestone and roadmap anchor: Slice 1
-live sign-off for the canonical Restricted Custody Transfer wedge was closed on
-**March 30, 2026**, and Q2 **Window A host-first closure** completed on
-**April 2, 2026**. PKG–RCT **contract alignment** through Phase 4 is in the tree:
-activation hardening, publish-time validation, explicit **triple-hash** binding
-(policy bundle + decision graph + state) on receipts, and opt-in **strict replay**
-that rejects policy-only verification when signed artifacts omit those binds (see
-[pkg snapshot / RCT alignment](docs/development/pkg_snapshot_rct_alignment_research.md)).
+The root README should describe the active product boundary, not try to be the
+full milestone tracker. The detailed dated rollout now lives in the development
+docs.
 
-For the live roadmap and closure details, see:
+Latest repo-aligned status as of **April 10, 2026**:
 
-- [current next steps](docs/development/current_next_steps.md)
-- [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
-- [Q2 product spec](docs/development/q2_2026_audit_trail_ui_spec.md)
-- [development docs index](docs/development/README.md)
+- the canonical RCT wedge remains the single product-defining proof surface
+- Q2 Window A host-first closure is complete, and PKG-RCT contract alignment is
+  implemented in-repo through activation hardening, publish-time validation,
+  explicit triple-hash binding, and opt-in strict replay verification
+- `RESULT_VERIFIER` P0 is implemented for the RCT slice and now fail-closes
+  downstream policy/closure paths on replay mismatch
+- the remote kube topology is validated for the core hot-path/runtime lane, and
+  the verification API kube integration lane is now implemented in-repo
 
-That means the near-term product boundary is:
+Near-term product boundary for this phase:
 
-- external agent request
+- external agent request (narrow gateway contract)
 - governed runtime decision (`allow` / `deny` / `quarantine` / `escalate`)
 - transaction-specific execution authority
 - device- and scope-bound accountability
 - replayable evidence and verification surface
 - forensic-block and replay linkage
 
-This keeps the work focused on the layer SeedCore can uniquely own:
-governed admissibility and proof, not generalized model intelligence.
+This keeps execution focused on the layer SeedCore can uniquely own: governed
+admissibility and proof, not generalized model intelligence.
 
-For this phase, the vertical story should stay concrete:
+Vertical posture for this stage:
 
-- operator and admin ingress can be hardened through IAP-style first-mile identity
+- operator and admin ingress can be hardened through IAP-style first-mile
+  identity
 - the trust plane remains in SeedCore
-- edge execution can start on Jetson-class hardware and mature toward IGX Thor-class trusted-edge deployments
-- the must-win proof surface remains one custody-aware workflow, not a generic "autonomous everything" platform
+- edge execution starts on Jetson-class boundaries and can mature toward
+  IGX Thor-class trusted-edge deployments
+- the must-win proof surface stays one custody-aware workflow, not a generic
+  "autonomous everything" platform
 
-This is how SeedCore can hold both positions at once:
+Execution discipline:
 
 - ambitious enough to matter as a category-defining trust substrate
-- disciplined enough to ship step by step in one high-trust vertical domain first
+- disciplined enough to ship step by step in one high-trust vertical first
 
-Supporting documents:
+Live planning and closure references:
 
 - [development docs index](docs/development/README.md)
-- [canonical 2026 positioning](docs/development/seedcore_2026_execution_plan.md)
+- [current next steps](docs/development/current_next_steps.md)
+- [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
+- [Q2 product spec](docs/development/q2_2026_audit_trail_ui_spec.md)
 - [agent action gateway contract (v1 draft)](docs/development/agent_action_gateway_contract.md)
 
 ## Current Codebase Snapshot
 
-Based on the current repository state, SeedCore is already organized around the three trust problems that most agent systems leave unresolved:
+SeedCore currently centers on three unresolved trust gaps in agent execution:
 
 1. **Verifiable authority boundary**
 2. **Policy enforcement layer**
 3. **Trusted chain of custody**
 
-Recent changes reinforced that direction in two concrete areas:
+Current repository baseline:
 
-1. **HAL transition attestation and receipt verification**
-2. **Execution token TTL, revocation, and emergency stop controls**
+- Governed execution uses short-lived `ExecutionToken` authority with TTL limits, revocation, and HAL emergency-stop enforcement.
+- Trust-critical receipts and transition evidence are signed via policy-selected providers (TPM/KMS/software modes by environment).
+- Evidence bundles support replay and offline verification through the Rust `seedcore-verify` surface.
+- `RESULT_VERIFIER` now reuses the replay stack inside the coordinator runtime and writes authoritative fail-closed lockout/quarantine state for replay mismatches in the RCT slice.
+- Verification and observability APIs are live under `/api/v1/verification/*` and `/api/v1/pdp/hot-path/*`.
+- The kube deployment path now includes a first-class verification lane for hot-path gates, degraded dependency drills, benchmark capture, and verification-surface signoff when the verification API is deployed.
+- PKG-RCT alignment includes snapshot/contract artifacts and opt-in activation, publish validation, and strict replay hardening.
+- Restricted-custody flows support explicit `trust_proof` material for offline artifact + trust-bundle verification.
 
-Implemented in this repo (high-level):
-
-- Trust-critical receipt signing routed through TPM/KMS/Ed25519/HMAC paths based on policy and environment.
-- Short-lived `ExecutionToken` authority with TTL enforcement, revocation, and an operator-triggered emergency cutoff at the HAL boundary.
-- Replay-verifiable evidence bundles plus offline verification via the `seedcore-verify` kernel/CLI.
-- Q2 verification surface (operator console + verification API) under `/api/v1/verification/*`.
-- Hot-path observability under `/api/v1/pdp/hot-path/status` plus Prometheus text at `/api/v1/pdp/hot-path/metrics`.
-- Bounded **memory** subsystem (`MemoryRuntime`, working / semantic / optional incident services): advisory context for agents and tools, not a second product center or an implicit authority for PDP decisions.
-- PKG RCT contract surfaces: snapshot manifests and contract artifacts; **opt-in** activation hardening (`SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE`, `SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT`), **opt-in** publish validation before snapshot activate (`SEEDCORE_PKG_RCT_PUBLISH_VALIDATE`), and **opt-in** strict replay verification (`SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH`) with host helper `scripts/host/verify_rct_replay_strict.py`.
-
-Restricted-custody trust hardening supports explicit `trust_proof` material, enabling offline verification against artifacts and a trust bundle (TPM fixture path included).
+For implementation detail and rollout posture, see `docs/development/current_next_steps.md` and related development docs.
 
 ## Trust Challenges
 
