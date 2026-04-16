@@ -5,6 +5,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from seedcore.api.governed_router_mutation import (
+    build_router_audit_callbacks,
+    derive_router_governed_ids,
+)
 from seedcore.api.external_authority import (
     CreatorProfileUpsertRequest,
     OwnerPolicyUpsertRequest,
@@ -31,11 +35,30 @@ from seedcore.api.external_authority import (
     verify_signed_intent_submission,
 )
 from seedcore.coordinator.core.governance import build_governance_context
+from seedcore.coordinator.dao import GovernedExecutionAuditDAO
 from seedcore.database import get_async_pg_session
+from seedcore.models.governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
+)
 from seedcore.ops.evidence.owner_context import owner_context_hash as build_owner_context_hash
+from seedcore.services.governed_mutation_service import (
+    GovernedMutationError,
+    governed_mutation_wrapper,
+)
 
 
 router = APIRouter(tags=["identity"])
+_governed_audit_dao = GovernedExecutionAuditDAO()
+_identity_mutation_contract = GovernedMutationContract(
+    effect_class=MutationEffectClass.IDENTITY_STATE,
+    requires_execution_token=False,
+    requires_policy_receipt=False,
+    requires_signed_receipt=True,
+    snapshot_binding_required=False,
+    replay_mode=MutationReplayMode.HASH_STABLE,
+)
 
 
 def _provenance_rank(level: str | None) -> int:
@@ -44,13 +67,88 @@ def _provenance_rank(level: str | None) -> int:
     return int(order.get(normalized, 0))
 
 
+async def _run_identity_mutation(
+    *,
+    session: AsyncSession,
+    operation: str,
+    target_ref: str,
+    request_payload: dict[str, Any],
+    mutation_operation,
+    actor_ref: str | None = None,
+    snapshot_id: int | None = None,
+    policy_receipt_id: str | None = None,
+) -> dict[str, Any]:
+    ids = derive_router_governed_ids(
+        namespace="identity",
+        operation=operation,
+        target_ref=target_ref,
+        task_prefix="identity-task",
+    )
+    load_previous_chain, append_audit = build_router_audit_callbacks(
+        session=session,
+        dao=_governed_audit_dao,
+        ids=ids,
+        record_type="identity_mutation",
+        action_type=operation.upper(),
+        target_ref=target_ref,
+        actor_ref=actor_ref,
+        actor_organ_id="identity_router",
+        policy_source="identity_router",
+    )
+
+    try:
+        governed = await governed_mutation_wrapper.execute(
+            entrypoint_id=f"identity.{operation}",
+            contract=_identity_mutation_contract,
+            payload_for_hash={
+                "operation": operation,
+                "target_ref": target_ref,
+                "request": request_payload,
+            },
+            mutation_operation=mutation_operation,
+            receipt_kind=f"identity.{operation}",
+            actor_ref=actor_ref,
+            target_ref=target_ref,
+            intent_id=ids.intent_id,
+            token_id=ids.token_id,
+            policy_receipt_id=policy_receipt_id,
+            snapshot_id=snapshot_id,
+            load_previous_receipt_chain=load_previous_chain,
+            append_audit_record=append_audit,
+        )
+    except GovernedMutationError as exc:
+        raise HTTPException(status_code=500, detail=f"Governed mutation failed: {exc.code}") from exc
+
+    # Identity helper functions commit their own fact mutations.
+    # We still need to commit the governed audit append that happens after the mutation operation.
+    await session.commit()
+
+    body = (
+        governed.mutation_result.model_dump(mode="json")
+        if hasattr(governed.mutation_result, "model_dump")
+        else (
+            dict(governed.mutation_result)
+            if isinstance(governed.mutation_result, dict)
+            else {"result": governed.mutation_result}
+        )
+    )
+    body["mutation_receipt"] = governed.mutation_receipt
+    return body
+
+
 @router.post("/identities/dids")
 async def register_did(
     payload: DIDRegistrationRequest,
     session: AsyncSession = Depends(get_async_pg_session),
 ):
-    record = await upsert_did_document(session, payload)
-    return record.model_dump(mode="json")
+    return await _run_identity_mutation(
+        session=session,
+        operation="register_did",
+        target_ref=str(payload.did),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=lambda: upsert_did_document(session, payload),
+        actor_ref=str(getattr(payload, "updated_by", "") or payload.did),
+    )
 
 
 @router.patch("/identities/dids/{did}")
@@ -59,10 +157,20 @@ async def update_did(
     patch: DIDUpdateRequest,
     session: AsyncSession = Depends(get_async_pg_session),
 ):
-    record = await patch_did_document(session, did, patch)
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"DID '{did}' not found")
-    return record.model_dump(mode="json")
+    async def _mutation():
+        record = await patch_did_document(session, did, patch)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"DID '{did}' not found")
+        return record
+
+    return await _run_identity_mutation(
+        session=session,
+        operation="update_did",
+        target_ref=str(did),
+        request_payload=patch.model_dump(mode="json"),
+        mutation_operation=_mutation,
+        actor_ref=str(getattr(patch, "updated_by", "") or did),
+    )
 
 
 @router.get("/identities/dids/{did}")
@@ -87,8 +195,17 @@ async def create_delegation(
         raise HTTPException(status_code=404, detail=f"Owner DID '{payload.owner_id}' not found")
     if assistant is None:
         raise HTTPException(status_code=404, detail=f"Assistant DID '{payload.assistant_id}' not found")
-    record = await grant_delegation(session, payload)
-    return record.model_dump(mode="json")
+    async def _mutation():
+        return await grant_delegation(session, payload)
+
+    return await _run_identity_mutation(
+        session=session,
+        operation="grant_delegation",
+        target_ref=str(payload.owner_id),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=_mutation,
+        actor_ref=str(payload.owner_id),
+    )
 
 
 @router.post("/delegations/{delegation_id}/revoke")
@@ -97,10 +214,20 @@ async def revoke_delegation_endpoint(
     payload: DelegationRevokeRequest,
     session: AsyncSession = Depends(get_async_pg_session),
 ):
-    record = await revoke_delegation(session, delegation_id, reason=payload.reason)
-    if record is None:
-        raise HTTPException(status_code=404, detail=f"Delegation '{delegation_id}' not found")
-    return record.model_dump(mode="json")
+    async def _mutation():
+        record = await revoke_delegation(session, delegation_id, reason=payload.reason)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Delegation '{delegation_id}' not found")
+        return record
+
+    return await _run_identity_mutation(
+        session=session,
+        operation="revoke_delegation",
+        target_ref=str(delegation_id),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=_mutation,
+        actor_ref=str(delegation_id),
+    )
 
 
 @router.get("/delegations/{delegation_id}")
@@ -149,8 +276,14 @@ async def upsert_creator_profile_endpoint(
     payload: CreatorProfileUpsertRequest,
     session: AsyncSession = Depends(get_async_pg_session),
 ):
-    record = await upsert_creator_profile(session, payload)
-    return record.model_dump(mode="json")
+    return await _run_identity_mutation(
+        session=session,
+        operation="upsert_creator_profile",
+        target_ref=str(payload.owner_id),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=lambda: upsert_creator_profile(session, payload),
+        actor_ref=str(payload.updated_by or payload.owner_id),
+    )
 
 
 @router.get("/creator-profiles/{owner_id}")
@@ -169,8 +302,14 @@ async def upsert_trust_preferences_endpoint(
     payload: TrustPreferencesUpsertRequest,
     session: AsyncSession = Depends(get_async_pg_session),
 ):
-    record = await upsert_trust_preferences(session, payload)
-    return record.model_dump(mode="json")
+    return await _run_identity_mutation(
+        session=session,
+        operation="upsert_trust_preferences",
+        target_ref=str(payload.owner_id),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=lambda: upsert_trust_preferences(session, payload),
+        actor_ref=str(payload.updated_by or payload.owner_id),
+    )
 
 
 @router.get("/trust-preferences/{owner_id}")
@@ -189,8 +328,14 @@ async def upsert_owner_policy_endpoint(
     payload: OwnerPolicyUpsertRequest,
     session: AsyncSession = Depends(get_async_pg_session),
 ):
-    record = await upsert_owner_policy(session, payload)
-    return record.model_dump(mode="json")
+    return await _run_identity_mutation(
+        session=session,
+        operation="upsert_owner_policy",
+        target_ref=str(payload.owner_id),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=lambda: upsert_owner_policy(session, payload),
+        actor_ref=str(payload.updated_by or payload.owner_id),
+    )
 
 
 @router.get("/owner-policies/{owner_id}")

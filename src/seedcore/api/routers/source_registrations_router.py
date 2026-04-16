@@ -9,8 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...api.governed_router_mutation import (
+    build_router_audit_callbacks,
+    derive_router_governed_ids,
+)
+from ...coordinator.dao import GovernedExecutionAuditDAO
 from ...database import get_async_pg_session
 from ...models import DatabaseTask as Task, TaskStatus
+from ...models.governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
+)
 from ...models.source_registration import (
     RegistrationDecision,
     SourceRegistration,
@@ -23,9 +33,22 @@ from ...models.source_registration import (
 )
 from ...ops.source_registration.normalizer import normalize_source_registration_context
 from ...ops.source_registration.projector import record_tracking_event
+from ...services.governed_mutation_service import (
+    GovernedMutationError,
+    governed_mutation_wrapper,
+)
 
 
 router = APIRouter()
+_governed_audit_dao = GovernedExecutionAuditDAO()
+_source_registration_mutation_contract = GovernedMutationContract(
+    effect_class=MutationEffectClass.DIGITAL_STATE,
+    requires_execution_token=False,
+    requires_policy_receipt=False,
+    requires_signed_receipt=True,
+    snapshot_binding_required=False,
+    replay_mode=MutationReplayMode.HASH_STABLE,
+)
 
 
 class ArtifactCreate(BaseModel):
@@ -123,6 +146,7 @@ class SourceRegistrationRead(BaseModel):
     artifacts: List[ArtifactRead] = Field(default_factory=list)
     measurements: List[MeasurementRead] = Field(default_factory=list)
     latest_decision: Optional[RegistrationDecisionRead] = None
+    mutation_receipt: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -131,6 +155,7 @@ class SubmitRegistrationResponse(BaseModel):
     registration_id: uuid.UUID
     task_id: uuid.UUID
     status: str
+    mutation_receipt: Optional[Dict[str, Any]] = None
 
 
 ENVIRONMENTAL_MEASUREMENT_TYPES = {"oxygen_level", "humidity", "gps", "altitude_meters"}
@@ -165,6 +190,54 @@ async def _get_registration_or_404(
     if registration is None:
         raise HTTPException(status_code=404, detail="SourceRegistration not found")
     return registration
+
+
+async def _run_source_registration_mutation(
+    *,
+    session: AsyncSession,
+    operation: str,
+    target_ref: str,
+    request_payload: Dict[str, Any],
+    mutation_operation,
+    actor_ref: str | None = None,
+    snapshot_id: int | None = None,
+) -> tuple[Any, Dict[str, Any]]:
+    ids = derive_router_governed_ids(
+        namespace="source_registration",
+        operation=operation,
+        target_ref=target_ref,
+        task_prefix="source-registration-task",
+    )
+    load_previous_chain, append_audit = build_router_audit_callbacks(
+        session=session,
+        dao=_governed_audit_dao,
+        ids=ids,
+        record_type="source_registration_mutation",
+        action_type=operation.upper(),
+        target_ref=target_ref,
+        actor_ref=actor_ref,
+        actor_organ_id="source_registrations_router",
+        policy_source="source_registrations_router",
+    )
+
+    try:
+        governed = await governed_mutation_wrapper.execute(
+            entrypoint_id=f"source_registrations.{operation}",
+            contract=_source_registration_mutation_contract,
+            payload_for_hash=request_payload,
+            mutation_operation=mutation_operation,
+            receipt_kind=f"source_registration.{operation}",
+            actor_ref=actor_ref,
+            target_ref=target_ref,
+            intent_id=ids.intent_id,
+            token_id=ids.token_id,
+            snapshot_id=snapshot_id,
+            load_previous_receipt_chain=load_previous_chain,
+            append_audit_record=append_audit,
+        )
+    except GovernedMutationError as exc:
+        raise HTTPException(status_code=500, detail=f"Governed mutation failed: {exc.code}") from exc
+    return governed.mutation_result, dict(governed.mutation_receipt or {})
 
 
 def _artifact_event_type(artifact_type: str) -> TrackingEventType:
@@ -429,72 +502,85 @@ async def create_source_registration(
     payload: SourceRegistrationCreate,
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> SourceRegistrationRead:
-    registration = SourceRegistration(
-        lot_id=payload.lot_id,
-        producer_id=payload.producer_id,
-        status=SourceRegistrationStatus.DRAFT,
-        snapshot_id=await _resolve_snapshot_id(session, payload.snapshot_id),
-    )
-    session.add(registration)
-    await session.flush()
+    async def _mutation_operation() -> SourceRegistration:
+        registration = SourceRegistration(
+            lot_id=payload.lot_id,
+            producer_id=payload.producer_id,
+            status=SourceRegistrationStatus.DRAFT,
+            snapshot_id=await _resolve_snapshot_id(session, payload.snapshot_id),
+        )
+        session.add(registration)
+        await session.flush()
 
-    await record_tracking_event(
-        session,
-        registration=registration,
-        event_type=TrackingEventType.SOURCE_CLAIM_DECLARED,
-        source_kind=TrackingEventSourceKind.SOURCE_DECLARATION,
-        payload={
-            "source_claim_id": payload.source_claim_id,
-            "lot_id": payload.lot_id,
-            "producer_id": payload.producer_id,
-            "rare_grade_profile_id": payload.rare_grade_profile_id,
-            "claimed_origin": payload.claimed_origin,
-            "collection_site": payload.collection_site,
-            "collected_at": (
-                payload.collected_at.isoformat() if payload.collected_at is not None else None
-            ),
-        },
-        captured_at=payload.collected_at,
-        snapshot_id=registration.snapshot_id,
-    )
-
-    for artifact in payload.artifacts:
         await record_tracking_event(
             session,
             registration=registration,
-            event_type=_artifact_event_type(artifact.artifact_type),
-            source_kind=TrackingEventSourceKind.PROVENANCE_SCAN,
+            event_type=TrackingEventType.SOURCE_CLAIM_DECLARED,
+            source_kind=TrackingEventSourceKind.SOURCE_DECLARATION,
             payload={
-                "artifact_type": artifact.artifact_type,
-                "uri": artifact.uri,
-                "sha256": artifact.sha256,
-                "captured_at": (
-                    artifact.captured_at.isoformat() if artifact.captured_at is not None else None
+                "source_claim_id": payload.source_claim_id,
+                "lot_id": payload.lot_id,
+                "producer_id": payload.producer_id,
+                "rare_grade_profile_id": payload.rare_grade_profile_id,
+                "claimed_origin": payload.claimed_origin,
+                "collection_site": payload.collection_site,
+                "collected_at": (
+                    payload.collected_at.isoformat() if payload.collected_at is not None else None
                 ),
-                "captured_by": artifact.captured_by,
-                "device_id": artifact.device_id,
-                "content_type": artifact.content_type,
-                "metadata": artifact.metadata,
             },
-            captured_at=artifact.captured_at,
-            device_id=artifact.device_id,
-            sha256=artifact.sha256,
+            captured_at=payload.collected_at,
+            snapshot_id=registration.snapshot_id,
         )
 
-    for measurement in payload.measurements:
-        await record_tracking_event(
-            session,
-            registration=registration,
-            event_type=_measurement_event_type(measurement.measurement_type),
-            source_kind=TrackingEventSourceKind.TELEMETRY,
-            payload=_measurement_payload_for_tracking_event(measurement),
-            captured_at=measurement.measured_at,
-            device_id=measurement.sensor_id,
-        )
+        for artifact in payload.artifacts:
+            await record_tracking_event(
+                session,
+                registration=registration,
+                event_type=_artifact_event_type(artifact.artifact_type),
+                source_kind=TrackingEventSourceKind.PROVENANCE_SCAN,
+                payload={
+                    "artifact_type": artifact.artifact_type,
+                    "uri": artifact.uri,
+                    "sha256": artifact.sha256,
+                    "captured_at": (
+                        artifact.captured_at.isoformat() if artifact.captured_at is not None else None
+                    ),
+                    "captured_by": artifact.captured_by,
+                    "device_id": artifact.device_id,
+                    "content_type": artifact.content_type,
+                    "metadata": artifact.metadata,
+                },
+                captured_at=artifact.captured_at,
+                device_id=artifact.device_id,
+                sha256=artifact.sha256,
+            )
 
+        for measurement in payload.measurements:
+            await record_tracking_event(
+                session,
+                registration=registration,
+                event_type=_measurement_event_type(measurement.measurement_type),
+                source_kind=TrackingEventSourceKind.TELEMETRY,
+                payload=_measurement_payload_for_tracking_event(measurement),
+                captured_at=measurement.measured_at,
+                device_id=measurement.sensor_id,
+            )
+        return registration
+
+    registration, mutation_receipt = await _run_source_registration_mutation(
+        session=session,
+        operation="create",
+        target_ref=f"{payload.lot_id}:{payload.producer_id}",
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=_mutation_operation,
+        actor_ref=payload.producer_id,
+        snapshot_id=payload.snapshot_id,
+    )
     await session.commit()
     await session.refresh(registration)
-    return await _build_registration_read(session, registration)
+    response = await _build_registration_read(session, registration)
+    response.mutation_receipt = mutation_receipt
+    return response
 
 
 @router.get("/source-registrations/{registration_id}", response_model=SourceRegistrationRead)
@@ -516,30 +602,45 @@ async def add_source_registration_artifact(
     session: AsyncSession = Depends(get_async_pg_session),
 ) -> SourceRegistrationRead:
     registration = await _get_registration_or_404(session, registration_id)
-    await record_tracking_event(
-        session,
-        registration=registration,
-        event_type=_artifact_event_type(payload.artifact_type),
-        source_kind=TrackingEventSourceKind.PROVENANCE_SCAN,
-        payload={
-            "artifact_type": payload.artifact_type,
-            "uri": payload.uri,
-            "sha256": payload.sha256,
-            "captured_at": (
-                payload.captured_at.isoformat() if payload.captured_at is not None else None
-            ),
-            "captured_by": payload.captured_by,
-            "device_id": payload.device_id,
-            "content_type": payload.content_type,
-            "metadata": payload.metadata,
-        },
-        captured_at=payload.captured_at,
-        device_id=payload.device_id,
-        sha256=payload.sha256,
+
+    async def _mutation_operation() -> SourceRegistration:
+        await record_tracking_event(
+            session,
+            registration=registration,
+            event_type=_artifact_event_type(payload.artifact_type),
+            source_kind=TrackingEventSourceKind.PROVENANCE_SCAN,
+            payload={
+                "artifact_type": payload.artifact_type,
+                "uri": payload.uri,
+                "sha256": payload.sha256,
+                "captured_at": (
+                    payload.captured_at.isoformat() if payload.captured_at is not None else None
+                ),
+                "captured_by": payload.captured_by,
+                "device_id": payload.device_id,
+                "content_type": payload.content_type,
+                "metadata": payload.metadata,
+            },
+            captured_at=payload.captured_at,
+            device_id=payload.device_id,
+            sha256=payload.sha256,
+        )
+        return registration
+
+    registration, mutation_receipt = await _run_source_registration_mutation(
+        session=session,
+        operation="add_artifact",
+        target_ref=str(registration_id),
+        request_payload=payload.model_dump(mode="json"),
+        mutation_operation=_mutation_operation,
+        actor_ref=payload.captured_by or payload.device_id,
+        snapshot_id=registration.snapshot_id,
     )
     await session.commit()
     await session.refresh(registration)
-    return await _build_registration_read(session, registration)
+    response = await _build_registration_read(session, registration)
+    response.mutation_receipt = mutation_receipt
+    return response
 
 
 @router.post(
@@ -554,126 +655,137 @@ async def submit_source_registration(
     if registration.status == SourceRegistrationStatus.APPROVED:
         raise HTTPException(status_code=409, detail="SourceRegistration already approved")
 
-    artifacts = (
-        await session.execute(
-            select(SourceRegistrationArtifact).where(
-                SourceRegistrationArtifact.registration_id == registration.id
-            ).order_by(
-                SourceRegistrationArtifact.captured_at.asc(),
-                SourceRegistrationArtifact.created_at.asc(),
-                SourceRegistrationArtifact.id.asc(),
+    async def _mutation_operation() -> SubmitRegistrationResponse:
+        artifacts = (
+            await session.execute(
+                select(SourceRegistrationArtifact).where(
+                    SourceRegistrationArtifact.registration_id == registration.id
+                ).order_by(
+                    SourceRegistrationArtifact.captured_at.asc(),
+                    SourceRegistrationArtifact.created_at.asc(),
+                    SourceRegistrationArtifact.id.asc(),
+                )
             )
-        )
-    ).scalars().all()
-    measurements = (
-        await session.execute(
-            select(SourceRegistrationMeasurement).where(
-                SourceRegistrationMeasurement.registration_id == registration.id
-            ).order_by(
-                SourceRegistrationMeasurement.measurement_type.asc(),
-                SourceRegistrationMeasurement.measured_at.asc(),
-                SourceRegistrationMeasurement.created_at.asc(),
-                SourceRegistrationMeasurement.id.asc(),
+        ).scalars().all()
+        measurements = (
+            await session.execute(
+                select(SourceRegistrationMeasurement).where(
+                    SourceRegistrationMeasurement.registration_id == registration.id
+                ).order_by(
+                    SourceRegistrationMeasurement.measurement_type.asc(),
+                    SourceRegistrationMeasurement.measured_at.asc(),
+                    SourceRegistrationMeasurement.created_at.asc(),
+                    SourceRegistrationMeasurement.id.asc(),
+                )
             )
-        )
-    ).scalars().all()
-    tracking_events = (
-        await session.execute(
-            select(TrackingEvent)
-            .where(TrackingEvent.registration_id == registration.id)
-            .order_by(
-                TrackingEvent.captured_at.asc(),
-                TrackingEvent.created_at.asc(),
-                TrackingEvent.id.asc(),
+        ).scalars().all()
+        tracking_events = (
+            await session.execute(
+                select(TrackingEvent)
+                .where(TrackingEvent.registration_id == registration.id)
+                .order_by(
+                    TrackingEvent.captured_at.asc(),
+                    TrackingEvent.created_at.asc(),
+                    TrackingEvent.id.asc(),
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
 
-    raw_source_registration = _build_raw_source_registration(
-        registration,
-        artifacts=artifacts,
-        measurements=measurements,
-        tracking_events=tracking_events,
-    )
-    raw_multimodal = {
-        "artifacts": [
+        raw_source_registration = _build_raw_source_registration(
+            registration,
+            artifacts=artifacts,
+            measurements=measurements,
+            tracking_events=tracking_events,
+        )
+        raw_multimodal = {
+            "artifacts": [
+                {
+                    "artifact_type": artifact.artifact_type,
+                    "uri": artifact.uri,
+                    "sha256": artifact.sha256,
+                    "device_id": artifact.device_id,
+                }
+                for artifact in artifacts
+            ],
+        }
+        normalized_context = normalize_source_registration_context(
+            raw_source_registration,
+            tracking_events=raw_source_registration["tracking_events"],
+            multimodal_context=raw_multimodal,
+            task_description=(
+                f"Source registration for lot {registration.lot_id} "
+                f"from producer {registration.producer_id}"
+            ),
+        )
+
+        task = Task(
+            type="registration",
+            description=(
+                f"Source registration for lot {registration.lot_id} "
+                f"from producer {registration.producer_id}"
+            ),
+            domain="provenance",
+            drift_score=0.0,
+            status=TaskStatus.QUEUED,
+            snapshot_id=registration.snapshot_id or await _resolve_snapshot_id(session, None),
+            params={
+                "source_registration": normalized_context.registration,
+                "multimodal": normalized_context.multimodal_context,
+                "governance": {
+                    "workflow": "source_registration",
+                    "require_registration_verdict": True,
+                },
+            },
+        )
+        session.add(task)
+        await session.flush()
+        await _ensure_task_node_mapping(session, task.id)
+
+        submit_event = await record_tracking_event(
+            session,
+            registration=registration,
+            event_type=TrackingEventType.OPERATOR_REQUEST_RECEIVED,
+            source_kind=TrackingEventSourceKind.OPERATOR_REQUEST,
+            payload={
+                "command": "submit_for_decision",
+                "task_id": str(task.id),
+            },
+        )
+        refreshed_tracking_events = list(raw_source_registration["tracking_events"])
+        refreshed_tracking_events.append(_serialize_tracking_event(submit_event))
+        normalized_context = normalize_source_registration_context(
             {
-                "artifact_type": artifact.artifact_type,
-                "uri": artifact.uri,
-                "sha256": artifact.sha256,
-                "device_id": artifact.device_id,
-            }
-            for artifact in artifacts
-        ],
-    }
-    normalized_context = normalize_source_registration_context(
-        raw_source_registration,
-        tracking_events=raw_source_registration["tracking_events"],
-        multimodal_context=raw_multimodal,
-        task_description=(
-            f"Source registration for lot {registration.lot_id} "
-            f"from producer {registration.producer_id}"
-        ),
-    )
-
-    task = Task(
-        type="registration",
-        description=(
-            f"Source registration for lot {registration.lot_id} "
-            f"from producer {registration.producer_id}"
-        ),
-        domain="provenance",
-        drift_score=0.0,
-        status=TaskStatus.QUEUED,
-        snapshot_id=registration.snapshot_id or await _resolve_snapshot_id(session, None),
-        params={
+                **raw_source_registration,
+                "tracking_events": refreshed_tracking_events,
+            },
+            tracking_events=refreshed_tracking_events,
+            multimodal_context=raw_multimodal,
+            task_description=task.description,
+        )
+        task.params = {
+            **dict(task.params or {}),
             "source_registration": normalized_context.registration,
             "multimodal": normalized_context.multimodal_context,
-            "governance": {
-                "workflow": "source_registration",
-                "require_registration_verdict": True,
-            },
-        },
-    )
-    session.add(task)
-    await session.flush()
-    await _ensure_task_node_mapping(session, task.id)
+        }
+        registration.submitted_task_id = task.id
+        return SubmitRegistrationResponse(
+            registration_id=registration.id,
+            task_id=task.id,
+            status=registration.status.value,
+        )
 
-    submit_event = await record_tracking_event(
-        session,
-        registration=registration,
-        event_type=TrackingEventType.OPERATOR_REQUEST_RECEIVED,
-        source_kind=TrackingEventSourceKind.OPERATOR_REQUEST,
-        payload={
-            "command": "submit_for_decision",
-            "task_id": str(task.id),
-        },
+    result, mutation_receipt = await _run_source_registration_mutation(
+        session=session,
+        operation="submit",
+        target_ref=str(registration_id),
+        request_payload={"registration_id": str(registration_id)},
+        mutation_operation=_mutation_operation,
+        actor_ref=registration.producer_id,
+        snapshot_id=registration.snapshot_id,
     )
-    refreshed_tracking_events = list(raw_source_registration["tracking_events"])
-    refreshed_tracking_events.append(_serialize_tracking_event(submit_event))
-    normalized_context = normalize_source_registration_context(
-        {
-            **raw_source_registration,
-            "tracking_events": refreshed_tracking_events,
-        },
-        tracking_events=refreshed_tracking_events,
-        multimodal_context=raw_multimodal,
-        task_description=task.description,
-    )
-    task.params = {
-        **dict(task.params or {}),
-        "source_registration": normalized_context.registration,
-        "multimodal": normalized_context.multimodal_context,
-    }
-    registration.submitted_task_id = task.id
-
     await session.commit()
-
-    return SubmitRegistrationResponse(
-        registration_id=registration.id,
-        task_id=task.id,
-        status=registration.status.value,
-    )
+    result.mutation_receipt = mutation_receipt
+    return result
 
 
 @router.get(

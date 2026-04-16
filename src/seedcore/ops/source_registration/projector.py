@@ -29,6 +29,7 @@ def compute_tracking_event_sha256(payload: Dict[str, Any]) -> str:
 async def record_tracking_event(
     session: AsyncSession,
     *,
+    event_id: Optional[uuid.UUID] = None,
     registration: Optional[SourceRegistration] = None,
     event_type: TrackingEventType,
     source_kind: TrackingEventSourceKind,
@@ -43,12 +44,23 @@ async def record_tracking_event(
     snapshot_id: Optional[int] = None,
     sha256: Optional[str] = None,
 ) -> TrackingEvent:
+    payload_data = dict(payload or {})
+    authoritative_sha256 = compute_tracking_event_sha256(payload_data)
+    external_sha256 = str(sha256).strip() if sha256 is not None else None
+    if external_sha256:
+        provenance = payload_data.get("_provenance")
+        provenance_dict = dict(provenance) if isinstance(provenance, dict) else {}
+        provenance_dict["caller_sha256"] = external_sha256
+        provenance_dict["authoritative_sha256"] = authoritative_sha256
+        payload_data["_provenance"] = provenance_dict
+
     event = TrackingEvent(
+        id=event_id or uuid.uuid4(),
         registration_id=registration.id if registration is not None else None,
         event_type=event_type,
         source_kind=source_kind,
-        payload=payload or {},
-        sha256=sha256 or compute_tracking_event_sha256(payload or {}),
+        payload=payload_data,
+        sha256=authoritative_sha256,
         captured_at=captured_at or datetime.now(timezone.utc),
         producer_id=producer_id,
         device_id=device_id,

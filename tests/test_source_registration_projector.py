@@ -15,6 +15,7 @@ from seedcore.models.source_registration import (
     TrackingEventType,
 )
 from seedcore.ops.source_registration.projector import (
+    compute_tracking_event_sha256,
     project_tracking_event,
     record_tracking_event,
 )
@@ -100,6 +101,25 @@ async def test_record_tracking_event_projects_source_claim_into_registration() -
     assert registration.collection_site["site_id"] == "site-1"
     assert registration.status == SourceRegistrationStatus.INGESTING
     assert event.projected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_record_tracking_event_uses_server_authoritative_hash() -> None:
+    registration = _make_registration()
+    session = FakeAsyncSession(get_result=registration)
+    payload = {"measurement_type": "humidity", "value": 67.2, "unit": "percent"}
+    event = await record_tracking_event(
+        session,
+        registration=registration,
+        event_type=TrackingEventType.ENVIRONMENTAL_READING_RECORDED,
+        source_kind=TrackingEventSourceKind.TELEMETRY,
+        payload=payload,
+        sha256="caller-provided-digest",
+    )
+    assert event.sha256 == compute_tracking_event_sha256(payload)
+    provenance = event.payload.get("_provenance")
+    assert isinstance(provenance, dict)
+    assert provenance.get("caller_sha256") == "caller-provided-digest"
 
 
 @pytest.mark.asyncio
