@@ -195,6 +195,13 @@ Primary planning docs:
 - [`baseline_task_types_analysis.md`](baseline_task_types_analysis.md)
 - [`agent_capability_skills_relationships.md`](agent_capability_skills_relationships.md)
 - [`agent_capability_skills_quick_reference.md`](agent_capability_skills_quick_reference.md)
+- [`hermes_skill_synthetic_artifact_model.md`](hermes_skill_synthetic_artifact_model.md)
+  - proposed documentation model for representing a Hermes Skill as a SeedCore
+    synthetic artifact while preserving first-class runtime `skill` identity
+- [`nous_instruction_tuning_patterns_for_seedcore.md`](nous_instruction_tuning_patterns_for_seedcore.md)
+  - research note translating Hermes/Nous instruction-tuning patterns into
+    SeedCore-specific post-training workstreams such as contract obedience,
+    tool-call discipline, abstention, and evidence-grounded explanation
 
 ### Local operations and protocol references
 
