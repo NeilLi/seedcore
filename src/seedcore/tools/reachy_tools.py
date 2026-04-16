@@ -23,6 +23,11 @@ import httpx  # pyright: ignore[reportMissingImports]
 
 from .base import ToolBase
 from .manager import ToolError
+from seedcore.models.governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
+)
 
 from seedcore.logging_setup import setup_logging, ensure_serve_logger
 
@@ -40,6 +45,17 @@ class ReachyMotionTool(ToolBase):
     
     name = "reachy.motion"
     description = "Control robot motion (head pose, antennas, body yaw) via HAL service"
+
+    def governance_contract(self) -> Optional[GovernedMutationContract]:
+        return GovernedMutationContract(
+            effect_class=MutationEffectClass.PHYSICAL_ACTUATION,
+            requires_execution_token=True,
+            requires_policy_receipt=True,
+            requires_signed_receipt=True,
+            snapshot_binding_required=True,
+            replay_mode=MutationReplayMode.HASH_STABLE,
+            notes="HAL actuation must remain governed and replay-attestable.",
+        )
     
     def __init__(self, hal_base_url: Optional[str] = None):
         """
@@ -69,6 +85,7 @@ class ReachyMotionTool(ToolBase):
     
     def schema(self) -> Dict[str, Any]:
         """Return tool schema for LLM planning."""
+        contract = self.governance_contract()
         return {
             "name": self.name,
             "description": self.description,
@@ -110,7 +127,8 @@ class ReachyMotionTool(ToolBase):
                     }
                 }
             },
-            "required": []
+            "required": [],
+            "x_governed_mutation_contract": contract.model_dump(mode="json") if contract else None,
         }
     
     async def run(
@@ -179,6 +197,7 @@ class ReachyMotionTool(ToolBase):
                 "actuator_endpoint": result.get("actuator_endpoint"),
                 "result_hash": result.get("result_hash"),
                 "execution_token_id": result.get("execution_token_id"),
+                "mutation_receipt": result.get("mutation_receipt"),
                 "robot_state": result.get("robot_state"),
                 "endpoint_response": result.get("endpoint_response"),
                 "head": head,

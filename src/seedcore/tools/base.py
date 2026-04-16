@@ -8,6 +8,7 @@ import time
 import logging
 
 from seedcore.tools.manager import ToolError
+from seedcore.models.governed_mutation import GovernedMutationContract
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,13 @@ class ToolBase:
                 "properties": {},
             },
         }
+
+    def governance_contract(self) -> Optional[GovernedMutationContract]:
+        """
+        Optional governance contract for side-effecting tools.
+        Read-only tools can return None.
+        """
+        return None
 
     # ------------------------------------------------------------------
     # Optional: learning / reflection hook

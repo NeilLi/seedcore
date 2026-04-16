@@ -21,6 +21,11 @@ from typing import Dict, Any, List
 
 from seedcore.tools.base import ToolBase
 from seedcore.logging_setup import ensure_serve_logger
+from seedcore.models.governed_mutation import (
+    GovernedMutationContract,
+    MutationEffectClass,
+    MutationReplayMode,
+)
 
 logger = ensure_serve_logger("seedcore.tools.tuya", level="INFO")
 
@@ -57,6 +62,8 @@ class TuyaGetStatusTool(ToolBase):
 
     def schema(self) -> Dict[str, Any]:
         return {
+            "name": self.name,
+            "description": self.description,
             "type": "object",
             "properties": {
                 "device_id": {
@@ -83,6 +90,17 @@ class TuyaSendCommandTool(ToolBase):
 
     name = "tuya.send_command"
     description = "Send control commands to a Tuya IoT device"
+
+    def governance_contract(self) -> GovernedMutationContract:
+        return GovernedMutationContract(
+            effect_class=MutationEffectClass.EXTERNAL_SIDE_EFFECT,
+            requires_execution_token=True,
+            requires_policy_receipt=True,
+            requires_signed_receipt=True,
+            snapshot_binding_required=True,
+            replay_mode=MutationReplayMode.HASH_STABLE,
+            notes="IoT command dispatch is a governed external mutation.",
+        )
 
     async def run(
         self,
@@ -117,7 +135,10 @@ class TuyaSendCommandTool(ToolBase):
         return result
 
     def schema(self) -> Dict[str, Any]:
+        contract = self.governance_contract()
         return {
+            "name": self.name,
+            "description": self.description,
             "type": "object",
             "properties": {
                 "device_id": {
@@ -138,4 +159,5 @@ class TuyaSendCommandTool(ToolBase):
                 },
             },
             "required": ["device_id", "commands"],
+            "x_governed_mutation_contract": contract.model_dump(mode="json"),
         }
