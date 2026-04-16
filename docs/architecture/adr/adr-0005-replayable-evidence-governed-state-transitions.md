@@ -197,9 +197,3 @@ This keeps the canary bounded to one governed workflow producer instead of broad
 ## Notes
 
 This ADR is intentionally stronger than the current implementation, but it is also intentionally non-urgent. Today, SeedCore already supports replayable evidence bundles, `state_binding_hash`, signed transition receipts, and append-only digital twin journaling. The decision here is to guide those mechanisms toward a stricter replay contract for governed state transitions over time, not to force an immediate redesign of the current baseline.
-
-Research references that informed this direction:
-
-- Leslie Lamport, [Time, Clocks, and the Ordering of Events in a Distributed System](https://www.microsoft.com/en-us/research/publication/time-clocks-ordering-events-distributed-system/)
-- ethereum.org, [Merkle Patricia Trie](https://ethereum.org/developers/docs/data-structures-and-encoding/patricia-merkle-trie)
-- Friedemann Mattern profile note on vector clocks, [ETH Zurich portrait](https://inf.ethz.ch/news-and-events/spotlights/infk-news-channel/2021/06/portrait-friedemann-mattern.html)
