@@ -1,205 +1,211 @@
-# SeedCore Design Notes
+# SeedCore Design Notes: Zero-Trust Execution Substrate
 
-This is a living conceptual note for SeedCore. It captures enduring design intent and should not be treated as a migration log or implementation checklist.
+This document is the enduring design anchor for SeedCore. It is intentionally architectural rather than procedural: it explains what SeedCore is, what boundaries it must preserve, and what implementation invariants every serious runtime component must satisfy.
 
-## Runtime Intent
+SeedCore is not a chat interface with tools attached. It is a zero-trust execution substrate for custody-aware digital twins, where AI judgment, policy authority, physical execution, and replay evidence are deliberately separated.
 
-SeedCore is a zero-trust runtime for custody-aware digital twins where AI judgment, accountable agents, and real-world execution are separated by explicit policy and evidence boundaries.
+## 1. Core Architectural Intent
 
-Core intent:
+SeedCore exists to make physical-world and platform-bound AI operations accountable.
 
-- keep AI advisory by default
-- require policy-verified authorization before high-consequence actions
-- preserve replayable evidence for each governed state transition
+The runtime is built on three non-negotiable pillars:
 
-## Plane Model (Current)
+- **Advisory AI**: intelligence is allowed to reason, plan, and recommend, but not to directly execute high-consequence actions
+- **Policy-Verified Authorization**: every governed state transition requires explicit policy evaluation over pinned inputs
+- **Immutable Evidence**: every governed action must produce replayable evidence that can survive disputes, audits, and verification
 
-SeedCore uses a practical multi-plane model:
+This intent is not aspirational. It is the core runtime posture that architecture, APIs, tools, and product surfaces must preserve.
 
-- **Intelligence Plane**: reasoning, planning, and context hydration
-- **Control Plane**: policy evaluation, surprise/drift gating, execution decisioning
-- **Execution Plane**: accountable agents and tool/actuator handoff
-- **Infrastructure Plane**: distributed runtime substrate, data services, and telemetry
+Current execution context matters:
 
-The plane model is a design aid for system boundaries. It is not a strict package/module taxonomy.
+- the must-win workflow remains **Restricted Custody Transfer**
+- the first durable product surface is the **proof / verification surface**
+- the PDP decision boundary is synchronous and stateless at decision time
+- stateful context, custody, approval, and replay systems sit around that boundary rather than inside it
 
-## Judgment vs Authority
+## 2. The Four-Plane Model
 
-A stable system boundary in SeedCore is the split between judgment and authority:
+SeedCore uses a practical four-plane model to keep boundaries crisp without pretending the codebase is organized as a perfect taxonomy.
 
-- `TaskPayload` carries planning and routing context
-- `ActionIntent` carries an accountable, policy-evaluable action contract
-- authorization occurs only after policy allow and tokenized handoff
+| Plane | Responsibility |
+| :--- | :--- |
+| **Intelligence** | Context hydration, reasoning, planning, and intent preparation. |
+| **Control** | Policy evaluation, drift or surprise gating, approval checks, and execution decisioning. |
+| **Execution** | Accountable agents, tool invocations, actuator handoff, and endpoint enforcement. |
+| **Infrastructure** | Distributed runtime substrate, storage, queues, telemetry, and operational services. |
 
-This keeps the runtime auditable, deny-by-default, and safe under model uncertainty.
+The plane model is useful because it prevents conceptual collapse:
 
-## Fast Path and Escalation
+- intelligence should not quietly inherit authority
+- control should not be treated as merely advisory
+- execution should not bypass governance
+- infrastructure should not be mistaken for business authorization
 
-SeedCore favors low-latency default handling for routine cases, with deliberate escalation for high-surprise or high-risk situations. In practice:
+### Runtime Control Stack
 
-- routine decisions stay on the hot path
-- surprising states escalate to deeper reasoning and stricter governance
-- execution remains policy-constrained in both paths
+Within that plane model, the architecture docs consistently describe a common zero-trust runtime stack:
 
-## Design Guardrails
+- **Policy Decision Engine (PDP)**: final authority evaluation over pinned policy and context inputs
+- **Execution Token Service (ETS)**: short-lived action authority for downstream enforcement
+- **Digital Twin Engine (DTE)**: authoritative state for owners, assistants, assets, products, transactions, and devices
+- **Custody Graph (CG)**: lineage for who had what, where it moved, and which artifacts justify the transition
+- **Evidence and Replay Layer (ER)**: signed receipts, replay artifacts, trust surfaces, and verification outputs
 
-When introducing new components, preserve these guardrails:
+These subsystem names should remain consistent across architecture, development, and product-facing documents.
 
-- no direct LLM-to-actuator execution bypassing policy checks
-- no hidden side effects without signed or verifiable receipts
-- no coupling that prevents deterministic replay of high-consequence workflows
+## 3. Judgment vs. Authority
 
-## Advanced Guardrails (Current)
+The most important boundary in SeedCore is the split between recommendation and action.
 
-The current guardrail architecture follows a shared governed-mutation model across tool execution, direct API mutations, HAL actuation, and replay.
+- **`TaskPayload`** carries planning and routing context. It explains what is being attempted and why.
+- **`ActionIntent`** carries the accountable action contract. It is the policy-evaluable runtime shape that expresses who is acting, on what, under what scope, and until when.
+- **The authority gap** is closed only after policy validation and tokenized handoff. SeedCore must remain deny-by-default until that handoff is complete.
 
-In practical terms, SeedCore now assumes:
+This boundary is why the system is legally and operationally defensible:
 
-- mutating paths must declare an explicit mutation contract
-- contract enforcement is fail-closed for governed paths
-- signed mutation receipts are the default proof surface for side effects
-- replay services must support deterministic dependency injection for high-consequence workflows
+- assistants orchestrate intent
+- SeedCore authorizes
+- endpoints and robots enforce token validity
+- replay artifacts prove what happened
 
-This is the implementation shape that the current codebase is converging around, rather than a future-only target.
+The same principle applies to ingress. If delegated intent arrives over Kafka or another transport, that transport is ingress only. It is not an alternate policy engine or a bypass around the authoritative `agent-actions` runtime.
 
-## Shared Mutation Contract
+## 4. Governed Execution Substrate
 
-SeedCore uses a common contract to describe side-effecting behavior before execution occurs.
+SeedCore is converging on a shared governed-mutation model for all meaningful side effects. High-consequence mutations should pass through a common execution boundary rather than bespoke code paths.
 
-The contract expresses:
+This is the architectural answer to three recurring risks:
 
-- `effect_class`: what kind of state is being changed
-- `requires_execution_token`: whether governed authorization is mandatory
-- `requires_signed_receipt`: whether the mutation must emit a signed receipt
-- `snapshot_binding_required`: whether the mutation must remain pinned to policy/context state
-- `replay_mode`: the expected replay stability requirement
+- direct LLM-to-actuator bypass
+- state mutation without signed proof
+- replay surfaces that depend on ambient runtime behavior
 
-This keeps mutation semantics visible at registration time instead of relying on naming conventions or implicit runtime assumptions.
+### Governed Mutation Flow
 
-## Governed Mutation Flow
-
-The intended high-consequence mutation path is now a shared wrapper, not a collection of one-off code paths.
+1. **Contract lookup**: identify the mutation contract and its declared requirements such as effect class, token requirement, signed receipt requirement, snapshot binding, and replay mode.
+2. **Validation**: perform RBAC checks, policy binding checks, and execution-token validation as required by the contract.
+3. **Deterministic hashing**: compute a stable payload hash so execution and proof can be bound to the same mutation semantics.
+4. **Mutation execution**: perform the side effect only after the governed preconditions are satisfied.
+5. **Proof emission**: emit a signed mutation receipt and link it into evidence, audit, and custody records where applicable.
 
 ```mermaid
 flowchart LR
-    A["Tool Or API Mutation"] --> B["Contract Lookup"]
-    B --> C["RBAC Check"]
+    A["Tool / API / HAL Mutation"] --> B["Governed Mutation Contract"]
+    B --> C["RBAC / Policy / Snapshot Validation"]
     C --> D["Execution Token Validation"]
-    D --> E["Snapshot / Policy Binding Check"]
-    E --> F["Deterministic Payload Hashing"]
-    F --> G["Mutation Execution"]
-    G --> H["Signed Mutation Receipt"]
-    H --> I["Governed Audit / Evidence Bundle"]
-    I --> J["Replay / Verification Surface"]
+    D --> E["Deterministic Payload Hashing"]
+    E --> F["Mutation Execution"]
+    F --> G["Signed Mutation Receipt"]
+    G --> H["Evidence, Audit, and Custody Linkage"]
 ```
 
-This flow preserves the judgment-versus-authority split:
+This flow should be read as a substrate pattern, not a single implementation detail. It applies across:
 
-- AI may recommend or prepare actions
-- governed runtime components decide whether the mutation may execute
-- execution proof is attached to receipts and audit artifacts, not to model output alone
+- governed tool execution
+- direct API mutations
+- HAL-backed actuation evidence
+- replay and verification correlation surfaces
 
-## Five Implementation Themes
+### Product Boundary vs Runtime Boundary
 
-The advanced guardrail work now resolves into five stable design themes.
+The external **Agent Action Gateway** is a product boundary contract. It is not a replacement for the internal runtime accountability model.
 
-### 1. Shared Mutation Contract And Fail-Closed Enforcement
+Its role is to:
 
-Mutating components should not depend on tool-name pattern matching as their primary safety mechanism.
+- receive agent-originated governed requests
+- normalize them deterministically into runtime contracts such as `ActionIntent`
+- preserve proof and replay correlation from the first external request onward
 
-The runtime direction is:
+That distinction matters. Public-facing contracts may evolve by workflow. The governed execution substrate must remain internally coherent across workflows.
 
-- register or derive a `GovernedMutationContract`
-- fail closed when a known mutating path has no valid contract
-- require RBAC and token validation on governed mutations
-- keep HAL execution-token enforcement enabled by default at the actuator boundary
+## 5. Architectural Invariants
 
-This ensures new side-effecting code enters the system through an explicit contract surface.
+The following invariants are not convenience checks. They are the design rules that keep the runtime zero-trust.
 
-### 2. Standardized Signed Receipts
+### Fail-Closed Enforcement
 
-Side effects should emit signed, hash-bound receipts that can be linked into append-only audit evidence.
+Mutating paths should not depend on tool-name patterns or informal discipline for safety.
 
-The normalized receipt shape centers on:
+Required direction:
 
-- `receipt_id`
-- `payload_hash`
-- `executed_at`
-- `previous_receipt_hash`
-- actor, intent, token, and policy references where applicable
+- known mutating paths declare or derive a valid governed mutation contract
+- missing or invalid contract state is treated as denial, not as soft fallback
+- RBAC and token failures are deny outcomes on governed paths
+- actuator-bound token enforcement remains enabled at the execution boundary
 
-Receipt issuance is now treated as part of the mutation boundary, not as optional logging.
+### Standardized Signed Proof
 
-### 3. Unified Governed Mutation Entrypoints
+Side effects must generate proof that is useful beyond logging.
 
-SeedCore is moving away from bespoke mutation code paths toward a shared governed wrapper used by:
+Required direction:
 
-- tool execution
-- identity mutations
-- tracking event creation
-- source registration mutations
-- HAL-backed mutation evidence
+- each governed side effect emits a signed receipt
+- receipts carry stable identifiers and payload hashes
+- receipt chains preserve predecessor linkage where mutation history matters
+- audit and evidence bundles link mutation proof into broader replay surfaces
 
-The architectural goal is simple: if a component mutates governed state, it should look like every other governed mutation at the execution boundary.
+### Unified Mutation Entrypoints
 
-### 4. Deterministic Replay For High-Consequence Workflows
+SeedCore should not accumulate multiple mutation regimes.
 
-Replay logic for custody, trust, and verification surfaces must be able to run from pinned artifacts with deterministic dependencies.
+Required direction:
 
-For high-consequence workflows this means:
+- tools, API mutations, and HAL-associated mutation paths converge on shared governed execution boundaries
+- direct state changes outside governed entrypoints are treated as architectural debt
+- new component onboarding starts from the contract and evidence model, not from convenience wrappers
 
-- inject `Clock`-like time providers instead of calling ambient time directly in replay-sensitive logic
-- inject ID generators instead of relying on ambient UUID generation in replay-sensitive logic
-- pin `snapshot_id` or equivalent policy/context references where mutation semantics depend on policy state
-- derive fallback replay identifiers from stable payload data when source IDs are absent
+### Deterministic Replay
 
-Replay should be reproducible from evidence artifacts, not from whatever environment happens to exist at verification time.
+High-consequence workflows must be reproducible from artifacts, not from ambient runtime conditions.
 
-### 5. Deterministic Service Dependencies Beyond Replay
+Required direction:
 
-Determinism is not only a replay concern. Services that feed replay or trust surfaces should expose deterministic hooks as well.
+- replay-sensitive services inject time providers rather than calling ambient time directly
+- replay-sensitive services inject ID generators rather than relying on ambient UUID creation
+- snapshot and policy references are pinned when workflow semantics depend on them
+- fallback replay identifiers are derived from stable payload data when upstream identifiers are absent
 
-That principle now extends to replay-adjacent services such as custody graph lineage and dispute flows:
+### Deterministic Trust-Surface Services
 
-- dispute and lineage identifiers should be stable or provider-injected where replay depends on them
-- time-sensitive service behavior should support injected clocks in verification-sensitive paths
-- artifact-producing services should prefer deterministic fallbacks over ambient randomness
+Replay determinism is not only the responsibility of the replay service.
 
-## New Component Contract
+Required direction:
 
-When adding a new side-effecting component, treat the following as the default admission contract.
+- custody-lineage services expose deterministic hooks where they shape replayable artifacts
+- dispute and verification flows avoid unnecessary ambient randomness
+- services adjacent to trust pages, verification results, and audit surfaces preserve stable artifact semantics
 
-1. Declare a governed mutation contract.
-2. Require an execution token for high-consequence side effects.
-3. Emit a signed receipt for every mutation that changes governed state.
-4. Persist enough lineage to link the receipt into audit, evidence, or custody history.
-5. Separate pure decision logic from IO adapters so replay can run on artifacts.
-6. Inject time and ID dependencies anywhere deterministic replay matters.
+## 6. Admission Contract For New Components
+
+Before a side-effecting component is merged into SeedCore, it should satisfy the following admission contract:
+
+1. Declare a formal governed mutation contract.
+2. Require an execution token for high-consequence actions.
+3. Emit a signed receipt for every governed state change.
+4. Persist enough lineage to connect the mutation to audit, evidence, custody, or trust surfaces.
+5. Decouple decision logic from IO adapters so replay can run from artifacts instead of live dependencies.
+6. Inject time and ID dependencies anywhere deterministic replay or verification matters.
 7. Add replay-oriented tests that assert stable outputs for stable inputs.
 
-If a new component cannot satisfy these expectations, that should be an explicit design exception rather than an unexamined shortcut.
+If a component cannot meet these expectations, that should be treated as an explicit architectural exception with a stated risk, not as an informal shortcut.
 
-## Architectural Outcome
+## 7. Document Role In The Corpus
 
-The practical result of these guardrails is that SeedCore behaves less like a chat system with tools and more like a governed execution runtime:
+This note is the architectural anchor, not the complete implementation manual.
 
-- policy and approval state decide authority
-- execution tokens scope side effects
-- signed receipts make mutations externally provable
-- custody and audit records preserve lineage
-- replay and trust surfaces reconstruct what happened from evidence, not narration
+Use it to answer:
 
-That is the core design intent to preserve as new components are added.
+- what SeedCore is fundamentally trying to preserve
+- where authority actually lives
+- what invariants new runtime components must respect
+
+Use the linked documents for workflow-specific contracts, execution wedges, deployment posture, and external product surfaces.
 
 ## Canonical References
-
-For normative implementation details and active execution priorities, use:
 
 - [Architecture Overview](architecture/overview/architecture.md)
 - [Zero-Trust Custody and Digital-Twin Runtime](architecture/overview/zero_trust_custody_digital_twin_runtime.md)
 - [Sequence Of Trust: Zero-Trust Physical Custody](architecture/overview/sequence_of_trust_zero_trust_physical_custody.md)
-- [Gemini Extension: Owner / Creator Layer Implementation](architecture/overview/gemini_owner_creator_extension.md)
-- [Owner / Creator External SDK and Plugin Surface](development/owner_creator_external_sdk_and_plugin_surface.md)
-- [Gemini Owner/Creator Phase 1-3 Quickstart](development/gemini_phase1_quickstart.md)
 - [SeedCore 2026 Execution Plan](development/seedcore_2026_execution_plan.md)
 - [Agent Action Gateway Contract](development/agent_action_gateway_contract.md)
+- [Owner / Creator External SDK and Plugin Surface](development/owner_creator_external_sdk_and_plugin_surface.md)
