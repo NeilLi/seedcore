@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 from seedcore.database import get_async_pg_session_factory
 from seedcore.coordinator.dao import (
@@ -26,11 +26,15 @@ class CustodyGraphService:
         graph_dao: Optional[CustodyGraphDAO] = None,
         dispute_dao: Optional[CustodyDisputeDAO] = None,
         digital_twin_dao: Optional[DigitalTwinDAO] = None,
+        clock: Optional[Callable[[], datetime]] = None,
+        id_generator: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._transition_dao = transition_dao or CustodyTransitionDAO()
         self._graph_dao = graph_dao or CustodyGraphDAO()
         self._dispute_dao = dispute_dao or CustodyDisputeDAO()
         self._digital_twin_dao = digital_twin_dao or DigitalTwinDAO()
+        self._clock = clock
+        self._id_generator = id_generator
         self._digital_twin_service = DigitalTwinService(
             session_factory=session_factory or get_async_pg_session_factory(),
             dao=self._digital_twin_dao,
@@ -432,7 +436,7 @@ class CustodyGraphService:
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         asset_id = self._resolve_asset_id(references)
-        dispute_id = f"dispute:{uuid.uuid4()}"
+        dispute_id = f"dispute:{self._new_id()}"
         case = await self._dispute_dao.create_case(
             session,
             dispute_id=dispute_id,
@@ -849,4 +853,25 @@ class CustodyGraphService:
             return None
 
     def utcnow(self) -> datetime:
+        if callable(self._clock):
+            try:
+                now = self._clock()
+            except Exception:
+                now = None
+            if isinstance(now, datetime):
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=timezone.utc)
+                return now.astimezone(timezone.utc)
         return datetime.now(timezone.utc)
+
+    def _new_id(self) -> str:
+        if callable(self._id_generator):
+            try:
+                candidate = self._id_generator()
+            except Exception:
+                candidate = None
+            if isinstance(candidate, uuid.UUID):
+                return str(candidate)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return str(uuid.uuid4())

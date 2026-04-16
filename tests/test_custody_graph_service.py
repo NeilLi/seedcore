@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -279,3 +281,38 @@ async def test_dispute_workflow_and_lineage_attach_disputes():
     assert resolved["status"] == "RESOLVED"
     assert lineage["transitions"][0]["disputes"][0]["dispute_id"] == dispute["dispute_id"]
     assert any(node["node_id"].startswith("dispute_case:") for node in graph["nodes"])
+
+
+@pytest.mark.asyncio
+async def test_open_dispute_supports_injected_id_generator() -> None:
+    service = CustodyGraphService(
+        transition_dao=_FakeTransitionDAO(),
+        graph_dao=_FakeGraphDAO(),
+        dispute_dao=_FakeDisputeDAO(),
+        digital_twin_dao=_FakeDigitalTwinDAO(),
+        id_generator=lambda: "00000000-0000-0000-0000-000000000123",
+    )
+
+    dispute = await service.open_dispute(
+        object(),
+        title="Injected deterministic id",
+        summary="deterministic id check",
+        opened_by="auditor:seed",
+        references={"asset_id": "asset-1", "transition_event_id": "receipt-1"},
+        metadata={},
+    )
+
+    assert dispute["dispute_id"] == "dispute:00000000-0000-0000-0000-000000000123"
+
+
+def test_utcnow_supports_injected_clock() -> None:
+    fixed_now = datetime(2026, 4, 16, 9, 30, tzinfo=timezone.utc)
+    service = CustodyGraphService(
+        transition_dao=_FakeTransitionDAO(),
+        graph_dao=_FakeGraphDAO(),
+        dispute_dao=_FakeDisputeDAO(),
+        digital_twin_dao=_FakeDigitalTwinDAO(),
+        clock=lambda: fixed_now,
+        id_generator=lambda: uuid.UUID("00000000-0000-0000-0000-000000000999"),
+    )
+    assert service.utcnow() == fixed_now
