@@ -258,6 +258,23 @@ class ToolManagerShard:
             logger.warning(f"Failed to register Reachy tools in shard: {e}")
             return False
 
+    async def register_youtube_tools(self):
+        """
+        Register YouTube publishing tools in this shard.
+        """
+        try:
+            manager = await self._ensure_manager()
+            from seedcore.tools.youtube_tools import YouTubePublishVideoTool
+
+            await manager.register_internal(YouTubePublishVideoTool())
+            return True
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger("seedcore.tools.manager_actor")
+            logger.warning(f"Failed to register YouTube tools in shard: {e}")
+            return False
+
     async def list_tools(self):
         manager = await self._ensure_manager()
         return await manager.list_tools()

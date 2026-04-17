@@ -791,6 +791,9 @@ def _derive_actuator_endpoint(active_driver: BaseRobotDriver) -> str:
 
 
 def _derive_sealer_identity() -> str:
+    explicit_identity = os.getenv("SEEDCORE_HAL_SEALER_IDENTITY", "").strip()
+    if explicit_identity:
+        return explicit_identity
     if driver is not None:
         return _derive_actuator_endpoint(driver)
     normalized = str(HARDWARE_UUID).strip()

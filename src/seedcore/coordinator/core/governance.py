@@ -118,7 +118,10 @@ EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "endpoint_id",
     "payload_hash",
 )
-DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 0.5
+# Real-world governed actions can legitimately take many seconds or minutes
+# (uploads, sealing, physical actuation). A sub-second default causes
+# successful executions to be rejected during evidence settlement.
+DEFAULT_EXECUTION_TOKEN_TTL_SECONDS = 300.0
 RESTRICTED_CUSTODY_TRANSFER_WORKFLOW_TYPE = "custody_transfer"
 RESTRICTED_CUSTODY_TRANSFER_ACTION_TYPES = {"TRANSFER_CUSTODY"}
 

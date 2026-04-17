@@ -42,6 +42,14 @@ def build_coordinator(args: dict | None = None):
         "ML_SERVICE_TIMEOUT": os.getenv("ML_SERVICE_TIMEOUT", "8.0"),
         "COGNITIVE_SERVICE_TIMEOUT": os.getenv("COGNITIVE_SERVICE_TIMEOUT", "15.0"),
         "ORGANISM_SERVICE_TIMEOUT": os.getenv("ORGANISM_SERVICE_TIMEOUT", "5.0"),
+        "ORGANISM_TIMEOUT_S": os.getenv(
+            "ORGANISM_TIMEOUT_S",
+            os.getenv("ORGANISM_SERVICE_TIMEOUT", "120"),
+        ),
+        "SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS": os.getenv(
+            "SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS",
+            "300",
+        ),
         "SERVE_CALL_TIMEOUT_S": os.getenv("SERVE_CALL_TIMEOUT_S", "120"),
         # Circuit breaker timeouts
         "CB_ML_TIMEOUT_S": os.getenv("CB_ML_TIMEOUT_S", "5.0"),
@@ -55,15 +63,18 @@ def build_coordinator(args: dict | None = None):
         "TUNE_EXPERIMENT_PREFIX": os.getenv("TUNE_EXPERIMENT_PREFIX", "coordinator-tune"),
     }
     
-    # Set environment variables for the replicas
-    for key, value in env_vars.items():
-        if value:
-            os.environ[key] = value
-    
     logger.info(f"Building Coordinator with environment variables: {list(env_vars.keys())}")
-    
+
     num_cpus = float(args.get("num_cpus", os.getenv("COORDINATOR_NUM_CPUS", "0.3")))
-    return Coordinator.options(ray_actor_options={"num_cpus": num_cpus}).bind()
+    runtime_env = {
+        "env_vars": {key: value for key, value in env_vars.items() if value},
+    }
+    return Coordinator.options(
+        ray_actor_options={
+            "num_cpus": num_cpus,
+            "runtime_env": runtime_env,
+        }
+    ).bind()
 
 if __name__ == "__main__":
     # This allows the entrypoint to be run directly for testing

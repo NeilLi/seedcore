@@ -18,6 +18,7 @@ class ForensicSealTool(ToolBase):
     
     def __init__(self, hal_base_url: Optional[str] = None):
         super().__init__()
+        self._hal_base_url = hal_base_url
         self._hal_client = HALClient(base_url=hal_base_url)
 
     @property
@@ -77,7 +78,7 @@ class ForensicSealTool(ToolBase):
             }
         }]
 
-    async def execute(self, params: Dict[str, Any]) -> Any:
+    async def run(self, **params: Any) -> Any:
         try:
             # 1. Provide default URN if not specified to prevent validation errors
             event_id = params.get("event_id") or f"urn:seedcore:event:honey-094-{str(uuid.uuid4())[:8]}"
@@ -108,9 +109,6 @@ class ForensicSealTool(ToolBase):
                 ),
             )
             
-            # 3. Clean up client
-            await self._hal_client.close()
-            
             # Return stringified JSON-LD for the Agent's reasoning history
             return {
                 "status": "success",
@@ -119,9 +117,45 @@ class ForensicSealTool(ToolBase):
             }
             
         except RuntimeError as e:
-            return ToolError(str(e))
+            if "client has been closed" in str(e).lower():
+                # Recreate HAL client and retry once for long-lived tool instances.
+                self._hal_client = HALClient(base_url=self._hal_base_url)
+                try:
+                    retry_event_id = params.get("event_id") or f"urn:seedcore:event:honey-094-{str(uuid.uuid4())[:8]}"
+                    custody_event = await self._hal_client.request_forensic_seal(
+                        event_id=retry_event_id,
+                        platform_state=params.get("platform_state", "buyer-review-prepared"),
+                        trajectory_hash=params.get("trajectory_hash"),
+                        policy_hash=params.get("policy_hash", "sha256:unknown"),
+                        auth_token=params.get("auth_token", "QA-HONEY-FORENSIC"),
+                        from_zone=params.get("from_zone", "inspection-zone-a"),
+                        to_zone=params.get("to_zone", "sealed-buyer-review"),
+                        transition_receipt=(
+                            params.get("transition_receipt")
+                            if isinstance(params.get("transition_receipt"), dict)
+                            else None
+                        ),
+                        actuator_telemetry=(
+                            params.get("actuator_telemetry")
+                            if isinstance(params.get("actuator_telemetry"), dict)
+                            else {}
+                        ),
+                        media_hash_references=(
+                            params.get("media_hash_references")
+                            if isinstance(params.get("media_hash_references"), list)
+                            else []
+                        ),
+                    )
+                    return {
+                        "status": "success",
+                        "message": "Honey Digital Twin custody event sealed successfully.",
+                        "custody_event": custody_event
+                    }
+                except Exception as retry_exc:
+                    raise ToolError(self.name, str(retry_exc), retry_exc)
+            raise ToolError(self.name, str(e), e)
         except Exception as e:
-            return ToolError(f"Unexpected error while sealing forensic event: {str(e)}")
+            raise ToolError(self.name, f"Unexpected error while sealing forensic event: {str(e)}", e)
 
 async def register_forensic_tools(tool_manager: Any, hal_base_url: Optional[str] = None) -> bool:
     """

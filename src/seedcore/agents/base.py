@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple, Union
@@ -350,6 +351,9 @@ class BaseAgent:
         # 6. Operational Metrics & Locks
         self.load: float = 0.0
         self._load_max: float = self._LOAD_MAX  # Initialize from class constant
+        self.default_tool_timeout_s: float = float(
+            os.getenv("SEEDCORE_AGENT_DEFAULT_TOOL_TIMEOUT_S", "20")
+        )
         self._last_role_update_time: float = 0.0
         self._role_update_min_interval: float = 5.0
         self._role_smoothing_alpha: float = 0.3
@@ -828,8 +832,10 @@ class BaseAgent:
             try:
                 from seedcore.organs.organism_core import register_reachy_tools
                 from seedcore.tools.forensic_tools import register_forensic_tools
+                from seedcore.tools.youtube_tools import register_youtube_tools
                 await register_reachy_tools(self.tool_handler)
                 await register_forensic_tools(self.tool_handler)
+                await register_youtube_tools(self.tool_handler)
             except Exception as e:
                 # Reachy tools are optional - log but don't fail if HAL is unavailable
                 logger.debug(f"[{self.agent_id}] Could not register Reachy tools in local ToolManager: {e}")

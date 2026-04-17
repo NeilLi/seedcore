@@ -263,12 +263,23 @@ class TimeoutConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, data: Dict[str, Any]) -> "TimeoutConfig":
-        payload: Dict[str, Any] = {}
-        if "serve_call_s" in data and data["serve_call_s"] is not None:
+        base = cls()
+        payload: Dict[str, Any] = base.model_dump()
+
+        if (
+            "serve_call_s" in data
+            and data["serve_call_s"] is not None
+            and "SERVE_CALL_TIMEOUT_S" not in os.environ
+        ):
             payload["serve_call_s"] = int(data["serve_call_s"])
-        if "organism_timeout_s" in data and data["organism_timeout_s"] is not None:
+        if (
+            "organism_timeout_s" in data
+            and data["organism_timeout_s"] is not None
+            and "ORGANISM_TIMEOUT_S" not in os.environ
+        ):
             payload["organism_timeout_s"] = int(data["organism_timeout_s"])
-        # Env/defaults are handled via the default_factory when field is missing
+
+        # Host-mode env vars should be able to override repo YAML safely.
         return cls(**payload)
 
 
@@ -463,6 +474,13 @@ class Coordinator:
         self.cognitive_client = self.services.cognitive
         self.organism_client = self.services.organism
         self.eventizer = self.services.eventizer
+        # Keep organism client timeout aligned with coordinator config.
+        # Without this, long-running governed tool paths (e.g. publish_video uploads)
+        # can be cancelled by the client-side default timeout (10s).
+        try:
+            self.organism_client.timeout = float(self.organism_timeout_s)
+        except Exception:
+            logger.debug("Unable to apply organism timeout override to organism client.", exc_info=True)
 
         self.metrics = self.infra.metrics
         self._session_factory = self.infra.session_factory
@@ -1552,23 +1570,28 @@ class Coordinator:
             authoritative_approval_transition_history=authoritative_approval_transition_history,
             authoritative_approval_transition_head=authoritative_approval_transition_head,
         )
-        cognitive_assessment = await self._resolve_policy_case_assessment(
-            payload=payload,
-            existing_governance=existing_governance,
-            policy_case=policy_case,
-        )
-        if cognitive_assessment is not None:
-            policy_case = prepare_policy_case(
-                payload,
-                approved_source_registrations=approved_source_registrations,
-                relevant_twin_snapshot=relevant_twin_snapshot,
-                telemetry_summary=telemetry_summary,
-                cognitive_assessment=cognitive_assessment,
-                evidence_summary=evidence_summary,
-                authoritative_approval_envelope=authoritative_approval_envelope,
-                authoritative_approval_transition_history=authoritative_approval_transition_history,
-                authoritative_approval_transition_head=authoritative_approval_transition_head,
+        action_type = str(policy_case.action_intent.action.type or "").strip().upper()
+        require_assessment_all = str(
+            os.getenv("SEEDCORE_REQUIRE_COGNITIVE_POLICY_ASSESSMENT_FOR_ALL_ACTIONS", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if action_type == "TRANSFER_CUSTODY" or require_assessment_all:
+            cognitive_assessment = await self._resolve_policy_case_assessment(
+                payload=payload,
+                existing_governance=existing_governance,
+                policy_case=policy_case,
             )
+            if cognitive_assessment is not None:
+                policy_case = prepare_policy_case(
+                    payload,
+                    approved_source_registrations=approved_source_registrations,
+                    relevant_twin_snapshot=relevant_twin_snapshot,
+                    telemetry_summary=telemetry_summary,
+                    cognitive_assessment=cognitive_assessment,
+                    evidence_summary=evidence_summary,
+                    authoritative_approval_envelope=authoritative_approval_envelope,
+                    authoritative_approval_transition_history=authoritative_approval_transition_history,
+                    authoritative_approval_transition_head=authoritative_approval_transition_head,
+                )
 
         baseline_decision = evaluate_intent(policy_case)
         baseline_governance = build_governance_context_from_policy_case(
@@ -1576,7 +1599,6 @@ class Coordinator:
             policy_decision=baseline_decision,
         )
 
-        action_type = str(policy_case.action_intent.action.type or "").strip().upper()
         if action_type != "TRANSFER_CUSTODY":
             return baseline_governance
 

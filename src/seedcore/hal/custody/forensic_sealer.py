@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -71,15 +72,21 @@ class ForensicSealer:
             "node_id": self.device_identity,
             "captured_at": timestamp,
         }
+        configured_trust_level = os.getenv("SEEDCORE_HAL_FORENSIC_TRUST_LEVEL", "").strip().lower()
+        if configured_trust_level in {"baseline", "attested"}:
+            trust_level = configured_trust_level
+        else:
+            trust_level = (
+                "attested"
+                if self.device_identity.startswith("hal://") or self.device_identity.startswith("robot_sim://")
+                else "baseline"
+            )
+
         _, signer_metadata, signature, trust_proof = build_signed_artifact(
             artifact_type="hal_capture",
             payload=payload,
             endpoint_id=self.device_identity,
-            trust_level=(
-                "attested"
-                if self.device_identity.startswith("hal://") or self.device_identity.startswith("robot_sim://")
-                else "baseline"
-            ),
+            trust_level=trust_level,
             node_id=self.device_identity,
         )
         envelope = HALCaptureEnvelope(

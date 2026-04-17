@@ -35,6 +35,11 @@ if [[ -f "${ENV_FILE}" ]]; then
     OPENAI_API_KEY \
     ANTHROPIC_API_KEY \
     GOOGLE_API_KEY \
+    SEEDCORE_YOUTUBE_INTENT_HMAC_SECRET \
+    SEEDCORE_YOUTUBE_ACCESS_TOKEN \
+    SEEDCORE_YOUTUBE_CLIENT_ID \
+    SEEDCORE_YOUTUBE_CLIENT_SECRET \
+    SEEDCORE_YOUTUBE_REFRESH_TOKEN \
     NEO4J_USER \
     NEO4J_PASSWORD \
     GOOGLE_VERTEX_MODEL \
@@ -103,10 +108,19 @@ export SERVE_GATEWAY="${SERVE_GATEWAY:-http://${RAY_HOST}:8000}"
 export SEEDCORE_API_URL="${SEEDCORE_API_URL:-http://127.0.0.1:8002}"
 export SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE="${SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE:-host}"
 export HAL_BASE_URL="${HAL_BASE_URL:-http://127.0.0.1:8003}"
+export SEEDCORE_HAL_SEALER_IDENTITY="${SEEDCORE_HAL_SEALER_IDENTITY:-local://seedcore-hal}"
+export SEEDCORE_HAL_FORENSIC_TRUST_LEVEL="${SEEDCORE_HAL_FORENSIC_TRUST_LEVEL:-baseline}"
+export SEEDCORE_YOUTUBE_INTENT_OWNER_EMAIL="${SEEDCORE_YOUTUBE_INTENT_OWNER_EMAIL:-lizi.lining@gmail.com}"
+export SEEDCORE_YOUTUBE_INTENT_HMAC_SECRET="${SEEDCORE_YOUTUBE_INTENT_HMAC_SECRET:-seedcore-local-youtube-hmac}"
 export COG_BASE_URL="${COG_BASE_URL:-${SERVE_GATEWAY}/cognitive}"
 export ORG_BASE_PATH="${ORG_BASE_PATH:-/organism}"
 export COG_BASE_PATH="${COG_BASE_PATH:-/cognitive}"
 export SERVE_BASE_PATH="${SERVE_BASE_PATH:-/ml}"
+
+if [[ -z "${SEEDCORE_EXTERNAL_INTENT_HMAC_SECRETS_JSON:-}" ]]; then
+  _seedcore_email_slug="$(printf '%s' "${SEEDCORE_YOUTUBE_INTENT_OWNER_EMAIL}" | tr '[:upper:]' '[:lower:]' | sed 's/@/-at-/g; s/[^a-z0-9-]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')"
+  export SEEDCORE_EXTERNAL_INTENT_HMAC_SECRETS_JSON="{\"did:seedcore:assistant:youtube-publisher:${_seedcore_email_slug}\":\"${SEEDCORE_YOUTUBE_INTENT_HMAC_SECRET}\",\"hmac:${_seedcore_email_slug}:v1\":\"${SEEDCORE_YOUTUBE_INTENT_HMAC_SECRET}\"}"
+fi
 
 export POSTGRES_POOL_SIZE="${POSTGRES_POOL_SIZE:-5}"
 export POSTGRES_MAX_OVERFLOW="${POSTGRES_MAX_OVERFLOW:-5}"
@@ -117,15 +131,34 @@ export RAY_USAGE_STATS_ENABLED="${RAY_USAGE_STATS_ENABLED:-0}"
 export SEEDCORE_SKIP_EAGER_RAY="${SEEDCORE_SKIP_EAGER_RAY:-1}"
 export SEEDCORE_DISPATCHER_MAIN_INTERVAL_S="${SEEDCORE_DISPATCHER_MAIN_INTERVAL_S:-0.05}"
 export SEEDCORE_SKIP_NEO4J_CHECK="${SEEDCORE_SKIP_NEO4J_CHECK:-0}"
+export SERVE_CALL_TIMEOUT_S="${SERVE_CALL_TIMEOUT_S:-300}"
+export ORGANISM_TIMEOUT_S="${ORGANISM_TIMEOUT_S:-300}"
+export SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS="${SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS:-900}"
+export SEEDCORE_AGENT_DEFAULT_TOOL_TIMEOUT_S="${SEEDCORE_AGENT_DEFAULT_TOOL_TIMEOUT_S:-300}"
 
 # External API mock controls (safe local defaults).
 # Set to 1/true/yes/on to use deterministic non-network mock behavior.
+# When GOOGLE_API_KEY is present, default Gemini mock flags to live mode (0)
+# so local cognitive paths can actually exercise Gemini API calls.
 export SEEDCORE_MOCK_EXTERNAL_APIS="${SEEDCORE_MOCK_EXTERNAL_APIS:-0}"
-export SEEDCORE_MOCK_GEMINI_API="${SEEDCORE_MOCK_GEMINI_API:-1}"
-export GOOGLE_API_MOCK="${GOOGLE_API_MOCK:-1}"
-export GEMINI_API_MOCK="${GEMINI_API_MOCK:-1}"
+if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+  export SEEDCORE_MOCK_GEMINI_API="${SEEDCORE_MOCK_GEMINI_API:-0}"
+  export GOOGLE_API_MOCK="${GOOGLE_API_MOCK:-0}"
+  export GEMINI_API_MOCK="${GEMINI_API_MOCK:-0}"
+else
+  export SEEDCORE_MOCK_GEMINI_API="${SEEDCORE_MOCK_GEMINI_API:-1}"
+  export GOOGLE_API_MOCK="${GOOGLE_API_MOCK:-1}"
+  export GEMINI_API_MOCK="${GEMINI_API_MOCK:-1}"
+fi
 export SYNOPSIS_EMBEDDING_MOCK="${SYNOPSIS_EMBEDDING_MOCK:-1}"
 export NIM_RETRIEVAL_MOCK="${NIM_RETRIEVAL_MOCK:-1}"
+
+# RCT control posture defaults for local governed execution flows.
+# Keep these enabled so PKG activation for RCT workflows does not fail closed.
+export SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH="${SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH:-1}"
+export SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE="${SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE:-1}"
+export SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT="${SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT:-1}"
+export SEEDCORE_PKG_RCT_PUBLISH_VALIDATE="${SEEDCORE_PKG_RCT_PUBLISH_VALIDATE:-1}"
 
 # Local host-mode should prefer a working provider over container defaults.
 # If Gemini credentials are present but OpenAI is unset or clearly placeholder-only,

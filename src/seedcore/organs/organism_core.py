@@ -203,15 +203,30 @@ async def register_reachy_tools(tool_manager: Any) -> bool:
     """
     try:
         from seedcore.tools.reachy_tools import register_reachy_tools as _register_reachy_hal_tools
+        from seedcore.tools.forensic_tools import register_forensic_tools as _register_forensic_tools
         
         # Get HAL base URL from environment or use default
         hal_base_url = os.getenv("HAL_BASE_URL", "http://localhost:8003")
         
-        result = await _register_reachy_hal_tools(tool_manager, hal_base_url=hal_base_url)
-        return result
+        reachy_result = await _register_reachy_hal_tools(tool_manager, hal_base_url=hal_base_url)
+        forensic_result = await _register_forensic_tools(tool_manager, hal_base_url=hal_base_url)
+        return bool(reachy_result or forensic_result)
 
     except Exception as e:
         logger.warning(f"⚠️ Failed to register Reachy tools: {e}", exc_info=True)
+        return False
+
+
+async def register_youtube_tools(tool_manager: Any) -> bool:
+    """
+    Register YouTube publishing tools.
+    """
+    try:
+        from seedcore.tools.youtube_tools import register_youtube_tools as _register_youtube_tools
+
+        return await _register_youtube_tools(tool_manager)
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to register YouTube tools: {e}", exc_info=True)
         return False
 
 
@@ -944,6 +959,8 @@ class OrganismCore:
             
             # Register Reachy simulation tools
             await register_reachy_tools(self.tool_manager)
+            # Register YouTube publishing tools
+            await register_youtube_tools(self.tool_manager)
         else:
             # Dynamic Sharding Calculation
             # Default: 1 shard per 1000 agents, min 4, max 16
@@ -988,6 +1005,10 @@ class OrganismCore:
                 register_reachy_tools(shard) for shard in self.tool_shards
             ]
             registration_tasks.extend(reachy_tasks)
+            youtube_tasks = [
+                register_youtube_tools(shard) for shard in self.tool_shards
+            ]
+            registration_tasks.extend(youtube_tasks)
             await asyncio.gather(*registration_tasks, return_exceptions=True)
 
     # ------------------------------------------------------------------

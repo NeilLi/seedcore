@@ -38,5 +38,6 @@ export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-8002}"
 # Align hot-path status/metrics labels with k8s (`kubernetes`) and Ray (`ray`) deploys.
 export SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE="${SEEDCORE_HOT_PATH_DEPLOYMENT_ROLE:-host}"
+export SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS="${SEEDCORE_EXECUTION_TOKEN_TTL_SECONDS:-900}"
 
 exec uvicorn seedcore.main:app --host "${HOST}" --port "${PORT}"
