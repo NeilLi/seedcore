@@ -22,6 +22,7 @@ from seedcore.coordinator.result_verifier_dao import (
 )
 from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
 from seedcore.services.result_verifier_engine import (
+    ResultVerifierRetryableError,
     is_restricted_custody_transfer_record,
     verify_governed_audit_record,
 )
@@ -309,6 +310,12 @@ class ResultVerifierRuntime:
                 next_attempt = max(int(self._max_attempts), attempt + 1)
                 terminal = True
                 next_at = utcnow()
+            elif isinstance(exc, ResultVerifierRetryableError):
+                error_code = str(exc)[:128] or "result_verifier_retryable_failure"
+                next_attempt = attempt + 1
+                terminal = next_attempt >= self._max_attempts
+                delay_s = result_verifier_backoff_seconds(attempt)
+                next_at = utcnow() + timedelta(seconds=delay_s)
             else:
                 next_attempt = attempt + 1
                 terminal = next_attempt >= self._max_attempts

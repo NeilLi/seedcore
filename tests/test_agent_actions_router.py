@@ -208,6 +208,18 @@ class _ResultVerifierGateBlockedService:
         }
 
 
+class _ResultVerifierGateReplayMismatchService:
+    async def evaluate_result_verifier_gate(self, *, twin_refs):
+        return {
+            "blocked": True,
+            "reason_code": "result_verifier_replay_mismatch",
+            "reason": "Authoritative RESULT_VERIFIER replay mismatch is active.",
+            "twin_type": "asset",
+            "twin_id": "asset:lot-8841",
+            "checked_refs": len(list(twin_refs or [])),
+        }
+
+
 class _ResultVerifierGateRaisesService:
     async def evaluate_result_verifier_gate(self, *, twin_refs):
         raise RuntimeError("simulated gate failure")
@@ -703,6 +715,36 @@ def test_agent_actions_evaluate_denies_when_result_verifier_gate_blocks(monkeypa
     assert "result_verifier_lockout" in body["trust_gaps"]
 
 
+def test_agent_actions_evaluate_denies_when_result_verifier_replay_mismatch_blocks(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateReplayMismatchService(),
+    )
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "deny"
+    assert body["decision"]["reason_code"] == "result_verifier_replay_mismatch"
+    assert body["execution_token"] is None
+    assert "result_verifier_replay_mismatch" in body["trust_gaps"]
+
+
 def test_agent_actions_evaluate_no_execute_query_strips_execution_token(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()
@@ -981,6 +1023,45 @@ def test_agent_actions_closure_rejects_when_result_verifier_gate_blocks(monkeypa
     assert detail["gate_reason_code"] == "result_verifier_lockout"
 
 
+def test_agent_actions_closure_rejects_when_result_verifier_replay_mismatch_blocks(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateOpenService(),
+    )
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateReplayMismatchService(),
+    )
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    assert close_response.status_code == 409
+    detail = close_response.json()["detail"]
+    assert detail["error_code"] == "closure_blocked_by_result_verifier"
+    assert detail["gate_reason_code"] == "result_verifier_replay_mismatch"
+
+
 def test_agent_actions_closure_marks_replay_ready_when_settlement_applied(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()
@@ -1062,6 +1143,54 @@ async def test_closure_settlement_handoff_rejects_when_result_verifier_gate_bloc
     assert settlement_status == "rejected"
     assert settlement_result["error_code"] == "settlement_blocked_by_result_verifier"
     assert settlement_result["gate_reason_code"] == "result_verifier_lockout"
+
+
+@pytest.mark.asyncio
+async def test_closure_settlement_handoff_rejects_when_result_verifier_replay_mismatch_blocks(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    monkeypatch.setattr(agent_actions_router, "SETTLEMENT_HANDOFF_ENABLED", True)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _ResultVerifierGateReplayMismatchService(),
+    )
+
+    request_record = agent_actions_router._AgentActionStoredRecord(
+        request_id="req-transfer-2026-0001",
+        idempotency_key="idem-transfer-2026-0001",
+        request_hash="hash-1",
+        recorded_at=datetime.now(timezone.utc),
+        response=agent_actions_router.AgentActionEvaluateResponse(
+            request_id="req-transfer-2026-0001",
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=10,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="ok",
+                reason="ok",
+                policy_snapshot_ref="snapshot:1",
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-1",
+                intent_id="req-transfer-2026-0001",
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:00:06Z",
+                contract_version="rules@8.0.0",
+            ),
+            governed_receipt={"asset_ref": "asset:lot-8841"},
+        ),
+        request_payload=_base_payload(),
+    )
+    closure_payload = AgentActionClosureRequest.model_validate(_base_closure_payload())
+
+    settlement_status, settlement_result = await agent_actions_router._apply_closure_settlement_handoff(
+        request_record=request_record,
+        closure_payload=closure_payload,
+    )
+    assert settlement_status == "rejected"
+    assert settlement_result["error_code"] == "settlement_blocked_by_result_verifier"
+    assert settlement_result["gate_reason_code"] == "result_verifier_replay_mismatch"
 
 
 def test_build_closure_evidence_bundle_includes_forensic_block():

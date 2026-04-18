@@ -665,6 +665,7 @@ class DigitalTwinService:
             return ctx
         lock_payload = {
             "failure_code": outcome.failure_code,
+            "gate_reason_code": outcome.gate_reason_code,
             "failure_class": outcome.failure_class,
             "issues": list(outcome.issues or [])[:32],
             "at": datetime.now(timezone.utc).isoformat(),
@@ -1014,14 +1015,24 @@ class DigitalTwinService:
             for item in list(governance.get("lockouts") or [])
             if str(item).strip()
         ]
+        lockout_payload = (
+            governance.get("result_verifier_lockout")
+            if isinstance(governance.get("result_verifier_lockout"), Mapping)
+            else {}
+        )
         has_result_verifier_lockout = (
             "result_verifier_lockout" in lockouts
-            or bool(governance.get("result_verifier_lockout"))
+            or bool(lockout_payload)
         )
         last_event_type = str(governance.get("last_event_type") or "").strip().lower()
+        stored_reason_code = str(lockout_payload.get("gate_reason_code") or "").strip()
+        if not stored_reason_code.startswith("result_verifier_"):
+            stored_reason_code = ""
 
         reason_code: Optional[str] = None
-        if lifecycle_state == "VERIFICATION_FAILED" or last_event_type == "verification_failed":
+        if stored_reason_code:
+            reason_code = stored_reason_code
+        elif lifecycle_state == "VERIFICATION_FAILED" or last_event_type == "verification_failed":
             reason_code = "result_verifier_verification_failed"
         elif last_event_type == "verification_quarantined":
             reason_code = "result_verifier_quarantined"
@@ -1033,13 +1044,20 @@ class DigitalTwinService:
         if reason_code is None:
             return {"blocked": False}
 
+        if reason_code == "result_verifier_replay_mismatch":
+            reason = (
+                f"Authoritative RESULT_VERIFIER gate blocked downstream transaction for "
+                f"{twin_type}:{twin_id} due to replay mismatch."
+            )
+        else:
+            reason = (
+                f"Authoritative RESULT_VERIFIER gate blocked downstream transaction for "
+                f"{twin_type}:{twin_id} ({reason_code})."
+            )
         return {
             "blocked": True,
             "reason_code": reason_code,
-            "reason": (
-                f"Authoritative RESULT_VERIFIER gate blocked downstream transaction for "
-                f"{twin_type}:{twin_id} ({reason_code})."
-            ),
+            "reason": reason,
             "twin_type": twin_type,
             "twin_id": twin_id,
         }

@@ -27,8 +27,10 @@ from seedcore.services.digital_twin_service import (
     build_result_verifier_gate_failure_verdict,
 )
 from seedcore.services.result_verifier_engine import (
+    ResultVerifierRetryableError,
     is_restricted_custody_transfer_record,
     map_replay_verification_to_outcome,
+    verify_governed_audit_record,
 )
 from seedcore.services.result_verifier_runtime import ResultVerifierRuntime
 
@@ -92,17 +94,87 @@ def test_map_replay_verification_integrity_vs_trust() -> None:
     )
     assert o1.failure_class == "integrity"
     assert o1.twin_event_type == "verification_failed"
+    assert o1.gate_reason_code == "result_verifier_verification_failed"
 
     trust = ReplayVerificationStatus(
         verified=False,
-        tamper_status="ok",
-        issues=["authority_state_binding:dependency_mismatch"],
+        tamper_status="incomplete",
+        issues=["missing_policy_receipt"],
     )
     o2 = map_replay_verification_to_outcome(
         trust, record=record, evidence_bundle=eb, transition_receipts=[]
     )
     assert o2.failure_class == "trust"
     assert o2.twin_event_type == "verification_quarantined"
+    assert o2.failure_code == "missing_policy_receipt"
+    assert o2.gate_reason_code == "result_verifier_quarantined"
+
+
+def test_map_replay_verification_promotes_explicit_replay_mismatch_reason() -> None:
+    record = {
+        "policy_receipt": {"policy_receipt_id": "pr1"},
+        "action_intent": {"resource": {"asset_id": "a1"}},
+    }
+    eb = {"evidence_bundle_id": "eb1", "evidence_inputs": {"transition_receipts": []}}
+
+    mismatch = ReplayVerificationStatus(
+        verified=False,
+        tamper_status="payload_mismatch",
+        issues=["decision_graph_snapshot:snapshot_hash_mismatch"],
+    )
+    outcome = map_replay_verification_to_outcome(
+        mismatch,
+        record=record,
+        evidence_bundle=eb,
+        transition_receipts=[],
+    )
+    assert outcome.failure_class == "integrity"
+    assert outcome.failure_code == "replay_mismatch"
+    assert outcome.gate_reason_code == "result_verifier_replay_mismatch"
+
+
+def test_map_replay_verification_does_not_promote_generic_rust_failure_to_replay_mismatch() -> None:
+    record = {
+        "policy_receipt": {"policy_receipt_id": "pr1"},
+        "action_intent": {"resource": {"asset_id": "a1"}},
+    }
+    eb = {"evidence_bundle_id": "eb1", "evidence_inputs": {"transition_receipts": []}}
+
+    transient = ReplayVerificationStatus(
+        verified=False,
+        tamper_status="incomplete",
+        issues=["rust_replay_chain:rust_verify_replay_chain_timeout"],
+        artifact_results={"rust_replay_chain": {"verified": False, "error_code": "rust_verify_replay_chain_timeout"}},
+    )
+    outcome = map_replay_verification_to_outcome(
+        transient,
+        record=record,
+        evidence_bundle=eb,
+        transition_receipts=[],
+    )
+    assert outcome.failure_class == "trust"
+    assert outcome.failure_code == "rust_replay_chain:rust_verify_replay_chain_timeout"
+    assert outcome.gate_reason_code == "result_verifier_quarantined"
+
+
+def test_verify_governed_audit_record_raises_retryable_on_rust_timeout() -> None:
+    record = {
+        "policy_receipt": {"policy_receipt_id": "pr1"},
+        "evidence_bundle": {"evidence_bundle_id": "eb1"},
+        "action_intent": {"resource": {"asset_id": "a1"}},
+    }
+    status = ReplayVerificationStatus(
+        verified=False,
+        tamper_status="incomplete",
+        issues=["rust_replay_chain:rust_verify_replay_chain_timeout"],
+        artifact_results={"rust_replay_chain": {"verified": False, "error_code": "rust_verify_replay_chain_timeout"}},
+    )
+
+    with patch("seedcore.services.result_verifier_engine.ReplayService") as replay_cls:
+        replay = replay_cls.return_value
+        replay.verify_audit_record_for_result_verifier.return_value = (status, record["evidence_bundle"], record["policy_receipt"], [])
+        with pytest.raises(ResultVerifierRetryableError, match="rust_verify_replay_chain_timeout"):
+            verify_governed_audit_record(record)
 
 
 @pytest.mark.asyncio
@@ -123,6 +195,36 @@ async def test_evaluate_result_verifier_gate_fail_closed_when_dao_raises() -> No
     verdict = await svc.evaluate_result_verifier_gate(twin_refs=[("asset", "asset:x1")])
     assert verdict["blocked"] is True
     assert verdict["reason_code"] == "result_verifier_gate_lookup_failed"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_result_verifier_gate_uses_replay_mismatch_lockout_reason() -> None:
+    dao = SimpleNamespace(
+        get_authoritative_snapshots=AsyncMock(
+            return_value={
+                ("asset", "asset:x1"): {
+                    "snapshot": {
+                        "twin_kind": "asset",
+                        "twin_id": "asset:x1",
+                        "lifecycle_state": "VERIFICATION_FAILED",
+                        "governance": {
+                            "last_event_type": "verification_failed",
+                            "lockouts": ["result_verifier_lockout"],
+                            "result_verifier_lockout": {
+                                "failure_code": "replay_mismatch",
+                                "gate_reason_code": "result_verifier_replay_mismatch",
+                            },
+                        },
+                    }
+                }
+            }
+        ),
+    )
+    svc = DigitalTwinService(session_factory=_StubSessionFactory(_StubSession()), dao=dao, event_dao=MagicMock())
+    verdict = await svc.evaluate_result_verifier_gate(twin_refs=[("asset", "asset:x1")])
+    assert verdict["blocked"] is True
+    assert verdict["reason_code"] == "result_verifier_replay_mismatch"
+    assert "replay mismatch" in verdict["reason"].lower()
 
 
 def test_build_result_verifier_gate_failure_verdict_includes_reason() -> None:
@@ -373,6 +475,46 @@ async def test_process_job_sets_terminal_missing_subject_error_code() -> None:
     kwargs = runtime._job_dao.schedule_retry.await_args.kwargs
     assert kwargs["terminal"] is True
     assert kwargs["error_code"] == "missing_subject_for_fail_closed"
+
+
+@pytest.mark.asyncio
+async def test_process_job_retries_on_retryable_verifier_failure() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._max_attempts = 6
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {"action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}}},
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._job_dao = SimpleNamespace(
+        schedule_retry=AsyncMock(),
+    )
+    runtime._persist_terminal = AsyncMock()
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 0,
+    }
+    dts = SimpleNamespace()
+    with patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        side_effect=ResultVerifierRetryableError("rust_verify_replay_chain_timeout"),
+    ):
+        await runtime._process_one_job(MagicMock(), job, dts)
+    runtime._persist_terminal.assert_not_awaited()
+    runtime._job_dao.schedule_retry.assert_awaited_once()
+    kwargs = runtime._job_dao.schedule_retry.await_args.kwargs
+    assert kwargs["terminal"] is False
+    assert kwargs["error_code"] == "rust_verify_replay_chain_timeout"
 
 
 @pytest.mark.asyncio

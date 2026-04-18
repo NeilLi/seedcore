@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
+def _verify_cli_timeout_seconds() -> float:
+    raw = os.getenv("SEEDCORE_VERIFY_CLI_TIMEOUT_SECONDS", "15").strip()
+    try:
+        timeout_s = float(raw)
+    except ValueError:
+        timeout_s = 15.0
+    return max(1.0, timeout_s)
+
+
 def verify_execution_token_with_rust(
     token: Mapping[str, Any],
     *,
@@ -238,8 +247,15 @@ def seal_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) -> dict
     finally:
         _unlink_quietly(artifact_path)
     if "artifacts" not in output:
+        error = str(output.get("error") or "").strip()
+        if error == "rust_verify_timeout":
+            error_code = "rust_seal_replay_bundle_timeout"
+        elif error == "rust_kernel_unavailable":
+            error_code = "rust_seal_replay_bundle_unavailable"
+        else:
+            error_code = "rust_seal_replay_bundle_failed"
         return {
-            "error_code": "rust_seal_replay_bundle_failed",
+            "error_code": error_code,
             "details": [output],
             "artifacts": [],
         }
@@ -259,9 +275,16 @@ def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
     finally:
         _unlink_quietly(bundle_path)
     if "verified" not in output:
+        error = str(output.get("error") or "").strip()
+        if error == "rust_verify_timeout":
+            error_code = "rust_verify_replay_chain_timeout"
+        elif error == "rust_kernel_unavailable":
+            error_code = "rust_verify_replay_chain_unavailable"
+        else:
+            error_code = "rust_verify_replay_chain_failed"
         return {
             "verified": False,
-            "error_code": "rust_verify_replay_chain_failed",
+            "error_code": error_code,
             "details": [output],
             "artifact_reports": [],
             "chain_checks": [],
@@ -293,6 +316,7 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
     repo_root = _repo_root()
     rust_dir = repo_root / "rust"
     binary = _resolve_verify_binary(repo_root)
+    timeout_s = _verify_cli_timeout_seconds()
 
     try:
         completed: subprocess.CompletedProcess[str] | None = None
@@ -302,6 +326,7 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=timeout_s,
             )
             if completed.returncode != 0:
                 completed = subprocess.run(
@@ -310,6 +335,7 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
                     check=False,
                     capture_output=True,
                     text=True,
+                    timeout=timeout_s,
                 )
         else:
             completed = subprocess.run(
@@ -318,13 +344,16 @@ def _run_verify_cli(args: list[str]) -> dict[str, Any]:
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=timeout_s,
             )
+    except subprocess.TimeoutExpired:
+        return {"error": "rust_verify_timeout", "timeout_seconds": timeout_s}
     except Exception as exc:
-        return {"error": f"rust_kernel_unavailable:{exc}"}
+        return {"error": "rust_kernel_unavailable", "detail": str(exc)}
 
     if completed.returncode != 0:
         stderr = completed.stderr.strip() or completed.stdout.strip()
-        return {"error": f"rust_verify_failed:{stderr}"}
+        return {"error": "rust_verify_failed", "detail": stderr}
 
     try:
         return json.loads(completed.stdout)

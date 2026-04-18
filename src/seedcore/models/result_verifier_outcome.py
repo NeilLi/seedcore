@@ -12,6 +12,7 @@ class ResultVerifierOutcome(BaseModel):
 
     verified: bool
     failure_code: Optional[str] = None
+    gate_reason_code: Optional[str] = None
     failure_class: Optional[Literal["integrity", "trust", "none"]] = Field(
         default=None,
         description="integrity -> verification_failed twin event; trust -> verification_quarantined",
