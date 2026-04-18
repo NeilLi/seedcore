@@ -232,8 +232,8 @@ contract ambiguity.
 
 See:
 
-- `docs/development/killer_demo_execution_spine.md`
-- `docs/development/next_killer_demo_contract_freeze.md`
+- `docs/development/archive/historical/killer_demo_execution_spine.md`
+- `docs/development/archive/historical/next_killer_demo_contract_freeze.md`
 - `docs/development/phase0_contract_freeze_manifest.json`
 
 Status as of March 26, 2026:

@@ -20,13 +20,13 @@ program, not an isolated optimization project.
 Program alignment:
 
 - Q2 priority in
-  [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md):
+  [seedcore_2026_execution_plan.md](seedcore_2026_execution_plan.md):
   make the current RCT wedge operationally promotable
 - Q3 priority in
   [agent_action_gateway_contract.md](/Users/ningli/project/seedcore/docs/development/agent_action_gateway_contract.md):
   expose a stable external agent boundary over a trustworthy decision path
 - product narrative in
-  [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md):
+  [seedcore_2026_execution_plan.md](seedcore_2026_execution_plan.md):
   SeedCore owns admissibility and proof, so the decision path must be
   operationally defensible
 
@@ -278,8 +278,8 @@ Concrete work:
 Primary docs:
 
 - [hot_path_enforcement_promotion_contract.md](/Users/ningli/project/seedcore/docs/development/hot_path_enforcement_promotion_contract.md)
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-- [restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
+- [current_next_steps.md](current_next_steps.md)
+- [restricted_custody_transfer_demo_signoff_report.md](archive/historical/restricted_custody_transfer_demo_signoff_report.md)
 
 Exit criteria:
 

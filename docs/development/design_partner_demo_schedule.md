@@ -422,8 +422,8 @@ The demo is strong enough for partners if they can repeat this back afterward:
 
 ## Related references
 
-- [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
-- [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
-- [restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
-- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
-- [autonomous_repair_transfer_demo_spec.md](/Users/ningli/project/seedcore/docs/development/autonomous_repair_transfer_demo_spec.md)
+- [killer_demo_execution_spine.md](archive/historical/killer_demo_execution_spine.md)
+- [next_killer_demo_contract_freeze.md](archive/historical/next_killer_demo_contract_freeze.md)
+- [restricted_custody_transfer_demo_signoff_report.md](archive/historical/restricted_custody_transfer_demo_signoff_report.md)
+- [q2_2026_audit_trail_ui_spec.md](q2_2026_audit_trail_ui_spec.md)
+- [autonomous_repair_transfer_demo_spec.md](autonomous_repair_transfer_demo_spec.md)

@@ -783,5 +783,5 @@ This proposal should be linked from:
 
 - `docs/development/language_evolution_map.md`
 - `docs/development/current_next_steps.md`
-- `docs/development/killer_demo_execution_spine.md`
-- `docs/development/next_killer_demo_contract_freeze.md`
+- `docs/development/archive/historical/killer_demo_execution_spine.md`
+- `docs/development/archive/historical/next_killer_demo_contract_freeze.md`

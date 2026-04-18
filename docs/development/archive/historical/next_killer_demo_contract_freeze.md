@@ -7,8 +7,8 @@ This document is the implementation plan for the next Restricted Custody Transfe
 It supersedes the older "contract freeze only" framing. The frozen contract shapes still matter, but the purpose here is now to drive delivery.
 
 Live status and execution ordering remain in:
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-- [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md)
+- [current_next_steps.md](../../current_next_steps.md)
+- [seedcore_2026_execution_plan.md](../../seedcore_2026_execution_plan.md)
 
 ## Objective
 
@@ -171,10 +171,10 @@ The next killer demo is done when:
 
 ## References
 
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-- [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
-- [design_partner_demo_schedule.md](/Users/ningli/project/seedcore/docs/development/design_partner_demo_schedule.md)
-- [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md)
-- [contract_freeze_zero_trust_terms.md](/Users/ningli/project/seedcore/docs/development/contract_freeze_zero_trust_terms.md)
-- [end_to_end_governance_demo_contract.md](/Users/ningli/project/seedcore/docs/development/end_to_end_governance_demo_contract.md)
-- [pkg_authz_graph_rfc.md](/Users/ningli/project/seedcore/docs/development/pkg_authz_graph_rfc.md)
+- [current_next_steps.md](../../current_next_steps.md)
+- [killer_demo_execution_spine.md](killer_demo_execution_spine.md)
+- [design_partner_demo_schedule.md](../../design_partner_demo_schedule.md)
+- [seedcore_2026_execution_plan.md](../../seedcore_2026_execution_plan.md)
+- [contract_freeze_zero_trust_terms.md](contract_freeze_zero_trust_terms.md)
+- [end_to_end_governance_demo_contract.md](end_to_end_governance_demo_contract.md)
+- [pkg_authz_graph_rfc.md](../../pkg_authz_graph_rfc.md)

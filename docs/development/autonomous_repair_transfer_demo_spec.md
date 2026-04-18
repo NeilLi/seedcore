@@ -737,6 +737,6 @@ This spec should stay aligned with current SeedCore implementation anchors:
 Related documents:
 
 - [north_star_autonomous_trade_environment.md](./north_star_autonomous_trade_environment.md)
-- [killer_demo_execution_spine.md](./killer_demo_execution_spine.md)
-- [next_killer_demo_contract_freeze.md](./next_killer_demo_contract_freeze.md)
+- [killer_demo_execution_spine.md](./archive/historical/killer_demo_execution_spine.md)
+- [next_killer_demo_contract_freeze.md](./archive/historical/next_killer_demo_contract_freeze.md)
 - [q2_2026_audit_trail_ui_spec.md](./q2_2026_audit_trail_ui_spec.md)

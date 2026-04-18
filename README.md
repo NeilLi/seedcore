@@ -72,11 +72,18 @@ must-win product workflow:
 
 - **Agent-Governed Restricted Custody Transfer**
 
+Read that wedge in **commerce** terms: a governed path where **digital
+transaction identity** (for example order, quote, line item, declared value) is
+bound to **physical custody and scope** before SeedCore issues bounded execution
+authority, and where closure produces **replayable proof** suitable for
+high-trust fulfillment—not a general robotics stack and not a perimeter-security
+product.
+
 The root README should describe the active product boundary, not try to be the
 full milestone tracker. The detailed dated rollout now lives in the development
 docs.
 
-Latest repo-aligned status as of **April 10, 2026**:
+Latest repo-aligned status as of **April 18, 2026**:
 
 - the canonical RCT wedge remains the single product-defining proof surface
 - Q2 Window A host-first closure is complete, and PKG-RCT contract alignment is
@@ -84,8 +91,13 @@ Latest repo-aligned status as of **April 10, 2026**:
   explicit triple-hash binding, and opt-in strict replay verification
 - `RESULT_VERIFIER` P0 is implemented for the RCT slice and now fail-closes
   downstream policy/closure paths on replay mismatch
-- the remote kube topology is validated for the core hot-path/runtime lane, and
-  the verification API kube integration lane is now implemented in-repo
+- the remote kube topology is validated for the core hot-path/runtime lane; a
+  first-class kube verification lane is in-repo, with **in-cluster verification
+  API** deployment as the next topology milestone for full operator-surface
+  capture (see `docs/development/kube_topology_validation_q2_signoff.md`)
+- the external agent evaluate path includes **commerce-shaped** adapters (narrow
+  Shopify-sandbox mapping into gateway asset and fingerprint fields) alongside
+  the strict `seedcore.agent_action_gateway.v1` contract
 
 Near-term product boundary for this phase:
 
@@ -399,17 +411,17 @@ In these environments, the default action is quarantine, not graceful degradatio
 
 ## Recommended Next Steps
 
-The detailed next-step plan now lives in [docs/development/current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md).
+The detailed next-step plan now lives in [docs/development/current_next_steps.md](docs/development/current_next_steps.md).
 
 That document is the better source of truth because the implementation and
 verification state is moving faster than the architecture overview in this root
 README.
 
 The recommended language-boundary evolution for that next stage lives in
-[docs/development/language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
+[docs/development/language_evolution_map.md](docs/development/language_evolution_map.md).
 
 The concrete Rust workspace proposal for that same track lives in
-[docs/development/rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
+[docs/development/rust_workspace_proposal.md](docs/development/rust_workspace_proposal.md).
 
 In short, the highest-priority remaining work is:
 
@@ -465,7 +477,7 @@ For deep technical details see:
 - [Design Notes](docs/design-notes.md)
 - [Zero-Trust Custody and Digital-Twin Runtime](docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md)
 - [Source Registration Architecture](docs/development/source_registration_architecture.md)
-- [End-to-End Governance Demo Contract](docs/development/end_to_end_governance_demo_contract.md)
+- [End-to-End Governance Demo Contract](docs/development/archive/historical/end_to_end_governance_demo_contract.md)
 - [Policy Gate Matrix](docs/development/policy_gate_matrix.md)
 - [Evidence Bundle Example](docs/development/evidence_bundle_example.json)
 
@@ -518,7 +530,7 @@ Outputs are generated in the `demo-output/` folder.
 
 ### Host-Mode Local Runtime (Recommended For Day-To-Day Development)
 
-For local macOS or laptop development, use the host-mode helpers under [deploy/local/README.md](/Users/ningli/project/seedcore/deploy/local/README.md). They avoid the full Kind/Kubernetes footprint and are the best path for routine runtime bring-up and verification.
+For local macOS or laptop development, use the host-mode helpers under [deploy/local/README.md](deploy/local/README.md). They avoid the full Kind/Kubernetes footprint and are the best path for routine runtime bring-up and verification.
 
 Typical startup sequence:
 
@@ -587,7 +599,7 @@ Verify that Gemini sees the extension:
 ```
 
 The extension launches the checked-in MCP server entrypoint at
-[`scripts/gemini/run_seedcore_mcp.py`](/Users/ningli/project/seedcore/scripts/gemini/run_seedcore_mcp.py)
+[`scripts/gemini/run_seedcore_mcp.py`](scripts/gemini/run_seedcore_mcp.py)
 and should make these tools available in Gemini:
 
 - `seedcore.health`
@@ -608,7 +620,7 @@ and should make these tools available in Gemini:
 
 The extension does not start SeedCore for you. Bring up the runtime first using
 the host-mode steps above or the full guide in
-[deploy/local/README.md](/Users/ningli/project/seedcore/deploy/local/README.md).
+[deploy/local/README.md](deploy/local/README.md).
 
 Useful checks after runtime bring-up:
 
@@ -620,9 +632,9 @@ curl http://127.0.0.1:8002/readyz
 If Gemini installs the extension but the `seedcore.*` tools do not appear or
 fail immediately, see:
 
-- [GEMINI.md](/Users/ningli/project/seedcore/GEMINI.md)
-- [gemini-tools.md](/Users/ningli/project/seedcore/skills/using-seedcore/references/gemini-tools.md)
-- [gemini-troubleshooting.md](/Users/ningli/project/seedcore/skills/using-seedcore/references/gemini-troubleshooting.md)
+- [GEMINI.md](GEMINI.md)
+- [gemini-tools.md](skills/using-seedcore/references/gemini-tools.md)
+- [gemini-troubleshooting.md](skills/using-seedcore/references/gemini-troubleshooting.md)
 
 ### Rust + TypeScript Proof Surface Quick Check
 

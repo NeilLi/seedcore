@@ -680,10 +680,10 @@ This v1 contract should be considered ready when all are true:
 
 ## Related Documents
 
-- [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md)
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+- [seedcore_2026_execution_plan.md](seedcore_2026_execution_plan.md)
+- [current_next_steps.md](current_next_steps.md)
 - [hot_path_shadow_to_enforce_breakdown.md](/Users/ningli/project/seedcore/docs/development/hot_path_shadow_to_enforce_breakdown.md)
 - [asset_centric_pdp_hot_path_contract.md](/Users/ningli/project/seedcore/docs/development/asset_centric_pdp_hot_path_contract.md)
-- [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
+- [next_killer_demo_contract_freeze.md](archive/historical/next_killer_demo_contract_freeze.md)
 - [src/seedcore/models/action_intent.py](/Users/ningli/project/seedcore/src/seedcore/models/action_intent.py)
 - [src/seedcore/models/pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/models/pdp_hot_path.py)

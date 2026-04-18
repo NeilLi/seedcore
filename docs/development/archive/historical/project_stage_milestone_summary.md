@@ -1,22 +1,23 @@
 # SeedCore Project Stage Milestone Summary
 
-Date: 2026-03-27
+Date: 2026-04-18
+Status: Historical milestone summary; current map lives in [`README.md`](../../README.md)
 
 ## Purpose
 
-This document summarizes SeedCore's stage milestones based on a serious
-repository-level review of the codebase as it exists today.
+This document summarizes SeedCore's stage milestones based on a repository-level
+review of the codebase as it exists today.
 
 Historical note:
 
 - this is a milestone summary, not the active planning source of truth
-- use [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-  and [seedcore_2026_execution_plan.md](/Users/ningli/project/seedcore/docs/development/seedcore_2026_execution_plan.md)
+- use [current_next_steps.md](../../current_next_steps.md)
+  and [seedcore_2026_execution_plan.md](../../seedcore_2026_execution_plan.md)
   for live planning and status
 
 It is not a marketing roadmap.
 
-It is intended to answer a more practical question:
+It answers one practical question:
 
 > What stages has SeedCore actually passed, what stages are partially real, and
 > what stages still remain open before the core trust-runtime story is truly
@@ -51,26 +52,27 @@ SeedCore is best understood today as a three-layer system:
 2. Rust proof/kernel direction for deterministic authority-bearing artifacts
 3. TypeScript verification and product surfaces
 
-That split is not accidental.
-It is explicitly described in
-[language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md)
-and already reflected in the repo layout:
+That split is intentional. It is described in
+[`language_evolution_map.md`](../../language_evolution_map.md) and already reflected
+in the repo layout:
 
-- Python runtime: [src/seedcore](/Users/ningli/project/seedcore/src/seedcore)
-- Rust kernel workspace: [rust](/Users/ningli/project/seedcore/rust)
-- TypeScript trust/product workspace: [ts](/Users/ningli/project/seedcore/ts)
+- Python runtime: [src/seedcore](../../../src/seedcore)
+- Rust kernel workspace: [rust](../../../rust)
+- TypeScript trust/product workspace: [ts](../../../ts)
 
-The project is no longer just a cognitive-agent architecture.
-It is actively being refocused into a governed execution and verification
-runtime, anchored to the [North Star: Autonomous Trade Environment](north_star_autonomous_trade_environment.md).
-The current focus is on one must-win workflow:
+The project is no longer just a cognitive-agent architecture. It is a governed
+execution and verification runtime, anchored to the
+[`north_star_autonomous_trade_environment.md`](../../north_star_autonomous_trade_environment.md).
+The current must-win workflow is best read in commerce terms:
+economic intent bound to physical custody and replayable proof.
 
-- `Restricted Custody Transfer`
+- `Restricted Custody Transfer` (RCT), with in-repo **commerce field mapping**
+  for gateway evaluate flows (for example Shopify-sandbox-shaped transaction
+  inputs mapped into `asset.*` and `forensic_context.fingerprint_components`)
 
 That execution lock is defined in
-[killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
-and reinforced in
-[current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md).
+[`killer_demo_execution_spine.md`](killer_demo_execution_spine.md) and
+reinforced in [`current_next_steps.md`](../../current_next_steps.md).
 
 ## Milestone Summary
 
@@ -84,7 +86,7 @@ What this stage achieved:
   agent behaviors, memory, ML, digital twin support, and service orchestration
 - a real FastAPI entrypoint with router registration, DB initialization, and
   PKG manager bootstrap in
-  [main.py](/Users/ningli/project/seedcore/src/seedcore/main.py)
+  [main.py](../../../src/seedcore/main.py)
 - broad subsystem coverage across:
   - agents
   - cognitive
@@ -118,7 +120,7 @@ Status: materially implemented
 What this stage achieved:
 
 - `ActionIntent` as the accountable authorization request in
-  [action_intent.py](/Users/ningli/project/seedcore/src/seedcore/models/action_intent.py)
+  [action_intent.py](../../../src/seedcore/models/action_intent.py)
 - short-lived execution tokens and deny-by-default policy gating
 - HAL-side token validation, revocation, and emergency cutoff controls
 - evidence bundles and transition receipts for custody-bearing execution
@@ -127,12 +129,12 @@ What this stage achieved:
 
 Repo evidence:
 
-- [README.md](/Users/ningli/project/seedcore/README.md)
-- [evidence_bundle.py](/Users/ningli/project/seedcore/src/seedcore/models/evidence_bundle.py)
-- [governance_audit.py](/Users/ningli/project/seedcore/src/seedcore/models/governance_audit.py)
-- [test_external_surface_verification.py](/Users/ningli/project/seedcore/tests/test_external_surface_verification.py)
-- [test_transition_receipts.py](/Users/ningli/project/seedcore/tests/test_transition_receipts.py)
-- [test_evidence_signing_verification.py](/Users/ningli/project/seedcore/tests/test_evidence_signing_verification.py)
+- [README.md](../../../README.md)
+- [evidence_bundle.py](../../../src/seedcore/models/evidence_bundle.py)
+- [governance_audit.py](../../../src/seedcore/models/governance_audit.py)
+- [test_external_surface_verification.py](../../../tests/test_external_surface_verification.py)
+- [test_transition_receipts.py](../../../tests/test_transition_receipts.py)
+- [test_evidence_signing_verification.py](../../../tests/test_evidence_signing_verification.py)
 
 Why it matters:
 
@@ -164,12 +166,12 @@ What this stage achieved:
 
 Repo evidence:
 
-- [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py)
-- [src/seedcore/ops/pkg](/Users/ningli/project/seedcore/src/seedcore/ops/pkg)
-- [test_pkg_authz_graph.py](/Users/ningli/project/seedcore/tests/test_pkg_authz_graph.py)
-- [test_pkg_authz_graph_manager.py](/Users/ningli/project/seedcore/tests/test_pkg_authz_graph_manager.py)
-- [test_authz_parity_service.py](/Users/ningli/project/seedcore/tests/test_authz_parity_service.py)
-- [pdp_authz_graph_staging_rollout.md](/Users/ningli/project/seedcore/docs/development/pdp_authz_graph_staging_rollout.md)
+- [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
+- [src/seedcore/ops/pkg](../../../src/seedcore/ops/pkg)
+- [test_pkg_authz_graph.py](../../../tests/test_pkg_authz_graph.py)
+- [test_pkg_authz_graph_manager.py](../../../tests/test_pkg_authz_graph_manager.py)
+- [test_authz_parity_service.py](../../../tests/test_authz_parity_service.py)
+- [pdp_authz_graph_staging_rollout.md](../../pdp_authz_graph_staging_rollout.md)
 
 Why it matters:
 
@@ -203,10 +205,10 @@ What this stage achieved:
 
 Repo evidence:
 
-- [replay_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/replay_router.py)
-- [test_replay_router.py](/Users/ningli/project/seedcore/tests/test_replay_router.py)
-- [test_end_to_end_product_verification.py](/Users/ningli/project/seedcore/tests/test_end_to_end_product_verification.py)
-- [verify_end_to_end_product.sh](/Users/ningli/project/seedcore/scripts/host/verify_end_to_end_product.sh)
+- [replay_router.py](../../../src/seedcore/api/routers/replay_router.py)
+- [test_replay_router.py](../../../tests/test_replay_router.py)
+- [test_end_to_end_product_verification.py](../../../tests/test_end_to_end_product_verification.py)
+- [verify_end_to_end_product.sh](../../../scripts/host/verify_end_to_end_product.sh)
 
 Why it matters:
 
@@ -234,11 +236,11 @@ What this stage achieved:
 
 Repo evidence:
 
-- [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
-- [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
-- [phase0_contract_freeze_manifest.json](/Users/ningli/project/seedcore/docs/development/phase0_contract_freeze_manifest.json)
-- [verify_phase0_contract_freeze.py](/Users/ningli/project/seedcore/scripts/tools/verify_phase0_contract_freeze.py)
-- [test_phase0_contract_freeze.py](/Users/ningli/project/seedcore/tests/test_phase0_contract_freeze.py)
+- [killer_demo_execution_spine.md](killer_demo_execution_spine.md)
+- [next_killer_demo_contract_freeze.md](next_killer_demo_contract_freeze.md)
+- [phase0_contract_freeze_manifest.json](../../phase0_contract_freeze_manifest.json)
+- [verify_phase0_contract_freeze.py](../../../scripts/tools/verify_phase0_contract_freeze.py)
+- [test_phase0_contract_freeze.py](../../../tests/test_phase0_contract_freeze.py)
 
 Why it matters:
 
@@ -265,11 +267,11 @@ What this stage achieved:
 
 Repo evidence:
 
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-- [tpm_fleet_rollout_runbook.md](/Users/ningli/project/seedcore/docs/development/tpm_fleet_rollout_runbook.md)
-- [rust/fixtures/receipts](/Users/ningli/project/seedcore/rust/fixtures/receipts)
-- [verify_evidence_signing.sh](/Users/ningli/project/seedcore/scripts/host/verify_evidence_signing.sh)
-- [verify_zero_trust_pdp_contract.sh](/Users/ningli/project/seedcore/scripts/host/verify_zero_trust_pdp_contract.sh)
+- [current_next_steps.md](../../current_next_steps.md)
+- [tpm_fleet_rollout_runbook.md](../../tpm_fleet_rollout_runbook.md)
+- [rust/fixtures/receipts](../../../rust/fixtures/receipts)
+- [verify_evidence_signing.sh](../../../scripts/host/verify_evidence_signing.sh)
+- [verify_zero_trust_pdp_contract.sh](../../../scripts/host/verify_zero_trust_pdp_contract.sh)
 
 Why it matters:
 
@@ -302,10 +304,10 @@ What this stage achieved:
 
 Repo evidence:
 
-- [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
-- [rust/fixtures/transfers/escalate_break_glass](/Users/ningli/project/seedcore/rust/fixtures/transfers/escalate_break_glass)
-- [rust/fixtures/transfers/deny_missing_approval](/Users/ningli/project/seedcore/rust/fixtures/transfers/deny_missing_approval)
-- [rust/fixtures/approval_envelopes](/Users/ningli/project/seedcore/rust/fixtures/approval_envelopes)
+- [next_killer_demo_contract_freeze.md](next_killer_demo_contract_freeze.md)
+- [rust/fixtures/transfers/escalate_break_glass](../../../rust/fixtures/transfers/escalate_break_glass)
+- [rust/fixtures/transfers/deny_missing_approval](../../../rust/fixtures/transfers/deny_missing_approval)
+- [rust/fixtures/approval_envelopes](../../../rust/fixtures/approval_envelopes)
 
 Why it matters:
 
@@ -327,7 +329,10 @@ than "done."
 
 ### Stage 7: Phase C Operational Decision Engine and Asset-Centric Hot Path
 
-Status: started with real implementation, still early
+Status: materially advanced; remote Kubernetes topology now exercises core
+hot-path gates and observability (see
+[`kube_topology_validation_q2_signoff.md`](kube_topology_validation_q2_signoff.md)).
+The open follow-on is full in-cluster verification/operator capture.
 
 What this stage achieved:
 
@@ -343,11 +348,11 @@ What this stage achieved:
 
 Repo evidence:
 
-- [asset_centric_pdp_hot_path_contract.md](/Users/ningli/project/seedcore/docs/development/asset_centric_pdp_hot_path_contract.md)
-- [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/models/pdp_hot_path.py)
-- [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py)
-- [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py)
-- [test_pdp_hot_path_router.py](/Users/ningli/project/seedcore/tests/test_pdp_hot_path_router.py)
+- [asset_centric_pdp_hot_path_contract.md](asset_centric_pdp_hot_path_contract.md)
+- [pdp_hot_path.py](../../../src/seedcore/models/pdp_hot_path.py)
+- [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py)
+- [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
+- [test_pdp_hot_path_router.py](../../../tests/test_pdp_hot_path_router.py)
 
 Why it matters:
 
@@ -383,13 +388,13 @@ What this stage achieved:
 
 Repo evidence:
 
-- [ts/services/verification-api/src/server.ts](/Users/ningli/project/seedcore/ts/services/verification-api/src/server.ts)
-- [ts/services/verification-api/src/transferSources.ts](/Users/ningli/project/seedcore/ts/services/verification-api/src/transferSources.ts)
-- [ts/packages/contracts/src/trustContracts.ts](/Users/ningli/project/seedcore/ts/packages/contracts/src/trustContracts.ts)
-- [ts/apps/operator-console/src/ui.ts](/Users/ningli/project/seedcore/ts/apps/operator-console/src/ui.ts)
-- [ts/apps/proof-surface/src/server.ts](/Users/ningli/project/seedcore/ts/apps/proof-surface/src/server.ts)
-- [productized_verification_surface_protocol.md](/Users/ningli/project/seedcore/docs/development/productized_verification_surface_protocol.md)
-- [verify_productized_surface.sh](/Users/ningli/project/seedcore/scripts/host/verify_productized_surface.sh)
+- [ts/services/verification-api/src/server.ts](../../../ts/services/verification-api/src/server.ts)
+- [ts/services/verification-api/src/transferSources.ts](../../../ts/services/verification-api/src/transferSources.ts)
+- [ts/packages/contracts/src/trustContracts.ts](../../../ts/packages/contracts/src/trustContracts.ts)
+- [ts/apps/operator-console/src/ui.ts](../../../ts/apps/operator-console/src/ui.ts)
+- [ts/apps/proof-surface/src/server.ts](../../../ts/apps/proof-surface/src/server.ts)
+- [productized_verification_surface_protocol.md](../../productized_verification_surface_protocol.md)
+- [verify_productized_surface.sh](../../../scripts/host/verify_productized_surface.sh)
 
 Why it matters:
 
@@ -424,10 +429,10 @@ What this stage achieved:
 
 Repo evidence:
 
-- [rust/Cargo.toml](/Users/ningli/project/seedcore/rust/Cargo.toml)
-- [rust/README.md](/Users/ningli/project/seedcore/rust/README.md)
-- [rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md)
-- [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md)
+- [rust/Cargo.toml](../../../rust/Cargo.toml)
+- [rust/README.md](../../../rust/README.md)
+- [rust_workspace_proposal.md](../../../rust_workspace_proposal.md)
+- [language_evolution_map.md](../../language_evolution_map.md)
 
 Why it matters:
 
@@ -442,7 +447,9 @@ The Rust story is real, but still in transition from scaffold to kernel.
 
 ### Stage 10: External Tool Boundary Standardization on MCP
 
-Status: done for the intended scope
+Status: done for the intended scope; the commerce-shaped gateway evaluate path
+is now part of the same boundary (reference adapter, sandbox commerce mapping,
+and MCP tool)
 
 What this stage achieved:
 
@@ -450,15 +457,22 @@ What this stage achieved:
 - JSON-RPC tool lifecycle compliance
 - safe-first exposed tool surface
 - adapter-boundary discipline through `ToolManager`
+- narrow **agent action gateway** productization: strict v1 evaluate payloads,
+  deterministic correlation, optional commerce transaction mapping, and
+  `seedcore.agent_action.evaluate` for external agents
 
 Repo evidence:
 
-- [protocol_adoption_2026.md](/Users/ningli/project/seedcore/docs/architecture/overview/protocol_adoption_2026.md)
+- [protocol_adoption_2026.md](../architecture/overview/protocol_adoption_2026.md)
+- [shopify_sandbox_commerce_adapter.py](../../../src/seedcore/adapters/shopify_sandbox_commerce_adapter.py)
+- [rct_agent_action_gateway_reference_adapter.py](../../../src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py)
+- [agent_action_gateway_contract.md](agent_action_gateway_contract.md)
 
 Why it matters:
 
 - it tightens the external tool boundary without forcing a large internal
-  rewrite
+  rewrite, and it is how **commerce-side systems** attach without becoming an
+  alternate PDP
 
 Interpretation:
 
@@ -476,7 +490,7 @@ What this stage achieved:
 
 Repo evidence:
 
-- [vla_2026_optimizations.md](/Users/ningli/project/seedcore/docs/development/vla_2026_optimizations.md)
+- [vla_2026_optimizations.md](vla_2026_optimizations.md)
 
 Why it matters:
 
@@ -506,9 +520,9 @@ main thesis directly.
 The most accurate single-sentence summary is:
 
 > SeedCore has moved beyond a cognitive-agent architecture and is now a
-> functioning governed-execution runtime with real replay, proof, and
-> verification surfaces, centered on a Restricted Custody Transfer wedge that
-> is partially hardened and increasingly productized.
+> governed-execution runtime with real replay, proof, and verification
+> surfaces, centered on a Restricted Custody Transfer wedge that is partially
+> hardened and increasingly productized as a commerce trust workflow.
 
 That is stronger and more credible than calling the system complete.
 
@@ -523,7 +537,7 @@ That is stronger and more credible than calling the system complete.
 | Stage 4: Contract freeze for RCT wedge | Done | Strong program control milestone |
 | Stage 5: Trust hardening | Checkpoint crossed | Real progress, not universal closure |
 | Stage 6: Multi-party governance | Partial | Structured and credible, not fully closed |
-| Stage 7: Asset-centric hot path | Early | Real boundary created, needs operational proof |
+| Stage 7: Asset-centric hot path | Advanced, topology follow-on open | Kube-backed gate evidence; verification API in-cluster capture next |
 | Stage 8: Verification product surface | Advanced | One of the clearest recent wins |
 | Stage 9: Rust proof kernel direction | Scaffolded | Strategic path more than current center |
 | Stage 10: MCP external boundary | Done | Good platform hygiene milestone |

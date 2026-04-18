@@ -7,7 +7,7 @@ Working execution spine for the next 90-day contract-and-proof phase.
 Historical note:
 
 - this file tracks the closed Slice 1 execution spine and its contract order
-- live planning has moved into [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+- live planning has moved into [current_next_steps.md](../../current_next_steps.md)
   and the Q2 product spec
 
 Current repo state on 2026-03-30:
@@ -37,7 +37,7 @@ workflow:
 
 **Restricted Custody Transfer**
 
-This workflow is the primary vehicle for proving the [North Star: Autonomous Trade Environment](north_star_autonomous_trade_environment.md). 
+This workflow is the primary vehicle for proving the [North Star: Autonomous Trade Environment](../../north_star_autonomous_trade_environment.md). 
 
 Definition:
 
@@ -217,12 +217,12 @@ Do not let the phase drift into:
 
 ## Related Documents
 
-- [autonomous_repair_transfer_demo_spec.md](/Users/ningli/project/seedcore/docs/development/autonomous_repair_transfer_demo_spec.md)
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-- [restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
-- [next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md)
-- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
-- [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md)
-- [rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md)
-- [pkg_authz_graph_rfc.md](/Users/ningli/project/seedcore/docs/development/pkg_authz_graph_rfc.md)
-- [contract_freeze_zero_trust_terms.md](/Users/ningli/project/seedcore/docs/development/contract_freeze_zero_trust_terms.md)
+- [autonomous_repair_transfer_demo_spec.md](../../autonomous_repair_transfer_demo_spec.md)
+- [current_next_steps.md](../../current_next_steps.md)
+- [restricted_custody_transfer_demo_signoff_report.md](restricted_custody_transfer_demo_signoff_report.md)
+- [next_killer_demo_contract_freeze.md](next_killer_demo_contract_freeze.md)
+- [q2_2026_audit_trail_ui_spec.md](../../q2_2026_audit_trail_ui_spec.md)
+- [language_evolution_map.md](../../language_evolution_map.md)
+- [rust_workspace_proposal.md](../../rust_workspace_proposal.md)
+- [pkg_authz_graph_rfc.md](../../pkg_authz_graph_rfc.md)
+- [contract_freeze_zero_trust_terms.md](contract_freeze_zero_trust_terms.md)

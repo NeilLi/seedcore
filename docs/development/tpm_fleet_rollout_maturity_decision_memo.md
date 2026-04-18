@@ -34,7 +34,7 @@ Short version:
 This requirement is already on the active critical path.
 
 The Phase A plan in
-[current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+[current_next_steps.md](current_next_steps.md)
 explicitly includes:
 
 - KMS, TPM, or HSM-backed signing for selected receipt paths
@@ -43,7 +43,7 @@ explicitly includes:
 - operationalizing fleet rollout using the TPM checklist and drills
 
 The current milestone summary in
-[project_stage_milestone_summary.md](/Users/ningli/project/seedcore/docs/development/project_stage_milestone_summary.md)
+[project_stage_milestone_summary.md](archive/historical/project_stage_milestone_summary.md)
 also says Phase A has crossed a significant checkpoint but is not finished
 because the following remain open:
 

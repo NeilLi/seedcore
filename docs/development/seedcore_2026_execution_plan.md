@@ -669,7 +669,7 @@ Required outcomes:
 
 Q2 product spec for this workstream:
 
-- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
+- [q2_2026_audit_trail_ui_spec.md](q2_2026_audit_trail_ui_spec.md)
 
 ### Workstream 5: Pilot Packaging
 

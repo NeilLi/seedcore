@@ -458,7 +458,7 @@ For 2026, the most useful concrete expression of that workflow is a
   evidence chains agree
 
 The execution spine for that rule now lives in
-[killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md).
+[killer_demo_execution_spine.md](archive/historical/killer_demo_execution_spine.md).
 
 ## Immediate Execution Order
 
@@ -876,7 +876,7 @@ capabilities:
 
 Authoritative Q2 product specification for this phase:
 
-- [q2_2026_audit_trail_ui_spec.md](/Users/ningli/project/seedcore/docs/development/q2_2026_audit_trail_ui_spec.md)
+- [q2_2026_audit_trail_ui_spec.md](q2_2026_audit_trail_ui_spec.md)
 
 If Phase D expands beyond that narrow proof surface before the canonical
 workflow is demonstrably credible, it will dilute the product story and slow
@@ -1017,18 +1017,18 @@ The immediate next technical step for that demonstration is to freeze the
 approval, authorization-output, forensic-block, and verification-surface
 contracts for the next dual-authorization workflow before broad UI or signer
 integration work begins. See
-[killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
+[killer_demo_execution_spine.md](archive/historical/killer_demo_execution_spine.md)
 and
-[next_killer_demo_contract_freeze.md](/Users/ningli/project/seedcore/docs/development/next_killer_demo_contract_freeze.md).
+[next_killer_demo_contract_freeze.md](archive/historical/next_killer_demo_contract_freeze.md).
 
 Phase 0 closure is now machine-checkable through
-[phase0_contract_freeze_manifest.json](/Users/ningli/project/seedcore/docs/development/phase0_contract_freeze_manifest.json)
+[phase0_contract_freeze_manifest.json](phase0_contract_freeze_manifest.json)
 with the validation gate
 `python scripts/tools/verify_phase0_contract_freeze.py`.
 
 The current engineering sign-off state for that demo, including what is passed
 offline and what still genuinely demands a live runtime proof, now lives in
-[restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md).
+[restricted_custody_transfer_demo_signoff_report.md](archive/historical/restricted_custody_transfer_demo_signoff_report.md).
 
 The recommended multi-language boundary plan for that work now lives in
 [language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).

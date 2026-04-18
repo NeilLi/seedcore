@@ -27,9 +27,9 @@
     "obligations"
   ],
   "required_docs": [
-    "docs/development/contract_freeze_zero_trust_terms.md",
-    "docs/development/killer_demo_execution_spine.md",
-    "docs/development/next_killer_demo_contract_freeze.md",
+    "docs/development/archive/historical/contract_freeze_zero_trust_terms.md",
+    "docs/development/archive/historical/killer_demo_execution_spine.md",
+    "docs/development/archive/historical/next_killer_demo_contract_freeze.md",
     "docs/development/rust_workspace_proposal.md"
   ],
   "required_rust_public_types": {

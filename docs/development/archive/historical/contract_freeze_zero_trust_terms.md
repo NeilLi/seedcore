@@ -170,4 +170,4 @@ Freezing these definitions preserves the zero-trust boundary and prevents propos
 - Evidence assembly: `src/seedcore/ops/evidence/builder.py`
 - JSON-LD/export seed model: `src/seedcore/hal/custody/forensic_sealer.py`
 - Governed audit persistence: `src/seedcore/models/governance_audit.py`
-- Demo contract: `docs/development/end_to_end_governance_demo_contract.md`
+- Demo contract: `docs/development/archive/historical/end_to_end_governance_demo_contract.md`

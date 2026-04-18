@@ -505,5 +505,5 @@ Do not add any of the following during week 1 unless the current plan becomes bl
 ## References
 
 - [Source Registration And Tracking Event Reference](/Users/ningli/project/seedcore/docs/references/source-registration-events.md)
-- [Source Registration Architecture](/Users/ningli/project/seedcore/docs/development/source_registration_architecture.md)
+- [Source Registration Architecture](../../source_registration_architecture.md)
 - [Task Routing Payload Reference](/Users/ningli/project/seedcore/docs/references/task_payload_router.md)

@@ -306,7 +306,7 @@ provenance were all captured on 2026-03-30.**
 
 ## Related Documents
 
-- [current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
-- [killer_demo_execution_spine.md](/Users/ningli/project/seedcore/docs/development/killer_demo_execution_spine.md)
-- [productized_verification_surface_protocol.md](/Users/ningli/project/seedcore/docs/development/productized_verification_surface_protocol.md)
-- [phase0_contract_freeze_manifest.json](/Users/ningli/project/seedcore/docs/development/phase0_contract_freeze_manifest.json)
+- [current_next_steps.md](../../current_next_steps.md)
+- [killer_demo_execution_spine.md](killer_demo_execution_spine.md)
+- [productized_verification_surface_protocol.md](../../productized_verification_surface_protocol.md)
+- [phase0_contract_freeze_manifest.json](../../phase0_contract_freeze_manifest.json)

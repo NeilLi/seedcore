@@ -41,7 +41,7 @@ failure.
 That is directionally correct, but it is not the current delivery gate.
 
 The active staged plan in
-[current_next_steps.md](/Users/ningli/project/seedcore/docs/development/current_next_steps.md)
+[current_next_steps.md](current_next_steps.md)
 prioritizes:
 
 - trust hardening
@@ -50,7 +50,7 @@ prioritizes:
 - the verification product surface
 
 The current signed-off Restricted Custody Transfer wedge in
-[restricted_custody_transfer_demo_signoff_report.md](/Users/ningli/project/seedcore/docs/development/restricted_custody_transfer_demo_signoff_report.md)
+[restricted_custody_transfer_demo_signoff_report.md](archive/historical/restricted_custody_transfer_demo_signoff_report.md)
 already demonstrates:
 
 - offline replay verification
