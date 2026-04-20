@@ -9,7 +9,13 @@ repository.workspace = true
 [dependencies]
 seedcore-kernel-types = { path = "../seedcore-kernel-types" }
 base64.workspace = true
+# Pin base64ct via a direct dep so transitive pkcs8/der resolution stays on the
+# 1.6.x line; versions >= 1.7 require Rust edition2024 (MSRV 1.85), which is
+# above the workspace toolchain.
+base64ct.workspace = true
+ed25519-dalek.workspace = true
 hex.workspace = true
+p256.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

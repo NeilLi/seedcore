@@ -4,14 +4,17 @@
 //! artifact verification, and replay-chain verification.
 
 use base64::Engine;
+// `ed25519_dalek::pkcs8::DecodePublicKey` and `ed25519_dalek::Verifier` re-export
+// the same `pkcs8::DecodePublicKey` and `signature::Verifier` traits used by the
+// `p256` crate, so a single import pair brings both verifiers and both PEM
+// decoders into scope.
+use ed25519_dalek::pkcs8::DecodePublicKey;
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey};
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 pub use seedcore_kernel_types::{
@@ -122,11 +125,17 @@ fn status_not_checked() -> String {
     "not_checked".to_string()
 }
 
-fn hardened_debug_hash_disabled() -> bool {
+fn env_flag_enabled(value: &str) -> bool {
     matches!(
-        std::env::var("SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE"),
-        Ok(value) if matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
     )
+}
+
+fn hardened_debug_hash_disabled() -> bool {
+    std::env::var("SEEDCORE_HARDENED_RESTRICTED_CUSTODY_MODE")
+        .map(|value| env_flag_enabled(&value))
+        .unwrap_or(false)
 }
 
 /// Deterministic canonicalization helper.
@@ -459,12 +468,8 @@ fn verify_replay_artifact_item(
     let artifact_type = artifact.payload.artifact_type().to_string();
     let mut last_report = None;
     for hash in signature_hashes {
-        let report = verify_signature_envelope(
-            &artifact.signature,
-            &hash,
-            artifact_type.clone(),
-            resolver,
-        );
+        let report =
+            verify_signature_envelope(&artifact.signature, &hash, artifact_type.clone(), resolver);
         if report.verified {
             return report;
         }
@@ -682,27 +687,36 @@ fn verify_ed25519_signature(
                 )
             }
         };
-    let public_key_pem = match public_material_to_pem(&key_material.public_material, "ed25519") {
-        Ok(value) => value,
+    let sig_array: &[u8; 64] = match signature_bytes.as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => {
+            return signature_mismatch_report(
+                artifact_type,
+                "ed25519_signature_length_invalid".to_string(),
+            )
+        }
+    };
+    let ed_signature = Ed25519Signature::from_bytes(sig_array);
+    let verifying_key = match load_ed25519_verifying_key(&key_material.public_material) {
+        Ok(key) => key,
         Err(error) => return invalid_key_material_report(artifact_type, error),
     };
-    match verify_with_openssl(&public_key_pem, &signature_bytes, artifact_hash.value.as_bytes(), "ed25519") {
-        Ok(true) => success_report(artifact_type),
-        Ok(false) => match verify_with_openssl(
-            &public_key_pem,
-            &signature_bytes,
-            artifact_hash.to_string().as_bytes(),
-            "ed25519",
-        ) {
-            Ok(true) => success_report(artifact_type),
-            Ok(false) => signature_mismatch_report(
-                artifact_type,
-                "ed25519 signature verification failed".to_string(),
-            ),
-            Err(error) => invalid_key_material_report(artifact_type, error),
-        },
-        Err(error) => invalid_key_material_report(artifact_type, error),
+    if verifying_key
+        .verify(artifact_hash.value.as_bytes(), &ed_signature)
+        .is_ok()
+    {
+        return success_report(artifact_type);
     }
+    if verifying_key
+        .verify(artifact_hash.to_string().as_bytes(), &ed_signature)
+        .is_ok()
+    {
+        return success_report(artifact_type);
+    }
+    signature_mismatch_report(
+        artifact_type,
+        "ed25519 signature verification failed".to_string(),
+    )
 }
 
 fn verify_p256_signature(
@@ -728,27 +742,68 @@ fn verify_p256_signature(
                 )
             }
         };
-    let public_key_pem = match public_material_to_pem(&key_material.public_material, "p256") {
-        Ok(value) => value,
+    let p256_signature = match decode_p256_signature(&signature_bytes) {
+        Ok(sig) => sig,
+        Err(detail) => return signature_mismatch_report(artifact_type, detail),
+    };
+    let verifying_key = match load_p256_verifying_key(&key_material.public_material) {
+        Ok(key) => key,
         Err(error) => return invalid_key_material_report(artifact_type, error),
     };
-    match verify_with_openssl(&public_key_pem, &signature_bytes, artifact_hash.value.as_bytes(), "p256") {
-        Ok(true) => success_report(artifact_type),
-        Ok(false) => match verify_with_openssl(
-            &public_key_pem,
-            &signature_bytes,
-            artifact_hash.to_string().as_bytes(),
-            "p256",
-        ) {
-            Ok(true) => success_report(artifact_type),
-            Ok(false) => signature_mismatch_report(
-                artifact_type,
-                "ecdsa_p256 signature verification failed".to_string(),
-            ),
-            Err(error) => invalid_key_material_report(artifact_type, error),
-        },
-        Err(error) => invalid_key_material_report(artifact_type, error),
+    if verifying_key
+        .verify(artifact_hash.value.as_bytes(), &p256_signature)
+        .is_ok()
+    {
+        return success_report(artifact_type);
     }
+    if verifying_key
+        .verify(artifact_hash.to_string().as_bytes(), &p256_signature)
+        .is_ok()
+    {
+        return success_report(artifact_type);
+    }
+    signature_mismatch_report(
+        artifact_type,
+        "ecdsa_p256 signature verification failed".to_string(),
+    )
+}
+
+fn load_ed25519_verifying_key(public_material: &str) -> Result<Ed25519VerifyingKey, String> {
+    if public_material.contains("BEGIN PUBLIC KEY") {
+        return Ed25519VerifyingKey::from_public_key_pem(public_material)
+            .map_err(|_| "ed25519_pem_decode_failed".to_string());
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(public_material)
+        .map_err(|_| "public_key_decode_failed".to_string())?;
+    let bytes: &[u8; 32] = raw
+        .as_slice()
+        .try_into()
+        .map_err(|_| "ed25519_key_length_invalid".to_string())?;
+    Ed25519VerifyingKey::from_bytes(bytes).map_err(|_| "ed25519_key_bytes_invalid".to_string())
+}
+
+fn load_p256_verifying_key(public_material: &str) -> Result<P256VerifyingKey, String> {
+    if public_material.contains("BEGIN PUBLIC KEY") {
+        return P256VerifyingKey::from_public_key_pem(public_material)
+            .map_err(|_| "p256_pem_decode_failed".to_string());
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(public_material)
+        .map_err(|_| "public_key_decode_failed".to_string())?;
+    P256VerifyingKey::from_sec1_bytes(&raw).map_err(|_| "p256_sec1_decode_failed".to_string())
+}
+
+fn decode_p256_signature(bytes: &[u8]) -> Result<P256Signature, String> {
+    if let Ok(sig) = P256Signature::from_der(bytes) {
+        return Ok(sig);
+    }
+    if bytes.len() == 64 {
+        if let Ok(sig) = P256Signature::from_slice(bytes) {
+            return Ok(sig);
+        }
+    }
+    Err("p256_signature_decode_failed".to_string())
 }
 
 fn success_report(artifact_type: String) -> VerificationReport {
@@ -854,98 +909,6 @@ fn hmac_sha256_hex(secret: &str, message: &str) -> String {
     hex::encode(outer.finalize())
 }
 
-fn public_material_to_pem(public_material: &str, scheme: &str) -> Result<String, String> {
-    if public_material.contains("BEGIN PUBLIC KEY") {
-        return Ok(public_material.to_string());
-    }
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(public_material)
-        .map_err(|_| "public_key_decode_failed".to_string())?;
-    let der = match scheme {
-        "p256" => {
-            let mut prefix = hex::decode("3059301306072A8648CE3D020106082A8648CE3D030107034200")
-                .map_err(|_| "p256_prefix_invalid".to_string())?;
-            prefix.extend(raw);
-            prefix
-        }
-        "ed25519" => {
-            let mut prefix = hex::decode("302a300506032b6570032100")
-                .map_err(|_| "ed25519_prefix_invalid".to_string())?;
-            prefix.extend(raw);
-            prefix
-        }
-        _ => return Err("unsupported_public_key_scheme".to_string()),
-    };
-    Ok(bytes_to_pem("PUBLIC KEY", &der))
-}
-
-fn bytes_to_pem(label: &str, der: &[u8]) -> String {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
-    let mut body = String::new();
-    for chunk in encoded.as_bytes().chunks(64) {
-        body.push_str(std::str::from_utf8(chunk).unwrap_or_default());
-        body.push('\n');
-    }
-    format!("-----BEGIN {label}-----\n{body}-----END {label}-----\n")
-}
-
-fn verify_with_openssl(
-    public_key_pem: &str,
-    signature: &[u8],
-    message: &[u8],
-    scheme: &str,
-) -> Result<bool, String> {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "clock_error".to_string())?
-        .as_nanos();
-    let dir = std::env::temp_dir();
-    let key_path = dir.join(format!("seedcore_verify_key_{stamp}.pem"));
-    let sig_path = dir.join(format!("seedcore_verify_sig_{stamp}.bin"));
-    let msg_path = dir.join(format!("seedcore_verify_msg_{stamp}.bin"));
-    fs::write(&key_path, public_key_pem).map_err(|error| format!("key_write_failed:{error}"))?;
-    fs::write(&sig_path, signature).map_err(|error| format!("sig_write_failed:{error}"))?;
-    fs::write(&msg_path, message).map_err(|error| format!("msg_write_failed:{error}"))?;
-    let output = match scheme {
-        "p256" => Command::new("openssl")
-            .args([
-                "dgst",
-                "-sha256",
-                "-verify",
-                key_path.to_string_lossy().as_ref(),
-                "-signature",
-                sig_path.to_string_lossy().as_ref(),
-                msg_path.to_string_lossy().as_ref(),
-            ])
-            .output()
-            .map_err(|error| format!("openssl_unavailable:{error}"))?,
-        "ed25519" => Command::new("openssl")
-            .args([
-                "pkeyutl",
-                "-verify",
-                "-pubin",
-                "-inkey",
-                key_path.to_string_lossy().as_ref(),
-                "-rawin",
-                "-in",
-                msg_path.to_string_lossy().as_ref(),
-                "-sigfile",
-                sig_path.to_string_lossy().as_ref(),
-            ])
-            .output()
-            .map_err(|error| format!("openssl_unavailable:{error}"))?,
-        _ => return Err("unsupported_signature_scheme".to_string()),
-    };
-    cleanup_temp_paths(&[key_path, sig_path, msg_path]);
-    Ok(output.status.success())
-}
-
-fn cleanup_temp_paths(paths: &[PathBuf]) {
-    for path in paths {
-        let _ = fs::remove_file(path);
-    }
-}
-
 fn sort_value(value: Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -963,6 +926,10 @@ fn sort_value(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use ed25519_dalek::Signer as _;
+    use ed25519_dalek::SigningKey as Ed25519SigningKey;
+    use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
     use seedcore_kernel_types::{
         Disposition, ExplanationPayload, PolicyReceipt, ReplayArtifactPayload, Timestamp,
         TransitionReceipt,
@@ -1004,6 +971,19 @@ mod tests {
             } else {
                 Err(VerificationError::KeyNotFound)
             }
+        }
+    }
+
+    struct MapResolver {
+        keys: BTreeMap<String, KeyMaterial>,
+    }
+
+    impl KeyResolver for MapResolver {
+        fn resolve(&self, key_ref: &str) -> Result<KeyMaterial, VerificationError> {
+            self.keys
+                .get(key_ref)
+                .cloned()
+                .ok_or(VerificationError::KeyNotFound)
         }
     }
 
@@ -1092,6 +1072,106 @@ mod tests {
         let report = verify_signed_artifact(&signed, &StaticResolver);
         assert!(!report.verified);
         assert_eq!(report.error_code.as_deref(), Some("artifact_hash_mismatch"));
+    }
+
+    #[test]
+    fn env_flag_enabled_matches_supported_truthy_values() {
+        for truthy in ["1", "true", "TRUE", " yes ", "On"] {
+            assert!(env_flag_enabled(truthy), "{truthy} should be truthy");
+        }
+        for falsy in ["", "0", "false", "off", "no", "anything-else"] {
+            assert!(!env_flag_enabled(falsy), "{falsy} should be falsy");
+        }
+    }
+
+    #[test]
+    fn verify_ed25519_signature_accepts_raw_and_legacy_hash_payloads() {
+        let signing_key = Ed25519SigningKey::from_bytes(&[7u8; 32]);
+        let verifying_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+
+        let mut keys = BTreeMap::new();
+        keys.insert(
+            "ed-key".to_string(),
+            KeyMaterial {
+                key_ref: "ed-key".to_string(),
+                public_material: verifying_key_b64,
+                metadata: BTreeMap::new(),
+            },
+        );
+        let resolver = MapResolver { keys };
+
+        let artifact = demo_artifact();
+        let artifact_hash = hash_artifact(&artifact).expect("hash should compute");
+        for message in [artifact_hash.value.clone(), artifact_hash.to_string()] {
+            let signature_b64 =
+                BASE64_STANDARD.encode(signing_key.sign(message.as_bytes()).to_bytes());
+            let signed = SignedArtifact {
+                artifact: artifact.clone(),
+                artifact_hash: artifact_hash.clone(),
+                signature: SignatureEnvelope {
+                    signer_type: "service".to_string(),
+                    signer_id: "seedcore-ed25519-test".to_string(),
+                    signing_scheme: "ed25519".to_string(),
+                    key_ref: Some("ed-key".to_string()),
+                    attestation_level: "baseline".to_string(),
+                    signature: signature_b64,
+                },
+            };
+            let report = verify_signed_artifact(&signed, &resolver);
+            assert!(
+                report.verified,
+                "ed25519 signature should verify for message '{message}'"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_p256_signature_accepts_der_and_raw_signature_encodings() {
+        let signing_key = P256SigningKey::from_bytes((&[11u8; 32]).into()).expect("valid key");
+        let public_key_b64 = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+
+        let mut keys = BTreeMap::new();
+        keys.insert(
+            "p256-key".to_string(),
+            KeyMaterial {
+                key_ref: "p256-key".to_string(),
+                public_material: public_key_b64,
+                metadata: BTreeMap::new(),
+            },
+        );
+        let resolver = MapResolver { keys };
+
+        let artifact = demo_artifact();
+        let artifact_hash = hash_artifact(&artifact).expect("hash should compute");
+        let mut signatures = Vec::new();
+        for message in [artifact_hash.value.clone(), artifact_hash.to_string()] {
+            let signature: P256Signature = signing_key.sign(message.as_bytes());
+            signatures.push(BASE64_STANDARD.encode(signature.to_der().as_bytes()));
+        }
+        let raw_signature: P256Signature = signing_key.sign(artifact_hash.value.as_bytes());
+        signatures.push(BASE64_STANDARD.encode(raw_signature.to_bytes()));
+
+        for signature_b64 in signatures {
+            let signed = SignedArtifact {
+                artifact: artifact.clone(),
+                artifact_hash: artifact_hash.clone(),
+                signature: SignatureEnvelope {
+                    signer_type: "service".to_string(),
+                    signer_id: "seedcore-p256-test".to_string(),
+                    signing_scheme: "ecdsa_p256_sha256".to_string(),
+                    key_ref: Some("p256-key".to_string()),
+                    attestation_level: "attested".to_string(),
+                    signature: signature_b64,
+                },
+            };
+            let report = verify_signed_artifact(&signed, &resolver);
+            assert!(report.verified, "p256 signature should verify");
+        }
     }
 
     #[test]

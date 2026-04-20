@@ -12,6 +12,7 @@ windows, or implementation rewrites.
 - [ADR 0003: Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](./adr-0003-igx-thor-trusted-edge-profile.md)
 - [ADR 0004: Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](./adr-0004-result-verifier-runtime.md)
 - [ADR 0005: Preserve Replayable Evidence for Governed Digital Twin State Transitions](./adr-0005-replayable-evidence-governed-state-transitions.md)
+- [ADR 0006: Split RESULT_VERIFIER Into a Dedicated Process on Measurable Triggers](./adr-0006-result-verifier-deployment-split-trigger.md)
 
 ## Conventions
 

@@ -14,9 +14,9 @@ use seedcore_kernel_types::{
 use seedcore_policy_core::FrozenDecisionInput;
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
-    hash_artifact, replay_artifact_source_hash, verify_detached_signature,
-    verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
-    ReplayVerificationReport, Signer, VerificationReport,
+    hash_artifact, replay_artifact_source_hash, verify_detached_signature, verify_receipt_artifact,
+    verify_replay_chain, ReplayArtifact, ReplayBundle, ReplayVerificationReport, Signer,
+    VerificationReport,
 };
 use seedcore_token_core::{
     enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
@@ -776,21 +776,29 @@ fn replay_signature_for_payload(
     payload: &ReplayArtifactPayload,
 ) -> Result<SignatureEnvelope, String> {
     match payload {
-        ReplayArtifactPayload::ExecutionToken(token) => Ok(normalize_replay_signature(
-            token.signature.clone(),
-            None,
-        )),
+        ReplayArtifactPayload::ExecutionToken(token) => {
+            Ok(normalize_replay_signature(token.signature.clone(), None))
+        }
         ReplayArtifactPayload::PolicyReceipt(receipt) => Ok(normalize_replay_signature(
             receipt.signer.clone(),
-            receipt.trust_proof.as_ref().map(|proof| proof.key_ref.as_str()),
+            receipt
+                .trust_proof
+                .as_ref()
+                .map(|proof| proof.key_ref.as_str()),
         )),
         ReplayArtifactPayload::TransitionReceipt(receipt) => Ok(normalize_replay_signature(
             receipt.signer.clone(),
-            receipt.trust_proof.as_ref().map(|proof| proof.key_ref.as_str()),
+            receipt
+                .trust_proof
+                .as_ref()
+                .map(|proof| proof.key_ref.as_str()),
         )),
         ReplayArtifactPayload::EvidenceBundle(bundle) => Ok(normalize_replay_signature(
             bundle.signer.clone(),
-            bundle.trust_proof.as_ref().map(|proof| proof.key_ref.as_str()),
+            bundle
+                .trust_proof
+                .as_ref()
+                .map(|proof| proof.key_ref.as_str()),
         )),
         ReplayArtifactPayload::ActionIntent(_)
         | ReplayArtifactPayload::TransferApprovalEnvelope(_)
@@ -808,7 +816,8 @@ fn normalize_replay_signature(
     if signature.key_ref.is_none() {
         if let Some(key_ref) = trust_key_ref.filter(|value| !value.trim().is_empty()) {
             signature.key_ref = Some(key_ref.to_string());
-        } else if signature.signing_scheme == "hmac_sha256" && !signature.signer_id.trim().is_empty()
+        } else if signature.signing_scheme == "hmac_sha256"
+            && !signature.signer_id.trim().is_empty()
         {
             signature.key_ref = Some(format!("legacy-hmac:{}", signature.signer_id.trim()));
         }
