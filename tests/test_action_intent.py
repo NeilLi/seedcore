@@ -372,6 +372,9 @@ def test_build_governance_context_emits_signed_policy_receipt():
     assert governance["policy_receipt"]["signature"]
     assert governance["execution_token"]["token_id"]
     assert governance["execution_token"]["contract_version"]
+    assert governance["execution_context"]["endpoint_id"] == governance["execution_token"]["execution_preconditions"]["endpoint_id"]
+    assert governance["execution_context"]["payload_hash"] == governance["execution_token"]["execution_preconditions"]["payload_hash"]
+    assert governance["execution_context"]["context_token"] == governance["execution_token"]["execution_preconditions"]["context_token"]
 
 
 def test_build_governance_context_carries_governed_receipt_hash_into_policy_receipt(monkeypatch):

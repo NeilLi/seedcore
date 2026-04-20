@@ -26,15 +26,27 @@ def _token_dict(
     *,
     endpoint_id: str | None = None,
     payload_hash: str | None = None,
+    resource_state_hash: str | None = None,
+    approval_transition_head: str | None = None,
+    context_token: str | None = None,
     target_zone: str | None = None,
     ttl_seconds: float = 1.0,
 ) -> dict[str, object]:
     issued_at = datetime.now(timezone.utc)
     constraints: dict[str, str] = {}
+    execution_preconditions: dict[str, str] = {}
     if endpoint_id is not None:
         constraints["endpoint_id"] = endpoint_id
+        execution_preconditions["endpoint_id"] = endpoint_id
     if payload_hash is not None:
         constraints["payload_hash"] = payload_hash
+        execution_preconditions["payload_hash"] = payload_hash
+    if resource_state_hash is not None:
+        execution_preconditions["resource_state_hash"] = resource_state_hash
+    if approval_transition_head is not None:
+        execution_preconditions["approval_transition_head"] = approval_transition_head
+    if context_token is not None:
+        execution_preconditions["context_token"] = context_token
     if target_zone is not None:
         constraints["target_zone"] = target_zone
 
@@ -45,6 +57,7 @@ def _token_dict(
         "valid_until": (issued_at + timedelta(seconds=ttl_seconds)).isoformat(),
         "contract_version": "snapshot:test",
         "constraints": constraints,
+        "execution_preconditions": execution_preconditions,
     }
     payload["signature"] = _sign_token_payload(payload)
     return payload
@@ -194,6 +207,35 @@ async def test_execution_token_is_single_use() -> None:
                 )
             )
         assert "replayed ExecutionToken" in str(exc.value)
+    finally:
+        driver.disconnect()
+        hal_main.driver = original
+
+
+@pytest.mark.asyncio
+async def test_execution_token_context_token_mismatch_is_rejected() -> None:
+    driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
+    assert driver.connect() is True
+
+    original = hal_main.driver
+    hal_main.driver = driver
+    try:
+        with pytest.raises(Exception) as exc:
+            await hal_main.actuate(
+                hal_main.ActuationRequest(
+                    behavior_name="move_forward",
+                    behavior_params={"distance": 1},
+                    execution_token=_token_dict(
+                        "tok-context-mismatch",
+                        endpoint_id=hal_main._derive_actuator_endpoint(driver),  # noqa: SLF001
+                        context_token="sha256:token-context-001",
+                    ),
+                    execution_context=hal_main.ExecutionPreconditions(
+                        context_token="sha256:token-context-002",
+                    ),
+                )
+            )
+        assert "ExecutionToken context token mismatch" in str(exc.value)
     finally:
         driver.disconnect()
         hal_main.driver = original

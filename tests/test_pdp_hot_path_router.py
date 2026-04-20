@@ -261,6 +261,13 @@ def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monke
             valid_until="2026-04-02T08:01:16Z",
             contract_version="rules@transfer-v1",
             constraints={"asset_id": "asset:lot-8841"},
+            execution_preconditions={
+                "resource_state_hash": "sha256:resource-state-001",
+                "approval_transition_head": "sha256:approval-transition-001",
+                "context_token": "sha256:context-token-001",
+                "payload_hash": "sha256:payload-transfer-001",
+                "endpoint_id": "hal://robot-sim/1",
+            },
             signature={
                 "signer_type": "service",
                 "signer_id": "seedcore-verify",
@@ -283,6 +290,7 @@ def test_pdp_hot_path_allow_includes_execution_token_and_signer_provenance(monke
     body = response.json()
     assert body["decision"]["disposition"] == "allow"
     assert body["execution_token"]["token_id"] == "token-transfer-001"
+    assert body["execution_preconditions"]["context_token"] == "sha256:context-token-001"
     assert body["signer_provenance"][0]["artifact_type"] == "execution_token"
     assert body["signer_provenance"][0]["signer_id"] == "seedcore-verify"
 

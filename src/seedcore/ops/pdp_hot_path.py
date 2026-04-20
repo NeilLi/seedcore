@@ -875,6 +875,11 @@ def evaluate_pdp_hot_path(
         obligations=obligations,
         checks=checks,
         execution_token=decision.execution_token if isinstance(decision.execution_token, ExecutionToken) else None,
+        execution_preconditions=(
+            decision.execution_token.execution_preconditions
+            if isinstance(decision.execution_token, ExecutionToken)
+            else None
+        ),
         governed_receipt=dict(decision.governed_receipt or {}),
         signer_provenance=signer_provenance,
         request_schema_bundle=(

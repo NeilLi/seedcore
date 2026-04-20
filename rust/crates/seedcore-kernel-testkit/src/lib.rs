@@ -13,8 +13,8 @@ use seedcore_proof_core::{
     KeyMaterial, KeyResolver, ReplayArtifact, ReplayBundle, Signer, VerificationError,
 };
 use seedcore_token_core::{
-    enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
-    ExecutionTokenClaims, TokenConstraints, TokenVerificationReport,
+    enforce_constraints, mint_token, verify_token, ExecutionPreconditions, ExecutionRequestContext,
+    ExecutionToken, ExecutionTokenClaims, TokenConstraints, TokenVerificationReport,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -281,6 +281,11 @@ pub fn run_transfer_fixture(
                 endpoint_id: fixture.action_intent.endpoint_id.clone(),
                 payload_hash: fixture.action_intent.payload_hash.clone(),
             },
+            execution_preconditions: ExecutionPreconditions {
+                payload_hash: fixture.action_intent.payload_hash.clone(),
+                endpoint_id: fixture.action_intent.endpoint_id.clone(),
+                ..ExecutionPreconditions::default()
+            },
         };
 
         let token = mint_token(claims, signer)
@@ -309,6 +314,11 @@ pub fn run_transfer_fixture(
                 registration_decision_id: fixture.action_intent.registration_decision_id.clone(),
                 endpoint_id: fixture.action_intent.endpoint_id.clone(),
                 payload_hash: fixture.action_intent.payload_hash.clone(),
+                execution_preconditions: ExecutionPreconditions {
+                    payload_hash: fixture.action_intent.payload_hash.clone(),
+                    endpoint_id: fixture.action_intent.endpoint_id.clone(),
+                    ..ExecutionPreconditions::default()
+                },
             },
             fixed_ts("2026-04-02T08:00:30Z")?,
         );

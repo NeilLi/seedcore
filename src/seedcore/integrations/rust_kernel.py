@@ -309,6 +309,12 @@ def map_token_error_for_hal(error_code: str | None) -> str:
         return "ExecutionToken target zone mismatch"
     if error_code in {"payload_hash_mismatch"}:
         return "ExecutionToken payload mismatch"
+    if error_code in {"resource_state_hash_mismatch"}:
+        return "ExecutionToken resource state mismatch"
+    if error_code in {"approval_transition_head_mismatch"}:
+        return "ExecutionToken approval transition mismatch"
+    if error_code in {"context_token_mismatch"}:
+        return "ExecutionToken context token mismatch"
     return "invalid ExecutionToken"
 
 

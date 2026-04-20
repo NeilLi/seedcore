@@ -141,6 +141,13 @@ def _allow_hot_path_response() -> HotPathEvaluateResponse:
             issued_at="2026-03-31T10:00:01Z",
             valid_until="2026-03-31T10:00:06Z",
             contract_version="rules@8.0.0",
+            execution_preconditions={
+                "resource_state_hash": "sha256:resource-state-001",
+                "approval_transition_head": "sha256:approval-transition-001",
+                "context_token": "sha256:context-token-001",
+                "payload_hash": "sha256:payload-transfer-001",
+                "endpoint_id": "hal://robot-sim/1",
+            },
         ),
         request_schema_bundle={
             "artifact_type": "request_schema_bundle",
@@ -189,6 +196,10 @@ async def _organism_preflight_fail(*args, **kwargs):
 
 async def _closure_settlement_disabled(*args, **kwargs):
     return "pending", {"enabled": False}
+
+
+async def _result_verifier_gate_open(*args, **kwargs):
+    return {"blocked": False, "checked_refs": 0}
 
 
 class _ResultVerifierGateOpenService:
@@ -253,8 +264,195 @@ def test_agent_actions_evaluate_wraps_hot_path_result(monkeypatch):
     assert body["request_id"] == "req-transfer-2026-0001"
     assert body["decision"]["disposition"] == "allow"
     assert body["execution_token"]["token_id"] == "token-transfer-001"
+    assert body["execution_context"]["context_token"] == "sha256:context-token-001"
     assert "ExecutionToken" in body["minted_artifacts"]
     assert "PolicyReceipt" in body["minted_artifacts"]
+
+
+def test_agent_actions_execute_routes_governed_task(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    captured = {}
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+
+    def _fake_evaluate(request, **kwargs):
+        captured["hot_path_request"] = request
+        payload_hash = request.action_intent.action.parameters["payload_hash"]
+        endpoint_id = request.action_intent.action.parameters["endpoint_id"]
+        return HotPathEvaluateResponse(
+            request_id=request.request_id,
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=35,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="restricted_custody_transfer_allowed",
+                reason="all mandatory checks passed",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-transfer-execute-001",
+                intent_id=request.request_id,
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:05:01Z",
+                contract_version="rules@8.0.0",
+                execution_preconditions={
+                    "resource_state_hash": "sha256:resource-state-001",
+                    "approval_transition_head": "sha256:approval-transition-001",
+                    "context_token": "sha256:context-token-001",
+                    "payload_hash": payload_hash,
+                    "endpoint_id": endpoint_id,
+                },
+            ),
+            governed_receipt={
+                "audit_id": "audit-execute-001",
+                "policy_receipt_id": "receipt-policy-execute-001",
+            },
+        )
+
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_evaluate_result_verifier_gate_for_twin_refs",
+        _result_verifier_gate_open,
+    )
+
+    class _FakeOrganismClient:
+        def __init__(self, timeout=None):
+            captured["organism_timeout"] = timeout
+
+        async def route_and_execute(self, task, current_epoch=None):
+            captured["execution_task"] = task
+            return {
+                "success": True,
+                "payload": {
+                    "results": [
+                        {
+                            "tool": "reachy.motion",
+                            "output": {"status": "accepted", "execution_token_id": "token-transfer-execute-001"},
+                        }
+                    ]
+                },
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(agent_actions_router, "OrganismServiceClient", _FakeOrganismClient)
+
+    payload = _base_payload()
+    payload["execution"] = {
+        "tool_name": "reachy.motion",
+        "args": {
+            "behavior_name": "move_forward",
+            "behavior_params": {
+                "distance": 1.25,
+                "asset_id": "asset:lot-8841",
+                "to_zone": "handoff_bay_3",
+            },
+        },
+    }
+
+    response = client.post("/api/v1/agent-actions/execute", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+
+    expected_payload_hash = "sha256:" + agent_actions_router._canonical_tool_args_hash(payload["execution"]["args"])
+    assert captured["hot_path_request"].action_intent.action.parameters["payload_hash"] == expected_payload_hash
+    assert body["evaluation"]["decision"]["disposition"] == "allow"
+    assert body["execution_task"]["params"]["tool_calls"][0]["name"] == "reachy.motion"
+    assert body["execution_task"]["params"]["tool_calls"][0]["args"]["behavior_name"] == "move_forward"
+    assert body["execution_task"]["params"]["governance"]["execution_context"]["payload_hash"] == expected_payload_hash
+    assert body["execution_result"]["success"] is True
+
+
+def test_agent_actions_execute_is_idempotent(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    call_count = {"route_and_execute": 0}
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+
+    def _fake_evaluate(request, **kwargs):
+        payload_hash = request.action_intent.action.parameters["payload_hash"]
+        return HotPathEvaluateResponse(
+            request_id=request.request_id,
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=35,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="restricted_custody_transfer_allowed",
+                reason="all mandatory checks passed",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-transfer-execute-001",
+                intent_id=request.request_id,
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:05:01Z",
+                contract_version="rules@8.0.0",
+                execution_preconditions={
+                    "resource_state_hash": "sha256:resource-state-001",
+                    "approval_transition_head": "sha256:approval-transition-001",
+                    "context_token": "sha256:context-token-001",
+                    "payload_hash": payload_hash,
+                    "endpoint_id": "node:jetson-orin-01",
+                },
+            ),
+            governed_receipt={
+                "audit_id": "audit-execute-001",
+                "policy_receipt_id": "receipt-policy-execute-001",
+            },
+        )
+
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_evaluate_result_verifier_gate_for_twin_refs",
+        _result_verifier_gate_open,
+    )
+
+    class _FakeOrganismClient:
+        def __init__(self, timeout=None):
+            pass
+
+        async def route_and_execute(self, task, current_epoch=None):
+            call_count["route_and_execute"] += 1
+            return {"success": True, "payload": {"results": []}}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(agent_actions_router, "OrganismServiceClient", _FakeOrganismClient)
+
+    payload = _base_payload()
+    payload["execution"] = {
+        "tool_name": "reachy.motion",
+        "args": {
+            "behavior_name": "move_forward",
+            "behavior_params": {"distance": 1.0},
+        },
+    }
+
+    first = client.post("/api/v1/agent-actions/execute", json=payload)
+    second = client.post("/api/v1/agent-actions/execute", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert call_count["route_and_execute"] == 1
+    assert first.json()["execution_result"] == second.json()["execution_result"]
 
 
 def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeypatch):
@@ -766,6 +964,7 @@ def test_agent_actions_evaluate_no_execute_query_strips_execution_token(monkeypa
     body = response.json()
     assert body["decision"]["disposition"] == "allow"
     assert body["execution_token"] is None
+    assert body["execution_context"] is None
     assert "ExecutionToken" not in body["minted_artifacts"]
     assert "PolicyReceipt" in body["minted_artifacts"]
 
@@ -793,6 +992,7 @@ def test_agent_actions_evaluate_no_execute_option_strips_execution_token(monkeyp
     body = response.json()
     assert body["decision"]["disposition"] == "allow"
     assert body["execution_token"] is None
+    assert body["execution_context"] is None
     assert "ExecutionToken" not in body["minted_artifacts"]
 
 

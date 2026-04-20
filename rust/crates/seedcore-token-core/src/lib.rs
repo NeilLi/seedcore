@@ -4,7 +4,7 @@
 //! scope enforcement.
 
 use seedcore_kernel_types::Timestamp;
-pub use seedcore_kernel_types::{ExecutionToken, TokenConstraints};
+pub use seedcore_kernel_types::{ExecutionPreconditions, ExecutionToken, TokenConstraints};
 use seedcore_proof_core::{
     sign_artifact, verify_signed_artifact, KeyResolver, SignedArtifact, Signer,
 };
@@ -20,6 +20,8 @@ pub struct ExecutionTokenClaims {
     pub valid_until: Timestamp,
     pub contract_version: String,
     pub constraints: TokenConstraints,
+    #[serde(default)]
+    pub execution_preconditions: ExecutionPreconditions,
 }
 
 /// Runtime request context evaluated against token constraints.
@@ -33,6 +35,8 @@ pub struct ExecutionRequestContext {
     pub registration_decision_id: Option<String>,
     pub endpoint_id: Option<String>,
     pub payload_hash: Option<String>,
+    #[serde(default)]
+    pub execution_preconditions: ExecutionPreconditions,
 }
 
 /// Verification result for a token artifact.
@@ -162,6 +166,45 @@ pub fn enforce_constraints(
     ) {
         return deny("payload_hash_mismatch");
     }
+    if mismatch(
+        token.execution_preconditions.resource_state_hash.as_deref(),
+        request
+            .execution_preconditions
+            .resource_state_hash
+            .as_deref(),
+    ) {
+        return deny("resource_state_hash_mismatch");
+    }
+    if mismatch(
+        token
+            .execution_preconditions
+            .approval_transition_head
+            .as_deref(),
+        request
+            .execution_preconditions
+            .approval_transition_head
+            .as_deref(),
+    ) {
+        return deny("approval_transition_head_mismatch");
+    }
+    if mismatch(
+        token.execution_preconditions.context_token.as_deref(),
+        request.execution_preconditions.context_token.as_deref(),
+    ) {
+        return deny("context_token_mismatch");
+    }
+    if mismatch(
+        token.execution_preconditions.endpoint_id.as_deref(),
+        request.execution_preconditions.endpoint_id.as_deref(),
+    ) {
+        return deny("endpoint_id_mismatch");
+    }
+    if mismatch(
+        token.execution_preconditions.payload_hash.as_deref(),
+        request.execution_preconditions.payload_hash.as_deref(),
+    ) {
+        return deny("payload_hash_mismatch");
+    }
 
     TokenEnforcementReport {
         allowed: true,
@@ -220,6 +263,7 @@ fn execution_token_from_signed(signed: SignedArtifact<ExecutionTokenClaims>) -> 
         valid_until: signed.artifact.valid_until,
         contract_version: signed.artifact.contract_version,
         constraints: signed.artifact.constraints,
+        execution_preconditions: signed.artifact.execution_preconditions,
         artifact_hash: signed.artifact_hash,
         signature: signed.signature,
     }
@@ -234,6 +278,7 @@ fn execution_token_into_signed(token: ExecutionToken) -> SignedArtifact<Executio
             valid_until: token.valid_until,
             contract_version: token.contract_version,
             constraints: token.constraints,
+            execution_preconditions: token.execution_preconditions,
         },
         artifact_hash: token.artifact_hash,
         signature: token.signature,
@@ -299,6 +344,13 @@ mod tests {
                 endpoint_id: Some("hal://robot_sim/1".to_string()),
                 payload_hash: Some("sha256:payload-transfer-001".to_string()),
             },
+            execution_preconditions: ExecutionPreconditions {
+                resource_state_hash: Some("sha256:resource-state-001".to_string()),
+                approval_transition_head: Some("sha256:approval-transition-001".to_string()),
+                context_token: Some("sha256:context-token-001".to_string()),
+                payload_hash: Some("sha256:payload-transfer-001".to_string()),
+                endpoint_id: Some("hal://robot_sim/1".to_string()),
+            },
         }
     }
 
@@ -312,6 +364,13 @@ mod tests {
             registration_decision_id: Some("decision:registration-001".to_string()),
             endpoint_id: Some("hal://robot_sim/1".to_string()),
             payload_hash: Some("sha256:payload-transfer-001".to_string()),
+            execution_preconditions: ExecutionPreconditions {
+                resource_state_hash: Some("sha256:resource-state-001".to_string()),
+                approval_transition_head: Some("sha256:approval-transition-001".to_string()),
+                context_token: Some("sha256:context-token-001".to_string()),
+                payload_hash: Some("sha256:payload-transfer-001".to_string()),
+                endpoint_id: Some("hal://robot_sim/1".to_string()),
+            },
         }
     }
 
@@ -375,5 +434,20 @@ mod tests {
         );
         assert!(!report.allowed);
         assert_eq!(report.error_code.as_deref(), Some("payload_hash_mismatch"));
+    }
+
+    #[test]
+    fn enforce_constraints_rejects_context_token_mismatch() {
+        let token = mint_token(sample_claims(), &DebugSigner).expect("token should mint");
+        let mut request = sample_request();
+        request.execution_preconditions.context_token =
+            Some("sha256:context-token-002".to_string());
+        let report = enforce_constraints(
+            &token,
+            &request,
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        );
+        assert!(!report.allowed);
+        assert_eq!(report.error_code.as_deref(), Some("context_token_mismatch"));
     }
 }

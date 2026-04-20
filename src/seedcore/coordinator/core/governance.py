@@ -22,6 +22,7 @@ from seedcore.models.action_intent import (
     AuthorityLevel,
     BreakGlassDecisionContext,
     DelegatedAuthority,
+    ExecutionPreconditions,
     ExecutionToken,
     IntentAction,
     IntentEnvironment,
@@ -1415,6 +1416,13 @@ def build_governance_context_from_policy_case(
         context["taxonomy_bundle"] = taxonomy_bundle
     if policy_decision.execution_token is not None:
         context["execution_token"] = policy_decision.execution_token.model_dump(mode="json")
+        execution_context = (
+            policy_decision.execution_token.execution_preconditions.model_dump(mode="json")
+            if policy_decision.execution_token.execution_preconditions is not None
+            else {}
+        )
+        if execution_context:
+            context["execution_context"] = execution_context
     return context
 
 
@@ -3492,6 +3500,19 @@ def _finalize_policy_decision_contract(
             advisory["state_binding_hash"] = state_binding_hash
             governed_receipt["advisory"] = advisory
 
+    execution_preconditions = (
+        policy_decision.execution_token.execution_preconditions.model_dump(mode="json")
+        if policy_decision.execution_token is not None
+        else None
+    )
+    if execution_preconditions:
+        authz_graph["execution_preconditions"] = dict(execution_preconditions)
+        if governed_receipt:
+            governed_receipt["execution_preconditions"] = dict(execution_preconditions)
+            advisory = dict(governed_receipt.get("advisory") or {})
+            advisory["execution_preconditions"] = dict(execution_preconditions)
+            governed_receipt["advisory"] = advisory
+
     policy_decision.authz_graph = authz_graph
     policy_decision.governed_receipt = governed_receipt
     return policy_decision
@@ -3922,6 +3943,50 @@ def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
     }
 
 
+def _build_execution_context_token(
+    *,
+    action_intent: ActionIntent,
+    approval_context: Mapping[str, Any] | None = None,
+) -> str:
+    approval = dict(approval_context or {})
+    material = {
+        "action_type": action_intent.action.type,
+        "asset_id": action_intent.resource.asset_id,
+        "target_zone": action_intent.resource.target_zone,
+        "resource_state_hash": _compiled_authz_resource_state_hash(action_intent),
+        "approval_transition_head": (
+            str(approval.get("approval_transition_head")).strip()
+            if approval.get("approval_transition_head") is not None
+            and str(approval.get("approval_transition_head")).strip()
+            else None
+        ),
+        "approval_binding_hash": _approval_binding_hash_string(approval.get("approval_binding_hash")),
+        "source_registration_id": action_intent.resource.source_registration_id,
+        "registration_decision_id": action_intent.resource.registration_decision_id,
+    }
+    return f"sha256:{_sha256_hex(_canonical_json(material))}"
+
+
+def _build_execution_preconditions(action_intent: ActionIntent) -> ExecutionPreconditions:
+    approval_context = _approval_context(action_intent)
+    approval_transition_head = (
+        str(approval_context.get("approval_transition_head")).strip()
+        if approval_context.get("approval_transition_head") is not None
+        and str(approval_context.get("approval_transition_head")).strip()
+        else None
+    )
+    return ExecutionPreconditions(
+        resource_state_hash=_compiled_authz_resource_state_hash(action_intent),
+        approval_transition_head=approval_transition_head,
+        context_token=_build_execution_context_token(
+            action_intent=action_intent,
+            approval_context=approval_context,
+        ),
+        payload_hash=_resolve_execution_payload_hash(action_intent),
+        endpoint_id=_resolve_execution_endpoint_id(action_intent),
+    )
+
+
 def _mint_execution_token(
     *,
     action_intent: ActionIntent,
@@ -3930,6 +3995,7 @@ def _mint_execution_token(
     extra_constraints: Mapping[str, Any] | None = None,
 ) -> ExecutionToken:
     constraints = _build_execution_constraints(action_intent)
+    execution_preconditions = _build_execution_preconditions(action_intent)
     if extra_constraints:
         constraints.update(
             {
@@ -3939,9 +4005,9 @@ def _mint_execution_token(
             }
         )
     if _is_restricted_custody_transfer(action_intent):
-        if not str(constraints.get("endpoint_id") or "").strip():
+        if not str(execution_preconditions.endpoint_id or "").strip():
             raise ValueError("execution_token_endpoint_required")
-        if not str(constraints.get("payload_hash") or "").strip():
+        if not str(execution_preconditions.payload_hash or "").strip():
             raise ValueError("execution_token_payload_hash_required")
     token_payload = {
         "token_id": str(uuid.uuid4()),
@@ -3950,6 +4016,7 @@ def _mint_execution_token(
         "valid_until": _isoformat(valid_until),
         "contract_version": action_intent.action.security_contract.version,
         "constraints": constraints,
+        "execution_preconditions": execution_preconditions.model_dump(mode="json"),
     }
     minted = mint_execution_token_with_rust(token_payload)
     if minted.get("error") is not None:
@@ -3961,6 +4028,13 @@ def _mint_execution_token(
     if isinstance(minted_constraints, Mapping):
         merged_constraints.update(dict(minted_constraints))
     minted["constraints"] = merged_constraints
+    minted_execution_preconditions = minted.get("execution_preconditions")
+    if isinstance(minted_execution_preconditions, Mapping):
+        minted["execution_preconditions"] = ExecutionPreconditions(
+            **dict(minted_execution_preconditions)
+        ).model_dump(mode="json")
+    else:
+        minted["execution_preconditions"] = execution_preconditions.model_dump(mode="json")
     return ExecutionToken(**minted)
 
 

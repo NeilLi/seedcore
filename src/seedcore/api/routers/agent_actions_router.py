@@ -18,10 +18,12 @@ from sqlalchemy import text
 
 from ...api.external_authority import build_owner_twin_snapshot, get_delegation
 from ...agents.roles.specialization import SpecializationManager
+from ...coordinator.core.governance import prepare_policy_case
 from ...database import get_async_pg_session_factory, get_async_redis_client
 from ...coordinator.dao import GovernedExecutionAuditDAO
 from ...models.action_intent import (
     ActionIntent,
+    ExecutionPreconditions,
     IntentAction,
     IntentPrincipal,
     IntentResource,
@@ -31,6 +33,7 @@ from ...models.agent_action_gateway import (
     AgentActionClosureRecordResponse,
     AgentActionClosureRequest,
     AgentActionClosureResponse,
+    AgentActionExecuteResponse,
     AgentActionEvaluateRequest,
     AgentActionEvaluateResponse,
     AgentActionRequestRecordResponse,
@@ -43,6 +46,7 @@ from ...models.pdp_hot_path import (
 )
 from ...ops.pdp_hot_path import (
     HOT_PATH_CONTRACT_VERSION,
+    build_governance_context_from_hot_path_response,
     evaluate_pdp_hot_path,
     resolve_authoritative_transfer_approval,
 )
@@ -87,10 +91,21 @@ class _AgentActionClosureStoredRecord:
     response: AgentActionClosureResponse
 
 
+@dataclass
+class _AgentActionExecuteStoredRecord:
+    request_id: str
+    idempotency_key: str
+    request_hash: str
+    recorded_at: datetime
+    response: AgentActionExecuteResponse
+
+
 _REQUEST_RECORDS_BY_ID: Dict[str, _AgentActionStoredRecord] = {}
 _IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
 _CLOSURE_RECORDS_BY_ID: Dict[str, _AgentActionClosureStoredRecord] = {}
 _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
+_EXECUTE_RECORDS_BY_REQUEST_ID: Dict[str, _AgentActionExecuteStoredRecord] = {}
+_EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
 _REQUEST_RECORDS_LOCK = Lock()
 _REDIS_CLIENT: Any = None
 _REDIS_CLIENT_LOCK = asyncio.Lock()
@@ -106,12 +121,17 @@ REDIS_REQUEST_RECORD_KEY_PREFIX = "seedcore:agent_actions:req"
 REDIS_IDEMPOTENCY_KEY_PREFIX = "seedcore:agent_actions:idem"
 REDIS_CLOSURE_RECORD_KEY_PREFIX = "seedcore:agent_actions:closure"
 REDIS_CLOSURE_IDEMPOTENCY_KEY_PREFIX = "seedcore:agent_actions:closure:idem"
+REDIS_EXECUTE_RECORD_KEY_PREFIX = "seedcore:agent_actions:execute"
+REDIS_EXECUTE_IDEMPOTENCY_KEY_PREFIX = "seedcore:agent_actions:execute:idem"
 ORGANISM_PREFLIGHT_REQUIRED = os.getenv(
     "SEEDCORE_AGENT_ACTION_REQUIRE_ORGANISM_READY",
     "true",
 ).strip().lower() in {"1", "true", "yes", "on"}
 ORGANISM_PREFLIGHT_TIMEOUT_SECONDS = float(
     os.getenv("SEEDCORE_AGENT_ACTION_ORGANISM_PREFLIGHT_TIMEOUT_S", "3")
+)
+ORGANISM_EXECUTE_TIMEOUT_SECONDS = float(
+    os.getenv("SEEDCORE_AGENT_ACTION_ORGANISM_EXECUTE_TIMEOUT_S", "30")
 )
 DISABLE_REDIS_STORE = os.getenv(
     "SEEDCORE_AGENT_ACTION_DISABLE_REDIS_STORE",
@@ -133,6 +153,7 @@ def _map_to_hot_path_request(
     payload: AgentActionEvaluateRequest,
     *,
     request_hash: str | None = None,
+    payload_hash_override: str | None = None,
 ) -> HotPathEvaluateRequest:
     hardware_fingerprint = payload.principal.hardware_fingerprint
     execution_endpoint_id = (
@@ -188,7 +209,13 @@ def _map_to_hot_path_request(
             ),
             parameters={
                 "endpoint_id": execution_endpoint_id,
-                "payload_hash": f"sha256:{request_hash}" if request_hash else None,
+                "payload_hash": (
+                    f"sha256:{payload_hash_override}"
+                    if payload_hash_override
+                    else f"sha256:{request_hash}"
+                    if request_hash
+                    else None
+                ),
                 "approval_context": {
                     "approval_envelope_id": payload.approval.approval_envelope_id,
                     "expected_envelope_version": payload.approval.expected_envelope_version,
@@ -450,6 +477,51 @@ def _minted_artifacts_from_hot_path_result(
     return minted
 
 
+def _execution_context_from_hot_path_result(
+    *,
+    execution_token: Any,
+    governed_receipt: Mapping[str, Any] | None = None,
+) -> ExecutionPreconditions | None:
+    if execution_token is not None:
+        preconditions = getattr(execution_token, "execution_preconditions", None)
+        if isinstance(preconditions, ExecutionPreconditions):
+            return preconditions
+        if isinstance(preconditions, Mapping):
+            try:
+                return ExecutionPreconditions(**dict(preconditions))
+            except Exception:
+                return None
+
+        token_payload = (
+            execution_token.model_dump(mode="json")
+            if hasattr(execution_token, "model_dump")
+            else dict(execution_token)
+            if isinstance(execution_token, Mapping)
+            else {}
+        )
+        if isinstance(token_payload.get("execution_preconditions"), Mapping):
+            try:
+                return ExecutionPreconditions(**dict(token_payload["execution_preconditions"]))
+            except Exception:
+                return None
+
+    if isinstance(governed_receipt, Mapping):
+        advisory = governed_receipt.get("advisory") if isinstance(governed_receipt.get("advisory"), Mapping) else {}
+        preconditions_payload = (
+            governed_receipt.get("execution_preconditions")
+            if isinstance(governed_receipt.get("execution_preconditions"), Mapping)
+            else advisory.get("execution_preconditions")
+            if isinstance(advisory.get("execution_preconditions"), Mapping)
+            else {}
+        )
+        if isinstance(preconditions_payload, Mapping) and preconditions_payload:
+            try:
+                return ExecutionPreconditions(**dict(preconditions_payload))
+            except Exception:
+                return None
+    return None
+
+
 def _apply_no_execute_preflight(
     response: AgentActionEvaluateResponse,
     *,
@@ -461,6 +533,7 @@ def _apply_no_execute_preflight(
     return response.model_copy(
         update={
             "execution_token": None,
+            "execution_context": None,
             "minted_artifacts": retained_artifacts,
         }
     )
@@ -575,6 +648,57 @@ def _canonical_gateway_payload_hash(
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
+def _resolve_execution_directive(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
+    if payload.execution is not None:
+        return payload.execution.model_dump(mode="json")
+
+    behavior_params: Dict[str, Any] = {
+        "distance": 1.0,
+        "asset_id": payload.asset.asset_id,
+        "request_id": payload.request_id,
+    }
+    if payload.asset.from_zone:
+        behavior_params["from_zone"] = payload.asset.from_zone
+    if payload.asset.to_zone:
+        behavior_params["to_zone"] = payload.asset.to_zone
+    if payload.asset.to_custodian_ref:
+        behavior_params["to_custodian_ref"] = payload.asset.to_custodian_ref
+    if payload.authority_scope is not None:
+        behavior_params["scope_id"] = payload.authority_scope.scope_id
+
+    return {
+        "tool_name": "reachy.motion",
+        "args": {
+            "behavior_name": "move_forward",
+            "behavior_params": behavior_params,
+        },
+    }
+
+
+def _canonical_tool_args_hash(tool_args: Mapping[str, Any]) -> str:
+    canonical_payload = {
+        str(key): value
+        for key, value in tool_args.items()
+        if key not in {"execution_token", "execution_context", "_governance"}
+    }
+    canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def _canonical_gateway_execute_payload_hash(
+    payload: AgentActionEvaluateRequest,
+    *,
+    execution_directive: Mapping[str, Any],
+) -> str:
+    canonical_payload = {
+        "request_hash": _canonical_gateway_payload_hash(payload, requested_no_execute=False),
+        "mode": "execute",
+        "execution": dict(execution_directive),
+    }
+    canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
 def _canonical_payload_hash(payload: Any) -> str:
     canonical_payload = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload or {})
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
@@ -602,6 +726,14 @@ def _closure_record_redis_key(closure_id: str) -> str:
 
 def _closure_idempotency_redis_key(idempotency_key: str) -> str:
     return f"{REDIS_CLOSURE_IDEMPOTENCY_KEY_PREFIX}:{idempotency_key}"
+
+
+def _execute_record_redis_key(request_id: str) -> str:
+    return f"{REDIS_EXECUTE_RECORD_KEY_PREFIX}:{request_id}"
+
+
+def _execute_idempotency_redis_key(idempotency_key: str) -> str:
+    return f"{REDIS_EXECUTE_IDEMPOTENCY_KEY_PREFIX}:{idempotency_key}"
 
 
 def _record_to_json_payload(record: _AgentActionStoredRecord) -> Dict[str, Any]:
@@ -668,6 +800,34 @@ def _closure_record_from_json_payload(payload: Dict[str, Any]) -> _AgentActionCl
         recorded_at = recorded_at.replace(tzinfo=timezone.utc)
     return _AgentActionClosureStoredRecord(
         closure_id=str(payload.get("closure_id") or "").strip(),
+        request_id=str(payload.get("request_id") or "").strip(),
+        idempotency_key=str(payload.get("idempotency_key") or "").strip(),
+        request_hash=str(payload.get("request_hash") or "").strip(),
+        recorded_at=recorded_at.astimezone(timezone.utc),
+        response=response,
+    )
+
+
+def _execute_record_to_json_payload(record: _AgentActionExecuteStoredRecord) -> Dict[str, Any]:
+    return {
+        "request_id": record.request_id,
+        "idempotency_key": record.idempotency_key,
+        "request_hash": record.request_hash,
+        "recorded_at": _to_utc_iso(record.recorded_at),
+        "response": record.response.model_dump(mode="json"),
+    }
+
+
+def _execute_record_from_json_payload(payload: Dict[str, Any]) -> _AgentActionExecuteStoredRecord:
+    response = AgentActionExecuteResponse.model_validate(payload.get("response") or {})
+    recorded_at_raw = payload.get("recorded_at")
+    if isinstance(recorded_at_raw, datetime):
+        recorded_at = recorded_at_raw
+    else:
+        recorded_at = datetime.fromisoformat(str(recorded_at_raw).replace("Z", "+00:00"))
+    if recorded_at.tzinfo is None:
+        recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+    return _AgentActionExecuteStoredRecord(
         request_id=str(payload.get("request_id") or "").strip(),
         idempotency_key=str(payload.get("idempotency_key") or "").strip(),
         request_hash=str(payload.get("request_hash") or "").strip(),
@@ -877,6 +1037,47 @@ async def _read_closure_record(closure_id: str) -> _AgentActionClosureStoredReco
         return _CLOSURE_RECORDS_BY_ID.get(closure_id)
 
 
+async def _read_execute_idempotency_entry(idempotency_key: str) -> Dict[str, Any] | None:
+    redis_client = await _resolve_redis_client()
+    if redis_client is not None:
+        try:
+            raw_value = await redis_client.get(_execute_idempotency_redis_key(idempotency_key))
+            if raw_value:
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, dict):
+                    parsed_entry = _idempotency_entry_from_json(parsed)
+                    if parsed_entry is not None:
+                        return {
+                            "request_id": parsed_entry.request_id,
+                            "request_hash": parsed_entry.request_hash,
+                        }
+        except Exception:
+            logger.warning("Agent action Redis execute idempotency read failed; falling back to in-memory.", exc_info=True)
+    with _REQUEST_RECORDS_LOCK:
+        existing_entry = _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.get(idempotency_key)
+        if existing_entry is None:
+            return None
+    return {
+        "request_id": existing_entry.request_id,
+        "request_hash": existing_entry.request_hash,
+    }
+
+
+async def _read_execute_record(request_id: str) -> _AgentActionExecuteStoredRecord | None:
+    redis_client = await _resolve_redis_client()
+    if redis_client is not None:
+        try:
+            raw_value = await redis_client.get(_execute_record_redis_key(request_id))
+            if raw_value:
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, dict):
+                    return _execute_record_from_json_payload(parsed)
+        except Exception:
+            logger.warning("Agent action Redis execute-record read failed; falling back to in-memory.", exc_info=True)
+    with _REQUEST_RECORDS_LOCK:
+        return _EXECUTE_RECORDS_BY_REQUEST_ID.get(request_id)
+
+
 async def _write_closure_record(record: _AgentActionClosureStoredRecord) -> None:
     redis_client = await _resolve_redis_client()
     if redis_client is not None:
@@ -907,6 +1108,40 @@ async def _write_closure_record(record: _AgentActionClosureStoredRecord) -> None
         _CLOSURE_RECORDS_BY_ID[record.closure_id] = record
         _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY[record.idempotency_key] = _AgentActionIdempotencyEntry(
             request_id=record.closure_id,
+            request_hash=record.request_hash,
+        )
+
+
+async def _write_execute_record(record: _AgentActionExecuteStoredRecord) -> None:
+    redis_client = await _resolve_redis_client()
+    if redis_client is not None:
+        record_payload = _execute_record_to_json_payload(record)
+        try:
+            await redis_client.setex(
+                _execute_record_redis_key(record.request_id),
+                REQUEST_RECORD_TTL_SECONDS,
+                json.dumps(record_payload, sort_keys=True, separators=(",", ":"), default=str),
+            )
+            await redis_client.setex(
+                _execute_idempotency_redis_key(record.idempotency_key),
+                REQUEST_RECORD_TTL_SECONDS,
+                json.dumps(
+                    {
+                        "request_id": record.request_id,
+                        "request_hash": record.request_hash,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            )
+            return
+        except Exception:
+            logger.warning("Agent action Redis execute write failed; falling back to in-memory.", exc_info=True)
+    with _REQUEST_RECORDS_LOCK:
+        _EXECUTE_RECORDS_BY_REQUEST_ID[record.request_id] = record
+        _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY[record.idempotency_key] = _AgentActionIdempotencyEntry(
+            request_id=record.request_id,
             request_hash=record.request_hash,
         )
 
@@ -953,6 +1188,48 @@ async def _claim_closure_idempotency_key(
         }
 
 
+async def _claim_execute_idempotency_key(
+    *,
+    idempotency_key: str,
+    request_id: str,
+    request_hash: str,
+) -> Tuple[bool, Dict[str, Any] | None]:
+    redis_client = await _resolve_redis_client()
+    if redis_client is not None:
+        serialized_entry = json.dumps(
+            {
+                "request_id": request_id,
+                "request_hash": request_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        try:
+            claimed = await redis_client.set(
+                _execute_idempotency_redis_key(idempotency_key),
+                serialized_entry,
+                ex=REQUEST_RECORD_TTL_SECONDS,
+                nx=True,
+            )
+            if bool(claimed):
+                return True, None
+            return False, await _read_execute_idempotency_entry(idempotency_key)
+        except Exception:
+            logger.warning("Agent action Redis execute idempotency claim failed; falling back to in-memory.", exc_info=True)
+    with _REQUEST_RECORDS_LOCK:
+        existing_entry = _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.get(idempotency_key)
+        if existing_entry is None:
+            _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY[idempotency_key] = _AgentActionIdempotencyEntry(
+                request_id=request_id,
+                request_hash=request_hash,
+            )
+            return True, None
+        return False, {
+            "request_id": existing_entry.request_id,
+            "request_hash": existing_entry.request_hash,
+        }
+
+
 async def _release_closure_idempotency_claim(
     *,
     idempotency_key: str,
@@ -976,6 +1253,31 @@ async def _release_closure_idempotency_claim(
             and existing_entry.request_hash == request_hash
         ):
             _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY.pop(idempotency_key, None)
+
+
+async def _release_execute_idempotency_claim(
+    *,
+    idempotency_key: str,
+    request_id: str,
+    request_hash: str,
+) -> None:
+    redis_client = await _resolve_redis_client()
+    if redis_client is not None:
+        try:
+            existing = await _read_execute_idempotency_entry(idempotency_key)
+            if existing and existing.get("request_id") == request_id and existing.get("request_hash") == request_hash:
+                await redis_client.delete(_execute_idempotency_redis_key(idempotency_key))
+            return
+        except Exception:
+            logger.warning("Agent action Redis execute idempotency release failed; falling back to in-memory.", exc_info=True)
+    with _REQUEST_RECORDS_LOCK:
+        existing_entry = _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.get(idempotency_key)
+        if (
+            existing_entry is not None
+            and existing_entry.request_id == request_id
+            and existing_entry.request_hash == request_hash
+        ):
+            _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.pop(idempotency_key, None)
 
 
 def _resolve_digital_twin_service() -> DigitalTwinService | None:
@@ -2027,6 +2329,85 @@ def _build_organism_preflight_task(payload: AgentActionEvaluateRequest) -> Dict[
     }
 
 
+def _telemetry_summary_from_payload(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
+    return {
+        "observed_at": _to_utc_iso(payload.telemetry.observed_at),
+        "freshness_seconds": payload.telemetry.freshness_seconds,
+        "max_allowed_age_seconds": payload.telemetry.max_allowed_age_seconds,
+        "current_zone": payload.telemetry.current_zone,
+        "current_coordinate_ref": payload.telemetry.current_coordinate_ref,
+        "evidence_refs": list(payload.telemetry.evidence_refs),
+    }
+
+
+def _evidence_summary_from_payload(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
+    return {
+        "evidence_refs": list(payload.telemetry.evidence_refs),
+        "reason_trace_ref": (
+            payload.forensic_context.reason_trace_ref
+            if payload.forensic_context is not None
+            else None
+        ),
+    }
+
+
+def _build_organism_execute_task(
+    *,
+    payload: AgentActionEvaluateRequest,
+    governance: Mapping[str, Any],
+    execution_directive: Mapping[str, Any],
+) -> Dict[str, Any]:
+    routing: Dict[str, Any] = {}
+    preflight_specialization = _resolve_preflight_specialization(payload)
+    if preflight_specialization:
+        routing["required_specialization"] = preflight_specialization
+
+    tool_name = str(execution_directive.get("tool_name") or "reachy.motion").strip() or "reachy.motion"
+    tool_args = (
+        dict(execution_directive.get("args"))
+        if isinstance(execution_directive.get("args"), Mapping)
+        else {}
+    )
+
+    return {
+        "task_id": payload.request_id,
+        "type": "action",
+        "domain": "custody",
+        "description": "agent action gateway execute",
+        "params": {
+            "interaction": {
+                "mode": "coordinator_routed",
+                "conversation_id": payload.request_id,
+            },
+            "routing": routing,
+            "risk": {
+                "is_high_stakes": True,
+            },
+            "multimodal": {
+                "location_context": payload.asset.to_zone or payload.telemetry.current_zone,
+            },
+            "resource": {
+                "asset_id": payload.asset.asset_id,
+                "lot_id": payload.asset.lot_id,
+                "target_zone": payload.asset.to_zone,
+            },
+            "tool_calls": [
+                {
+                    "name": tool_name,
+                    "args": tool_args,
+                }
+            ],
+            "governance": dict(governance),
+            "agent_action_gateway": {
+                "request_id": payload.request_id,
+                "workflow_type": payload.workflow.type,
+                "action_type": payload.workflow.action_type,
+                "tool_name": tool_name,
+            },
+        },
+    }
+
+
 async def _organism_preflight_check(payload: AgentActionEvaluateRequest) -> Tuple[bool, str]:
     client = OrganismServiceClient(timeout=ORGANISM_PREFLIGHT_TIMEOUT_SECONDS)
     try:
@@ -2113,6 +2494,38 @@ def _as_closure_record_response(record: _AgentActionClosureStoredRecord) -> Agen
         idempotency_key=record.idempotency_key,
         recorded_at=record.recorded_at,
         response=record.response,
+    )
+
+
+def _build_agent_action_evaluate_response(
+    *,
+    payload: AgentActionEvaluateRequest,
+    hot_path_result: HotPathEvaluateResponse,
+) -> AgentActionEvaluateResponse:
+    return AgentActionEvaluateResponse(
+        request_id=hot_path_result.request_id,
+        decided_at=hot_path_result.decided_at,
+        latency_ms=hot_path_result.latency_ms,
+        decision=hot_path_result.decision,
+        required_approvals=list(hot_path_result.required_approvals),
+        trust_gaps=list(hot_path_result.trust_gaps),
+        obligations=[dict(item) for item in hot_path_result.obligations],
+        minted_artifacts=_minted_artifacts_from_hot_path_result(
+            execution_token=hot_path_result.execution_token,
+            governed_receipt=dict(hot_path_result.governed_receipt),
+            signer_provenance=list(hot_path_result.signer_provenance),
+        ),
+        authority_scope_verdict=_build_authority_scope_verdict(payload),
+        fingerprint_verdict=_build_fingerprint_verdict(payload),
+        execution_token=hot_path_result.execution_token,
+        execution_context=_execution_context_from_hot_path_result(
+            execution_token=hot_path_result.execution_token,
+            governed_receipt=dict(hot_path_result.governed_receipt),
+        ),
+        governed_receipt=dict(hot_path_result.governed_receipt),
+        forensic_linkage={},
+        request_schema_bundle=hot_path_result.request_schema_bundle,
+        taxonomy_bundle=hot_path_result.taxonomy_bundle,
     )
 
 
@@ -2246,26 +2659,9 @@ async def evaluate_agent_action(
         )
         del debug  # kept for parity with existing hot-path router signature
 
-        response = AgentActionEvaluateResponse(
-            request_id=hot_path_result.request_id,
-            decided_at=hot_path_result.decided_at,
-            latency_ms=hot_path_result.latency_ms,
-            decision=hot_path_result.decision,
-            required_approvals=list(hot_path_result.required_approvals),
-            trust_gaps=list(hot_path_result.trust_gaps),
-            obligations=[dict(item) for item in hot_path_result.obligations],
-            minted_artifacts=_minted_artifacts_from_hot_path_result(
-                execution_token=hot_path_result.execution_token,
-                governed_receipt=dict(hot_path_result.governed_receipt),
-                signer_provenance=list(hot_path_result.signer_provenance),
-            ),
-            authority_scope_verdict=_build_authority_scope_verdict(payload),
-            fingerprint_verdict=_build_fingerprint_verdict(payload),
-            execution_token=hot_path_result.execution_token,
-            governed_receipt=dict(hot_path_result.governed_receipt),
-            forensic_linkage={},
-            request_schema_bundle=hot_path_result.request_schema_bundle,
-            taxonomy_bundle=hot_path_result.taxonomy_bundle,
+        response = _build_agent_action_evaluate_response(
+            payload=payload,
+            hot_path_result=hot_path_result,
         )
         response = _apply_forensic_scope_guards(payload=payload, response=response)
         response = await _apply_organism_preflight(payload=payload, response=response)
@@ -2292,6 +2688,178 @@ async def evaluate_agent_action(
                 idempotency_key=payload.idempotency_key,
                 request_id=payload.request_id,
                 request_hash=request_hash,
+            )
+        raise
+
+
+@router.post("/agent-actions/execute", response_model=AgentActionExecuteResponse)
+async def execute_agent_action(
+    payload_body: Dict[str, Any] = Body(...),
+    debug: bool = Query(default=False, description="Include check-by-check diagnostics."),
+) -> AgentActionExecuteResponse:
+    payload = _parse_validate_payload(payload_body, model=AgentActionEvaluateRequest)
+    execution_directive = _resolve_execution_directive(payload)
+    execute_request_hash = _canonical_gateway_execute_payload_hash(
+        payload,
+        execution_directive=execution_directive,
+    )
+
+    claimed, idempotency_entry = await _claim_execute_idempotency_key(
+        idempotency_key=payload.idempotency_key,
+        request_id=payload.request_id,
+        request_hash=execute_request_hash,
+    )
+    if not claimed and idempotency_entry is not None:
+        existing_request_hash = str(idempotency_entry.get("request_hash") or "").strip()
+        existing_request_id = str(idempotency_entry.get("request_id") or "").strip()
+        if existing_request_hash != execute_request_hash:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "idempotency_conflict",
+                    "message": "idempotency key already used with different execute request body",
+                    "request_id": payload.request_id,
+                },
+            )
+        if existing_request_id:
+            existing_record = await _read_execute_record(existing_request_id)
+            if existing_record is not None:
+                return existing_record.response
+            if existing_request_id != payload.request_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error_code": "idempotency_in_progress",
+                        "message": "idempotency key already claimed by an in-flight execute request",
+                        "request_id": existing_request_id,
+                    },
+                )
+
+    try:
+        owner_twin_snapshot = await _resolve_owner_twin_snapshot_for_payload(payload)
+        relevant_twin_snapshot = (
+            {"owner": owner_twin_snapshot}
+            if isinstance(owner_twin_snapshot, dict)
+            else None
+        )
+
+        tool_args = (
+            dict(execution_directive.get("args"))
+            if isinstance(execution_directive.get("args"), Mapping)
+            else {}
+        )
+        tool_payload_hash = _canonical_tool_args_hash(tool_args)
+        hot_path_request = _map_to_hot_path_request(
+            payload,
+            request_hash=execute_request_hash,
+            payload_hash_override=tool_payload_hash,
+        )
+        authoritative_transfer_approval = await resolve_authoritative_transfer_approval(hot_path_request)
+        hot_path_result = evaluate_pdp_hot_path(
+            hot_path_request,
+            relevant_twin_snapshot=relevant_twin_snapshot,
+            authoritative_approval_envelope=(
+                authoritative_transfer_approval.get("authoritative_approval_envelope")
+                if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
+                else None
+            ),
+            authoritative_approval_transition_history=(
+                authoritative_transfer_approval.get("authoritative_approval_transition_history")
+                if isinstance(authoritative_transfer_approval.get("authoritative_approval_transition_history"), list)
+                else None
+            ),
+            authoritative_approval_transition_head=(
+                str(authoritative_transfer_approval.get("authoritative_approval_transition_head"))
+                if authoritative_transfer_approval.get("authoritative_approval_transition_head") is not None
+                else None
+            ),
+        )
+        del debug
+
+        evaluation = _build_agent_action_evaluate_response(
+            payload=payload,
+            hot_path_result=hot_path_result,
+        )
+        evaluation = _apply_forensic_scope_guards(payload=payload, response=evaluation)
+        evaluation = await _apply_organism_preflight(payload=payload, response=evaluation)
+        evaluation = await _apply_result_verifier_policy_gate(payload=payload, response=evaluation)
+        evaluation = _annotate_owner_context_in_response(evaluation, owner_twin_snapshot)
+        evaluation = evaluation.model_copy(
+            update={"forensic_linkage": _build_forensic_linkage(payload=payload, response=evaluation)}
+        )
+
+        execution_task: Dict[str, Any] | None = None
+        execution_result: Dict[str, Any] | None = None
+        disposition = str(evaluation.decision.disposition or "").strip().lower()
+        if disposition == "allow" and evaluation.execution_token is not None:
+            policy_case = prepare_policy_case(
+                hot_path_request.action_intent,
+                policy_snapshot=hot_path_request.policy_snapshot_ref,
+                relevant_twin_snapshot=relevant_twin_snapshot,
+                telemetry_summary=_telemetry_summary_from_payload(payload),
+                evidence_summary=_evidence_summary_from_payload(payload),
+                authoritative_approval_envelope=(
+                    authoritative_transfer_approval.get("authoritative_approval_envelope")
+                    if isinstance(authoritative_transfer_approval.get("authoritative_approval_envelope"), dict)
+                    else None
+                ),
+                authoritative_approval_transition_history=(
+                    authoritative_transfer_approval.get("authoritative_approval_transition_history")
+                    if isinstance(authoritative_transfer_approval.get("authoritative_approval_transition_history"), list)
+                    else None
+                ),
+                authoritative_approval_transition_head=(
+                    str(authoritative_transfer_approval.get("authoritative_approval_transition_head"))
+                    if authoritative_transfer_approval.get("authoritative_approval_transition_head") is not None
+                    else None
+                ),
+            )
+            governance = build_governance_context_from_hot_path_response(
+                policy_case,
+                hot_path_result,
+            )
+            execution_task = _build_organism_execute_task(
+                payload=payload,
+                governance=governance,
+                execution_directive=execution_directive,
+            )
+            client = OrganismServiceClient(timeout=ORGANISM_EXECUTE_TIMEOUT_SECONDS)
+            try:
+                routed_result = await client.route_and_execute(task=execution_task)
+            finally:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+            execution_result = (
+                dict(routed_result)
+                if isinstance(routed_result, Mapping)
+                else {"result": routed_result}
+            )
+
+        response = AgentActionExecuteResponse(
+            request_id=payload.request_id,
+            executed_at=datetime.now(timezone.utc),
+            evaluation=evaluation,
+            execution_task=execution_task,
+            execution_result=execution_result,
+        )
+        await _write_execute_record(
+            _AgentActionExecuteStoredRecord(
+                request_id=payload.request_id,
+                idempotency_key=payload.idempotency_key,
+                request_hash=execute_request_hash,
+                recorded_at=datetime.now(timezone.utc),
+                response=response,
+            )
+        )
+        return response
+    except Exception:
+        if claimed:
+            await _release_execute_idempotency_claim(
+                idempotency_key=payload.idempotency_key,
+                request_id=payload.request_id,
+                request_hash=execute_request_hash,
             )
         raise
 
@@ -2458,6 +3026,8 @@ def _clear_agent_action_request_store_for_tests() -> None:
         _IDEMPOTENCY_ENTRIES_BY_KEY.clear()
         _CLOSURE_RECORDS_BY_ID.clear()
         _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY.clear()
+        _EXECUTE_RECORDS_BY_REQUEST_ID.clear()
+        _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.clear()
     _REDIS_CLIENT = None
     _REDIS_CLIENT_INITIALIZED = False
     _DIGITAL_TWIN_SERVICE = None

@@ -468,6 +468,16 @@ pub struct TokenConstraints {
     pub payload_hash: Option<String>,
 }
 
+/// Live execution preconditions presented alongside the governed action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ExecutionPreconditions {
+    pub resource_state_hash: Option<String>,
+    pub approval_transition_head: Option<String>,
+    pub context_token: Option<String>,
+    pub payload_hash: Option<String>,
+    pub endpoint_id: Option<String>,
+}
+
 /// Canonical execution-token artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionToken {
@@ -477,6 +487,8 @@ pub struct ExecutionToken {
     pub valid_until: Timestamp,
     pub contract_version: String,
     pub constraints: TokenConstraints,
+    #[serde(default)]
+    pub execution_preconditions: ExecutionPreconditions,
     pub artifact_hash: ArtifactHash,
     pub signature: SignatureEnvelope,
 }

@@ -117,6 +117,7 @@ class DummyReachyMotionTool(ToolBase):
             "status": "ok",
             "robot_state": {"head": kwargs.get("head", {})},
             "execution_token_id": (kwargs.get("execution_token") or {}).get("token_id"),
+            "execution_context": dict(kwargs.get("execution_context") or {}),
         }
 
 
@@ -155,6 +156,13 @@ async def test_tool_manager_requires_execution_token_for_actuation():
                 "asset_id": "asset-1",
                 "principal_agent_id": "agent-1",
             },
+            "execution_preconditions": {
+                "resource_state_hash": "sha256:state-1",
+                "approval_transition_head": "sha256:approval-1",
+                "context_token": "sha256:context-1",
+                "payload_hash": "sha256:payload-1",
+                "endpoint_id": "robot_sim://asset-1",
+            },
         }
     }
     out = await manager.execute(
@@ -164,6 +172,68 @@ async def test_tool_manager_requires_execution_token_for_actuation():
     )
     assert out["status"] == "ok"
     assert out["execution_token_id"] == "tok-1"
+    assert out["execution_context"]["context_token"] == "sha256:context-1"
+    assert out["execution_context"]["endpoint_id"] == "robot_sim://asset-1"
+
+
+@pytest.mark.asyncio
+async def test_tool_manager_overrides_caller_execution_context_with_governance_context():
+    manager = ToolManager()
+    await manager.register_internal(DummyReachyMotionTool())
+
+    governance = {
+        "action_intent": {
+            "intent_id": "intent-override-1",
+            "principal": {"agent_id": "agent-1"},
+            "action": {"type": "MOVE"},
+            "resource": {"asset_id": "asset-1", "target_zone": "zone-a"},
+        },
+        "execution_token": {
+            "token_id": "tok-override-1",
+            "intent_id": "intent-override-1",
+            "valid_until": "2099-01-01T00:00:00+00:00",
+            "signature": _stub_token_signature(),
+            "constraints": {
+                "action_type": "MOVE",
+                "target_zone": "zone-a",
+                "asset_id": "asset-1",
+                "principal_agent_id": "agent-1",
+            },
+            "execution_preconditions": {
+                "resource_state_hash": "sha256:state-good",
+                "approval_transition_head": "sha256:approval-good",
+                "context_token": "sha256:context-good",
+                "payload_hash": "sha256:payload-good",
+                "endpoint_id": "robot_sim://asset-good",
+            },
+        },
+        "execution_context": {
+            "resource_state_hash": "sha256:state-good",
+            "approval_transition_head": "sha256:approval-good",
+            "context_token": "sha256:context-good",
+            "payload_hash": "sha256:payload-good",
+            "endpoint_id": "robot_sim://asset-good",
+        },
+    }
+
+    out = await manager.execute(
+        "reachy.motion",
+        {
+            "head": {"yaw": 0.2},
+            "execution_context": {
+                "resource_state_hash": "sha256:state-bad",
+                "approval_transition_head": "sha256:approval-bad",
+                "context_token": "sha256:context-bad",
+                "payload_hash": "sha256:payload-bad",
+                "endpoint_id": "robot_sim://asset-bad",
+            },
+            "_governance": governance,
+        },
+        agent_id="agent-1",
+    )
+
+    assert out["execution_context"]["context_token"] == "sha256:context-good"
+    assert out["execution_context"]["endpoint_id"] == "robot_sim://asset-good"
 
     rec = await manager.execute(
         "custody.ledger.record",

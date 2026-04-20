@@ -27,8 +27,10 @@ def _token_dict(
 ) -> dict[str, object]:
     issued_at = datetime.now(timezone.utc)
     constraints: dict[str, str] = {}
+    execution_preconditions: dict[str, str] = {}
     if endpoint_id is not None:
         constraints["endpoint_id"] = endpoint_id
+        execution_preconditions["endpoint_id"] = endpoint_id
     if target_zone is not None:
         constraints["target_zone"] = target_zone
 
@@ -39,6 +41,7 @@ def _token_dict(
         "valid_until": (issued_at + timedelta(seconds=ttl_seconds)).isoformat(),
         "contract_version": "snapshot:test",
         "constraints": constraints,
+        "execution_preconditions": execution_preconditions,
     }
     payload["signature"] = _sign_token_payload(payload)
     return payload
@@ -53,6 +56,7 @@ def _sign_token_payload(payload: dict[str, object]) -> str:
             "valid_until": payload["valid_until"],
             "contract_version": payload["contract_version"],
             "constraints": payload["constraints"],
+            "execution_preconditions": payload["execution_preconditions"],
         },
         sort_keys=True,
         separators=(",", ":"),

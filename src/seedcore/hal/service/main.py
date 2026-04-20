@@ -30,6 +30,7 @@ from ...integrations.rust_kernel import (
     map_token_error_for_hal,
     verify_execution_token_with_rust,
 )
+from ...models.action_intent import ExecutionPreconditions
 from ...services.mutation_receipt_service import mutation_receipt_service
 
 # Internal SeedCore HAL imports
@@ -166,6 +167,7 @@ class ActuationRequest(BaseModel):
     behavior_name: Optional[str] = None
     behavior_params: Dict[str, Any] = {}
     execution_token: Optional[Dict[str, Any]] = None
+    execution_context: Optional[ExecutionPreconditions] = None
 
 
 class RevokeExecutionTokenRequest(BaseModel):
@@ -548,6 +550,11 @@ def _expected_execution_token_signature(payload: Dict[str, Any]) -> str:
     Exposed for boundary tests as hal_main._expected_execution_token_signature.
     """
     constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
+    execution_preconditions = (
+        payload.get("execution_preconditions")
+        if isinstance(payload.get("execution_preconditions"), dict)
+        else {}
+    )
     body = {
         "token_id": str(payload.get("token_id", "")),
         "intent_id": str(payload.get("intent_id", "")),
@@ -555,6 +562,7 @@ def _expected_execution_token_signature(payload: Dict[str, Any]) -> str:
         "valid_until": str(payload.get("valid_until", "")),
         "contract_version": str(payload.get("contract_version", "")),
         "constraints": constraints,
+        "execution_preconditions": execution_preconditions,
     }
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
     secret = os.getenv(
@@ -575,8 +583,61 @@ def _legacy_dev_hmac_signature_valid(token: Dict[str, Any]) -> bool:
     return hmac.compare_digest(expected.strip(), str(got).strip())
 
 
+def _coerce_execution_preconditions_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, ExecutionPreconditions):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        try:
+            return ExecutionPreconditions(**value).model_dump(mode="json")
+        except Exception:
+            return {}
+    return {}
+
+
+def _presented_execution_preconditions(
+    *,
+    active_driver: Optional[BaseRobotDriver],
+    request: Optional[ActuationRequest],
+) -> Dict[str, Any]:
+    presented = _coerce_execution_preconditions_dict(
+        request.execution_context if request is not None else None
+    )
+    if active_driver is not None:
+        presented["endpoint_id"] = _derive_actuator_endpoint(active_driver)
+    payload_hash = _canonical_actuation_payload_hash(request)
+    if payload_hash is not None:
+        presented["payload_hash"] = payload_hash
+    try:
+        return ExecutionPreconditions(**presented).model_dump(mode="json")
+    except Exception:
+        return {}
+
+
+def _validate_execution_preconditions(
+    *,
+    expected: Dict[str, Any],
+    presented: Dict[str, Any],
+) -> Optional[str]:
+    field_error_map = {
+        "resource_state_hash": "ExecutionToken resource state mismatch",
+        "approval_transition_head": "ExecutionToken approval transition mismatch",
+        "context_token": "ExecutionToken context token mismatch",
+        "payload_hash": "ExecutionToken payload mismatch",
+        "endpoint_id": "ExecutionToken endpoint mismatch",
+    }
+    for field_name, error_message in field_error_map.items():
+        expected_value = expected.get(field_name)
+        if not isinstance(expected_value, str) or not expected_value.strip():
+            continue
+        actual_value = presented.get(field_name)
+        if not isinstance(actual_value, str) or actual_value.strip() != expected_value.strip():
+            return error_message
+    return None
+
+
 def _validate_execution_token_constraints_legacy(
     *,
+    token: Dict[str, Any],
     constraints: Dict[str, Any],
     active_driver: Optional[BaseRobotDriver],
     request: Optional[ActuationRequest],
@@ -605,6 +666,17 @@ def _validate_execution_token_constraints_legacy(
         and payload_hash != actual_payload_hash
     ):
         return "ExecutionToken payload mismatch"
+    expected_preconditions = _coerce_execution_preconditions_dict(token.get("execution_preconditions"))
+    if expected_preconditions:
+        precondition_error = _validate_execution_preconditions(
+            expected=expected_preconditions,
+            presented=_presented_execution_preconditions(
+                active_driver=active_driver,
+                request=request,
+            ),
+        )
+        if precondition_error is not None:
+            return precondition_error
     return None
 
 
@@ -625,8 +697,11 @@ def _validate_execution_token(
     signature = token.get("signature")
     artifact_hash = token.get("artifact_hash")
     constraints = token.get("constraints")
+    execution_preconditions = token.get("execution_preconditions")
     if not isinstance(constraints, dict):
         constraints = {}
+    if not isinstance(execution_preconditions, dict):
+        return "invalid ExecutionToken"
 
     if not token_id or not isinstance(valid_until_raw, str):
         return "invalid ExecutionToken"
@@ -991,6 +1066,7 @@ def _validate_execution_token_constraints(
 
     if _legacy_dev_hmac_execution_token(token):
         return _validate_execution_token_constraints_legacy(
+            token=token,
             constraints=constraints,
             active_driver=active_driver,
             request=request,
@@ -1000,6 +1076,10 @@ def _validate_execution_token_constraints(
     expected_endpoint = _derive_actuator_endpoint(active_driver)
     target_zone = constraints.get("target_zone")
     configured_zones = _configured_target_zones()
+    presented_preconditions = _presented_execution_preconditions(
+        active_driver=active_driver,
+        request=request,
+    )
 
     rust_request = {
         "action_type": constraints.get("action_type"),
@@ -1014,6 +1094,7 @@ def _validate_execution_token_constraints(
         "registration_decision_id": constraints.get("registration_decision_id"),
         "endpoint_id": expected_endpoint,
         "payload_hash": _canonical_actuation_payload_hash(request),
+        "execution_preconditions": presented_preconditions,
     }
     rust_enforcement = enforce_execution_token_with_rust(
         token,
@@ -1033,6 +1114,15 @@ def _validate_execution_token_constraints(
     if isinstance(target_zone, str) and target_zone.strip():
         if configured_zones and target_zone not in configured_zones:
             return "ExecutionToken target zone mismatch"
+
+    expected_preconditions = _coerce_execution_preconditions_dict(token.get("execution_preconditions"))
+    if expected_preconditions:
+        precondition_error = _validate_execution_preconditions(
+            expected=expected_preconditions,
+            presented=presented_preconditions,
+        )
+        if precondition_error is not None:
+            return precondition_error
 
     return None
 

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .action_intent import ExecutionToken
+from .action_intent import ExecutionPreconditions, ExecutionToken
 from .edge_telemetry import SignedEdgeTelemetryRefV0
 from .pdp_hot_path import HotPathDecisionView
 
@@ -280,6 +280,27 @@ class AgentActionOptions(BaseModel):
     no_execute: bool = False
 
 
+class AgentActionExecutionDirective(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: Literal["reachy.motion"] = "reachy.motion"
+    args: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_reserved_args(self) -> "AgentActionExecutionDirective":
+        reserved = {
+            key
+            for key in ("execution_token", "execution_context", "_governance")
+            if key in self.args
+        }
+        if reserved:
+            raise ValueError(
+                "execution.args must not include reserved governance keys: "
+                + ", ".join(sorted(reserved))
+            )
+        return self
+
+
 class AgentActionEvaluateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -297,6 +318,7 @@ class AgentActionEvaluateRequest(BaseModel):
     forensic_context: Optional[AgentActionForensicContext] = None
     security_contract: AgentActionSecurityContract
     options: AgentActionOptions = Field(default_factory=AgentActionOptions)
+    execution: Optional[AgentActionExecutionDirective] = None
 
     @field_validator("request_id", "idempotency_key")
     @classmethod
@@ -345,6 +367,7 @@ class AgentActionEvaluateResponse(BaseModel):
         }
     )
     execution_token: Optional[ExecutionToken] = None
+    execution_context: Optional[ExecutionPreconditions] = None
     governed_receipt: Dict[str, Any] = Field(default_factory=dict)
     forensic_linkage: Dict[str, Any] = Field(
         default_factory=lambda: {
@@ -355,6 +378,17 @@ class AgentActionEvaluateResponse(BaseModel):
     )
     request_schema_bundle: Optional[Dict[str, Any]] = None
     taxonomy_bundle: Optional[Dict[str, Any]] = None
+
+
+class AgentActionExecuteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["seedcore.agent_action_gateway.v1"] = GATEWAY_CONTRACT_VERSION
+    request_id: str
+    executed_at: datetime
+    evaluation: AgentActionEvaluateResponse
+    execution_task: Optional[Dict[str, Any]] = None
+    execution_result: Optional[Dict[str, Any]] = None
 
 
 class AgentActionRequestRecordResponse(BaseModel):

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field  # pyright: ignore[reportMissingImports]
 
-from .action_intent import ActionIntent, ExecutionToken
+from .action_intent import ActionIntent, ExecutionPreconditions, ExecutionToken
 
 
 HotPathDisposition = Literal["allow", "deny", "quarantine", "escalate"]
@@ -87,6 +87,7 @@ class HotPathEvaluateResponse(BaseModel):
     obligations: List[Dict[str, Any]] = Field(default_factory=list)
     checks: List[HotPathCheckResult] = Field(default_factory=list)
     execution_token: Optional[ExecutionToken] = None
+    execution_preconditions: Optional[ExecutionPreconditions] = None
     governed_receipt: Dict[str, Any] = Field(default_factory=dict)
     signer_provenance: List[HotPathSignerProvenance] = Field(default_factory=list)
     request_schema_bundle: Optional[Dict[str, Any]] = None

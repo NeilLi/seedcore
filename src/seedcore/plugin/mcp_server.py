@@ -1138,6 +1138,7 @@ async def handle_agent_action_preflight(
         "obligations": result.get("obligations"),
         "minted_artifacts": result.get("minted_artifacts"),
         "execution_token": result.get("execution_token"),
+        "execution_context": result.get("execution_context"),
         "governed_receipt": result.get("governed_receipt"),
         "raw": result,
         "source_url": runtime.api_url("/agent-actions/evaluate"),
@@ -1176,11 +1177,46 @@ async def handle_agent_action_evaluate(
         "obligations": result.get("obligations"),
         "minted_artifacts": result.get("minted_artifacts"),
         "execution_token": result.get("execution_token"),
+        "execution_context": result.get("execution_context"),
         "governed_receipt": result.get("governed_receipt"),
         "forensic_linkage": result.get("forensic_linkage"),
         "correlation": correlation,
         "raw": result,
         "source_url": runtime.api_url("/agent-actions/evaluate"),
+    }
+
+
+async def handle_agent_action_execute(
+    runtime: SeedcoreRuntimeClient,
+    *,
+    adapter_input: dict[str, Any],
+    debug: bool = True,
+) -> dict[str, Any]:
+    from seedcore.adapters.rct_agent_action_gateway_reference_adapter import (
+        build_rct_agent_action_evaluate_request_v1,
+        build_rct_gateway_correlation_from_evaluate_response,
+    )
+
+    request = build_rct_agent_action_evaluate_request_v1(**adapter_input)
+    result = await runtime.execute_agent_action(
+        request,
+        debug=debug,
+    )
+
+    evaluation = result.get("evaluation") if isinstance(result.get("evaluation"), dict) else {}
+    correlation = build_rct_gateway_correlation_from_evaluate_response(
+        request_id=request.get("request_id") or "",
+        gateway_evaluate_response=evaluation,
+    )
+
+    return {
+        "ok": bool(((evaluation.get("decision") or {}).get("allowed"))),
+        "evaluation": evaluation,
+        "execution_task": result.get("execution_task"),
+        "execution_result": result.get("execution_result"),
+        "correlation": correlation,
+        "raw": result,
+        "source_url": runtime.api_url("/agent-actions/execute"),
     }
 
 
@@ -1864,6 +1900,18 @@ if FastMCP is not None:
             adapter_input=adapter_input,
             debug=debug,
             no_execute=no_execute,
+        )
+
+    @mcp.tool(name="seedcore.agent_action.execute")
+    async def seedcore_agent_action_execute(
+        ctx: AppContext,
+        adapter_input: dict[str, Any],
+        debug: bool = True,
+    ) -> dict[str, Any]:
+        return await handle_agent_action_execute(
+            _runtime(ctx),
+            adapter_input=adapter_input,
+            debug=debug,
         )
 
 

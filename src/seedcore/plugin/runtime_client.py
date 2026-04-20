@@ -171,6 +171,22 @@ class SeedcoreRuntimeClient:
             params=params,
         )
 
+    async def execute_agent_action(
+        self,
+        payload: dict[str, Any],
+        *,
+        debug: bool = False,
+    ) -> dict[str, Any]:
+        params = {
+            "debug": "true" if debug else "false",
+        }
+        return await self._request_json(
+            method="POST",
+            url=self.api_url("/agent-actions/execute"),
+            payload=payload,
+            params=params,
+        )
+
     async def upsert_creator_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request_json(method="POST", url=self.api_url("/creator-profiles"), payload=payload)
 

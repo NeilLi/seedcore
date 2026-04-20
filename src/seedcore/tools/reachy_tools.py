@@ -117,6 +117,10 @@ class ReachyMotionTool(ToolBase):
                         "type": "object",
                         "description": "Optional governance execution token for controlled actuation"
                     },
+                    "execution_context": {
+                        "type": "object",
+                        "description": "Optional execution context mirrored from governance for HAL precondition checks"
+                    },
                     "behavior_name": {
                         "type": "string",
                         "description": "Optional robot_sim behavior name (e.g., move_forward, rotate)"
@@ -139,6 +143,7 @@ class ReachyMotionTool(ToolBase):
         duration: float = 0.5,
         instant: bool = False,
         execution_token: Optional[Dict[str, Any]] = None,
+        execution_context: Optional[Dict[str, Any]] = None,
         behavior_name: Optional[str] = None,
         behavior_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any
@@ -183,6 +188,7 @@ class ReachyMotionTool(ToolBase):
                     "target": target,
                     "instant": instant,
                     "execution_token": execution_token,
+                    "execution_context": execution_context,
                     "behavior_name": behavior_name,
                     "behavior_params": behavior_params or {},
                 }

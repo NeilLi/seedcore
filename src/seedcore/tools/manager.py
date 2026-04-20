@@ -665,9 +665,13 @@ class ToolManager:
                 self._validate_execution_token(name, governance_ctx, tool_args=safe_args)
                 if isinstance(governance_ctx, dict):
                     token = governance_ctx.get("execution_token")
-                    if isinstance(token, dict) and "execution_token" not in safe_args:
-                        # Forward token to endpoints for governed execution.
+                    if isinstance(token, dict):
+                        # Governed control-plane artifacts are authoritative and override
+                        # caller-supplied copies before the tool boundary.
                         safe_args["execution_token"] = dict(token)
+                    execution_context = self._resolve_execution_context(governance_ctx)
+                    if isinstance(execution_context, dict):
+                        safe_args["execution_context"] = dict(execution_context)
             if contract and contract.is_mutating() and contract.requires_policy_receipt:
                 self._validate_policy_receipt(name, governance_ctx)
 
@@ -876,6 +880,9 @@ class ToolManager:
                 "payload_hash",
             )
         }
+        execution_context = self._resolve_execution_context(governance_ctx)
+        if isinstance(execution_context, dict) and execution_context:
+            request_context["execution_preconditions"] = dict(execution_context)
         rust_enforcement = enforce_execution_token_with_rust(
             token,
             request_context,
@@ -891,10 +898,37 @@ class ToolManager:
         payload = {
             str(key): value
             for key, value in tool_args.items()
-            if key != "execution_token"
+            if key not in {"execution_token", "execution_context"}
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+    def _resolve_execution_context(self, governance_ctx: Any) -> Dict[str, Any] | None:
+        if not isinstance(governance_ctx, Mapping):
+            return None
+
+        execution_context = governance_ctx.get("execution_context")
+        if isinstance(execution_context, Mapping) and execution_context:
+            return dict(execution_context)
+
+        token = governance_ctx.get("execution_token")
+        if isinstance(token, Mapping):
+            token_preconditions = token.get("execution_preconditions")
+            if isinstance(token_preconditions, Mapping) and token_preconditions:
+                return dict(token_preconditions)
+
+        policy_receipt = governance_ctx.get("policy_receipt")
+        if isinstance(policy_receipt, Mapping):
+            receipt_preconditions = policy_receipt.get("execution_preconditions")
+            if isinstance(receipt_preconditions, Mapping) and receipt_preconditions:
+                return dict(receipt_preconditions)
+            advisory = policy_receipt.get("advisory")
+            if isinstance(advisory, Mapping):
+                advisory_preconditions = advisory.get("execution_preconditions")
+                if isinstance(advisory_preconditions, Mapping) and advisory_preconditions:
+                    return dict(advisory_preconditions)
+
+        return None
 
     def _normalize_audit_task_id(self, task_id: Any) -> str:
         raw = str(task_id)

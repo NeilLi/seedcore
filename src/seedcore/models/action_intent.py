@@ -294,6 +294,27 @@ class PolicyCase(BaseModel):
     authoritative_approval_transition_head: Optional[str] = None
 
 
+class ExecutionPreconditions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_state_hash: Optional[str] = None
+    approval_transition_head: Optional[str] = None
+    context_token: Optional[str] = None
+    payload_hash: Optional[str] = None
+    endpoint_id: Optional[str] = None
+
+    @field_validator(
+        "resource_state_hash",
+        "approval_transition_head",
+        "context_token",
+        "payload_hash",
+        "endpoint_id",
+    )
+    @classmethod
+    def _validate_optional_fields(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_optional_str(value)
+
+
 class ExecutionToken(BaseModel):
     token_id: str
     intent_id: str
@@ -303,6 +324,7 @@ class ExecutionToken(BaseModel):
     artifact_hash: Dict[str, Any] = Field(default_factory=dict)
     signature: Dict[str, Any] = Field(default_factory=dict)
     constraints: Dict[str, Any] = Field(default_factory=dict)
+    execution_preconditions: ExecutionPreconditions = Field(default_factory=ExecutionPreconditions)
 
 
 class BreakGlassDecisionContext(BaseModel):
