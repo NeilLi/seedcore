@@ -9,9 +9,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies
 
 import json
+from datetime import datetime, timedelta, timezone
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from seedcore.coordinator.dao import (
+    DigitalTwinEventJournalDAO,
     GovernedExecutionAuditDAO,
     TaskRouterTelemetryDAO,
     TaskOutboxDAO,
@@ -599,3 +601,42 @@ class TestGovernedExecutionAuditDAO:
             {"value": "route_violation", "count": 1},
         ]
         assert session.execute.await_count == 2
+
+
+class TestDigitalTwinEventJournalDAO:
+    @pytest.mark.asyncio
+    async def test_get_latest_event_recorded_at_normalizes_to_utc(self):
+        dao = DigitalTwinEventJournalDAO()
+        session = AsyncMock()
+        offset = timezone(timedelta(hours=7))
+        latest = datetime(2026, 4, 7, 12, 0, 42, tzinfo=offset)
+        result_obj = MagicMock()
+        result_obj.scalar.return_value = latest
+        session.execute = AsyncMock(return_value=result_obj)
+
+        observed = await dao.get_latest_event_recorded_at(
+            session,
+            event_types=("transition_recorded", "evidence_settled"),
+        )
+
+        assert observed is not None
+        assert observed.tzinfo == timezone.utc
+        assert observed.isoformat() == "2026-04-07T05:00:42+00:00"
+
+    @pytest.mark.asyncio
+    async def test_get_latest_event_recorded_at_handles_naive_datetime(self):
+        dao = DigitalTwinEventJournalDAO()
+        session = AsyncMock()
+        latest = datetime(2026, 4, 7, 12, 0, 42)
+        result_obj = MagicMock()
+        result_obj.scalar.return_value = latest
+        session.execute = AsyncMock(return_value=result_obj)
+
+        observed = await dao.get_latest_event_recorded_at(
+            session,
+            event_types=("transition_recorded",),
+        )
+
+        assert observed is not None
+        assert observed.tzinfo == timezone.utc
+        assert observed.isoformat() == "2026-04-07T12:00:42+00:00"

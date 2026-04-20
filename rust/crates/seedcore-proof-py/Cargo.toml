@@ -1,0 +1,20 @@
+[package]
+name = "seedcore-proof-py"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "seedcore_proof_py"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+seedcore-kernel-types = { path = "../seedcore-kernel-types" }
+seedcore-proof-core = { path = "../seedcore-proof-core" }
+seedcore-token-core = { path = "../seedcore-token-core" }
+seedcore-kernel-testkit = { path = "../seedcore-kernel-testkit" }
+serde.workspace = true
+serde_json.workspace = true
+pyo3 = { version = "0.23", features = ["extension-module"] }

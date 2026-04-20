@@ -2,6 +2,7 @@
 members = [
   "crates/seedcore-kernel-types",
   "crates/seedcore-proof-core",
+  "crates/seedcore-proof-py",
   "crates/seedcore-approval-core",
   "crates/seedcore-policy-core",
   "crates/seedcore-token-core",

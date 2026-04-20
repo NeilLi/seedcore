@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import sys
+from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -105,3 +106,44 @@ def test_rekor_verify_detects_hash_mismatch(monkeypatch) -> None:
         )
         is False
     )
+
+
+def test_local_anchor_and_verify_round_trip(monkeypatch, tmp_path: Path) -> None:
+    log_path = tmp_path / "transparency.log.jsonl"
+    monkeypatch.setenv("SEEDCORE_TRANSPARENCY_MODE", "local")
+    monkeypatch.setenv("SEEDCORE_TRANSPARENCY_LOCAL_LOG_PATH", str(log_path))
+    payload_hash = f"sha256:{'ab' * 32}"
+
+    proof = transparency_module.anchor_receipt_hash(
+        payload_hash=payload_hash,
+        signature=None,
+        public_key_material=None,
+        key_algorithm="ecdsa_p256_sha256",
+        enabled=True,
+    )
+
+    assert proof.status == "anchored"
+    assert proof.entry_id
+    assert log_path.exists()
+    assert transparency_module.verify_transparency_proof(transparency=proof, payload_hash=payload_hash) is True
+
+
+def test_local_verify_fails_when_log_tampered(monkeypatch, tmp_path: Path) -> None:
+    log_path = tmp_path / "transparency.log.jsonl"
+    monkeypatch.setenv("SEEDCORE_TRANSPARENCY_MODE", "local")
+    monkeypatch.setenv("SEEDCORE_TRANSPARENCY_LOCAL_LOG_PATH", str(log_path))
+    payload_hash = f"sha256:{'cd' * 32}"
+
+    proof = transparency_module.anchor_receipt_hash(
+        payload_hash=payload_hash,
+        signature=None,
+        public_key_material=None,
+        key_algorithm="ecdsa_p256_sha256",
+        enabled=True,
+    )
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows
+    rows[0]["proof_hash"] = "00" * 32
+    log_path.write_text("\n".join(json.dumps(row, separators=(",", ":"), ensure_ascii=False) for row in rows) + "\n")
+
+    assert transparency_module.verify_transparency_proof(transparency=proof, payload_hash=payload_hash) is False

@@ -108,6 +108,25 @@ class MetricsTracker:
             "result_verifier_retry_total": 0,
             "result_verifier_terminal_fail_total": 0,
             "result_verifier_worker_latency_ms": deque(maxlen=latency_reservoir_size),
+            # Total accumulated processing time across all verifier jobs. Stored
+            # in milliseconds (int) so `increment_counter` stays type-safe; the
+            # Prometheus exposure name is `result_verifier_job_seconds_total`
+            # and the converter divides by 1000 on export. Required for the
+            # ADR 0006 CPU-pressure trigger: verifier CPU seconds as a fraction
+            # of total coordinator replica CPU seconds.
+            "result_verifier_job_millis_total": 0,
+        }
+
+        # Gauges store the latest observed value (not monotonic). Pre-declare
+        # so `set_gauge` can guard against typos the way `increment_counter`
+        # does for counters. Initialize floats at 0.0 so they serialize
+        # cleanly even when nothing has set them yet.
+        self._gauges: Dict[str, float] = {
+            # Lag between the newest event in the twin event journal and the
+            # verifier's intake watermark. Required for the ADR 0006
+            # scaling-shape trigger (default freshness target: < 60s
+            # sustained).
+            "result_verifier_watermark_lag_seconds": 0.0,
         }
     
     def track_routing_decision(self, decision: str, has_plan: bool = False):
@@ -238,6 +257,36 @@ class MetricsTracker:
                 self._task_metrics[key].append(latency_ms)
             else:
                 logger.warning(f"Attempted to append to non-latency metric: {key}")
+
+    def set_gauge(self, key: str, value: float):
+        """
+        Set a gauge metric to an absolute value (thread-safe).
+
+        Unlike counters, gauges overwrite rather than accumulate. Used for
+        point-in-time values such as queue depth or watermark lag.
+
+        Args:
+            key: Gauge key (must be pre-declared in ``self._gauges``)
+            value: Absolute value to record. Coerced to ``float``.
+        """
+        with self._lock:
+            if key in self._gauges:
+                try:
+                    self._gauges[key] = float(value)
+                except (TypeError, ValueError):
+                    logger.warning(f"Ignoring non-numeric gauge value for {key}: {value!r}")
+            else:
+                logger.warning(f"Attempted to set unknown gauge metric: {key}")
+
+    def get_gauge(self, key: str) -> float:
+        """
+        Return the current value of a pre-declared gauge (thread-safe).
+
+        Returns ``0.0`` for unknown keys so callers can use this in telemetry
+        joins without special-casing missing gauges.
+        """
+        with self._lock:
+            return float(self._gauges.get(key, 0.0))
     
     def get_metrics(self) -> Dict[str, Any]:
         """
@@ -255,6 +304,18 @@ class MetricsTracker:
                     metrics[key] = list(value)
                 else:
                     metrics[key] = value
+            # Merge gauges. They overwrite task-metric keys only if a gauge
+            # name collides with a counter key, which is not allowed by
+            # design; this is defensive in case a refactor introduces one.
+            for key, value in self._gauges.items():
+                metrics[key] = value
+
+            # Export a seconds-view of verifier processing time alongside the
+            # raw millisecond counter so PromQL can apply `rate()` directly on
+            # `result_verifier_job_seconds_total`.
+            metrics["result_verifier_job_seconds_total"] = (
+                float(metrics.get("result_verifier_job_millis_total", 0)) / 1000.0
+            )
         
         # Calculate averages (no lock needed for computation)
         if metrics.get("fast_path_latency_ms"):
@@ -320,6 +381,8 @@ class MetricsTracker:
                     self._task_metrics[key].clear()
                 else:
                     self._task_metrics[key] = 0
+            for key in self._gauges:
+                self._gauges[key] = 0.0
             self._last_reset_at = time.time()
     
     def get_metadata(self) -> Dict[str, Any]:
@@ -348,7 +411,8 @@ class MetricsTracker:
                 1 for v in self._task_metrics.values()
                 if isinstance(v, deque)
             )
-            total_metrics = counter_count + latency_count
+            gauge_count = len(self._gauges)
+            total_metrics = counter_count + latency_count + gauge_count
             
             # Get exporter health
             exporter_health = None
@@ -363,6 +427,7 @@ class MetricsTracker:
             "total_metrics_count": total_metrics,
             "counter_metrics_count": counter_count,
             "latency_metrics_count": latency_count,
+            "gauge_metrics_count": gauge_count,
             "exporter_configured": self._exporter is not None,
             "exporter_health": exporter_health,
         }

@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Optional
 
 from cryptography.hazmat.primitives import serialization
@@ -35,6 +36,8 @@ def anchor_receipt_hash(
             public_key_material=public_key_material,
             key_algorithm=key_algorithm,
         )
+    if mode == "local":
+        return _anchor_local(payload_hash)
     return _anchor_stub(payload_hash)
 
 
@@ -47,6 +50,12 @@ def verify_transparency_proof(
         return False
     mode = os.getenv("SEEDCORE_TRANSPARENCY_MODE", "stub").strip().lower()
     if mode != "rekor":
+        if mode == "local":
+            return _verify_local_hash_binding(
+                log_url=transparency.log_url,
+                entry_id=transparency.entry_id,
+                expected_hash=payload_hash,
+            )
         return True
     if not transparency.log_url or not transparency.entry_id:
         return False
@@ -76,6 +85,97 @@ def _anchor_stub(payload_hash: str) -> TransparencyProof:
         proof_hash=proof_hash,
         details={"provider": "local_transparency_stub"},
     )
+
+
+def _local_log_path() -> Path:
+    configured = os.getenv("SEEDCORE_TRANSPARENCY_LOCAL_LOG_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path("/tmp/seedcore_transparency_log.jsonl")
+
+
+def _anchor_local(payload_hash: str) -> TransparencyProof:
+    log_path = _local_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = _read_local_log_entries(log_path)
+    previous_entry_id = None
+    previous_proof_hash = None
+    if rows:
+        previous = rows[-1]
+        previous_entry_id = str(previous.get("entry_id") or "").strip() or None
+        previous_proof_hash = str(previous.get("proof_hash") or "").strip() or None
+    integrated_time = datetime.now(timezone.utc).isoformat()
+    entry_id = sha256(
+        f"{payload_hash}:{integrated_time}:{previous_entry_id or ''}".encode("utf-8")
+    ).hexdigest()
+    proof_hash = sha256(
+        f"{entry_id}:{payload_hash}:{previous_proof_hash or ''}".encode("utf-8")
+    ).hexdigest()
+    record = {
+        "entry_id": entry_id,
+        "integrated_time": integrated_time,
+        "payload_hash": payload_hash,
+        "proof_hash": proof_hash,
+        "previous_entry_id": previous_entry_id,
+        "previous_proof_hash": previous_proof_hash,
+    }
+    with log_path.open("a", encoding="utf-8") as fp:
+        fp.write(json.dumps(record, separators=(",", ":"), ensure_ascii=False))
+        fp.write("\n")
+    return TransparencyProof(
+        status="anchored",
+        log_url=f"file://{log_path}",
+        entry_id=entry_id,
+        integrated_time=integrated_time,
+        proof_hash=proof_hash,
+        details={"provider": "local_append_only"},
+    )
+
+
+def _read_local_log_entries(path: Path) -> list[dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fp:
+        for raw in fp:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                rows.append(parsed)
+    return rows
+
+
+def _verify_local_hash_binding(*, log_url: Optional[str], entry_id: Optional[str], expected_hash: str) -> bool:
+    if not isinstance(log_url, str) or not log_url.strip():
+        return False
+    if not isinstance(entry_id, str) or not entry_id.strip():
+        return False
+    raw_path = log_url.strip()
+    if raw_path.startswith("file://"):
+        raw_path = raw_path[len("file://") :]
+    path = Path(raw_path).expanduser()
+    rows = _read_local_log_entries(path)
+    if not rows:
+        return False
+    previous_proof_hash: Optional[str] = None
+    for row in rows:
+        current_entry_id = str(row.get("entry_id") or "").strip()
+        current_payload_hash = str(row.get("payload_hash") or "").strip()
+        current_proof_hash = str(row.get("proof_hash") or "").strip()
+        expected_proof_hash = sha256(
+            f"{current_entry_id}:{current_payload_hash}:{previous_proof_hash or ''}".encode("utf-8")
+        ).hexdigest()
+        if current_proof_hash != expected_proof_hash:
+            return False
+        if current_entry_id == entry_id:
+            return current_payload_hash == expected_hash
+        previous_proof_hash = current_proof_hash
+    return False
 
 
 def _anchor_with_rekor(

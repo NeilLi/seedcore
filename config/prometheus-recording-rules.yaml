@@ -149,3 +149,24 @@ groups:
           service: "coordinator"
           metric_type: "slo"
           slo_target: "0.95"
+
+      # RESULT_VERIFIER processing time in seconds (derived from ms counter if needed)
+      - record: result_verifier_job_seconds_total
+        expr: |
+          (
+            result_verifier_job_millis_total / 1000
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "counter_derived"
+
+      # ADR 0006 CPU-pressure trigger: verifier CPU seconds / coordinator CPU seconds
+      - record: coordinator:result_verifier_cpu_pressure_ratio
+        expr: |
+          (
+            rate(result_verifier_job_seconds_total[15m]) /
+            clamp_min(rate(coordinator_cpu_seconds_total[15m]), 0.000001)
+          ) or vector(0)
+        labels:
+          service: "coordinator"
+          metric_type: "ratio"

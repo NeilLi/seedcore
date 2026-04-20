@@ -71,6 +71,16 @@ def _build_runtime(metrics: MagicMock | None = None) -> ResultVerifierRuntime:
     return ResultVerifierRuntime(coordinator)
 
 
+def test_result_verifier_runtime_embedded_gate_respects_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEDCORE_RESULT_VERIFIER_ENABLED", "true")
+    monkeypatch.setenv("SEEDCORE_RESULT_VERIFIER_EMBEDDED", "false")
+    runtime = _build_runtime(metrics=MagicMock())
+    runtime.start()
+    assert runtime._enabled is True
+    assert runtime._embedded is False
+    assert runtime._tasks == []
+
+
 def test_backoff_sequence_matches_spec() -> None:
     assert result_verifier_backoff_seconds(0) == 30
     assert result_verifier_backoff_seconds(1) == 120
@@ -765,6 +775,216 @@ async def test_poll_journal_uses_durable_watermark_with_overlap_and_advances() -
         watermark_recorded_at=datetime(2026, 4, 7, 0, 0, 11, tzinfo=timezone.utc),
         watermark_event_id=uuid.UUID("00000000-0000-0000-0000-000000000020"),
     )
+
+
+@pytest.mark.asyncio
+async def test_process_job_increments_job_millis_total_on_success() -> None:
+    """ADR 0006 CPU-pressure trigger feed: job-millis counter on success path."""
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {"action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}}},
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._persist_terminal = AsyncMock()
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 0,
+    }
+    with patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        return_value=ResultVerifierOutcome(
+            verified=True,
+            failure_class="none",
+            twin_event_type=None,
+            asset_id=None,
+            issues=[],
+        ),
+    ):
+        await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    increment_calls = metrics.increment_counter.call_args_list
+    millis_calls = [c for c in increment_calls if c.args and c.args[0] == "result_verifier_job_millis_total"]
+    assert len(millis_calls) == 1, millis_calls
+    assert len(millis_calls[0].args) == 2
+    assert isinstance(millis_calls[0].args[1], int)
+    assert millis_calls[0].args[1] >= 0
+    metrics.append_latency.assert_called_with("result_verifier_worker_latency_ms", ANY)
+
+
+@pytest.mark.asyncio
+async def test_process_job_increments_job_millis_total_on_retryable_failure() -> None:
+    """ADR 0006 CPU-pressure trigger feed: millis counter still emitted on exception path."""
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._max_attempts = 6
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {"action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}}},
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._job_dao = SimpleNamespace(schedule_retry=AsyncMock())
+    runtime._persist_terminal = AsyncMock()
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 0,
+    }
+    with patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        side_effect=ResultVerifierRetryableError("rust_verify_replay_chain_timeout"),
+    ):
+        await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    increment_calls = metrics.increment_counter.call_args_list
+    millis_calls = [c for c in increment_calls if c.args and c.args[0] == "result_verifier_job_millis_total"]
+    assert len(millis_calls) == 1, millis_calls
+    assert isinstance(millis_calls[0].args[1], int)
+    metrics.append_latency.assert_called_with("result_verifier_worker_latency_ms", ANY)
+
+
+@pytest.mark.asyncio
+async def test_poll_journal_publishes_watermark_lag_gauge() -> None:
+    """ADR 0006 scaling-shape trigger feed: journal-vs-watermark lag gauge."""
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    wm_ts = datetime(2026, 4, 7, 0, 0, 10, tzinfo=timezone.utc)
+    wm_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+    latest_event_ts = datetime(2026, 4, 7, 0, 0, 42, tzinfo=timezone.utc)
+    runtime._job_dao = SimpleNamespace(
+        get_runtime_watermark=AsyncMock(
+            return_value={
+                "stream_key": "digital_twin_event_journal",
+                "watermark_recorded_at": wm_ts,
+                "watermark_event_id": wm_id,
+                "updated_at": None,
+            }
+        ),
+        enqueue_job=AsyncMock(return_value=str(uuid.uuid4())),
+        upsert_runtime_watermark=AsyncMock(),
+    )
+    runtime._event_dao = SimpleNamespace(
+        list_events_for_result_verifier_poll=AsyncMock(return_value=[]),
+        get_latest_event_recorded_at=AsyncMock(return_value=latest_event_ts),
+    )
+    await runtime._poll_journal_once(runtime._coordinator._session_factory)
+    metrics.set_gauge.assert_called_once()
+    args = metrics.set_gauge.call_args.args
+    assert args[0] == "result_verifier_watermark_lag_seconds"
+    # Journal truth is 32 seconds ahead of the watermark we started from
+    assert args[1] == pytest.approx(32.0)
+
+
+@pytest.mark.asyncio
+async def test_poll_journal_watermark_lag_gauge_is_zero_when_journal_empty() -> None:
+    """Empty journal reports zero lag, not false positives."""
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    wm_ts = datetime(2026, 4, 7, 0, 0, 10, tzinfo=timezone.utc)
+    wm_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+    runtime._job_dao = SimpleNamespace(
+        get_runtime_watermark=AsyncMock(
+            return_value={
+                "stream_key": "digital_twin_event_journal",
+                "watermark_recorded_at": wm_ts,
+                "watermark_event_id": wm_id,
+                "updated_at": None,
+            }
+        ),
+        enqueue_job=AsyncMock(return_value=str(uuid.uuid4())),
+        upsert_runtime_watermark=AsyncMock(),
+    )
+    runtime._event_dao = SimpleNamespace(
+        list_events_for_result_verifier_poll=AsyncMock(return_value=[]),
+        get_latest_event_recorded_at=AsyncMock(return_value=None),
+    )
+    await runtime._poll_journal_once(runtime._coordinator._session_factory)
+    metrics.set_gauge.assert_called_once_with("result_verifier_watermark_lag_seconds", 0.0)
+
+
+@pytest.mark.asyncio
+async def test_poll_journal_watermark_lag_gauge_handles_naive_watermark_timestamp() -> None:
+    """Watermark lag gauge stays robust when runtime watermark ts is naive."""
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    wm_ts = datetime(2026, 4, 7, 0, 0, 10)  # intentionally naive
+    wm_id = uuid.UUID("00000000-0000-0000-0000-000000000010")
+    latest_event_ts = datetime(2026, 4, 7, 0, 0, 42, tzinfo=timezone.utc)
+    runtime._job_dao = SimpleNamespace(
+        get_runtime_watermark=AsyncMock(
+            return_value={
+                "stream_key": "digital_twin_event_journal",
+                "watermark_recorded_at": wm_ts,
+                "watermark_event_id": wm_id,
+                "updated_at": None,
+            }
+        ),
+        enqueue_job=AsyncMock(return_value=str(uuid.uuid4())),
+        upsert_runtime_watermark=AsyncMock(),
+    )
+    runtime._event_dao = SimpleNamespace(
+        list_events_for_result_verifier_poll=AsyncMock(return_value=[]),
+        get_latest_event_recorded_at=AsyncMock(return_value=latest_event_ts),
+    )
+    await runtime._poll_journal_once(runtime._coordinator._session_factory)
+    metrics.set_gauge.assert_called_once()
+    args = metrics.set_gauge.call_args.args
+    assert args[0] == "result_verifier_watermark_lag_seconds"
+    assert args[1] == pytest.approx(32.0)
+
+
+def test_metrics_tracker_gauge_pre_declared_only() -> None:
+    """set_gauge is schema-guarded the same way increment_counter is."""
+    from seedcore.coordinator.metrics.tracker import MetricsTracker
+
+    tracker = MetricsTracker()
+    tracker.set_gauge("result_verifier_watermark_lag_seconds", 12.5)
+    assert tracker.get_gauge("result_verifier_watermark_lag_seconds") == 12.5
+    metrics_snapshot = tracker.get_metrics()
+    assert metrics_snapshot["result_verifier_watermark_lag_seconds"] == 12.5
+    tracker.set_gauge("unknown_gauge_name", 99.0)
+    assert tracker.get_gauge("unknown_gauge_name") == 0.0
+
+
+def test_metrics_tracker_job_millis_counter_accumulates() -> None:
+    """Job-millis counter is a plain monotonic int counter."""
+    from seedcore.coordinator.metrics.tracker import MetricsTracker
+
+    tracker = MetricsTracker()
+    tracker.increment_counter("result_verifier_job_millis_total", 150)
+    tracker.increment_counter("result_verifier_job_millis_total", 77)
+    snapshot = tracker.get_metrics()
+    assert snapshot["result_verifier_job_millis_total"] == 227
+    assert snapshot["result_verifier_job_seconds_total"] == pytest.approx(0.227)
+
+
+def test_metrics_tracker_reset_zeroes_gauges() -> None:
+    from seedcore.coordinator.metrics.tracker import MetricsTracker
+
+    tracker = MetricsTracker()
+    tracker.set_gauge("result_verifier_watermark_lag_seconds", 42.0)
+    tracker.increment_counter("result_verifier_job_millis_total", 42)
+    tracker.reset()
+    assert tracker.get_gauge("result_verifier_watermark_lag_seconds") == 0.0
+    snapshot = tracker.get_metrics()
+    assert snapshot["result_verifier_job_millis_total"] == 0
+    assert snapshot["result_verifier_watermark_lag_seconds"] == 0.0
 
 
 @pytest.mark.asyncio

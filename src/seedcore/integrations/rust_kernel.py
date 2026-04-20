@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import importlib
 import json
+import logging
 import os
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+logger = logging.getLogger(__name__)
+
+_PROOF_PY_MODULE: Any | None = None
+_PROOF_PY_MODULE_CHECKED = False
 
 
 def _verify_cli_timeout_seconds() -> float:
@@ -16,6 +23,71 @@ def _verify_cli_timeout_seconds() -> float:
     except ValueError:
         timeout_s = 15.0
     return max(1.0, timeout_s)
+
+
+def _proof_py_bridge_enabled() -> bool:
+    raw = os.getenv("SEEDCORE_PROOF_PY_BRIDGE_ENABLED", "true").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _load_proof_py_module() -> Any | None:
+    global _PROOF_PY_MODULE, _PROOF_PY_MODULE_CHECKED
+    if _PROOF_PY_MODULE_CHECKED:
+        return _PROOF_PY_MODULE
+    _PROOF_PY_MODULE_CHECKED = True
+    if not _proof_py_bridge_enabled():
+        return None
+    try:
+        _PROOF_PY_MODULE = importlib.import_module("seedcore_proof_py")
+    except Exception:
+        _PROOF_PY_MODULE = None
+    return _PROOF_PY_MODULE
+
+
+def _reset_proof_py_bridge_cache_for_tests() -> None:
+    global _PROOF_PY_MODULE, _PROOF_PY_MODULE_CHECKED
+    _PROOF_PY_MODULE = None
+    _PROOF_PY_MODULE_CHECKED = False
+
+
+def _coerce_bridge_mapping(result: Any) -> dict[str, Any] | None:
+    if isinstance(result, Mapping):
+        return dict(result)
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except Exception:
+            return None
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+    return None
+
+
+def _call_proof_py_bridge(method: str, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    module = _load_proof_py_module()
+    if module is None:
+        return None
+    fn = getattr(module, method, None)
+    if not callable(fn):
+        return None
+    payload_dict = dict(payload)
+    try:
+        result = fn(payload_dict)
+    except TypeError:
+        # Rust PyO3 bridges often expose string-based JSON signatures.
+        try:
+            result = fn(json.dumps(payload_dict, ensure_ascii=True))
+        except Exception:
+            logger.debug("seedcore_proof_py bridge call failed: %s", method, exc_info=True)
+            return None
+    except Exception:
+        logger.debug("seedcore_proof_py bridge call failed: %s", method, exc_info=True)
+        return None
+    bridged = _coerce_bridge_mapping(result)
+    if bridged is None:
+        logger.debug("seedcore_proof_py bridge returned invalid payload for %s", method)
+        return None
+    return bridged
 
 
 def verify_execution_token_with_rust(
@@ -72,7 +144,13 @@ def enforce_execution_token_with_rust(
 
 
 def mint_execution_token_with_rust(claims: Mapping[str, Any]) -> dict[str, Any]:
-    claims_path = _write_temp_json(dict(claims))
+    payload = dict(claims)
+    bridged = _call_proof_py_bridge("mint_execution_token", payload)
+    if bridged is not None:
+        if "token_id" in bridged:
+            return bridged
+        logger.debug("seedcore_proof_py bridge payload invalid for mint_execution_token; falling back to CLI")
+    claims_path = _write_temp_json(payload)
     try:
         output = _run_verify_cli(
             [
@@ -209,7 +287,13 @@ def apply_transfer_approval_transition_with_rust(
 
 
 def verify_approval_transition_history_with_rust(history: Mapping[str, Any]) -> dict[str, Any]:
-    history_path = _write_temp_json(dict(history))
+    payload = dict(history)
+    bridged = _call_proof_py_bridge("verify_approval_history", payload)
+    if bridged is not None:
+        if "valid" in bridged:
+            return bridged
+        logger.debug("seedcore_proof_py bridge payload invalid for verify_approval_history; falling back to CLI")
+    history_path = _write_temp_json(payload)
     try:
         output = _run_verify_cli(
             [
@@ -266,6 +350,11 @@ def materialize_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) 
     payload = {
         "artifacts": [dict(item) for item in artifacts if isinstance(item, Mapping)],
     }
+    bridged = _call_proof_py_bridge("materialize_replay_bundle", payload)
+    if bridged is not None:
+        if "artifacts" in bridged:
+            return bridged
+        logger.debug("seedcore_proof_py bridge payload invalid for materialize_replay_bundle; falling back to CLI")
     artifact_path = _write_temp_json(payload)
     try:
         output = _run_verify_cli(
@@ -294,7 +383,14 @@ def materialize_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) 
 
 
 def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
-    bundle_path = _write_temp_json(dict(bundle))
+    payload = dict(bundle)
+    bridged = _call_proof_py_bridge("verify_chain", payload)
+    if bridged is not None:
+        if "verified" in bridged:
+            return bridged
+        logger.debug("seedcore_proof_py bridge payload invalid for verify_chain; falling back to CLI")
+
+    bundle_path = _write_temp_json(payload)
     trust_bundle_path = _verify_trust_bundle_path()
     try:
         args = [

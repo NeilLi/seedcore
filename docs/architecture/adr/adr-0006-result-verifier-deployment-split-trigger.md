@@ -206,21 +206,20 @@ or failure classification. It overrides only the deployment shape.
   inside it. See the PyO3 decision memo for the separate question of
   how the loop calls Rust.
 
-## Small Backlog
+## Trigger Prerequisites
 
-The backlog below is intentionally small. It covers only the work that must
-exist before any trigger can meaningfully fire. Splitting itself is not in
-the backlog; it is pre-authorized and will be scheduled by the first trigger.
+The trigger prerequisites below are implemented and should be treated as the
+current operational contract before a split is approved:
 
-- Add a `result_verifier_job_seconds_total` counter in the runtime loop so
-  the CPU-pressure trigger can be evaluated.
-- Add an intake-watermark-lag gauge
-  (`result_verifier_watermark_lag_seconds`) so the scaling-shape trigger
-  can be evaluated.
-- Add a dashboard row that computes the ratio of verifier CPU seconds to
-  total coordinator replica CPU seconds, with the 7-day rolling P95 overlay.
-- Document the reversibility expectation in the operator runbook for
-  `SEEDCORE_RESULT_VERIFIER_EMBEDDED`.
+- Runtime emits `result_verifier_job_millis_total` with derived
+  `result_verifier_job_seconds_total` for CPU-pressure evaluation.
+- Runtime emits intake watermark lag gauge
+  `result_verifier_watermark_lag_seconds` for scaling-shape evaluation.
+- Dashboard row exists for verifier CPU pressure ratio
+  (`coordinator:result_verifier_cpu_pressure_ratio`) and lag panel for
+  `result_verifier_watermark_lag_seconds`.
+- Operator runbook documents reversibility and the
+  `SEEDCORE_RESULT_VERIFIER_EMBEDDED` gate.
 
 ## Notes
 

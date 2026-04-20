@@ -175,6 +175,42 @@
           }
         ],
         "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
+      },
+      {
+        "id": 11,
+        "title": "Result Verifier CPU Pressure Ratio",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "coordinator:result_verifier_cpu_pressure_ratio",
+            "legendFormat": "Verifier / Coordinator CPU"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40}
+      },
+      {
+        "id": 12,
+        "title": "Result Verifier Watermark Lag (s)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "result_verifier_watermark_lag_seconds",
+            "legendFormat": "Lag (seconds)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "min": 0
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40}
       }
     ],
     "time": {

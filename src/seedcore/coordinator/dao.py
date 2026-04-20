@@ -6,7 +6,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select, text, tuple_  # pyright: ignore[reportMissingImports]
+from sqlalchemy import func, select, text, tuple_  # pyright: ignore[reportMissingImports]
 
 from ..integrations.rust_kernel import (
     approval_binding_hash_with_rust,
@@ -1718,6 +1718,37 @@ class DigitalTwinEventJournalDAO:
         result = await session.execute(stmt)
         rows = result.scalars().all()
         return [self._row_to_dict(row) for row in rows]
+
+    async def get_latest_event_recorded_at(
+        self,
+        session,
+        *,
+        event_types: Sequence[str],
+    ) -> Optional[datetime]:
+        """Return the newest ``recorded_at`` across the given event types.
+
+        Used by the RESULT_VERIFIER runtime to compute the journal-to-watermark
+        lag gauge (``result_verifier_watermark_lag_seconds``) against journal
+        truth rather than against wall clock. Returns ``None`` when no rows
+        match, which callers interpret as "zero lag" since there is nothing to
+        fall behind on.
+        """
+        types = [str(t) for t in event_types if str(t).strip()]
+        if not types:
+            return None
+        stmt = (
+            select(func.max(DigitalTwinEventJournal.recorded_at))
+            .where(DigitalTwinEventJournal.event_type.in_(types))
+        )
+        result = await session.execute(stmt)
+        value = result.scalar()
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        return value
 
     def _row_to_dict(self, row: DigitalTwinEventJournal) -> Dict[str, Any]:
         return {

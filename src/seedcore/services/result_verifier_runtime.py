@@ -40,6 +40,13 @@ _JOURNAL_EVENT_TYPES = ("transition_recorded", "evidence_settled")
 _RESULT_VERIFIER_STREAM_KEY = "digital_twin_event_journal"
 
 
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _asset_id_from_journal_row(row: Dict[str, Any]) -> Optional[str]:
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
     snap = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
@@ -66,6 +73,14 @@ def _parse_journal_time(value: Optional[str]) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _normalize_utc_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return _parse_journal_time(str(value) if value is not None else None)
+
+
 def _parse_journal_uuid(value: Any) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))
@@ -85,12 +100,8 @@ def _execution_token_id_from_record(record: Dict[str, Any]) -> Optional[str]:
 class ResultVerifierRuntime:
     def __init__(self, coordinator: "Coordinator") -> None:
         self._coordinator = coordinator
-        self._enabled = os.getenv("SEEDCORE_RESULT_VERIFIER_ENABLED", "false").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        self._enabled = _env_flag("SEEDCORE_RESULT_VERIFIER_ENABLED", default=False)
+        self._embedded = _env_flag("SEEDCORE_RESULT_VERIFIER_EMBEDDED", default=True)
         self._poll_seconds = float(os.getenv("SEEDCORE_RESULT_VERIFIER_POLL_SECONDS", "10"))
         self._batch_size = int(os.getenv("SEEDCORE_RESULT_VERIFIER_BATCH_SIZE", "20"))
         self._max_attempts = int(os.getenv("SEEDCORE_RESULT_VERIFIER_MAX_ATTEMPTS", "6"))
@@ -108,6 +119,13 @@ class ResultVerifierRuntime:
     def start(self) -> None:
         if not self._enabled:
             logger.info("RESULT_VERIFIER disabled (SEEDCORE_RESULT_VERIFIER_ENABLED=false)")
+            return
+        if not self._embedded:
+            logger.warning(
+                "RESULT_VERIFIER embedded runtime disabled (SEEDCORE_RESULT_VERIFIER_EMBEDDED=false); "
+                "coordinator will not start verifier loops in this process. Ensure a dedicated "
+                "RESULT_VERIFIER service is running to avoid verification downtime."
+            )
             return
         sf = getattr(self._coordinator, "_session_factory", None)
         if sf is None:
@@ -165,8 +183,8 @@ class ResultVerifierRuntime:
                     session,
                     stream_key=_RESULT_VERIFIER_STREAM_KEY,
                 )
-                watermark_ts = watermark["watermark_recorded_at"]
-                watermark_id = watermark["watermark_event_id"]
+                watermark_ts = _normalize_utc_datetime(watermark.get("watermark_recorded_at"))
+                watermark_id = _parse_journal_uuid(watermark.get("watermark_event_id"))
                 scan_after_ts = max(
                     DEFAULT_RESULT_VERIFIER_WATERMARK_TS,
                     watermark_ts - timedelta(seconds=max(0.0, self._overlap_seconds)),
@@ -225,6 +243,35 @@ class ResultVerifierRuntime:
                         watermark_recorded_at=max_seen_ts,
                         watermark_event_id=max_seen_id,
                     )
+                await self._record_watermark_lag_gauge(session, watermark_ts=max_seen_ts)
+
+    async def _record_watermark_lag_gauge(self, session: Any, *, watermark_ts: datetime) -> None:
+        """Publish intake-watermark-lag for the ADR 0006 scaling-shape trigger.
+
+        Lag is computed against the journal's own newest event so a quiet
+        journal reports ~0, not "falling behind". If the gauge write fails we
+        swallow the error - observability must never break the intake loop.
+        """
+        metrics = self._metrics()
+        if metrics is None:
+            return
+        try:
+            normalized_watermark_ts = _normalize_utc_datetime(watermark_ts)
+            latest = await self._event_dao.get_latest_event_recorded_at(
+                session,
+                event_types=_JOURNAL_EVENT_TYPES,
+            )
+            if latest is None:
+                lag_seconds = 0.0
+            else:
+                latest = _normalize_utc_datetime(latest)
+                delta = latest - normalized_watermark_ts
+                lag_seconds = max(0.0, delta.total_seconds())
+            setter = getattr(metrics, "set_gauge", None)
+            if callable(setter):
+                setter("result_verifier_watermark_lag_seconds", lag_seconds)
+        except Exception:
+            logger.debug("RESULT_VERIFIER watermark lag gauge emission failed", exc_info=True)
 
     async def _worker_loop(self) -> None:
         sf = self._coordinator._session_factory
@@ -331,10 +378,6 @@ class ResultVerifierRuntime:
                     self._metrics().increment_counter("result_verifier_integrity_fail_total")
                 elif outcome.failure_class == "trust":
                     self._metrics().increment_counter("result_verifier_quarantine_total")
-                self._metrics().append_latency(
-                    "result_verifier_worker_latency_ms",
-                    (time.perf_counter() - t0) * 1000.0,
-                )
         except Exception as exc:
             err = f"{type(exc).__name__}:{exc}"
             logger.warning("RESULT_VERIFIER job %s failed attempt=%s: %s", job_id, attempt, err)
@@ -379,6 +422,15 @@ class ResultVerifierRuntime:
                     self._metrics().increment_counter("result_verifier_terminal_fail_total")
                 else:
                     self._metrics().increment_counter("result_verifier_retry_total")
+        finally:
+            metrics = self._metrics()
+            if metrics is not None:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                metrics.append_latency("result_verifier_worker_latency_ms", elapsed_ms)
+                metrics.increment_counter(
+                    "result_verifier_job_millis_total",
+                    int(elapsed_ms),
+                )
 
     async def _persist_terminal(
         self,
