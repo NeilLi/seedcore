@@ -300,6 +300,7 @@ class ExecutionPreconditions(BaseModel):
     resource_state_hash: Optional[str] = None
     approval_transition_head: Optional[str] = None
     context_token: Optional[str] = None
+    plan_dag_hash: Optional[str] = None
     payload_hash: Optional[str] = None
     endpoint_id: Optional[str] = None
 
@@ -307,6 +308,7 @@ class ExecutionPreconditions(BaseModel):
         "resource_state_hash",
         "approval_transition_head",
         "context_token",
+        "plan_dag_hash",
         "payload_hash",
         "endpoint_id",
     )

@@ -12,6 +12,9 @@ from .pdp_hot_path import HotPathDecisionView
 
 GATEWAY_CONTRACT_VERSION = "seedcore.agent_action_gateway.v1"
 WORKFLOW_TYPE_RCT = "restricted_custody_transfer"
+PLANNER_TYPE_PHYSICAL_HANDOVER = "physical_digital_handover"
+PLANNER_TYPE_CONDITIONAL_ESCROW = "conditional_escrow"
+PLANNER_TYPE_DELEGATED_AUTHORITY = "delegated_authority"
 
 
 def _normalize_required_str(value: str, *, field_name: str) -> str:
@@ -283,8 +286,13 @@ class AgentActionOptions(BaseModel):
 class AgentActionExecutionDirective(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tool_name: Literal["reachy.motion"] = "reachy.motion"
+    tool_name: str
     args: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tool_name")
+    @classmethod
+    def _validate_tool_name(cls, value: str) -> str:
+        return _normalize_required_str(value, field_name="tool_name")
 
     @model_validator(mode="after")
     def _validate_reserved_args(self) -> "AgentActionExecutionDirective":
@@ -299,6 +307,62 @@ class AgentActionExecutionDirective(BaseModel):
                 + ", ".join(sorted(reserved))
             )
         return self
+
+
+class AgentActionExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    planner_type: Literal[
+        "physical_digital_handover",
+        "conditional_escrow",
+        "delegated_authority",
+    ] = PLANNER_TYPE_PHYSICAL_HANDOVER
+    planner_inputs: Dict[str, Any] = Field(default_factory=dict)
+    default_directive: Optional[AgentActionExecutionDirective] = None
+
+
+class AgentActionExecutionPlanStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str
+    step_type: str
+    description: str
+    depends_on: List[str] = Field(default_factory=list)
+    directive: Optional[AgentActionExecutionDirective] = None
+    state_anchors: Dict[str, Any] = Field(default_factory=dict)
+    on_failure: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("step_id", "step_type", "description")
+    @classmethod
+    def _validate_required_step_fields(cls, value: str, info) -> str:
+        return _normalize_required_str(value, field_name=info.field_name)
+
+    @field_validator("on_failure")
+    @classmethod
+    def _validate_optional_step_fields(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_optional_str(value)
+
+
+class AgentActionExecutionPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str
+    planner_type: Literal[
+        "physical_digital_handover",
+        "conditional_escrow",
+        "delegated_authority",
+    ]
+    operation_type: str
+    plan_dag_hash: str
+    state_anchors: Dict[str, Any] = Field(default_factory=dict)
+    steps: List[AgentActionExecutionPlanStep] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("plan_id", "operation_type", "plan_dag_hash")
+    @classmethod
+    def _validate_required_plan_fields(cls, value: str, info) -> str:
+        return _normalize_required_str(value, field_name=info.field_name)
 
 
 class AgentActionEvaluateRequest(BaseModel):
@@ -318,7 +382,7 @@ class AgentActionEvaluateRequest(BaseModel):
     forensic_context: Optional[AgentActionForensicContext] = None
     security_contract: AgentActionSecurityContract
     options: AgentActionOptions = Field(default_factory=AgentActionOptions)
-    execution: Optional[AgentActionExecutionDirective] = None
+    execution: Optional[AgentActionExecutionRequest] = None
 
     @field_validator("request_id", "idempotency_key")
     @classmethod
@@ -366,6 +430,7 @@ class AgentActionEvaluateResponse(BaseModel):
             "mismatch_keys": [],
         }
     )
+    execution_plan: Optional[AgentActionExecutionPlan] = None
     execution_token: Optional[ExecutionToken] = None
     execution_context: Optional[ExecutionPreconditions] = None
     governed_receipt: Dict[str, Any] = Field(default_factory=dict)
@@ -387,6 +452,7 @@ class AgentActionExecuteResponse(BaseModel):
     request_id: str
     executed_at: datetime
     evaluation: AgentActionEvaluateResponse
+    execution_plan: Optional[AgentActionExecutionPlan] = None
     execution_task: Optional[Dict[str, Any]] = None
     execution_result: Optional[Dict[str, Any]] = None
 

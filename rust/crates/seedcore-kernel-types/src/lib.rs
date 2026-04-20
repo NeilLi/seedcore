@@ -465,6 +465,7 @@ pub struct TokenConstraints {
     pub source_registration_id: Option<String>,
     pub registration_decision_id: Option<String>,
     pub endpoint_id: Option<String>,
+    pub plan_dag_hash: Option<String>,
     pub payload_hash: Option<String>,
 }
 
@@ -474,6 +475,7 @@ pub struct ExecutionPreconditions {
     pub resource_state_hash: Option<String>,
     pub approval_transition_head: Option<String>,
     pub context_token: Option<String>,
+    pub plan_dag_hash: Option<String>,
     pub payload_hash: Option<String>,
     pub endpoint_id: Option<String>,
 }

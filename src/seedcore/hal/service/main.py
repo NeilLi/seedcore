@@ -622,6 +622,7 @@ def _validate_execution_preconditions(
         "resource_state_hash": "ExecutionToken resource state mismatch",
         "approval_transition_head": "ExecutionToken approval transition mismatch",
         "context_token": "ExecutionToken context token mismatch",
+        "plan_dag_hash": "ExecutionToken plan DAG mismatch",
         "payload_hash": "ExecutionToken payload mismatch",
         "endpoint_id": "ExecutionToken endpoint mismatch",
     }

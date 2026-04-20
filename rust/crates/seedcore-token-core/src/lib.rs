@@ -34,6 +34,7 @@ pub struct ExecutionRequestContext {
     pub source_registration_id: Option<String>,
     pub registration_decision_id: Option<String>,
     pub endpoint_id: Option<String>,
+    pub plan_dag_hash: Option<String>,
     pub payload_hash: Option<String>,
     #[serde(default)]
     pub execution_preconditions: ExecutionPreconditions,
@@ -161,6 +162,12 @@ pub fn enforce_constraints(
         return deny("endpoint_id_mismatch");
     }
     if mismatch(
+        token.constraints.plan_dag_hash.as_deref(),
+        request.plan_dag_hash.as_deref(),
+    ) {
+        return deny("plan_dag_hash_mismatch");
+    }
+    if mismatch(
         token.constraints.payload_hash.as_deref(),
         request.payload_hash.as_deref(),
     ) {
@@ -192,6 +199,12 @@ pub fn enforce_constraints(
         request.execution_preconditions.context_token.as_deref(),
     ) {
         return deny("context_token_mismatch");
+    }
+    if mismatch(
+        token.execution_preconditions.plan_dag_hash.as_deref(),
+        request.execution_preconditions.plan_dag_hash.as_deref(),
+    ) {
+        return deny("plan_dag_hash_mismatch");
     }
     if mismatch(
         token.execution_preconditions.endpoint_id.as_deref(),
@@ -342,12 +355,14 @@ mod tests {
                 source_registration_id: Some("registration:approved-001".to_string()),
                 registration_decision_id: Some("decision:registration-001".to_string()),
                 endpoint_id: Some("hal://robot_sim/1".to_string()),
+                plan_dag_hash: Some("sha256:plan-dag-001".to_string()),
                 payload_hash: Some("sha256:payload-transfer-001".to_string()),
             },
             execution_preconditions: ExecutionPreconditions {
                 resource_state_hash: Some("sha256:resource-state-001".to_string()),
                 approval_transition_head: Some("sha256:approval-transition-001".to_string()),
                 context_token: Some("sha256:context-token-001".to_string()),
+                plan_dag_hash: Some("sha256:plan-dag-001".to_string()),
                 payload_hash: Some("sha256:payload-transfer-001".to_string()),
                 endpoint_id: Some("hal://robot_sim/1".to_string()),
             },
@@ -363,11 +378,13 @@ mod tests {
             source_registration_id: Some("registration:approved-001".to_string()),
             registration_decision_id: Some("decision:registration-001".to_string()),
             endpoint_id: Some("hal://robot_sim/1".to_string()),
+            plan_dag_hash: Some("sha256:plan-dag-001".to_string()),
             payload_hash: Some("sha256:payload-transfer-001".to_string()),
             execution_preconditions: ExecutionPreconditions {
                 resource_state_hash: Some("sha256:resource-state-001".to_string()),
                 approval_transition_head: Some("sha256:approval-transition-001".to_string()),
                 context_token: Some("sha256:context-token-001".to_string()),
+                plan_dag_hash: Some("sha256:plan-dag-001".to_string()),
                 payload_hash: Some("sha256:payload-transfer-001".to_string()),
                 endpoint_id: Some("hal://robot_sim/1".to_string()),
             },
@@ -434,6 +451,20 @@ mod tests {
         );
         assert!(!report.allowed);
         assert_eq!(report.error_code.as_deref(), Some("payload_hash_mismatch"));
+    }
+
+    #[test]
+    fn enforce_constraints_rejects_plan_dag_hash_mismatch() {
+        let token = mint_token(sample_claims(), &DebugSigner).expect("token should mint");
+        let mut request = sample_request();
+        request.plan_dag_hash = Some("sha256:plan-dag-002".to_string());
+        let report = enforce_constraints(
+            &token,
+            &request,
+            Timestamp::from_str("2026-04-02T08:00:30Z").unwrap(),
+        );
+        assert!(!report.allowed);
+        assert_eq!(report.error_code.as_deref(), Some("plan_dag_hash_mismatch"));
     }
 
     #[test]

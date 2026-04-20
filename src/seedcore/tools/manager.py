@@ -852,6 +852,7 @@ class ToolManager:
         principal = action_intent.get("principal", {})
         resource = action_intent.get("resource", {})
         action = action_intent.get("action", {})
+        action_params = action.get("parameters", {})
         expected_pairs: Dict[str, Any] = {
             "action_type": action.get("type"),
             "target_zone": resource.get("target_zone"),
@@ -859,8 +860,12 @@ class ToolManager:
             "principal_agent_id": principal.get("agent_id"),
             "source_registration_id": resource.get("source_registration_id"),
             "registration_decision_id": resource.get("registration_decision_id"),
+            "plan_dag_hash": (
+                action_params.get("plan_dag_hash")
+                if isinstance(action_params, dict)
+                else None
+            ),
         }
-        action_params = action.get("parameters", {})
         expected_pairs["endpoint_id"] = (
             action_params.get("endpoint_id")
             if isinstance(action_params, dict)
@@ -877,6 +882,7 @@ class ToolManager:
                 "source_registration_id",
                 "registration_decision_id",
                 "endpoint_id",
+                "plan_dag_hash",
                 "payload_hash",
             )
         }

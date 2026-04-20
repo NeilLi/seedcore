@@ -117,6 +117,7 @@ EXECUTION_TOKEN_CONSTRAINT_KEYS = (
     "source_registration_id",
     "registration_decision_id",
     "endpoint_id",
+    "plan_dag_hash",
     "payload_hash",
 )
 # Real-world governed actions can legitimately take many seconds or minutes
@@ -3935,6 +3936,7 @@ def _build_execution_constraints(action_intent: ActionIntent) -> Dict[str, Any]:
         "source_registration_id": action_intent.resource.source_registration_id,
         "registration_decision_id": action_intent.resource.registration_decision_id,
         "endpoint_id": _resolve_execution_endpoint_id(action_intent),
+        "plan_dag_hash": _resolve_execution_plan_dag_hash(action_intent),
         "payload_hash": _resolve_execution_payload_hash(action_intent),
     }
     return {
@@ -3963,6 +3965,7 @@ def _build_execution_context_token(
         "approval_binding_hash": _approval_binding_hash_string(approval.get("approval_binding_hash")),
         "source_registration_id": action_intent.resource.source_registration_id,
         "registration_decision_id": action_intent.resource.registration_decision_id,
+        "plan_dag_hash": _resolve_execution_plan_dag_hash(action_intent),
     }
     return f"sha256:{_sha256_hex(_canonical_json(material))}"
 
@@ -3982,6 +3985,7 @@ def _build_execution_preconditions(action_intent: ActionIntent) -> ExecutionPrec
             action_intent=action_intent,
             approval_context=approval_context,
         ),
+        plan_dag_hash=_resolve_execution_plan_dag_hash(action_intent),
         payload_hash=_resolve_execution_payload_hash(action_intent),
         endpoint_id=_resolve_execution_endpoint_id(action_intent),
     )
@@ -4007,8 +4011,11 @@ def _mint_execution_token(
     if _is_restricted_custody_transfer(action_intent):
         if not str(execution_preconditions.endpoint_id or "").strip():
             raise ValueError("execution_token_endpoint_required")
-        if not str(execution_preconditions.payload_hash or "").strip():
-            raise ValueError("execution_token_payload_hash_required")
+        if not (
+            str(execution_preconditions.plan_dag_hash or "").strip()
+            or str(execution_preconditions.payload_hash or "").strip()
+        ):
+            raise ValueError("execution_token_execution_binding_required")
     token_payload = {
         "token_id": str(uuid.uuid4()),
         "intent_id": action_intent.intent_id,
@@ -4213,10 +4220,24 @@ def _resolve_execution_payload_hash(action_intent: ActionIntent) -> str | None:
     payload_hash = parameters.get("payload_hash")
     if isinstance(payload_hash, str) and payload_hash.strip():
         return payload_hash.strip()
+    if _resolve_execution_plan_dag_hash(action_intent) is not None:
+        return None
     gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
     if not gateway:
         return None
     return f"sha256:{_sha256_hex(_canonical_json(_payload_hash_material(parameters)))}"
+
+
+def _resolve_execution_plan_dag_hash(action_intent: ActionIntent) -> str | None:
+    parameters = action_intent.action.parameters if isinstance(action_intent.action.parameters, Mapping) else {}
+    plan_dag_hash = parameters.get("plan_dag_hash")
+    if isinstance(plan_dag_hash, str) and plan_dag_hash.strip():
+        return plan_dag_hash.strip()
+    gateway = parameters.get("gateway") if isinstance(parameters.get("gateway"), Mapping) else {}
+    fallback = gateway.get("execution_plan_hash")
+    if isinstance(fallback, str) and fallback.strip():
+        return fallback.strip()
+    return None
 
 
 def _merge_action_intent_payload(

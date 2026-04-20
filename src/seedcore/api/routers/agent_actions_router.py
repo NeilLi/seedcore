@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, List, Mapping, Tuple
 
@@ -16,14 +16,24 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from ...api.external_authority import build_owner_twin_snapshot, get_delegation
+from ...api.external_authority import (
+    OwnerContextPreflightRequest,
+    build_owner_twin_snapshot,
+    get_delegation,
+)
 from ...agents.roles.specialization import SpecializationManager
 from ...coordinator.core.governance import prepare_policy_case
 from ...database import get_async_pg_session_factory, get_async_redis_client
 from ...coordinator.dao import GovernedExecutionAuditDAO
+from ...infra.kafka.delegated_intent import (
+    DelegatedIntentPayload,
+    build_delegated_intent_envelope,
+)
+from ...integrations.rust_kernel import mint_execution_token_with_rust
 from ...models.action_intent import (
     ActionIntent,
     ExecutionPreconditions,
+    ExecutionToken,
     IntentAction,
     IntentPrincipal,
     IntentResource,
@@ -36,7 +46,10 @@ from ...models.agent_action_gateway import (
     AgentActionExecuteResponse,
     AgentActionEvaluateRequest,
     AgentActionEvaluateResponse,
+    AgentActionExecutionPlan,
     AgentActionRequestRecordResponse,
+    PLANNER_TYPE_CONDITIONAL_ESCROW,
+    PLANNER_TYPE_DELEGATED_AUTHORITY,
 )
 from ...models.evidence_bundle import EvidenceBundle
 from ...models.pdp_hot_path import (
@@ -54,6 +67,7 @@ from ...hal.custody.transition_receipts import build_transition_receipt
 from ...ops.evidence.verification import build_signed_artifact
 from ...ops.pkg import get_global_pkg_manager
 from ...ops.evidence.forensic_block_contract import FORENSIC_BLOCK_CONTEXT
+from ...ops.execution_planners import build_execution_plan, executable_directives_from_plan
 from ...services.digital_twin_service import (
     DigitalTwinService,
     build_result_verifier_gate_failure_verdict,
@@ -154,6 +168,8 @@ def _map_to_hot_path_request(
     *,
     request_hash: str | None = None,
     payload_hash_override: str | None = None,
+    plan_dag_hash_override: str | None = None,
+    prefer_plan_binding: bool = False,
 ) -> HotPathEvaluateRequest:
     hardware_fingerprint = payload.principal.hardware_fingerprint
     execution_endpoint_id = (
@@ -174,6 +190,8 @@ def _map_to_hot_path_request(
         gateway_parameters["hardware_endpoint_id"] = hardware_fingerprint.endpoint_id
     if request_hash:
         gateway_parameters["request_hash"] = request_hash
+    if isinstance(plan_dag_hash_override, str) and plan_dag_hash_override.strip():
+        gateway_parameters["execution_plan_hash"] = plan_dag_hash_override.strip()
     if payload.authority_scope is not None:
         gateway_parameters["scope_id"] = payload.authority_scope.scope_id
         gateway_parameters["asset_ref"] = payload.authority_scope.asset_ref
@@ -191,6 +209,18 @@ def _map_to_hot_path_request(
                 mode="json",
                 exclude_none=True,
             )
+    resolved_payload_hash = (
+        f"sha256:{payload_hash_override}"
+        if payload_hash_override
+        else f"sha256:{request_hash}"
+        if request_hash and not prefer_plan_binding
+        else None
+    )
+    resolved_plan_dag_hash = (
+        str(plan_dag_hash_override).strip()
+        if isinstance(plan_dag_hash_override, str) and str(plan_dag_hash_override).strip()
+        else None
+    )
     action_intent = ActionIntent(
         intent_id=payload.request_id,
         timestamp=_to_utc_iso(payload.requested_at),
@@ -209,13 +239,8 @@ def _map_to_hot_path_request(
             ),
             parameters={
                 "endpoint_id": execution_endpoint_id,
-                "payload_hash": (
-                    f"sha256:{payload_hash_override}"
-                    if payload_hash_override
-                    else f"sha256:{request_hash}"
-                    if request_hash
-                    else None
-                ),
+                "payload_hash": resolved_payload_hash,
+                "plan_dag_hash": resolved_plan_dag_hash,
                 "approval_context": {
                     "approval_envelope_id": payload.approval.approval_envelope_id,
                     "expected_envelope_version": payload.approval.expected_envelope_version,
@@ -522,6 +547,85 @@ def _execution_context_from_hot_path_result(
     return None
 
 
+def _bind_plan_hash_to_execution_token(
+    execution_token: ExecutionToken | None,
+    *,
+    execution_plan: AgentActionExecutionPlan | None,
+) -> ExecutionToken | None:
+    if execution_token is None or execution_plan is None:
+        return execution_token
+    constraints = (
+        dict(execution_token.constraints)
+        if isinstance(execution_token.constraints, dict)
+        else {}
+    )
+    constraints["plan_dag_hash"] = execution_plan.plan_dag_hash
+    preconditions = execution_token.execution_preconditions.model_dump(mode="json")
+    preconditions["plan_dag_hash"] = execution_plan.plan_dag_hash
+    return execution_token.model_copy(
+        update={
+            "constraints": constraints,
+            "execution_preconditions": ExecutionPreconditions(**preconditions),
+        }
+    )
+
+
+def _bind_plan_hash_to_execution_context(
+    execution_context: ExecutionPreconditions | None,
+    *,
+    execution_plan: AgentActionExecutionPlan | None,
+) -> ExecutionPreconditions | None:
+    if execution_context is None or execution_plan is None:
+        return execution_context
+    updated = execution_context.model_dump(mode="json")
+    updated["plan_dag_hash"] = execution_plan.plan_dag_hash
+    return ExecutionPreconditions(**updated)
+
+
+def _apply_execution_plan_bindings_to_hot_path_result(
+    hot_path_result: HotPathEvaluateResponse,
+    *,
+    execution_plan: AgentActionExecutionPlan | None,
+) -> HotPathEvaluateResponse:
+    if execution_plan is None:
+        return hot_path_result
+    execution_token = _bind_plan_hash_to_execution_token(
+        hot_path_result.execution_token,
+        execution_plan=execution_plan,
+    )
+    execution_preconditions = _bind_plan_hash_to_execution_context(
+        hot_path_result.execution_preconditions,
+        execution_plan=execution_plan,
+    )
+    governed_receipt = dict(hot_path_result.governed_receipt)
+    if governed_receipt:
+        existing = (
+            dict(governed_receipt.get("execution_preconditions"))
+            if isinstance(governed_receipt.get("execution_preconditions"), Mapping)
+            else {}
+        )
+        existing["plan_dag_hash"] = execution_plan.plan_dag_hash
+        governed_receipt["execution_preconditions"] = existing
+        advisory = governed_receipt.get("advisory")
+        if isinstance(advisory, Mapping):
+            advisory_payload = dict(advisory)
+            advisory_preconditions = (
+                dict(advisory_payload.get("execution_preconditions"))
+                if isinstance(advisory_payload.get("execution_preconditions"), Mapping)
+                else {}
+            )
+            advisory_preconditions["plan_dag_hash"] = execution_plan.plan_dag_hash
+            advisory_payload["execution_preconditions"] = advisory_preconditions
+            governed_receipt["advisory"] = advisory_payload
+    return hot_path_result.model_copy(
+        update={
+            "execution_token": execution_token,
+            "execution_preconditions": execution_preconditions,
+            "governed_receipt": governed_receipt,
+        }
+    )
+
+
 def _apply_no_execute_preflight(
     response: AgentActionEvaluateResponse,
     *,
@@ -644,35 +748,10 @@ def _canonical_gateway_payload_hash(
     }
     if payload.forensic_context is not None:
         canonical_payload["forensic_context"] = payload.forensic_context.model_dump(mode="json")
+    if payload.execution is not None:
+        canonical_payload["execution"] = payload.execution.model_dump(mode="json")
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-
-
-def _resolve_execution_directive(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
-    if payload.execution is not None:
-        return payload.execution.model_dump(mode="json")
-
-    behavior_params: Dict[str, Any] = {
-        "distance": 1.0,
-        "asset_id": payload.asset.asset_id,
-        "request_id": payload.request_id,
-    }
-    if payload.asset.from_zone:
-        behavior_params["from_zone"] = payload.asset.from_zone
-    if payload.asset.to_zone:
-        behavior_params["to_zone"] = payload.asset.to_zone
-    if payload.asset.to_custodian_ref:
-        behavior_params["to_custodian_ref"] = payload.asset.to_custodian_ref
-    if payload.authority_scope is not None:
-        behavior_params["scope_id"] = payload.authority_scope.scope_id
-
-    return {
-        "tool_name": "reachy.motion",
-        "args": {
-            "behavior_name": "move_forward",
-            "behavior_params": behavior_params,
-        },
-    }
 
 
 def _canonical_tool_args_hash(tool_args: Mapping[str, Any]) -> str:
@@ -688,12 +767,12 @@ def _canonical_tool_args_hash(tool_args: Mapping[str, Any]) -> str:
 def _canonical_gateway_execute_payload_hash(
     payload: AgentActionEvaluateRequest,
     *,
-    execution_directive: Mapping[str, Any],
+    execution_plan: AgentActionExecutionPlan,
 ) -> str:
     canonical_payload = {
         "request_hash": _canonical_gateway_payload_hash(payload, requested_no_execute=False),
         "mode": "execute",
-        "execution": dict(execution_directive),
+        "execution_plan": execution_plan.model_dump(mode="json"),
     }
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
@@ -2351,23 +2430,181 @@ def _evidence_summary_from_payload(payload: AgentActionEvaluateRequest) -> Dict[
     }
 
 
+def _planner_inputs(payload: AgentActionEvaluateRequest) -> Dict[str, Any]:
+    if payload.execution is None:
+        return {}
+    return dict(payload.execution.planner_inputs)
+
+
+def _mint_delegated_subtoken(
+    *,
+    parent_token: ExecutionToken,
+    payload: AgentActionEvaluateRequest,
+    execution_plan: AgentActionExecutionPlan,
+) -> ExecutionToken:
+    planner_inputs = _planner_inputs(payload)
+    now = datetime.now(timezone.utc)
+    parent_valid_until = datetime.fromisoformat(str(parent_token.valid_until).replace("Z", "+00:00"))
+    if parent_valid_until.tzinfo is None:
+        parent_valid_until = parent_valid_until.replace(tzinfo=timezone.utc)
+    subtoken_ttl_seconds = int(
+        execution_plan.metadata.get("subtoken_ttl_seconds")
+        or planner_inputs.get("subtoken_ttl_seconds")
+        or 90
+    )
+    desired_valid_until = now + timedelta(seconds=max(30, subtoken_ttl_seconds))
+    parent_bound_valid_until = parent_valid_until.astimezone(timezone.utc)
+    if parent_bound_valid_until <= now:
+        parent_bound_valid_until = desired_valid_until
+    valid_until = min(parent_bound_valid_until, desired_valid_until)
+    delegate_agent_id = str(
+        execution_plan.metadata.get("delegate_agent_id")
+        or planner_inputs.get("delegate_agent_id")
+        or payload.principal.agent_id
+    ).strip()
+    delegate_endpoint_id = str(
+        execution_plan.metadata.get("delegate_endpoint_id")
+        or planner_inputs.get("delegate_endpoint_id")
+        or payload.principal.hardware_fingerprint.endpoint_id
+        or payload.principal.hardware_fingerprint.node_id
+        or ""
+    ).strip()
+    parent_constraints = (
+        dict(parent_token.constraints)
+        if isinstance(parent_token.constraints, dict)
+        else {}
+    )
+    subtoken_constraints = {
+        **parent_constraints,
+        "action_type": parent_constraints.get("action_type") or payload.workflow.action_type,
+        "target_zone": parent_constraints.get("target_zone") or payload.asset.to_zone,
+        "asset_id": parent_constraints.get("asset_id") or payload.asset.asset_id,
+        "principal_agent_id": delegate_agent_id,
+        "source_registration_id": parent_constraints.get("source_registration_id"),
+        "registration_decision_id": parent_constraints.get("registration_decision_id"),
+        "endpoint_id": delegate_endpoint_id or parent_constraints.get("endpoint_id"),
+        "plan_dag_hash": execution_plan.plan_dag_hash,
+        "payload_hash": None,
+    }
+    preconditions = parent_token.execution_preconditions.model_dump(mode="json")
+    preconditions["plan_dag_hash"] = execution_plan.plan_dag_hash
+    preconditions["endpoint_id"] = delegate_endpoint_id or preconditions.get("endpoint_id")
+    preconditions["payload_hash"] = None
+    minted = mint_execution_token_with_rust(
+        {
+            "token_id": str(uuid.uuid4()),
+            "intent_id": payload.request_id,
+            "issued_at": _to_utc_iso(now),
+            "valid_until": _to_utc_iso(valid_until),
+            "contract_version": parent_token.contract_version,
+            "constraints": subtoken_constraints,
+            "execution_preconditions": preconditions,
+        }
+    )
+    if minted.get("error") is not None:
+        raise ValueError(f"rust_subtoken_mint_failed:{minted.get('error')}")
+    return ExecutionToken(**minted)
+
+
+def _build_delegated_intent_execution_result(
+    *,
+    payload: AgentActionEvaluateRequest,
+    execution_plan: AgentActionExecutionPlan,
+    subtoken: ExecutionToken,
+) -> Dict[str, Any]:
+    planner_inputs = _planner_inputs(payload)
+    delegate_agent_id = str(
+        execution_plan.metadata.get("delegate_agent_id")
+        or planner_inputs.get("delegate_agent_id")
+        or payload.principal.agent_id
+    ).strip()
+    delegate_endpoint_id = str(
+        execution_plan.metadata.get("delegate_endpoint_id")
+        or planner_inputs.get("delegate_endpoint_id")
+        or payload.principal.hardware_fingerprint.endpoint_id
+        or payload.principal.hardware_fingerprint.node_id
+        or ""
+    ).strip()
+    delegated_payload = payload.model_dump(mode="json")
+    delegated_payload["principal"]["agent_id"] = delegate_agent_id
+    if delegate_endpoint_id:
+        delegated_payload["principal"]["hardware_fingerprint"]["endpoint_id"] = delegate_endpoint_id
+    delegated_gateway_request = AgentActionEvaluateRequest.model_validate(delegated_payload)
+    owner_preflight = OwnerContextPreflightRequest(
+        owner_id=payload.principal.owner_id,
+        assistant_id=delegate_agent_id,
+        delegation_id=_normalize_delegation_id(payload.principal.delegation_ref),
+        declared_value_usd=payload.asset.declared_value_usd,
+        required_modalities=[payload.workflow.type],
+        available_modalities=["delegated_execute"],
+        observed_provenance_level=payload.asset.provenance_hash,
+    )
+    envelope = build_delegated_intent_envelope(
+        DelegatedIntentPayload(
+            request_id=payload.request_id,
+            workflow_id=payload.request_id,
+            correlation_id=payload.request_id,
+            assistant_namespace=delegate_agent_id,
+            owner_context_preflight=owner_preflight,
+            gateway_request=delegated_gateway_request,
+            metadata={
+                "plan_id": execution_plan.plan_id,
+                "plan_dag_hash": execution_plan.plan_dag_hash,
+                "sub_execution_token": subtoken.model_dump(mode="json"),
+            },
+        ),
+        producer="seedcore.agent_action_gateway",
+    )
+    return {
+        "status": "delegated_ready",
+        "delegate_agent_id": delegate_agent_id,
+        "delegate_endpoint_id": delegate_endpoint_id or None,
+        "plan_dag_hash": execution_plan.plan_dag_hash,
+        "sub_execution_token": subtoken.model_dump(mode="json"),
+        "delegated_intent_envelope": envelope,
+    }
+
+
+def _build_planned_only_execution_result(
+    *,
+    execution_plan: AgentActionExecutionPlan,
+) -> Dict[str, Any]:
+    if execution_plan.planner_type == PLANNER_TYPE_CONDITIONAL_ESCROW:
+        return {
+            "status": "awaiting_condition",
+            "dispatched": False,
+            "plan_id": execution_plan.plan_id,
+            "plan_dag_hash": execution_plan.plan_dag_hash,
+            "dead_mans_switch_seconds": execution_plan.metadata.get("dead_mans_switch_seconds"),
+            "next_action": "poll_release_condition",
+        }
+    return {
+        "status": "planned_only",
+        "dispatched": False,
+        "plan_id": execution_plan.plan_id,
+        "plan_dag_hash": execution_plan.plan_dag_hash,
+    }
+
+
 def _build_organism_execute_task(
     *,
     payload: AgentActionEvaluateRequest,
     governance: Mapping[str, Any],
-    execution_directive: Mapping[str, Any],
+    execution_plan: AgentActionExecutionPlan,
 ) -> Dict[str, Any]:
     routing: Dict[str, Any] = {}
     preflight_specialization = _resolve_preflight_specialization(payload)
     if preflight_specialization:
         routing["required_specialization"] = preflight_specialization
-
-    tool_name = str(execution_directive.get("tool_name") or "reachy.motion").strip() or "reachy.motion"
-    tool_args = (
-        dict(execution_directive.get("args"))
-        if isinstance(execution_directive.get("args"), Mapping)
-        else {}
-    )
+    directives = executable_directives_from_plan(execution_plan)
+    tool_calls = [
+        {
+            "name": directive.tool_name,
+            "args": directive.args,
+        }
+        for directive in directives
+    ]
+    primary_tool_name = directives[0].tool_name if directives else None
 
     return {
         "task_id": payload.request_id,
@@ -2391,18 +2628,16 @@ def _build_organism_execute_task(
                 "lot_id": payload.asset.lot_id,
                 "target_zone": payload.asset.to_zone,
             },
-            "tool_calls": [
-                {
-                    "name": tool_name,
-                    "args": tool_args,
-                }
-            ],
+            "tool_calls": tool_calls,
             "governance": dict(governance),
             "agent_action_gateway": {
                 "request_id": payload.request_id,
                 "workflow_type": payload.workflow.type,
                 "action_type": payload.workflow.action_type,
-                "tool_name": tool_name,
+                "planner_type": execution_plan.planner_type,
+                "plan_id": execution_plan.plan_id,
+                "plan_dag_hash": execution_plan.plan_dag_hash,
+                "tool_name": primary_tool_name,
             },
         },
     }
@@ -2501,7 +2736,19 @@ def _build_agent_action_evaluate_response(
     *,
     payload: AgentActionEvaluateRequest,
     hot_path_result: HotPathEvaluateResponse,
+    execution_plan: AgentActionExecutionPlan | None = None,
 ) -> AgentActionEvaluateResponse:
+    bound_execution_token = _bind_plan_hash_to_execution_token(
+        hot_path_result.execution_token,
+        execution_plan=execution_plan,
+    )
+    bound_execution_context = _bind_plan_hash_to_execution_context(
+        _execution_context_from_hot_path_result(
+            execution_token=hot_path_result.execution_token,
+            governed_receipt=dict(hot_path_result.governed_receipt),
+        ),
+        execution_plan=execution_plan,
+    )
     return AgentActionEvaluateResponse(
         request_id=hot_path_result.request_id,
         decided_at=hot_path_result.decided_at,
@@ -2517,11 +2764,9 @@ def _build_agent_action_evaluate_response(
         ),
         authority_scope_verdict=_build_authority_scope_verdict(payload),
         fingerprint_verdict=_build_fingerprint_verdict(payload),
-        execution_token=hot_path_result.execution_token,
-        execution_context=_execution_context_from_hot_path_result(
-            execution_token=hot_path_result.execution_token,
-            governed_receipt=dict(hot_path_result.governed_receipt),
-        ),
+        execution_plan=execution_plan,
+        execution_token=bound_execution_token,
+        execution_context=bound_execution_context,
         governed_receipt=dict(hot_path_result.governed_receipt),
         forensic_linkage={},
         request_schema_bundle=hot_path_result.request_schema_bundle,
@@ -2635,9 +2880,22 @@ async def evaluate_agent_action(
             if isinstance(owner_twin_snapshot, dict)
             else None
         )
-        hot_path_request = _map_to_hot_path_request(payload, request_hash=request_hash)
+        preliminary_hot_path_request = _map_to_hot_path_request(payload, request_hash=request_hash)
         # Keep v1 gateway semantics as a contract wrapper around the existing hot-path path.
-        authoritative_transfer_approval = await resolve_authoritative_transfer_approval(hot_path_request)
+        authoritative_transfer_approval = await resolve_authoritative_transfer_approval(
+            preliminary_hot_path_request
+        )
+        execution_plan = build_execution_plan(
+            payload,
+            owner_twin_snapshot=owner_twin_snapshot,
+            authoritative_transfer_approval=authoritative_transfer_approval,
+        )
+        hot_path_request = _map_to_hot_path_request(
+            payload,
+            request_hash=request_hash,
+            plan_dag_hash_override=execution_plan.plan_dag_hash,
+            prefer_plan_binding=True,
+        )
         hot_path_result = evaluate_pdp_hot_path(
             hot_path_request,
             relevant_twin_snapshot=relevant_twin_snapshot,
@@ -2657,11 +2915,16 @@ async def evaluate_agent_action(
                 else None
             ),
         )
+        hot_path_result = _apply_execution_plan_bindings_to_hot_path_result(
+            hot_path_result,
+            execution_plan=execution_plan,
+        )
         del debug  # kept for parity with existing hot-path router signature
 
         response = _build_agent_action_evaluate_response(
             payload=payload,
             hot_path_result=hot_path_result,
+            execution_plan=execution_plan,
         )
         response = _apply_forensic_scope_guards(payload=payload, response=response)
         response = await _apply_organism_preflight(payload=payload, response=response)
@@ -2698,43 +2961,8 @@ async def execute_agent_action(
     debug: bool = Query(default=False, description="Include check-by-check diagnostics."),
 ) -> AgentActionExecuteResponse:
     payload = _parse_validate_payload(payload_body, model=AgentActionEvaluateRequest)
-    execution_directive = _resolve_execution_directive(payload)
-    execute_request_hash = _canonical_gateway_execute_payload_hash(
-        payload,
-        execution_directive=execution_directive,
-    )
-
-    claimed, idempotency_entry = await _claim_execute_idempotency_key(
-        idempotency_key=payload.idempotency_key,
-        request_id=payload.request_id,
-        request_hash=execute_request_hash,
-    )
-    if not claimed and idempotency_entry is not None:
-        existing_request_hash = str(idempotency_entry.get("request_hash") or "").strip()
-        existing_request_id = str(idempotency_entry.get("request_id") or "").strip()
-        if existing_request_hash != execute_request_hash:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error_code": "idempotency_conflict",
-                    "message": "idempotency key already used with different execute request body",
-                    "request_id": payload.request_id,
-                },
-            )
-        if existing_request_id:
-            existing_record = await _read_execute_record(existing_request_id)
-            if existing_record is not None:
-                return existing_record.response
-            if existing_request_id != payload.request_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error_code": "idempotency_in_progress",
-                        "message": "idempotency key already claimed by an in-flight execute request",
-                        "request_id": existing_request_id,
-                    },
-                )
-
+    claimed = False
+    execute_request_hash = _canonical_gateway_payload_hash(payload, requested_no_execute=False)
     try:
         owner_twin_snapshot = await _resolve_owner_twin_snapshot_for_payload(payload)
         relevant_twin_snapshot = (
@@ -2742,19 +2970,64 @@ async def execute_agent_action(
             if isinstance(owner_twin_snapshot, dict)
             else None
         )
-
-        tool_args = (
-            dict(execution_directive.get("args"))
-            if isinstance(execution_directive.get("args"), Mapping)
-            else {}
+        preliminary_request_hash = _canonical_gateway_payload_hash(
+            payload,
+            requested_no_execute=False,
         )
-        tool_payload_hash = _canonical_tool_args_hash(tool_args)
+        preliminary_hot_path_request = _map_to_hot_path_request(
+            payload,
+            request_hash=preliminary_request_hash,
+        )
+        authoritative_transfer_approval = await resolve_authoritative_transfer_approval(
+            preliminary_hot_path_request
+        )
+        execution_plan = build_execution_plan(
+            payload,
+            owner_twin_snapshot=owner_twin_snapshot,
+            authoritative_transfer_approval=authoritative_transfer_approval,
+        )
+        execute_request_hash = _canonical_gateway_execute_payload_hash(
+            payload,
+            execution_plan=execution_plan,
+        )
+
+        claimed, idempotency_entry = await _claim_execute_idempotency_key(
+            idempotency_key=payload.idempotency_key,
+            request_id=payload.request_id,
+            request_hash=execute_request_hash,
+        )
+        if not claimed and idempotency_entry is not None:
+            existing_request_hash = str(idempotency_entry.get("request_hash") or "").strip()
+            existing_request_id = str(idempotency_entry.get("request_id") or "").strip()
+            if existing_request_hash != execute_request_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error_code": "idempotency_conflict",
+                        "message": "idempotency key already used with different execute request body",
+                        "request_id": payload.request_id,
+                    },
+                )
+            if existing_request_id:
+                existing_record = await _read_execute_record(existing_request_id)
+                if existing_record is not None:
+                    return existing_record.response
+                if existing_request_id != payload.request_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error_code": "idempotency_in_progress",
+                            "message": "idempotency key already claimed by an in-flight execute request",
+                            "request_id": existing_request_id,
+                        },
+                    )
+
         hot_path_request = _map_to_hot_path_request(
             payload,
             request_hash=execute_request_hash,
-            payload_hash_override=tool_payload_hash,
+            plan_dag_hash_override=execution_plan.plan_dag_hash,
+            prefer_plan_binding=True,
         )
-        authoritative_transfer_approval = await resolve_authoritative_transfer_approval(hot_path_request)
         hot_path_result = evaluate_pdp_hot_path(
             hot_path_request,
             relevant_twin_snapshot=relevant_twin_snapshot,
@@ -2774,11 +3047,16 @@ async def execute_agent_action(
                 else None
             ),
         )
+        hot_path_result = _apply_execution_plan_bindings_to_hot_path_result(
+            hot_path_result,
+            execution_plan=execution_plan,
+        )
         del debug
 
         evaluation = _build_agent_action_evaluate_response(
             payload=payload,
             hot_path_result=hot_path_result,
+            execution_plan=execution_plan,
         )
         evaluation = _apply_forensic_scope_guards(payload=payload, response=evaluation)
         evaluation = await _apply_organism_preflight(payload=payload, response=evaluation)
@@ -2814,33 +3092,59 @@ async def execute_agent_action(
                     else None
                 ),
             )
-            governance = build_governance_context_from_hot_path_response(
-                policy_case,
-                hot_path_result,
+            governance = dict(
+                build_governance_context_from_hot_path_response(
+                    policy_case,
+                    hot_path_result,
+                )
             )
+            governance["execution_plan"] = execution_plan.model_dump(mode="json")
             execution_task = _build_organism_execute_task(
                 payload=payload,
                 governance=governance,
-                execution_directive=execution_directive,
+                execution_plan=execution_plan,
             )
-            client = OrganismServiceClient(timeout=ORGANISM_EXECUTE_TIMEOUT_SECONDS)
-            try:
-                routed_result = await client.route_and_execute(task=execution_task)
-            finally:
+            if execution_plan.planner_type == PLANNER_TYPE_DELEGATED_AUTHORITY:
+                delegated_subtoken = _mint_delegated_subtoken(
+                    parent_token=evaluation.execution_token,
+                    payload=payload,
+                    execution_plan=execution_plan,
+                )
+                governance["delegated_subtoken"] = delegated_subtoken.model_dump(mode="json")
+                execution_task["params"]["governance"] = dict(governance)
+                execution_result = _build_delegated_intent_execution_result(
+                    payload=payload,
+                    execution_plan=execution_plan,
+                    subtoken=delegated_subtoken,
+                )
+            elif execution_plan.planner_type == PLANNER_TYPE_CONDITIONAL_ESCROW:
+                execution_result = _build_planned_only_execution_result(
+                    execution_plan=execution_plan
+                )
+            elif executable_directives_from_plan(execution_plan):
+                client = OrganismServiceClient(timeout=ORGANISM_EXECUTE_TIMEOUT_SECONDS)
                 try:
-                    await client.close()
-                except Exception:
-                    pass
-            execution_result = (
-                dict(routed_result)
-                if isinstance(routed_result, Mapping)
-                else {"result": routed_result}
-            )
+                    routed_result = await client.route_and_execute(task=execution_task)
+                finally:
+                    try:
+                        await client.close()
+                    except Exception:
+                        pass
+                execution_result = (
+                    dict(routed_result)
+                    if isinstance(routed_result, Mapping)
+                    else {"result": routed_result}
+                )
+            else:
+                execution_result = _build_planned_only_execution_result(
+                    execution_plan=execution_plan
+                )
 
         response = AgentActionExecuteResponse(
             request_id=payload.request_id,
             executed_at=datetime.now(timezone.utc),
             evaluation=evaluation,
+            execution_plan=execution_plan,
             execution_task=execution_task,
             execution_result=execution_result,
         )

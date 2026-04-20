@@ -282,7 +282,7 @@ def test_agent_actions_execute_routes_governed_task(monkeypatch):
 
     def _fake_evaluate(request, **kwargs):
         captured["hot_path_request"] = request
-        payload_hash = request.action_intent.action.parameters["payload_hash"]
+        plan_dag_hash = request.action_intent.action.parameters["plan_dag_hash"]
         endpoint_id = request.action_intent.action.parameters["endpoint_id"]
         return HotPathEvaluateResponse(
             request_id=request.request_id,
@@ -305,7 +305,7 @@ def test_agent_actions_execute_routes_governed_task(monkeypatch):
                     "resource_state_hash": "sha256:resource-state-001",
                     "approval_transition_head": "sha256:approval-transition-001",
                     "context_token": "sha256:context-token-001",
-                    "payload_hash": payload_hash,
+                    "plan_dag_hash": plan_dag_hash,
                     "endpoint_id": endpoint_id,
                 },
             ),
@@ -348,13 +348,16 @@ def test_agent_actions_execute_routes_governed_task(monkeypatch):
 
     payload = _base_payload()
     payload["execution"] = {
-        "tool_name": "reachy.motion",
-        "args": {
-            "behavior_name": "move_forward",
-            "behavior_params": {
-                "distance": 1.25,
-                "asset_id": "asset:lot-8841",
-                "to_zone": "handoff_bay_3",
+        "planner_type": "physical_digital_handover",
+        "default_directive": {
+            "tool_name": "reachy.motion",
+            "args": {
+                "behavior_name": "move_forward",
+                "behavior_params": {
+                    "distance": 1.25,
+                    "asset_id": "asset:lot-8841",
+                    "to_zone": "handoff_bay_3",
+                },
             },
         },
     }
@@ -363,12 +366,14 @@ def test_agent_actions_execute_routes_governed_task(monkeypatch):
     assert response.status_code == 200
     body = response.json()
 
-    expected_payload_hash = "sha256:" + agent_actions_router._canonical_tool_args_hash(payload["execution"]["args"])
-    assert captured["hot_path_request"].action_intent.action.parameters["payload_hash"] == expected_payload_hash
+    expected_plan_hash = body["execution_plan"]["plan_dag_hash"]
+    assert captured["hot_path_request"].action_intent.action.parameters["payload_hash"] is None
+    assert captured["hot_path_request"].action_intent.action.parameters["plan_dag_hash"] == expected_plan_hash
     assert body["evaluation"]["decision"]["disposition"] == "allow"
     assert body["execution_task"]["params"]["tool_calls"][0]["name"] == "reachy.motion"
     assert body["execution_task"]["params"]["tool_calls"][0]["args"]["behavior_name"] == "move_forward"
-    assert body["execution_task"]["params"]["governance"]["execution_context"]["payload_hash"] == expected_payload_hash
+    assert body["execution_task"]["params"]["tool_calls"][1]["name"] == "forensic.seal"
+    assert body["execution_task"]["params"]["governance"]["execution_context"]["plan_dag_hash"] == expected_plan_hash
     assert body["execution_result"]["success"] is True
 
 
@@ -384,7 +389,7 @@ def test_agent_actions_execute_is_idempotent(monkeypatch):
     )
 
     def _fake_evaluate(request, **kwargs):
-        payload_hash = request.action_intent.action.parameters["payload_hash"]
+        plan_dag_hash = request.action_intent.action.parameters["plan_dag_hash"]
         return HotPathEvaluateResponse(
             request_id=request.request_id,
             decided_at=datetime.now(timezone.utc),
@@ -406,7 +411,7 @@ def test_agent_actions_execute_is_idempotent(monkeypatch):
                     "resource_state_hash": "sha256:resource-state-001",
                     "approval_transition_head": "sha256:approval-transition-001",
                     "context_token": "sha256:context-token-001",
-                    "payload_hash": payload_hash,
+                    "plan_dag_hash": plan_dag_hash,
                     "endpoint_id": "node:jetson-orin-01",
                 },
             ),
@@ -439,10 +444,13 @@ def test_agent_actions_execute_is_idempotent(monkeypatch):
 
     payload = _base_payload()
     payload["execution"] = {
-        "tool_name": "reachy.motion",
-        "args": {
-            "behavior_name": "move_forward",
-            "behavior_params": {"distance": 1.0},
+        "planner_type": "physical_digital_handover",
+        "default_directive": {
+            "tool_name": "reachy.motion",
+            "args": {
+                "behavior_name": "move_forward",
+                "behavior_params": {"distance": 1.0},
+            },
         },
     }
 
@@ -453,6 +461,178 @@ def test_agent_actions_execute_is_idempotent(monkeypatch):
     assert second.status_code == 200
     assert call_count["route_and_execute"] == 1
     assert first.json()["execution_result"] == second.json()["execution_result"]
+
+
+def test_agent_actions_execute_delegated_authority_returns_subtoken(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    call_count = {"route_and_execute": 0}
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+
+    def _fake_evaluate(request, **kwargs):
+        endpoint_id = request.action_intent.action.parameters["endpoint_id"]
+        plan_dag_hash = request.action_intent.action.parameters["plan_dag_hash"]
+        return HotPathEvaluateResponse(
+            request_id=request.request_id,
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=35,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="restricted_custody_transfer_allowed",
+                reason="all mandatory checks passed",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-transfer-delegate-001",
+                intent_id=request.request_id,
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:05:01Z",
+                contract_version="rules@8.0.0",
+                execution_preconditions={
+                    "resource_state_hash": "sha256:resource-state-001",
+                    "approval_transition_head": "sha256:approval-transition-001",
+                    "context_token": "sha256:context-token-001",
+                    "plan_dag_hash": plan_dag_hash,
+                    "endpoint_id": endpoint_id,
+                },
+            ),
+            governed_receipt={
+                "audit_id": "audit-execute-delegate-001",
+                "policy_receipt_id": "receipt-policy-execute-delegate-001",
+            },
+        )
+
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_evaluate_result_verifier_gate_for_twin_refs",
+        _result_verifier_gate_open,
+    )
+
+    class _FakeOrganismClient:
+        def __init__(self, timeout=None):
+            pass
+
+        async def route_and_execute(self, task, current_epoch=None):
+            call_count["route_and_execute"] += 1
+            return {"success": True}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(agent_actions_router, "OrganismServiceClient", _FakeOrganismClient)
+
+    payload = _base_payload()
+    payload["execution"] = {
+        "planner_type": "delegated_authority",
+        "planner_inputs": {
+            "delegate_agent_id": "agent:openclaw-01",
+            "delegate_endpoint_id": "hal://openclaw/01",
+            "subtoken_ttl_seconds": 45,
+        },
+    }
+
+    response = client.post("/api/v1/agent-actions/execute", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert call_count["route_and_execute"] == 0
+    assert body["execution_plan"]["planner_type"] == "delegated_authority"
+    assert body["execution_result"]["status"] == "delegated_ready"
+    assert body["execution_result"]["delegate_agent_id"] == "agent:openclaw-01"
+    assert body["execution_result"]["sub_execution_token"]["constraints"]["principal_agent_id"] == "agent:openclaw-01"
+    assert body["execution_task"]["params"]["tool_calls"] == []
+
+
+def test_agent_actions_execute_conditional_escrow_returns_waiting_state(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    call_count = {"route_and_execute": 0}
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+
+    def _fake_evaluate(request, **kwargs):
+        plan_dag_hash = request.action_intent.action.parameters["plan_dag_hash"]
+        return HotPathEvaluateResponse(
+            request_id=request.request_id,
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=35,
+            decision=HotPathDecisionView(
+                allowed=True,
+                disposition="allow",
+                reason_code="restricted_custody_transfer_allowed",
+                reason="all mandatory checks passed",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            ),
+            execution_token=ExecutionToken(
+                token_id="token-transfer-escrow-001",
+                intent_id=request.request_id,
+                issued_at="2026-03-31T10:00:01Z",
+                valid_until="2026-03-31T10:05:01Z",
+                contract_version="rules@8.0.0",
+                execution_preconditions={
+                    "resource_state_hash": "sha256:resource-state-001",
+                    "approval_transition_head": "sha256:approval-transition-001",
+                    "context_token": "sha256:context-token-001",
+                    "plan_dag_hash": plan_dag_hash,
+                    "endpoint_id": "node:jetson-orin-01",
+                },
+            ),
+            governed_receipt={
+                "audit_id": "audit-execute-escrow-001",
+                "policy_receipt_id": "receipt-policy-execute-escrow-001",
+            },
+        )
+
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_evaluate_result_verifier_gate_for_twin_refs",
+        _result_verifier_gate_open,
+    )
+
+    class _FakeOrganismClient:
+        def __init__(self, timeout=None):
+            pass
+
+        async def route_and_execute(self, task, current_epoch=None):
+            call_count["route_and_execute"] += 1
+            return {"success": True}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(agent_actions_router, "OrganismServiceClient", _FakeOrganismClient)
+
+    payload = _base_payload()
+    payload["execution"] = {
+        "planner_type": "conditional_escrow",
+        "planner_inputs": {
+            "governed_vault_ref": "vault:lot-8841",
+            "condition_ref": "scan:buyer-001",
+            "dead_mans_switch_seconds": 180,
+        },
+    }
+
+    response = client.post("/api/v1/agent-actions/execute", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert call_count["route_and_execute"] == 0
+    assert body["execution_plan"]["planner_type"] == "conditional_escrow"
+    assert body["execution_result"]["status"] == "awaiting_condition"
+    assert body["execution_result"]["dead_mans_switch_seconds"] == 180
+    assert body["execution_task"]["params"]["tool_calls"] == []
 
 
 def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeypatch):
@@ -493,7 +673,8 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
         == "approval-transfer-001"
     )
     assert mapped_request.action_intent.action.parameters["endpoint_id"] == "node:jetson-orin-01"
-    assert mapped_request.action_intent.action.parameters["payload_hash"] == f"sha256:{expected_request_hash}"
+    assert mapped_request.action_intent.action.parameters["payload_hash"] is None
+    assert str(mapped_request.action_intent.action.parameters["plan_dag_hash"]).startswith("sha256:")
     assert mapped_request.action_intent.resource.lot_id == "lot-8841"
     assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
     assert mapped_request.action_intent.action.parameters["value_usd"] == 1500.0
