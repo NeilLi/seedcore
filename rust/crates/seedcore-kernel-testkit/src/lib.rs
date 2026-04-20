@@ -129,6 +129,18 @@ impl KeyResolver for FixtureStaticResolver {
                 public_material: "debug".to_string(),
                 metadata: BTreeMap::new(),
             })
+        } else if key_ref == "legacy-hmac:seedcore-evidence-service" {
+            let mut metadata = BTreeMap::new();
+            metadata.insert(
+                "hmac_secret".to_string(),
+                std::env::var("SEEDCORE_EVIDENCE_SIGNING_SECRET")
+                    .unwrap_or_else(|_| "seedcore-dev-evidence-secret".to_string()),
+            );
+            Ok(KeyMaterial {
+                key_ref: key_ref.to_string(),
+                public_material: String::new(),
+                metadata,
+            })
         } else {
             Err(VerificationError::KeyNotFound)
         }
@@ -280,6 +292,7 @@ pub fn run_transfer_fixture(
                 registration_decision_id: fixture.action_intent.registration_decision_id.clone(),
                 endpoint_id: fixture.action_intent.endpoint_id.clone(),
                 payload_hash: fixture.action_intent.payload_hash.clone(),
+                plan_dag_hash: None,
             },
             execution_preconditions: ExecutionPreconditions {
                 payload_hash: fixture.action_intent.payload_hash.clone(),
@@ -314,6 +327,7 @@ pub fn run_transfer_fixture(
                 registration_decision_id: fixture.action_intent.registration_decision_id.clone(),
                 endpoint_id: fixture.action_intent.endpoint_id.clone(),
                 payload_hash: fixture.action_intent.payload_hash.clone(),
+                plan_dag_hash: None,
                 execution_preconditions: ExecutionPreconditions {
                     payload_hash: fixture.action_intent.payload_hash.clone(),
                     endpoint_id: fixture.action_intent.endpoint_id.clone(),

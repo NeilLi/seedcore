@@ -162,8 +162,10 @@ surfaces:
   replay-grade binding; HAL-backed `transition_receipt` with
   nonce-based replay detection; forensic sealing on attested endpoints.
 - **Result verification**: `RESULT_VERIFIER` P0 is embedded in the
-  Coordinator runtime and writes authoritative fail-closed
-  lockout/quarantine state on replay mismatch in the RCT slice.
+  Coordinator runtime, verifies source-preserving replay bundles in the
+  Rust kernel, writes authoritative fail-closed lockout/quarantine
+  state on replay mismatch in the RCT slice, and revokes the specific
+  execution token in the Redis CRL on terminal fail-closed outcomes.
 - **Trust proofs**: restricted-custody flows support explicit
   `trust_proof` material for offline artifact and trust-bundle
   verification via the Rust `seedcore-verify` kernel.

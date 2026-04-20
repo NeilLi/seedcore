@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import hashlib
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock
@@ -14,6 +15,7 @@ import mock_ray_dependencies  # noqa: F401
 import pytest
 
 import seedcore.services.replay_service as replay_service_module
+from seedcore.integrations.rust_kernel import verify_source_replay_artifacts_with_rust
 from seedcore.hal.custody.transition_receipts import build_transition_receipt
 from seedcore.services.replay_service import ReplayProjectionKind, ReplayService
 from seedcore.ops.evidence.verification import build_signed_artifact
@@ -244,6 +246,71 @@ def _apply_transition_metadata(
     return record
 
 
+def test_build_rust_replay_artifacts_excludes_unsigned_artifacts() -> None:
+    service = ReplayService()
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="550e8400-e29b-41d4-a716-446655440000",
+            intent_id="intent-rust-chain",
+            asset_id="asset-1",
+        ),
+        disposition="allow",
+        trust_gap_codes=[],
+    )
+    artifacts = service._build_rust_replay_artifacts(  # noqa: SLF001
+        record=record,
+        policy_receipt=record["policy_receipt"],
+        evidence_bundle=record["evidence_bundle"],
+        transition_receipts=service._extract_transition_receipts(evidence_bundle=record["evidence_bundle"]),  # noqa: SLF001
+        approval_context=service._approval_context_from_record(record),  # noqa: SLF001
+    )
+    artifact_types = [item["artifact_type"] for item in artifacts]
+    assert "action_intent" not in artifact_types
+    assert "policy_decision" not in artifact_types
+    assert "approval_transition_history" not in artifact_types
+    assert "policy_receipt" in artifact_types
+    assert "execution_token" in artifact_types
+    assert "transition_receipt" in artifact_types
+    assert "evidence_bundle" in artifact_types
+
+
+def test_verify_source_replay_artifacts_with_rust_rejects_tampered_signature() -> None:
+    service = ReplayService()
+    record = _apply_transition_metadata(
+        _build_audit_record(
+            task_id="550e8400-e29b-41d4-a716-446655440000",
+            intent_id="intent-rust-tamper",
+            asset_id="asset-1",
+        ),
+        disposition="allow",
+        trust_gap_codes=[],
+    )
+    artifacts = service._build_rust_replay_artifacts(  # noqa: SLF001
+        record=record,
+        policy_receipt=record["policy_receipt"],
+        evidence_bundle=record["evidence_bundle"],
+        transition_receipts=service._extract_transition_receipts(evidence_bundle=record["evidence_bundle"]),  # noqa: SLF001
+        approval_context=service._approval_context_from_record(record),  # noqa: SLF001
+    )
+    verified = verify_source_replay_artifacts_with_rust(artifacts)
+    assert verified["verified"] is True
+    first_report = verified["artifact_reports"][0]
+    assert first_report["trust_anchor_status"] == "not_checked"
+    assert first_report["attestation_status"] == "not_checked"
+    assert first_report["revocation_status"] == "not_checked"
+
+    tampered = deepcopy(artifacts)
+    policy_receipt = next(item for item in tampered if item["artifact_type"] == "policy_receipt")
+    policy_receipt["artifact"]["signer"]["signature"] = "sha256:deadbeef"
+
+    rejected = verify_source_replay_artifacts_with_rust(tampered)
+    assert rejected["verified"] is False
+    assert any(
+        isinstance(item, dict) and item.get("error_code") == "signature_mismatch"
+        for item in rejected.get("artifact_reports", [])
+    )
+
+
 def test_coerce_projection_accepts_enum_repr_string() -> None:
     service = ReplayService()
     assert service._coerce_projection("ReplayProjectionKind.INTERNAL") == ReplayProjectionKind.INTERNAL
@@ -471,13 +538,11 @@ async def test_assemble_replay_record_for_asset_includes_enrichment_and_verified
     assert replay.verification_status.artifact_results["policy_receipt"]["verified"] is True
     assert replay.verification_status.artifact_results["evidence_bundle"]["verified"] is True
     assert replay.verification_status.artifact_results["rust_replay_chain"]["verified"] is True
-    assert replay.verification_status.artifact_results["rust_replay_chain"]["artifact_count"] == 6
+    assert replay.verification_status.artifact_results["rust_replay_chain"]["artifact_count"] == 4
     assert [
         item.get("artifact_type")
         for item in replay.verification_status.artifact_results["rust_replay_chain"]["artifact_reports"]
     ] == [
-        "action_intent",
-        "policy_decision",
         "policy_receipt",
         "execution_token",
         "transition_receipt",

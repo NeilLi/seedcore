@@ -137,6 +137,34 @@ class ResultVerifierJobDAO:
             },
         )
 
+    async def requeue_stale_processing_jobs(
+        self,
+        session,
+        *,
+        stale_before: datetime,
+    ) -> list[dict[str, Any]]:
+        stmt = text(
+            """
+            UPDATE result_verifier_jobs
+            SET status = 'queued', updated_at = NOW()
+            WHERE status = 'processing'
+              AND updated_at < :stale_before
+            RETURNING
+                id::text AS id,
+                event_journal_id::text AS event_journal_id,
+                task_id::text AS task_id,
+                intent_id AS intent_id,
+                asset_id AS asset_id,
+                status AS status,
+                attempt_count AS attempt_count,
+                next_attempt_at AS next_attempt_at,
+                last_error_code AS last_error_code,
+                last_error_detail AS last_error_detail
+            """
+        )
+        result = await session.execute(stmt, {"stale_before": stale_before})
+        return [dict(row) for row in result.mappings().all()]
+
     async def insert_outcome(
         self,
         session,

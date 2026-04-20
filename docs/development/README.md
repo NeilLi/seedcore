@@ -133,9 +133,10 @@ integration**, still on one wedge:
   cluster** (plus optional Kafka) is the next topology milestone—not more
   feature surface area.
 - `RESULT_VERIFIER` fail-closed enforcement is in production posture for the RCT
-  slice; remaining risk is operational hardening (DB integration tests,
-  multi-worker contention, quarantine runbooks)—see top of
-  [`current_next_steps.md`](current_next_steps.md).
+  slice, including source-preserving Rust replay verification and
+  token-specific CRL revocation on terminal mismatch; remaining risk is
+  operational hardening (DB integration tests, multi-worker contention,
+  quarantine runbooks)—see top of [`current_next_steps.md`](current_next_steps.md).
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 

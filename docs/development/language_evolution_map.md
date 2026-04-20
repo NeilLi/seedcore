@@ -336,11 +336,12 @@ Status as of March 26, 2026:
     contracts (`ReplayArtifactPayload`) instead of generic JSON-value payloads;
     verifier fixtures and receipt/replay-chain verification now operate on
     canonical typed artifact structs end-to-end
-  - replay service now emits typed Rust replay artifact inputs and validates the
-    sealed chain through Rust (`seal-replay-bundle` + `verify-chain`) as part of
-    runtime verification status reporting, including typed action intent,
-    policy decision, policy receipt, approval transition history, transition
-    receipt, execution token (allow path), and evidence bundle artifacts
+  - replay service now emits typed Rust replay artifact inputs and validates a
+    source-preserving chain through Rust (`materialize-replay-bundle` +
+    `verify-chain`) as part of runtime verification status reporting; the hot
+    path preserves real source signatures for policy receipt, execution token
+    (allow path), transition receipt, and evidence bundle artifacts instead of
+    re-signing them with the fixture debug signer
   - allow-path replay verification now enforces execution-token presence and
     validity inside the Rust replay chain (missing/invalid token fails replay
     verification)

@@ -20,6 +20,10 @@ from seedcore.coordinator.result_verifier_dao import (
     result_verifier_backoff_seconds,
     utcnow,
 )
+from seedcore.hal.custody.execution_token_revocation import (
+    execution_token_crl_ttl_seconds,
+    store_revoked_execution_token,
+)
 from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
 from seedcore.services.result_verifier_engine import (
     ResultVerifierRetryableError,
@@ -69,6 +73,15 @@ def _parse_journal_uuid(value: Any) -> uuid.UUID:
         return DEFAULT_RESULT_VERIFIER_WATERMARK_ID
 
 
+def _execution_token_id_from_record(record: Dict[str, Any]) -> Optional[str]:
+    token_id = str(record.get("token_id") or "").strip()
+    if token_id:
+        return token_id
+    evidence_bundle = record.get("evidence_bundle") if isinstance(record.get("evidence_bundle"), dict) else {}
+    candidate = str(evidence_bundle.get("execution_token_id") or "").strip()
+    return candidate or None
+
+
 class ResultVerifierRuntime:
     def __init__(self, coordinator: "Coordinator") -> None:
         self._coordinator = coordinator
@@ -83,6 +96,9 @@ class ResultVerifierRuntime:
         self._max_attempts = int(os.getenv("SEEDCORE_RESULT_VERIFIER_MAX_ATTEMPTS", "6"))
         self._overlap_seconds = float(os.getenv("SEEDCORE_RESULT_VERIFIER_OVERLAP_SECONDS", "5"))
         self._max_scan_pages = int(os.getenv("SEEDCORE_RESULT_VERIFIER_MAX_SCAN_PAGES", "8"))
+        self._processing_stale_seconds = float(
+            os.getenv("SEEDCORE_RESULT_VERIFIER_PROCESSING_STALE_SECONDS", "300")
+        )
         self._job_dao = ResultVerifierJobDAO()
         self._event_dao = DigitalTwinEventJournalDAO()
         self._governance_dao = GovernedExecutionAuditDAO()
@@ -232,11 +248,24 @@ class ResultVerifierRuntime:
             if asyncio.iscoroutine(begin_ctx):
                 begin_ctx = await begin_ctx
             async with begin_ctx:
+                await self._recover_stale_processing_jobs(session)
                 jobs = await self._job_dao.claim_jobs(session, batch_size=self._batch_size)
                 if not jobs:
                     return
                 for job in jobs:
                     await self._process_one_job(session, job, dts)
+
+    async def _recover_stale_processing_jobs(self, session: Any) -> None:
+        stale_before = utcnow() - timedelta(seconds=max(1.0, self._processing_stale_seconds))
+        stale_jobs = await self._job_dao.requeue_stale_processing_jobs(
+            session,
+            stale_before=stale_before,
+        )
+        metrics = self._metrics()
+        if metrics is None:
+            return
+        for _ in stale_jobs:
+            metrics.increment_counter("result_verifier_stale_processing_requeued_total")
 
     async def _process_one_job(self, session: Any, job: Dict[str, Any], dts: Any) -> None:
         job_id = str(job.get("id") or "")
@@ -244,6 +273,7 @@ class ResultVerifierRuntime:
         task_id = job.get("task_id")
         intent_id = job.get("intent_id")
         attempt = int(job.get("attempt_count") or 0)
+        token_id: Optional[str] = None
         t0 = time.perf_counter()
         try:
             record: Optional[Dict[str, Any]] = None
@@ -255,6 +285,7 @@ class ResultVerifierRuntime:
                 raise RuntimeError("governed_audit_record_missing")
             resolved_task_id = str(task_id or record.get("task_id") or "").strip() or None
             resolved_intent_id = str(intent_id or record.get("intent_id") or "").strip() or None
+            token_id = _execution_token_id_from_record(record)
 
             if not is_restricted_custody_transfer_record(record):
                 outcome = ResultVerifierOutcome(
@@ -273,8 +304,10 @@ class ResultVerifierRuntime:
                     apply_twin=False,
                     task_id=resolved_task_id,
                     intent_id=resolved_intent_id,
+                    token_id=token_id,
                 )
                 if self._metrics():
+                    self._metrics().increment_counter("result_verifier_non_rct_skipped_total")
                     self._metrics().increment_counter("result_verifier_jobs_processed_total")
                 return
 
@@ -288,6 +321,7 @@ class ResultVerifierRuntime:
                 apply_twin=True,
                 task_id=resolved_task_id,
                 intent_id=resolved_intent_id,
+                token_id=token_id,
             )
             if self._metrics():
                 self._metrics().increment_counter("result_verifier_jobs_processed_total")
@@ -310,6 +344,14 @@ class ResultVerifierRuntime:
                 next_attempt = max(int(self._max_attempts), attempt + 1)
                 terminal = True
                 next_at = utcnow()
+                logger.error(
+                    "RESULT_VERIFIER fail-closed orphan job_id=%s event_journal_id=%s task_id=%s intent_id=%s token_id=%s",
+                    job_id,
+                    eid,
+                    task_id,
+                    intent_id,
+                    token_id,
+                )
             elif isinstance(exc, ResultVerifierRetryableError):
                 error_code = str(exc)[:128] or "result_verifier_retryable_failure"
                 next_attempt = attempt + 1
@@ -331,6 +373,8 @@ class ResultVerifierRuntime:
                 terminal=terminal,
             )
             if self._metrics():
+                if error_code == "missing_subject_for_fail_closed":
+                    self._metrics().increment_counter("result_verifier_fail_closed_orphan_total")
                 if terminal:
                     self._metrics().increment_counter("result_verifier_terminal_fail_total")
                 else:
@@ -347,6 +391,7 @@ class ResultVerifierRuntime:
         apply_twin: bool,
         task_id: Optional[str],
         intent_id: Optional[str],
+        token_id: Optional[str],
     ) -> None:
         tid = (task_id or "").strip() or None
         iid = (intent_id or "").strip() or None
@@ -357,6 +402,16 @@ class ResultVerifierRuntime:
         quarantine_mutation_confirmed = False
 
         if apply_twin and outcome.twin_event_type:
+            if requires_fail_closed_lockout and token_id:
+                try:
+                    stored_revocation = store_revoked_execution_token(
+                        token_id=token_id,
+                        ttl_seconds=execution_token_crl_ttl_seconds(),
+                    )
+                except RuntimeError as exc:
+                    raise ResultVerifierRetryableError("execution_token_revocation_unavailable") from exc
+                if not stored_revocation:
+                    raise ResultVerifierRetryableError("execution_token_revocation_unavailable")
             mutation_result = await dts.apply_result_verifier_outcome(
                 outcome,
                 task_id=tid,

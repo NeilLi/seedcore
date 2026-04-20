@@ -647,6 +647,8 @@ pub struct ReplayArtifact {
     #[serde(flatten)]
     pub payload: ReplayArtifactPayload,
     pub artifact_hash: ArtifactHash,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_artifact_hash: Option<ArtifactHash>,
     pub signature: SignatureEnvelope,
     pub previous_artifact_hash: Option<ArtifactHash>,
 }

@@ -262,16 +262,49 @@ def seal_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) -> dict
     return output
 
 
-def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
-    bundle_path = _write_temp_json(dict(bundle))
+def materialize_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    payload = {
+        "artifacts": [dict(item) for item in artifacts if isinstance(item, Mapping)],
+    }
+    artifact_path = _write_temp_json(payload)
     try:
         output = _run_verify_cli(
             [
-                "verify-chain",
-                "--bundle",
-                bundle_path,
+                "materialize-replay-bundle",
+                "--artifact",
+                artifact_path,
             ]
         )
+    finally:
+        _unlink_quietly(artifact_path)
+    if "artifacts" not in output:
+        error = str(output.get("error") or "").strip()
+        if error == "rust_verify_timeout":
+            error_code = "rust_materialize_replay_bundle_timeout"
+        elif error == "rust_kernel_unavailable":
+            error_code = "rust_materialize_replay_bundle_unavailable"
+        else:
+            error_code = "rust_materialize_replay_bundle_failed"
+        return {
+            "error_code": error_code,
+            "details": [output],
+            "artifacts": [],
+        }
+    return output
+
+
+def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    bundle_path = _write_temp_json(dict(bundle))
+    trust_bundle_path = _verify_trust_bundle_path()
+    try:
+        args = [
+            "verify-chain",
+            "--bundle",
+            bundle_path,
+        ]
+        if trust_bundle_path is not None:
+            args.extend(["--trust-bundle", trust_bundle_path])
+        output = _run_verify_cli(args)
     finally:
         _unlink_quietly(bundle_path)
     if "verified" not in output:
@@ -289,6 +322,36 @@ def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
             "artifact_reports": [],
             "chain_checks": [],
         }
+    return output
+
+
+def verify_source_replay_artifacts_with_rust(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    bundle = materialize_replay_bundle_with_rust(artifacts)
+    if not isinstance(bundle.get("artifacts"), list) or not bundle.get("artifacts"):
+        error_code = str(bundle.get("error_code") or "").strip().lower()
+        if error_code.endswith("_timeout"):
+            replay_error_code = "rust_verify_replay_chain_timeout"
+        elif error_code.endswith("_unavailable"):
+            replay_error_code = "rust_verify_replay_chain_unavailable"
+        else:
+            replay_error_code = "rust_verify_replay_chain_failed"
+        return {
+            "verified": False,
+            "error_code": replay_error_code,
+            "details": list(bundle.get("details") or []),
+            "artifact_reports": [],
+            "chain_checks": [],
+            "materialized_bundle": bundle,
+        }
+    verified = verify_replay_bundle_with_rust(bundle)
+    verified["materialized_bundle"] = bundle
+    return verified
+
+
+def list_verify_error_codes_with_rust() -> dict[str, Any]:
+    output = _run_verify_cli(["list-error-codes"])
+    if "error_codes" not in output:
+        return {"error_codes": {}, "details": [output]}
     return output
 
 
@@ -384,6 +447,16 @@ def _resolve_verify_binary(repo_root: Path) -> Path | None:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
+
+
+def _verify_trust_bundle_path() -> str | None:
+    configured = os.getenv("SEEDCORE_VERIFY_TRUST_BUNDLE", "").strip()
+    if not configured:
+        return None
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        candidate = (_repo_root() / candidate).resolve()
+    return str(candidate)
 
 
 def _write_temp_json(payload: Mapping[str, Any]) -> str:

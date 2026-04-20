@@ -14,8 +14,9 @@ use seedcore_kernel_types::{
 use seedcore_policy_core::FrozenDecisionInput;
 use seedcore_policy_core::PolicyEvaluation;
 use seedcore_proof_core::{
-    hash_artifact, verify_detached_signature, verify_receipt_artifact, verify_replay_chain,
-    ReplayArtifact, ReplayBundle, ReplayVerificationReport, Signer, VerificationReport,
+    hash_artifact, replay_artifact_source_hash, verify_detached_signature,
+    verify_receipt_artifact, verify_replay_chain, ReplayArtifact, ReplayBundle,
+    ReplayVerificationReport, Signer, VerificationReport,
 };
 use seedcore_token_core::{
     enforce_constraints, mint_token, verify_token, ExecutionRequestContext, ExecutionToken,
@@ -152,6 +153,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let bundle = seal_replay_bundle_path(Path::new(&artifact_path))?;
             print_json(&bundle)
         }
+        "materialize-replay-bundle" => {
+            let artifact_path = flag_value(&args, "--artifact")?;
+            let bundle = materialize_replay_bundle_path(Path::new(&artifact_path))?;
+            print_json(&bundle)
+        }
+        "list-error-codes" => print_json(&error_code_manifest()),
         "explain" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let evaluation: PolicyEvaluation = read_json_file(&artifact_path)?;
@@ -169,6 +176,8 @@ fn usage() -> String {
         "  seedcore-verify verify-chain --bundle <path> [--trust-bundle <path>]",
         "  seedcore-verify inspect-trust --artifact <path> --trust-bundle <path>",
         "  seedcore-verify seal-replay-bundle --artifact <path>",
+        "  seedcore-verify materialize-replay-bundle --artifact <path>",
+        "  seedcore-verify list-error-codes",
         "  seedcore-verify verify-transfer --dir <path>",
         "  seedcore-verify summarize-transfer --dir <path>",
         "  seedcore-verify validate-approval --artifact <path>",
@@ -698,6 +707,11 @@ fn seal_replay_bundle_path(path: &Path) -> Result<ReplayBundle, String> {
     seal_replay_bundle(input)
 }
 
+fn materialize_replay_bundle_path(path: &Path) -> Result<ReplayBundle, String> {
+    let input: ReplayBundleInput = read_json_file(path)?;
+    materialize_replay_bundle(input)
+}
+
 fn seal_replay_bundle(input: ReplayBundleInput) -> Result<ReplayBundle, String> {
     if input.artifacts.is_empty() {
         return Err("empty_replay_bundle_input".to_string());
@@ -715,12 +729,129 @@ fn seal_replay_bundle(input: ReplayBundleInput) -> Result<ReplayBundle, String> 
             artifact_id: item.artifact_id,
             payload: item.payload,
             artifact_hash: artifact_hash.clone(),
+            source_artifact_hash: None,
             signature,
             previous_artifact_hash: previous_hash.clone(),
         });
         previous_hash = Some(artifact_hash);
     }
     Ok(ReplayBundle { artifacts: sealed })
+}
+
+fn materialize_replay_bundle(input: ReplayBundleInput) -> Result<ReplayBundle, String> {
+    if input.artifacts.is_empty() {
+        return Err("empty_replay_bundle_input".to_string());
+    }
+
+    let mut previous_hash: Option<ArtifactHash> = None;
+    let mut materialized = Vec::with_capacity(input.artifacts.len());
+    for item in input.artifacts {
+        let source_artifact_hash = match item.source_artifact_hash {
+            Some(value) => Some(value),
+            None => replay_artifact_source_hash(&item.payload)
+                .map_err(|error| format!("replay_hash_failed:{error}"))?,
+        };
+        let artifact_hash = match source_artifact_hash.as_ref() {
+            Some(value) => value.clone(),
+            None => hash_artifact(&item.payload)
+                .map_err(|error| format!("replay_hash_failed:{error}"))?,
+        };
+        let signature = replay_signature_for_payload(&item.payload)?;
+        materialized.push(ReplayArtifact {
+            artifact_id: item.artifact_id,
+            payload: item.payload,
+            artifact_hash: artifact_hash.clone(),
+            source_artifact_hash,
+            signature,
+            previous_artifact_hash: previous_hash.clone(),
+        });
+        previous_hash = Some(artifact_hash);
+    }
+    Ok(ReplayBundle {
+        artifacts: materialized,
+    })
+}
+
+fn replay_signature_for_payload(
+    payload: &ReplayArtifactPayload,
+) -> Result<SignatureEnvelope, String> {
+    match payload {
+        ReplayArtifactPayload::ExecutionToken(token) => Ok(normalize_replay_signature(
+            token.signature.clone(),
+            None,
+        )),
+        ReplayArtifactPayload::PolicyReceipt(receipt) => Ok(normalize_replay_signature(
+            receipt.signer.clone(),
+            receipt.trust_proof.as_ref().map(|proof| proof.key_ref.as_str()),
+        )),
+        ReplayArtifactPayload::TransitionReceipt(receipt) => Ok(normalize_replay_signature(
+            receipt.signer.clone(),
+            receipt.trust_proof.as_ref().map(|proof| proof.key_ref.as_str()),
+        )),
+        ReplayArtifactPayload::EvidenceBundle(bundle) => Ok(normalize_replay_signature(
+            bundle.signer.clone(),
+            bundle.trust_proof.as_ref().map(|proof| proof.key_ref.as_str()),
+        )),
+        ReplayArtifactPayload::ActionIntent(_)
+        | ReplayArtifactPayload::TransferApprovalEnvelope(_)
+        | ReplayArtifactPayload::PolicyDecision(_)
+        | ReplayArtifactPayload::ApprovalTransitionHistory(_) => {
+            Err("unsupported_unsigned_replay_artifact".to_string())
+        }
+    }
+}
+
+fn normalize_replay_signature(
+    mut signature: SignatureEnvelope,
+    trust_key_ref: Option<&str>,
+) -> SignatureEnvelope {
+    if signature.key_ref.is_none() {
+        if let Some(key_ref) = trust_key_ref.filter(|value| !value.trim().is_empty()) {
+            signature.key_ref = Some(key_ref.to_string());
+        } else if signature.signing_scheme == "hmac_sha256" && !signature.signer_id.trim().is_empty()
+        {
+            signature.key_ref = Some(format!("legacy-hmac:{}", signature.signer_id.trim()));
+        }
+    }
+    signature
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ErrorCodeManifest {
+    error_codes: ErrorCodeGroups,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ErrorCodeGroups {
+    direct_replay_mismatch_issues: Vec<&'static str>,
+    retryable_rust_replay_error_codes: Vec<&'static str>,
+}
+
+fn error_code_manifest() -> ErrorCodeManifest {
+    ErrorCodeManifest {
+        error_codes: ErrorCodeGroups {
+            direct_replay_mismatch_issues: vec![
+                "allow_missing_execution_token",
+                "allow_invalid_execution_token",
+                "snapshot_hash_mismatch",
+                "policy_receipt_snapshot_hash_mismatch",
+                "evidence_bundle_snapshot_hash_mismatch",
+                "state_binding_hash_mismatch",
+                "policy_receipt_state_binding_hash_mismatch",
+                "evidence_bundle_state_binding_hash_mismatch",
+                "payload_hash_mismatch",
+                "artifact_hash_mismatch",
+            ],
+            retryable_rust_replay_error_codes: vec![
+                "rust_verify_replay_chain_timeout",
+                "rust_verify_replay_chain_unavailable",
+                "rust_verify_replay_chain_failed",
+                "rust_seal_replay_bundle_timeout",
+                "rust_seal_replay_bundle_unavailable",
+                "rust_seal_replay_bundle_failed",
+            ],
+        },
+    }
 }
 
 fn verify_receipt_path(
@@ -769,8 +900,11 @@ fn inspect_trust_path(
         signature_valid: checked.signature_valid,
         artifact_hash_valid: checked.artifact_hash_valid,
         trust_anchor_valid: checked.trust_anchor_valid,
+        trust_anchor_status: checked.trust_anchor_status,
         attestation_valid: checked.attestation_valid,
+        attestation_status: checked.attestation_status,
         revocation_valid: checked.revocation_valid,
+        revocation_status: checked.revocation_status,
         replay_status: checked.replay_status,
         transparency_status: checked.transparency_status,
         verified: checked.verified,
@@ -917,6 +1051,11 @@ fn apply_trust_bundle_checks(
             .accepted_trust_anchor_types
             .iter()
             .any(|item| item == &trust_proof.trust_anchor_type);
+    report.trust_anchor_status = if report.trust_anchor_valid {
+        "valid".to_string()
+    } else {
+        "invalid".to_string()
+    };
     if !report.trust_anchor_valid {
         report.verified = false;
         report.error_code = Some("invalid_trust_anchor".to_string());
@@ -950,6 +1089,11 @@ fn apply_trust_bundle_checks(
         .as_ref()
         .map(|item| item.attestation_type != "none")
         .unwrap_or(false);
+    report.attestation_status = if report.attestation_valid {
+        "valid".to_string()
+    } else {
+        "invalid".to_string()
+    };
     if !report.attestation_valid {
         report.verified = false;
         report.error_code = Some("missing_attestation_binding".to_string());
@@ -959,12 +1103,18 @@ fn apply_trust_bundle_checks(
         if let Err(error_code) = verify_tpm_attestation_cryptography(trust_proof) {
             report.verified = false;
             report.attestation_valid = false;
+            report.attestation_status = "invalid".to_string();
             report.error_code = Some(error_code);
             return report;
         }
     }
 
     report.revocation_valid = !is_trust_proof_revoked(trust_proof, artifact, trust_bundle);
+    report.revocation_status = if report.revocation_valid {
+        "valid".to_string()
+    } else {
+        "invalid".to_string()
+    };
     if !report.revocation_valid {
         report.verified = false;
         report.error_code = Some("revoked_signer".to_string());
@@ -1466,8 +1616,11 @@ struct TrustInspectionReport {
     signature_valid: bool,
     artifact_hash_valid: bool,
     trust_anchor_valid: bool,
+    trust_anchor_status: String,
     attestation_valid: bool,
+    attestation_status: String,
     revocation_valid: bool,
+    revocation_status: String,
     replay_status: String,
     transparency_status: String,
     verified: bool,
@@ -1628,6 +1781,8 @@ struct ReplayArtifactInput {
     artifact_id: String,
     #[serde(flatten)]
     payload: ReplayArtifactPayload,
+    #[serde(default)]
+    source_artifact_hash: Option<ArtifactHash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1890,6 +2045,7 @@ mod tests {
                 .map(|artifact| ReplayArtifactInput {
                     artifact_id: artifact.artifact_id,
                     payload: artifact.payload,
+                    source_artifact_hash: None,
                 })
                 .collect(),
         };

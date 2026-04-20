@@ -21,9 +21,8 @@ from seedcore.coordinator.dao import (
 )
 from seedcore.integrations.rust_kernel import (
     mint_execution_token_with_rust,
-    seal_replay_bundle_with_rust,
     verify_approval_transition_history_with_rust,
-    verify_replay_bundle_with_rust,
+    verify_source_replay_artifacts_with_rust,
 )
 from seedcore.hal.custody.transition_receipts import verify_transition_receipt_result
 from seedcore.models import DatabaseTask as Task
@@ -1555,23 +1554,23 @@ class ReplayService:
             )
         ) == "allow"
         if rust_replay_artifacts:
-            sealed_bundle = seal_replay_bundle_with_rust(rust_replay_artifacts)
-            if isinstance(sealed_bundle.get("artifacts"), list) and sealed_bundle.get("artifacts"):
-                rust_chain_result = verify_replay_bundle_with_rust(sealed_bundle)
-                rust_chain_result["artifact_count"] = len(sealed_bundle["artifacts"])
-                rust_chain_result["artifact_ids"] = [
-                    str(item.get("artifact_id"))
-                    for item in sealed_bundle["artifacts"]
-                    if isinstance(item, dict) and item.get("artifact_id") is not None
-                ]
-            else:
-                rust_chain_result = {
-                    "verified": False,
-                    "error_code": str(sealed_bundle.get("error_code") or "rust_replay_bundle_seal_failed"),
-                    "details": list(sealed_bundle.get("details") or []),
-                    "artifact_reports": [],
-                    "chain_checks": [],
-                }
+            rust_chain_result = verify_source_replay_artifacts_with_rust(rust_replay_artifacts)
+            materialized_bundle = (
+                rust_chain_result.get("materialized_bundle")
+                if isinstance(rust_chain_result.get("materialized_bundle"), dict)
+                else {}
+            )
+            materialized_artifacts = (
+                materialized_bundle.get("artifacts")
+                if isinstance(materialized_bundle.get("artifacts"), list)
+                else []
+            )
+            rust_chain_result["artifact_count"] = len(materialized_artifacts)
+            rust_chain_result["artifact_ids"] = [
+                str(item.get("artifact_id"))
+                for item in materialized_artifacts
+                if isinstance(item, dict) and item.get("artifact_id") is not None
+            ]
             if expected_allow_chain:
                 reports = (
                     list(rust_chain_result.get("artifact_reports"))
@@ -2254,26 +2253,6 @@ class ReplayService:
             return []
 
         artifacts: List[Dict[str, Any]] = []
-        action_intent_artifact = self._rust_action_intent_artifact(
-            record=record,
-            policy_receipt=policy_receipt,
-            transition_receipts=transition_receipts,
-            evidence_bundle=evidence_bundle,
-        )
-        if action_intent_artifact:
-            artifacts.append(action_intent_artifact)
-        policy_decision_artifact = self._rust_policy_decision_artifact(
-            record=record,
-            policy_receipt=policy_receipt,
-            action_intent_id=(
-                str(action_intent_artifact.get("artifact_id"))
-                if isinstance(action_intent_artifact, dict)
-                and action_intent_artifact.get("artifact_id") is not None
-                else str(policy_receipt.get("intent_id") or record.get("intent_id") or "")
-            ),
-        )
-        if policy_decision_artifact:
-            artifacts.append(policy_decision_artifact)
         artifacts.append(policy_artifact)
         execution_token_artifact = self._rust_execution_token_artifact(
             record=record,
@@ -2283,22 +2262,6 @@ class ReplayService:
         )
         if execution_token_artifact:
             artifacts.append(execution_token_artifact)
-        approval_history = (
-            list(approval_context.get("approval_transition_history"))
-            if isinstance(approval_context.get("approval_transition_history"), list)
-            else []
-        )
-        if approval_history:
-            artifacts.append(
-                {
-                    "artifact_id": f"approval-transition-history:{policy_artifact['artifact_id']}",
-                    "artifact_type": "approval_transition_history",
-                    "artifact": {
-                        "events": [dict(item) for item in approval_history if isinstance(item, dict)],
-                        "chain_head": approval_context.get("approval_transition_head"),
-                    },
-                }
-            )
 
         for receipt in transition_receipts:
             converted = self._rust_transition_receipt_artifact(record=record, transition_receipt=receipt)
@@ -2551,6 +2514,10 @@ class ReplayService:
                         "artifact_id": token_id,
                         "artifact_type": "execution_token",
                         "artifact": dict(existing),
+                        "source_artifact_hash": self._artifact_hash_object(
+                            existing.get("artifact_hash"),
+                            fallback_seed=f"execution_token:{token_id}",
+                        ),
                     }
 
         action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
@@ -2633,6 +2600,10 @@ class ReplayService:
             "artifact_id": str(minted.get("token_id")),
             "artifact_type": "execution_token",
             "artifact": dict(minted),
+            "source_artifact_hash": self._artifact_hash_object(
+                minted.get("artifact_hash"),
+                fallback_seed=f"execution_token:{token_id}",
+            ),
         }
 
     def _rust_policy_receipt_artifact(
@@ -2665,6 +2636,10 @@ class ReplayService:
         return {
             "artifact_id": policy_receipt_id,
             "artifact_type": "policy_receipt",
+            "source_artifact_hash": self._source_signature_hash(
+                policy_receipt,
+                fallback_seed=f"policy_receipt:{policy_receipt_id}",
+            ),
             "artifact": {
                 "policy_receipt_id": policy_receipt_id,
                 "policy_decision_id": str(
@@ -2728,6 +2703,11 @@ class ReplayService:
         return {
             "artifact_id": transition_receipt_id,
             "artifact_type": "transition_receipt",
+            "source_artifact_hash": self._source_signature_hash(
+                transition_receipt,
+                fallback_seed=f"transition_receipt:{transition_receipt_id}",
+                excluded_fields={"payload_hash"},
+            ),
             "artifact": {
                 "transition_receipt_id": transition_receipt_id,
                 "intent_id": intent_id,
@@ -2841,6 +2821,10 @@ class ReplayService:
         return {
             "artifact_id": evidence_bundle_id,
             "artifact_type": "evidence_bundle",
+            "source_artifact_hash": self._source_signature_hash(
+                evidence_bundle,
+                fallback_seed=f"evidence_bundle:{evidence_bundle_id}",
+            ),
             "artifact": {
                 "evidence_bundle_id": evidence_bundle_id,
                 "intent_id": intent_id,
@@ -2936,6 +2920,28 @@ class ReplayService:
             "key_ref": key_ref,
             "attestation_level": str(metadata.get("attestation_level") or "baseline"),
             "signature": signature_value,
+        }
+
+    def _source_signature_hash(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        fallback_seed: str,
+        excluded_fields: Optional[set[str]] = None,
+    ) -> Dict[str, str]:
+        excluded = {"signature", "signer_metadata", "trust_proof"}
+        if excluded_fields:
+            excluded.update(excluded_fields)
+        canonical_payload = {
+            str(key): value
+            for key, value in payload.items()
+            if str(key) not in excluded
+        }
+        if not canonical_payload:
+            return self._artifact_hash_object(None, fallback_seed=fallback_seed)
+        return {
+            "algorithm": "sha256",
+            "value": sha256_hex(canonical_json(canonical_payload)),
         }
 
     def _co_signer_expectations(self, value: Any) -> List[Dict[str, str]]:

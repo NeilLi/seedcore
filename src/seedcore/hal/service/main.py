@@ -24,7 +24,6 @@ from fastapi import FastAPI, Header, HTTPException
 from ..custody.forensic_sealer import ForensicSealer
 from ..custody.transition_receipts import build_transition_receipt
 from pydantic import BaseModel, Field
-from ...database import get_redis_client
 from ...integrations.rust_kernel import (
     enforce_execution_token_with_rust,
     map_token_error_for_hal,
@@ -32,6 +31,19 @@ from ...integrations.rust_kernel import (
 )
 from ...models.action_intent import ExecutionPreconditions
 from ...services.mutation_receipt_service import mutation_receipt_service
+from ...database import get_redis_client
+from ..custody.execution_token_revocation import (
+    EXECUTION_TOKEN_CONSUMED_PREFIX,
+    EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY,
+    EXECUTION_TOKEN_REVOCATION_PREFIX,
+    clear_execution_token_revocation_cutoff as _clear_execution_token_revocation_cutoff,
+    execution_token_crl_ttl_seconds as _execution_token_crl_ttl_seconds,
+    get_required_redis_client as _get_required_redis_client,
+    parse_optional_iso8601 as _parse_optional_iso8601,
+    set_execution_token_revocation_cutoff as _set_execution_token_revocation_cutoff,
+    store_revoked_execution_token as _store_revoked_execution_token,
+    validate_execution_token_revocation as _shared_validate_execution_token_revocation,
+)
 
 # Internal SeedCore HAL imports
 from ..drivers.reachy_mini import ReachyMiniDriver
@@ -66,19 +78,6 @@ HAL_ALLOW_UNGOVERNED_ACTUATION = os.getenv("HAL_ALLOW_UNGOVERNED_ACTUATION", "fa
     "true",
     "yes",
 }
-EXECUTION_TOKEN_REVOCATION_PREFIX = os.getenv(
-    "SEEDCORE_EXECUTION_TOKEN_CRL_PREFIX",
-    "seedcore:execution_token:revoked:",
-)
-EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY = os.getenv(
-    "SEEDCORE_EXECUTION_TOKEN_CRL_CUTOFF_KEY",
-    "seedcore:execution_token:revoked_before",
-)
-EXECUTION_TOKEN_CONSUMED_PREFIX = os.getenv(
-    "SEEDCORE_EXECUTION_TOKEN_CONSUMED_PREFIX",
-    "seedcore:execution_token:consumed:",
-)
-DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS = 300
 _LOCAL_EXECUTION_TOKEN_CLAIMS: Dict[str, datetime] = {}
 _LOCAL_EXECUTION_TOKEN_CLAIMS_LOCK = Lock()
 
@@ -770,82 +769,24 @@ def _coerce_execution_token(token: Dict[str, Any]) -> Any:
     # Kept for compatibility if used elsewhere, though not required internally now
     return token
 
-
-
-def _execution_token_crl_ttl_seconds() -> int:
-    raw = os.getenv(
-        "SEEDCORE_EXECUTION_TOKEN_CRL_TTL_SECONDS",
-        str(DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS),
-    )
-    try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS
-
-
 def _require_admin_token(provided_token: Optional[str]) -> None:
     expected = os.getenv("SEEDCORE_HAL_ADMIN_TOKEN", "").strip()
     if not expected:
         return
     if not provided_token or not hmac.compare_digest(provided_token, expected):
         raise HTTPException(status_code=403, detail="invalid admin token")
-
-
-def _get_required_redis_client():
-    redis_client = get_redis_client()
-    if redis_client is None:
-        raise RuntimeError("Redis unavailable for execution token revocation")
-    return redis_client
-
-
-def _store_revoked_execution_token(*, token_id: str, ttl_seconds: int) -> bool:
-    redis_client = _get_required_redis_client()
-    key = f"{EXECUTION_TOKEN_REVOCATION_PREFIX}{token_id}"
-    return bool(redis_client.setex(key, max(1, ttl_seconds), "1"))
-
-
-def _set_execution_token_revocation_cutoff(issued_before: datetime) -> bool:
-    redis_client = _get_required_redis_client()
-    value = issued_before.astimezone(timezone.utc).isoformat()
-    return bool(redis_client.set(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY, value))
-
-
-def _clear_execution_token_revocation_cutoff() -> bool:
-    redis_client = _get_required_redis_client()
-    return bool(redis_client.delete(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY))
-
-
-def _parse_optional_iso8601(value: Optional[str]) -> Optional[datetime]:
-    if value is None or not value.strip():
-        return None
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
 def _validate_execution_token_revocation(
     *,
     token_id: str,
     issued_at: datetime,
 ) -> Optional[str]:
-    redis_client = get_redis_client()
-    if redis_client is None:
-        return None
-
     try:
-        if redis_client.exists(f"{EXECUTION_TOKEN_REVOCATION_PREFIX}{token_id}"):
-            return "revoked ExecutionToken"
-        if redis_client.exists(f"{EXECUTION_TOKEN_CONSUMED_PREFIX}{token_id}"):
-            return "replayed ExecutionToken"
-
-        revoked_before = redis_client.get(EXECUTION_TOKEN_REVOCATION_CUTOFF_KEY)
-        if isinstance(revoked_before, str) and revoked_before.strip():
-            revoked_before_ts = datetime.fromisoformat(revoked_before.replace("Z", "+00:00"))
-            if revoked_before_ts.tzinfo is None:
-                revoked_before_ts = revoked_before_ts.replace(tzinfo=timezone.utc)
-            if issued_at <= revoked_before_ts.astimezone(timezone.utc):
-                return "revoked ExecutionToken"
+        shared_result = _shared_validate_execution_token_revocation(
+            token_id=token_id,
+            issued_at=issued_at,
+        )
+        if shared_result is not None:
+            return shared_result
     except Exception as exc:
         logger.warning("Execution token revocation check unavailable: %s", exc)
 

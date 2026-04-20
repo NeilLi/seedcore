@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY
+from unittest.mock import call
 from unittest.mock import AsyncMock, MagicMock
 from unittest.mock import patch
 
@@ -16,12 +17,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies  # noqa: F401
 
 import seedcore.services.coordinator_service as cs
+from seedcore.integrations.rust_kernel import list_verify_error_codes_with_rust
 from seedcore.coordinator.result_verifier_dao import (
     DEFAULT_RESULT_VERIFIER_WATERMARK_ID,
     result_verifier_backoff_seconds,
 )
 from seedcore.models.replay import ReplayVerificationStatus
 from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
+import seedcore.services.result_verifier_engine as result_verifier_engine_module
 from seedcore.services.digital_twin_service import (
     DigitalTwinService,
     build_result_verifier_gate_failure_verdict,
@@ -357,6 +360,7 @@ async def test_persist_terminal_counts_quarantine_metric_only_on_confirmed_mutat
         apply_twin=True,
         task_id=str(uuid.uuid4()),
         intent_id="intent-1",
+        token_id=None,
     )
     runtime._job_dao.insert_outcome.assert_awaited_once()
     runtime._job_dao.mark_job_done.assert_awaited_once()
@@ -393,6 +397,7 @@ async def test_persist_terminal_uses_fallback_when_asset_mutation_missing() -> N
         apply_twin=True,
         task_id=str(uuid.uuid4()),
         intent_id="intent-fallback",
+        token_id=None,
     )
     dts.apply_result_verifier_outcome_fallback.assert_awaited_once()
     runtime._job_dao.mark_job_done.assert_awaited_once()
@@ -428,7 +433,95 @@ async def test_persist_terminal_hard_fails_when_no_subject_for_fail_closed() -> 
             apply_twin=True,
             task_id=str(uuid.uuid4()),
             intent_id=None,
+            token_id=None,
         )
+    runtime._job_dao.insert_outcome.assert_not_awaited()
+    runtime._job_dao.mark_job_done.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_persist_terminal_revokes_token_before_twin_mutation() -> None:
+    runtime = _build_runtime(metrics=MagicMock())
+    runtime._job_dao = SimpleNamespace(
+        insert_outcome=AsyncMock(),
+        mark_job_done=AsyncMock(),
+    )
+    call_order: list[str] = []
+
+    async def _apply_result_verifier_outcome(*args, **kwargs):
+        call_order.append("twin")
+        return {"updated": 1}
+
+    dts = SimpleNamespace(
+        apply_result_verifier_outcome=AsyncMock(side_effect=_apply_result_verifier_outcome),
+        apply_result_verifier_outcome_fallback=AsyncMock(return_value={"updated": 0}),
+    )
+    outcome = ResultVerifierOutcome(
+        verified=False,
+        failure_code="sig",
+        failure_class="integrity",
+        twin_event_type="verification_failed",
+        asset_id="asset-1",
+        issues=["tamper"],
+    )
+    with patch(
+        "seedcore.services.result_verifier_runtime.execution_token_crl_ttl_seconds",
+        return_value=123,
+    ), patch(
+        "seedcore.services.result_verifier_runtime.store_revoked_execution_token",
+        side_effect=lambda **kwargs: call_order.append("revoke") or True,
+    ) as revoke:
+        await runtime._persist_terminal(
+            session=MagicMock(),
+            job_id=str(uuid.uuid4()),
+            event_journal_id=str(uuid.uuid4()),
+            outcome=outcome,
+            dts=dts,
+            apply_twin=True,
+            task_id=str(uuid.uuid4()),
+            intent_id="intent-1",
+            token_id="token-123",
+        )
+    revoke.assert_called_once_with(token_id="token-123", ttl_seconds=123)
+    assert call_order == ["revoke", "twin"]
+
+
+@pytest.mark.asyncio
+async def test_persist_terminal_retries_when_token_revocation_is_unavailable() -> None:
+    runtime = _build_runtime(metrics=MagicMock())
+    runtime._job_dao = SimpleNamespace(
+        insert_outcome=AsyncMock(),
+        mark_job_done=AsyncMock(),
+    )
+    dts = SimpleNamespace(
+        apply_result_verifier_outcome=AsyncMock(return_value={"updated": 1}),
+        apply_result_verifier_outcome_fallback=AsyncMock(return_value={"updated": 0}),
+    )
+    outcome = ResultVerifierOutcome(
+        verified=False,
+        failure_code="sig",
+        failure_class="integrity",
+        twin_event_type="verification_failed",
+        asset_id="asset-1",
+        issues=["tamper"],
+    )
+    with patch(
+        "seedcore.services.result_verifier_runtime.store_revoked_execution_token",
+        side_effect=RuntimeError("Redis unavailable for execution token revocation"),
+    ):
+        with pytest.raises(ResultVerifierRetryableError, match="execution_token_revocation_unavailable"):
+            await runtime._persist_terminal(
+                session=MagicMock(),
+                job_id=str(uuid.uuid4()),
+                event_journal_id=str(uuid.uuid4()),
+                outcome=outcome,
+                dts=dts,
+                apply_twin=True,
+                task_id=str(uuid.uuid4()),
+                intent_id="intent-1",
+                token_id="token-123",
+            )
+    dts.apply_result_verifier_outcome.assert_not_awaited()
     runtime._job_dao.insert_outcome.assert_not_awaited()
     runtime._job_dao.mark_job_done.assert_not_awaited()
 
@@ -478,6 +571,48 @@ async def test_process_job_sets_terminal_missing_subject_error_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_job_records_fail_closed_orphan_metric_and_error_log() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._max_attempts = 6
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "token_id": "token-123",
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {"action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}}},
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._job_dao = SimpleNamespace(schedule_retry=AsyncMock())
+    runtime._persist_terminal = AsyncMock(side_effect=RuntimeError("missing_subject_for_fail_closed"))
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 0,
+    }
+    with patch("seedcore.services.result_verifier_runtime.logger.error") as error_log, patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        return_value=ResultVerifierOutcome(
+            verified=False,
+            failure_code="sig",
+            failure_class="integrity",
+            twin_event_type="verification_failed",
+            asset_id=None,
+            issues=["missing_asset"],
+        ),
+    ):
+        await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    metrics.increment_counter.assert_any_call("result_verifier_fail_closed_orphan_total")
+    error_log.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_process_job_retries_on_retryable_verifier_failure() -> None:
     metrics = MagicMock()
     runtime = _build_runtime(metrics=metrics)
@@ -515,6 +650,57 @@ async def test_process_job_retries_on_retryable_verifier_failure() -> None:
     kwargs = runtime._job_dao.schedule_retry.await_args.kwargs
     assert kwargs["terminal"] is False
     assert kwargs["error_code"] == "rust_verify_replay_chain_timeout"
+
+
+@pytest.mark.asyncio
+async def test_process_job_counts_non_rct_skip_metric() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "action_intent": {"action": {"type": "READ_ONLY_LOOKUP"}},
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._persist_terminal = AsyncMock()
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 0,
+    }
+    await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    metrics.increment_counter.assert_any_call("result_verifier_non_rct_skipped_total")
+    runtime._persist_terminal.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_processing_jobs_increments_metric() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._job_dao = SimpleNamespace(
+        requeue_stale_processing_jobs=AsyncMock(return_value=[{"id": "1"}, {"id": "2"}]),
+    )
+    await runtime._recover_stale_processing_jobs(MagicMock())
+    assert metrics.increment_counter.call_args_list == [
+        call("result_verifier_stale_processing_requeued_total"),
+        call("result_verifier_stale_processing_requeued_total"),
+    ]
+
+
+def test_result_verifier_error_code_contract_matches_rust_manifest() -> None:
+    manifest = list_verify_error_codes_with_rust()
+    error_codes = manifest.get("error_codes") if isinstance(manifest.get("error_codes"), dict) else {}
+    direct = set(error_codes.get("direct_replay_mismatch_issues") or [])
+    retryable = set(error_codes.get("retryable_rust_replay_error_codes") or [])
+    assert direct == result_verifier_engine_module._DIRECT_REPLAY_MISMATCH_ISSUES
+    assert retryable == result_verifier_engine_module._RETRYABLE_RUST_REPLAY_ERROR_CODES
 
 
 @pytest.mark.asyncio

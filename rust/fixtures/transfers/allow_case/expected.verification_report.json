@@ -59,11 +59,21 @@
       "principal_agent_id": "agent:custody_runtime_01",
       "source_registration_id": "registration:approved-001",
       "registration_decision_id": "decision:registration-001",
+      "endpoint_id": "hal://robot_sim/1",
+      "plan_dag_hash": null,
+      "payload_hash": null
+    },
+    "execution_preconditions": {
+      "resource_state_hash": null,
+      "approval_transition_head": null,
+      "context_token": null,
+      "plan_dag_hash": null,
+      "payload_hash": null,
       "endpoint_id": "hal://robot_sim/1"
     },
     "artifact_hash": {
       "algorithm": "sha256",
-      "value": "3e86bc2e254ceb2c181f689aff21ef27d40a1638390ce62d5ac8e0023a213e4f"
+      "value": "d27466e75e445b66c768e9a96182b7b520f7144574a3a20c691bd0831980634b"
     },
     "signature": {
       "signer_type": "service",
@@ -71,7 +81,7 @@
       "signing_scheme": "debug_hash_v1",
       "key_ref": "test-key",
       "attestation_level": "baseline",
-      "signature": "sha256:3e86bc2e254ceb2c181f689aff21ef27d40a1638390ce62d5ac8e0023a213e4f"
+      "signature": "sha256:d27466e75e445b66c768e9a96182b7b520f7144574a3a20c691bd0831980634b"
     }
   },
   "token_verification": {

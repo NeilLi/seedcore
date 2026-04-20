@@ -23,9 +23,9 @@ Options considered for where verification runs and what triggers it:
 
 3. **Work queue:** Persist jobs in `result_verifier_jobs` keyed by `event_journal_id` (idempotent enqueue). Workers claim with `FOR UPDATE SKIP LOCKED`. Outcomes are append-only in `result_verifier_outcomes`.
 
-4. **Verification logic:** Reuse the same replay-chain path as `ReplayService` (Python verifiers + Rust chain verification), exposed as `verify_audit_record_for_result_verifier`, so operator/API replay and automated verifier stay aligned.
+4. **Verification logic:** Reuse the same replay-chain path as `ReplayService` (Python verifiers + Rust chain verification), exposed as `verify_audit_record_for_result_verifier`, so operator/API replay and automated verifier stay aligned. The runtime materializes **source-preserving** replay bundles for Rust verification rather than re-sealing artifacts with fixture signatures.
 
-5. **Enforcement:** On terminal mismatch, **immediately** mutate **authoritative** asset twin and custody: `verification_failed` (integrity-class) vs `verification_quarantined` (trust-class), set governance lockout marker `result_verifier_lockout`, set `authority_source=result_verifier`, and block downstream RCT transfers via existing authoritative quarantine merge. **No automatic unquarantine in v1**; remediation is operator-driven.
+5. **Enforcement:** On terminal mismatch, **immediately** mutate **authoritative** asset twin and custody: `verification_failed` (integrity-class) vs `verification_quarantined` (trust-class), set governance lockout marker `result_verifier_lockout`, set `authority_source=result_verifier`, revoke the specific `execution_token_id` in the Redis CRL when present, and block downstream RCT transfers via existing authoritative quarantine merge. **No automatic unquarantine in v1**; remediation is operator-driven.
 
 6. **Scope (v1):** Automation applies to **restricted custody transfer** governed audit records only; non-RCT journal events may enqueue jobs but verify as no-op (outcome recorded, no twin mutation).
 
@@ -40,6 +40,7 @@ Options considered for where verification runs and what triggers it:
 - Coordinator replicas must coordinate via **database locking** (`SKIP LOCKED`) so only one worker processes a job; multiple coordinator instances are safe for the worker pool.
 - Operational playbooks must document **clearing quarantine** after legitimate remediation; absence of auto-unquarantine avoids silent re-enablement after partial fixes.
 - Metrics on the coordinator tracker (`result_verifier_*`) become part of trust-slice observability.
+- The current fail-closed loop revokes specific execution tokens only; it does **not** advance the global `revoked_before` cutoff.
 - If coordinator CPU or isolation becomes an issue, the same DAO/runtime can be lifted into a separate process later without changing the schema or twin event vocabulary.
 
 ## Alternatives Considered
