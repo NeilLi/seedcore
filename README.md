@@ -350,6 +350,8 @@ signing posture live in
 cargo test --workspace --manifest-path rust/Cargo.toml
 cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
 rust/target/debug/seedcore-verify summarize-transfer --dir rust/fixtures/transfers/allow_case
+bash scripts/ci/build_seedcore_proof_py_bridge.sh
+python -m pip install "$(ls -1 artifacts/wheels/seedcore_proof_py-*.whl | head -n 1)"
 
 npm --prefix ts install
 npm --prefix ts run typecheck

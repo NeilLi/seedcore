@@ -15,6 +15,7 @@ seedcore-kernel-types = { path = "../seedcore-kernel-types" }
 seedcore-proof-core = { path = "../seedcore-proof-core" }
 seedcore-token-core = { path = "../seedcore-token-core" }
 seedcore-kernel-testkit = { path = "../seedcore-kernel-testkit" }
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 pyo3 = { version = "0.23", features = ["extension-module"] }

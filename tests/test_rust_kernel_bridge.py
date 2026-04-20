@@ -86,6 +86,42 @@ def test_verify_replay_bundle_supports_json_string_bridge_signatures(monkeypatch
     assert report["chain_checks"] == ["bridge-json"]
 
 
+def test_verify_replay_bundle_passes_trust_bundle_path_to_bridge(monkeypatch):
+    rust_kernel._reset_proof_py_bridge_cache_for_tests()
+    monkeypatch.setenv("SEEDCORE_PROOF_PY_BRIDGE_ENABLED", "true")
+    monkeypatch.setattr(
+        rust_kernel,
+        "_verify_trust_bundle_path",
+        lambda: "/abs/path/trust-bundle.json",
+        raising=True,
+    )
+
+    def verify_chain(payload: str) -> str:
+        loaded = json.loads(payload)
+        assert loaded == {
+            "bundle": {"artifacts": []},
+            "trust_bundle_path": "/abs/path/trust-bundle.json",
+        }
+        return json.dumps(
+            {
+                "verified": True,
+                "error_code": None,
+                "artifact_reports": [],
+                "chain_checks": ["trust-bridge"],
+            }
+        )
+
+    fake_bridge = SimpleNamespace(verify_chain=verify_chain)
+    monkeypatch.setattr(rust_kernel, "_PROOF_PY_MODULE", fake_bridge, raising=True)
+    monkeypatch.setattr(rust_kernel, "_PROOF_PY_MODULE_CHECKED", True, raising=True)
+
+    with patch.object(rust_kernel, "_run_verify_cli", side_effect=AssertionError("cli should not run")):
+        report = rust_kernel.verify_replay_bundle_with_rust({"artifacts": []})
+
+    assert report["verified"] is True
+    assert report["chain_checks"] == ["trust-bridge"]
+
+
 def test_mint_execution_token_uses_bridge_when_available(monkeypatch):
     rust_kernel._reset_proof_py_bridge_cache_for_tests()
     monkeypatch.setenv("SEEDCORE_PROOF_PY_BRIDGE_ENABLED", "true")

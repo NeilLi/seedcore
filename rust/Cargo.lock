@@ -638,6 +638,7 @@ dependencies = [
 name = "seedcore-proof-py"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "pyo3",
  "seedcore-kernel-testkit",
  "seedcore-kernel-types",

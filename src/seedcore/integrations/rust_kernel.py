@@ -384,14 +384,21 @@ def materialize_replay_bundle_with_rust(artifacts: Sequence[Mapping[str, Any]]) 
 
 def verify_replay_bundle_with_rust(bundle: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(bundle)
-    bridged = _call_proof_py_bridge("verify_chain", payload)
+    trust_bundle_path = _verify_trust_bundle_path()
+    bridge_payload: dict[str, Any] = payload
+    if trust_bundle_path is not None:
+        bridge_payload = {
+            "bundle": payload,
+            "trust_bundle_path": trust_bundle_path,
+        }
+
+    bridged = _call_proof_py_bridge("verify_chain", bridge_payload)
     if bridged is not None:
         if "verified" in bridged:
             return bridged
         logger.debug("seedcore_proof_py bridge payload invalid for verify_chain; falling back to CLI")
 
     bundle_path = _write_temp_json(payload)
-    trust_bundle_path = _verify_trust_bundle_path()
     try:
         args = [
             "verify-chain",
