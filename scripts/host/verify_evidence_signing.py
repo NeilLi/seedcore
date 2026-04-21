@@ -98,7 +98,7 @@ def main() -> int:
     )
 
     payload = {"artifact_id": "signer-runtime", "status": "ok"}
-    _, hmac_metadata, _ = build_signed_artifact(
+    _, hmac_metadata, _, _ = build_signed_artifact(
         artifact_type="evidence_bundle",
         payload=payload,
     )
@@ -124,7 +124,7 @@ def main() -> int:
             {"evidence-ed25519-runtime": {"public_key": base64.b64encode(public_bytes).decode("ascii")}}
         )
         os.environ["SEEDCORE_EVIDENCE_ED25519_KEY_ID"] = "evidence-ed25519-runtime"
-        _, ed_metadata, _ = build_signed_artifact(
+        _, ed_metadata, _, _ = build_signed_artifact(
             artifact_type="evidence_bundle",
             payload=payload,
             endpoint_id="robot_sim://pybullet_r2d2_01",
@@ -173,9 +173,11 @@ def main() -> int:
         transition_receipts=transition_receipts,
     )
     verified = replay_service._build_verification_status(  # noqa: SLF001 - verifier target
+        record=record,
         policy_receipt=record["policy_receipt"],
         evidence_bundle=record["evidence_bundle"],
         transition_receipts=transition_receipts,
+        digital_twin_history_refs=[],
     )
     tampered = dict(transition_receipts[0])
     tampered["payload_hash"] = "broken-hash"

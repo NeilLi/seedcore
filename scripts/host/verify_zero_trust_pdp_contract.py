@@ -21,8 +21,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from seedcore.coordinator.core.governance import evaluate_intent
-from seedcore.coordinator.core import governance as governance_mod
 from seedcore.database import get_async_pg_session_factory
+from seedcore.integrations.rust_kernel import verify_execution_token_with_rust
 
 
 @dataclass
@@ -93,9 +93,9 @@ async def _fetch_table_counts() -> dict[str, int]:
     return counts
 
 
-def _verify_signature(payload: dict[str, Any], signature: str) -> bool:
-    expected = governance_mod._sign_payload(payload)  # noqa: SLF001 - intentional contract verification
-    return signature == expected
+def _verify_signature(token: dict[str, Any]) -> bool:
+    result = verify_execution_token_with_rust(token)
+    return bool(result.get("verified"))
 
 
 def _serialize_decision(decision: Any) -> dict[str, Any]:
@@ -149,7 +149,6 @@ async def main() -> int:
     deny_decision = evaluate_intent(deny_payload)
 
     token_payload = allow_decision.execution_token.model_dump(mode="json") if allow_decision.execution_token else {}
-    token_signature = token_payload.pop("signature", None)
     results.append(
         CheckResult(
             "pdp.single_call_allow_token",
@@ -157,11 +156,10 @@ async def main() -> int:
             and allow_decision.execution_token is not None
             and allow_decision.deny_code is None
             and allow_decision.policy_snapshot == active_version
-            and bool(token_signature)
-            and _verify_signature(token_payload, str(token_signature)),
+            and _verify_signature(token_payload),
             {
                 **_serialize_decision(allow_decision),
-                "token_signature_valid": _verify_signature(token_payload, str(token_signature)) if token_signature else False,
+                "token_signature_valid": _verify_signature(token_payload),
                 "token_constraints_keys": sorted((allow_decision.execution_token.constraints or {}).keys()) if allow_decision.execution_token else [],
             },
         )

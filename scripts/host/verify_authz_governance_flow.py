@@ -84,6 +84,7 @@ class SeededCase:
     slug: str
     task_id: str
     audit_id: str
+    asset_id: str
     disposition: str
     trust_gap_codes: list[str]
 
@@ -122,7 +123,7 @@ def _build_policy_receipt(
         "trust_gap_codes": trust_gap_codes,
         "timestamp": "2026-03-23T07:00:00+00:00",
     }
-    _, signer_metadata, signature = build_signed_artifact(
+    _, signer_metadata, signature, _ = build_signed_artifact(
         artifact_type="policy_receipt",
         payload=payload,
     )
@@ -184,7 +185,7 @@ def _build_evidence_bundle(
         "node_id": "robot_sim://unit-1",
         "created_at": "2026-03-23T07:03:00+00:00",
     }
-    _, signer_metadata, signature = build_signed_artifact(
+    _, signer_metadata, signature, _ = build_signed_artifact(
         artifact_type="evidence_bundle",
         payload=payload,
         endpoint_id="robot_sim://unit-1",
@@ -339,6 +340,7 @@ async def _seed_cases() -> list[SeededCase]:
                     slug=case["slug"],
                     task_id=str(task.id),
                     audit_id=appended["entry_id"],
+                    asset_id=case["asset_id"],
                     disposition=case["disposition"],
                     trust_gap_codes=list(case["trust_gap_codes"]),
                 )
@@ -367,11 +369,17 @@ def _check(name: str, ok: bool, detail: dict[str, Any]) -> CheckResult:
 def _run_checks(seeded: list[SeededCase]) -> list[CheckResult]:
     base = os.getenv("SEEDCORE_API_URL", "http://127.0.0.1:8002").rstrip("/")
     quarantine_case = _find_case(seeded, "trust-gap-quarantine")
+    quarantine_summary_case = _find_case(seeded, "trust-gap-summary")
     deny_case = _find_case(seeded, "authz-deny")
 
     search_stale = _get_json(
         f"{base}/api/v1/governance/search",
-        params={"disposition": "quarantine", "trust_gap_code": "stale_telemetry", "current_only": "true"},
+        params={
+            "asset_id": quarantine_case.asset_id,
+            "disposition": "quarantine",
+            "trust_gap_code": "stale_telemetry",
+            "current_only": "true",
+        },
     )
     search_quarantine = _get_json(
         f"{base}/api/v1/governance/search",
@@ -393,6 +401,7 @@ def _run_checks(seeded: list[SeededCase]) -> list[CheckResult]:
             "governance.search_stale",
             search_stale.get("total") == 1
             and search_stale.get("items", [{}])[0].get("task_id") == quarantine_case.task_id
+            and search_stale.get("items", [{}])[0].get("authz_transition_summary", {}).get("asset_ref") == quarantine_case.asset_id
             and search_stale.get("facets", {}).get("trust_gap_codes") == [{"value": "stale_telemetry", "count": 1}],
             {
                 "total": search_stale.get("total"),
@@ -403,8 +412,23 @@ def _run_checks(seeded: list[SeededCase]) -> list[CheckResult]:
         _check(
             "governance.search_quarantine",
             search_quarantine.get("total") >= 2
-            and {"value": "missing_lineage", "count": 1} in search_quarantine.get("facets", {}).get("trust_gap_codes", [])
-            and {"value": "stale_telemetry", "count": 1} in search_quarantine.get("facets", {}).get("trust_gap_codes", []),
+            and {
+                item.get("task_id")
+                for item in (search_quarantine.get("items") or [])
+                if isinstance(item, dict)
+            }.issuperset({quarantine_case.task_id, quarantine_summary_case.task_id})
+            and any(
+                isinstance(item, dict)
+                and item.get("value") == "missing_lineage"
+                and int(item.get("count") or 0) >= 1
+                for item in (search_quarantine.get("facets", {}).get("trust_gap_codes") or [])
+            )
+            and any(
+                isinstance(item, dict)
+                and item.get("value") == "stale_telemetry"
+                and int(item.get("count") or 0) >= 1
+                for item in (search_quarantine.get("facets", {}).get("trust_gap_codes") or [])
+            ),
             {
                 "total": search_quarantine.get("total"),
                 "facets": search_quarantine.get("facets"),

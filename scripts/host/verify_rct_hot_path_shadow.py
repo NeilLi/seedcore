@@ -243,6 +243,10 @@ def _build_request(
         ).isoformat().replace("+00:00", "Z")
     parameters: dict[str, Any] = {
         "endpoint_id": action_intent_input.get("endpoint_id"),
+        # Restricted custody transfer now requires explicit execution binding
+        # material to mint execution tokens (plan DAG hash or payload hash).
+        "payload_hash": f"fixture-payload:{case_dir.name}:{request_id}",
+        "plan_dag_hash": f"fixture-plan:{case_dir.name}",
         "approval_context": {
             "approval_envelope_id": approval_envelope_id,
             "approval_envelope_version": approval_version,

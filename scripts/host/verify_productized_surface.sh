@@ -58,11 +58,29 @@ find_runtime_audit_id() {
     echo "$SEEDCORE_AUDIT_ID"
     return 0
   fi
-  if ! command -v psql >/dev/null 2>&1; then
+  if ! command -v psql >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
     return 1
   fi
-  psql -d "$DB_NAME" -Atc \
-    "select id::text from public.governed_execution_audit order by recorded_at desc limit 1;" 2>/dev/null | head -n 1
+  local id
+  id="$(
+    psql -d "$DB_NAME" -Atc \
+      "select id::text
+       from public.governed_execution_audit
+       where record_type = 'execution_receipt'
+         and evidence_bundle is not null
+       order by recorded_at desc
+       limit 1;" 2>/dev/null || true
+  )"
+  id="$(printf '%s\n' "${id}" | head -n 1 | tr -d '[:space:]')"
+  if [[ -z "${id}" ]]; then
+    return 1
+  fi
+  if ! curl -fsS "${RUNTIME_API_BASE}/replay?audit_id=${id}&projection=internal" >/dev/null 2>&1; then
+    echo "[FAIL] Latest runtime execution receipt audit_id=${id} is not replayable. Refusing to sign off on an older record." >&2
+    return 1
+  fi
+  echo "${id}"
+  return 0
 }
 
 require_bin curl

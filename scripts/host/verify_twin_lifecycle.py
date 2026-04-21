@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timedelta, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -20,6 +21,7 @@ if str(TESTS_ROOT) not in sys.path:
 
 from seedcore.services.custody_graph_service import CustodyGraphService
 from seedcore.services.digital_twin_service import DigitalTwinService
+from seedcore.ops.evidence.verification import build_signed_artifact
 
 
 @dataclass
@@ -180,12 +182,94 @@ async def _run() -> int:
     )
 
     captured.clear()
+    issued_at = datetime.now(timezone.utc)
+    valid_until = issued_at + timedelta(minutes=5)
+    policy_payload = {
+        "policy_receipt_id": "policy-settlement",
+        "policy_decision_id": "decision-settlement",
+        "task_id": "task-settlement",
+        "intent_id": "intent-settlement",
+        "policy_version": "snapshot:test",
+        "decision": {"allowed": True, "disposition": "allow"},
+        "evaluated_rules": ["zone_match"],
+        "authz_disposition": "allow",
+        "timestamp": issued_at.isoformat(),
+    }
+    _, policy_signer, policy_signature, policy_trust_proof = build_signed_artifact(
+        artifact_type="policy_receipt",
+        payload=policy_payload,
+    )
+    execution_token = {
+        "token_id": "token-settlement",
+        "intent_id": "intent-settlement",
+        "issued_at": issued_at.isoformat(),
+        "valid_until": valid_until.isoformat(),
+        "contract_version": "snapshot:test",
+        "constraints": {"endpoint_id": "robot_sim://unit-1"},
+    }
+    transition_receipt_payload = {
+        "transition_receipt_id": "tr-settlement",
+        "intent_id": "intent-settlement",
+        "token_id": "token-settlement",
+        "actuator_endpoint": "robot_sim://unit-1",
+        "hardware_uuid": "robot-1",
+        "actuator_result_hash": "actuator-hash",
+        "from_zone": "staging-a",
+        "to_zone": "vault-a",
+        "target_zone": "vault-a",
+        "executed_at": issued_at.isoformat(),
+    }
+    _, transition_signer, transition_signature, transition_trust_proof = build_signed_artifact(
+        artifact_type="transition_receipt",
+        payload=transition_receipt_payload,
+        endpoint_id="robot_sim://unit-1",
+        trust_level="attested",
+        node_id="robot_sim://unit-1",
+    )
+    transition_receipt = {
+        **transition_receipt_payload,
+        "signer_metadata": transition_signer.model_dump(mode="json"),
+        "signature": transition_signature,
+        "trust_proof": transition_trust_proof.model_dump(mode="json") if transition_trust_proof else None,
+    }
+    evidence_payload = {
+        "evidence_bundle_id": "bundle-settlement",
+        "task_id": "task-settlement",
+        "intent_id": "intent-settlement",
+        "execution_token_id": "token-settlement",
+        "policy_receipt_id": "policy-settlement",
+        "transition_receipt_ids": ["tr-settlement"],
+        "evidence_inputs": {
+            "execution_summary": {"node_id": "robot_sim://unit-1"},
+            "transition_receipts": [transition_receipt],
+        },
+        "node_id": "robot_sim://unit-1",
+        "created_at": issued_at.isoformat(),
+    }
+    _, evidence_signer, evidence_signature, evidence_trust_proof = build_signed_artifact(
+        artifact_type="evidence_bundle",
+        payload=evidence_payload,
+        endpoint_id="robot_sim://unit-1",
+        trust_level="attested",
+        node_id="robot_sim://unit-1",
+    )
     await twin_service.settle_from_evidence_bundle(
         relevant_twin_snapshot={"asset": {"twin_kind": "asset", "twin_id": "asset:asset-1", "lifecycle_state": "IN_TRANSIT", "revision_stage": "EXECUTED"}},
         task_id="task-settlement",
         intent_id="intent-settlement",
-        execution_token={"constraints": {"endpoint_id": "robot_sim://unit-1"}},
-        evidence_bundle={"node_id": "robot_sim://unit-1", "evidence_inputs": {"execution_summary": {"node_id": "robot_sim://unit-1"}}},
+        policy_receipt={
+            **policy_payload,
+            "signer_metadata": policy_signer.model_dump(mode="json"),
+            "signature": policy_signature,
+            "trust_proof": policy_trust_proof.model_dump(mode="json") if policy_trust_proof else None,
+        },
+        execution_token=execution_token,
+        evidence_bundle={
+            **evidence_payload,
+            "signer_metadata": evidence_signer.model_dump(mode="json"),
+            "signature": evidence_signature,
+            "trust_proof": evidence_trust_proof.model_dump(mode="json") if evidence_trust_proof else None,
+        },
     )
     results.append(
         CheckResult(

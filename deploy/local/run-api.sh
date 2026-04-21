@@ -9,6 +9,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 cd "${PROJECT_ROOT}"
 
 source .venv/bin/activate
+# Import host-mode defaults (including required RCT fail-closed posture flags).
+source "${SCRIPT_DIR}/host-env.sh"
 
 export PATH="/opt/homebrew/opt/postgresql@17/bin:${PATH}"
 export PYTHONPATH="${PROJECT_ROOT}/src"

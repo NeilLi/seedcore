@@ -38,17 +38,9 @@ def _api_url(base_env: str, default: str, path: str) -> str:
 
 
 def _sign_token_payload(payload: dict[str, object]) -> str:
-    token_base = {
-        "token_id": payload["token_id"],
-        "intent_id": payload["intent_id"],
-        "issued_at": payload["issued_at"],
-        "valid_until": payload["valid_until"],
-        "contract_version": payload["contract_version"],
-        "constraints": payload["constraints"],
-    }
     from seedcore.hal.service import main as hal_main
 
-    return hal_main._expected_execution_token_signature(token_base)  # noqa: SLF001 - intentional verifier
+    return hal_main._expected_execution_token_signature(payload)  # noqa: SLF001 - intentional verifier
 
 
 def _build_token(
@@ -60,8 +52,10 @@ def _build_token(
 ) -> dict[str, object]:
     issued_at = datetime.now(timezone.utc)
     constraints: dict[str, str] = {}
+    execution_preconditions: dict[str, str] = {}
     if endpoint_id is not None:
         constraints["endpoint_id"] = endpoint_id
+        execution_preconditions["endpoint_id"] = endpoint_id
     if target_zone is not None:
         constraints["target_zone"] = target_zone
     payload: dict[str, object] = {
@@ -71,6 +65,7 @@ def _build_token(
         "valid_until": (issued_at + timedelta(seconds=ttl_seconds)).isoformat(),
         "contract_version": "snapshot:test",
         "constraints": constraints,
+        "execution_preconditions": execution_preconditions,
     }
     payload["signature"] = _sign_token_payload(payload)
     return payload
