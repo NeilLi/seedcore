@@ -557,11 +557,13 @@ Recommended contradiction outcomes:
 
 Recommended deterministic error behavior:
 
-- `400` malformed semantic contract (for example unsupported `workflow.type`)
+- `400` reserved for higher-level semantic contract failures that pydantic
+  validation cannot express; not required in v1
 - `401` missing/invalid caller authentication
 - `403` caller is authenticated but not authorized for requested workflow scope
 - `409` idempotency conflict (same key, different canonical request hash)
-- `422` schema/validation failure
+- `422` schema/validation failure (this covers `workflow.type` rejection,
+  unknown top-level fields, and every other request-shape rule defined above)
 - `503` dependency unavailable (for example policy graph or approval store)
 
 Error payload minimum:

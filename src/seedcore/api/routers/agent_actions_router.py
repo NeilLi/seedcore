@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, List, Mapping, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from sqlalchemy import text
 
@@ -89,10 +89,15 @@ class _AgentActionStoredRecord:
     request_payload: Dict[str, Any] = field(default_factory=dict)
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @dataclass
 class _AgentActionIdempotencyEntry:
     request_id: str
     request_hash: str
+    created_at: datetime = field(default_factory=_utcnow)
 
 
 @dataclass
@@ -131,6 +136,72 @@ REQUEST_RECORD_TTL_SECONDS = max(
     86400,
     int(os.getenv("SEEDCORE_AGENT_ACTION_REQUEST_RECORD_TTL_SECONDS", "86400")),
 )
+
+
+def _is_expired(reference: datetime, *, now: datetime | None = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return (now - reference).total_seconds() > REQUEST_RECORD_TTL_SECONDS
+
+
+def _gc_in_memory_stores(*, now: datetime | None = None) -> None:
+    """Prune in-memory records/idempotency entries older than the TTL.
+
+    Redis mode already enforces TTL via `SETEX`; this keeps the in-memory
+    fallback honest about the contract's "≥24h retention" rule instead of
+    holding records for the process lifetime.
+    """
+
+    now = now or datetime.now(timezone.utc)
+    with _REQUEST_RECORDS_LOCK:
+        expired_ids = [
+            req_id
+            for req_id, record in _REQUEST_RECORDS_BY_ID.items()
+            if _is_expired(record.recorded_at, now=now)
+        ]
+        for req_id in expired_ids:
+            _REQUEST_RECORDS_BY_ID.pop(req_id, None)
+
+        expired_idem = [
+            key
+            for key, entry in _IDEMPOTENCY_ENTRIES_BY_KEY.items()
+            if _is_expired(entry.created_at, now=now)
+        ]
+        for key in expired_idem:
+            _IDEMPOTENCY_ENTRIES_BY_KEY.pop(key, None)
+
+        expired_closures = [
+            closure_id
+            for closure_id, record in _CLOSURE_RECORDS_BY_ID.items()
+            if _is_expired(record.recorded_at, now=now)
+        ]
+        for closure_id in expired_closures:
+            _CLOSURE_RECORDS_BY_ID.pop(closure_id, None)
+
+        expired_closure_idem = [
+            key
+            for key, entry in _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY.items()
+            if _is_expired(entry.created_at, now=now)
+        ]
+        for key in expired_closure_idem:
+            _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY.pop(key, None)
+
+        expired_execute = [
+            req_id
+            for req_id, record in _EXECUTE_RECORDS_BY_REQUEST_ID.items()
+            if _is_expired(record.recorded_at, now=now)
+        ]
+        for req_id in expired_execute:
+            _EXECUTE_RECORDS_BY_REQUEST_ID.pop(req_id, None)
+
+        expired_execute_idem = [
+            key
+            for key, entry in _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.items()
+            if _is_expired(entry.created_at, now=now)
+        ]
+        for key in expired_execute_idem:
+            _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.pop(key, None)
 REDIS_REQUEST_RECORD_KEY_PREFIX = "seedcore:agent_actions:req"
 REDIS_IDEMPOTENCY_KEY_PREFIX = "seedcore:agent_actions:idem"
 REDIS_CLOSURE_RECORD_KEY_PREFIX = "seedcore:agent_actions:closure"
@@ -157,10 +228,193 @@ SETTLEMENT_HANDOFF_ENABLED = os.getenv(
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# --- Gateway authentication (feature-flagged) ---
+#
+# Default `off` preserves the historical behavior for internal callers (Kafka
+# ingress, in-process evaluation, tests).  Enterprise deployments should set
+# `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_MODE=shared_key` and
+# `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_TOKEN=<secret>` to enforce the
+# §"Security Requirements" boundary in agent_action_gateway_contract.md.
+GATEWAY_AUTH_MODE = os.getenv(
+    "SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_MODE",
+    "off",
+).strip().lower()
+GATEWAY_AUTH_TOKEN = os.getenv(
+    "SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_TOKEN",
+    "",
+).strip()
+_GATEWAY_AUTH_ALLOWED_ROLES_RAW = os.getenv(
+    "SEEDCORE_AGENT_ACTION_GATEWAY_ALLOWED_ROLES",
+    "",
+).strip()
+GATEWAY_AUTH_ALLOWED_ROLES: set[str] = {
+    item.strip()
+    for item in _GATEWAY_AUTH_ALLOWED_ROLES_RAW.split(",")
+    if item.strip()
+}
+
+
+def _gateway_auth_enabled() -> bool:
+    return GATEWAY_AUTH_MODE in {"shared_key", "bearer"}
+
+
+def require_gateway_caller(request: Request) -> None:
+    """FastAPI dependency enforcing the gateway authentication boundary.
+
+    When `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_MODE` is unset or `off`, this is
+    a no-op and the route is accepted for any caller (current behavior).
+
+    When enabled, the caller must present a Bearer token that matches
+    `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_TOKEN`; otherwise the handler returns
+    `401` per the contract's Error Contract.
+    """
+
+    if not _gateway_auth_enabled():
+        return
+    if not GATEWAY_AUTH_TOKEN:
+        # Misconfigured deployment: auth enabled but no secret.  Prefer a
+        # clear 503 over accidentally permitting requests.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "gateway_auth_not_configured",
+                "message": "agent action gateway auth is enabled but no token is configured",
+            },
+        )
+    authorization = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error_code": "missing_credentials",
+                "message": "Authorization header is required for the agent action gateway",
+            },
+        )
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].strip().lower() != "bearer" or not parts[1].strip():
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error_code": "invalid_credentials",
+                "message": "Authorization header must be a Bearer token",
+            },
+        )
+    token = parts[1].strip()
+    if token != GATEWAY_AUTH_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error_code": "invalid_credentials",
+                "message": "Bearer token did not match the expected gateway credential",
+            },
+        )
+
+
+def _enforce_gateway_role_scope(payload: "AgentActionEvaluateRequest") -> None:
+    """Return 403 when an authenticated caller requests a workflow scope they
+    are not on the allowlist for.
+
+    No-op when either auth is disabled or no allowlist is configured.
+    """
+
+    if not _gateway_auth_enabled() or not GATEWAY_AUTH_ALLOWED_ROLES:
+        return
+    role = str(payload.principal.role_profile or "").strip()
+    if role not in GATEWAY_AUTH_ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error_code": "role_not_authorized_for_workflow",
+                "message": (
+                    "authenticated principal role is not authorized for the "
+                    "requested agent action gateway workflow"
+                ),
+                "request_id": payload.request_id,
+                "role_profile": role or None,
+            },
+        )
+
+
 def _to_utc_iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _log_gateway_decision(
+    *,
+    payload: "AgentActionEvaluateRequest",
+    response: "AgentActionEvaluateResponse",
+) -> None:
+    """Emit a single structured log line per gateway evaluate decision.
+
+    Field set is the observability contract from
+    `docs/development/agent_action_gateway_contract.md §Observability Requirements`.
+    """
+
+    try:
+        scope = payload.authority_scope
+        verdict = response.authority_scope_verdict if isinstance(response.authority_scope_verdict, dict) else {}
+        logger.info(
+            "agent_action_gateway.evaluate.decision",
+            extra={
+                "event": "agent_action_gateway.evaluate.decision",
+                "request_id": payload.request_id,
+                "idempotency_key": payload.idempotency_key,
+                "agent_id": payload.principal.agent_id,
+                "hardware_fingerprint_id": (
+                    payload.principal.hardware_fingerprint.fingerprint_id
+                    if payload.principal.hardware_fingerprint is not None
+                    else None
+                ),
+                "asset_id": payload.asset.asset_id,
+                "product_ref": payload.asset.product_ref,
+                "approval_envelope_id": payload.approval.approval_envelope_id,
+                "scope_id": scope.scope_id if scope is not None else None,
+                "expected_coordinate_ref": (
+                    scope.expected_coordinate_ref if scope is not None else None
+                ),
+                "disposition": response.decision.disposition,
+                "reason_code": response.decision.reason_code,
+                "policy_snapshot_ref": response.decision.policy_snapshot_ref,
+                "latency_ms": response.latency_ms,
+                "authority_scope_status": verdict.get("status") if isinstance(verdict, dict) else None,
+                "trust_gaps": list(response.trust_gaps),
+            },
+        )
+    except Exception:
+        # Observability must never break the request path.
+        logger.debug("agent_action_gateway.evaluate.decision logging failed", exc_info=True)
+
+
+def _log_closure_decision(
+    *,
+    payload: "AgentActionClosureRequest",
+    response: "AgentActionClosureResponse",
+) -> None:
+    """Emit a single structured log line per gateway closure decision."""
+
+    try:
+        logger.info(
+            "agent_action_gateway.closure.decision",
+            extra={
+                "event": "agent_action_gateway.closure.decision",
+                "request_id": payload.request_id,
+                "closure_id": payload.closure_id,
+                "idempotency_key": payload.idempotency_key,
+                "evidence_bundle_id": payload.evidence_bundle_id,
+                "forensic_block_id": (
+                    payload.forensic_block.forensic_block_id
+                    if payload.forensic_block is not None
+                    else None
+                ),
+                "settlement_status": response.settlement_status,
+                "replay_status": response.replay_status,
+                "linked_disposition": response.linked_disposition,
+            },
+        )
+    except Exception:
+        logger.debug("agent_action_gateway.closure.decision logging failed", exc_info=True)
 
 
 def _map_to_hot_path_request(
@@ -252,7 +506,14 @@ def _map_to_hot_path_request(
         ),
         resource=IntentResource(
             asset_id=payload.asset.asset_id,
-            target_zone=payload.asset.to_zone,
+            target_zone=(
+                payload.asset.to_zone
+                or (
+                    payload.authority_scope.expected_to_zone
+                    if payload.authority_scope is not None
+                    else None
+                )
+            ),
             provenance_hash=payload.asset.provenance_hash,
             lot_id=payload.asset.lot_id,
             category_envelope={
@@ -292,6 +553,8 @@ def _map_to_hot_path_request(
             observed_at=_to_utc_iso(payload.telemetry.observed_at),
             freshness_seconds=payload.telemetry.freshness_seconds,
             max_allowed_age_seconds=payload.telemetry.max_allowed_age_seconds,
+            current_zone=payload.telemetry.current_zone,
+            current_coordinate_ref=payload.telemetry.current_coordinate_ref,
             evidence_refs=list(payload.telemetry.evidence_refs),
         ),
         request_schema_bundle=request_schema_bundle,
@@ -396,6 +659,13 @@ def _build_fingerprint_verdict(payload: AgentActionEvaluateRequest) -> Dict[str,
     }
 
 
+def _physical_presence_hash_missing(payload: AgentActionEvaluateRequest) -> bool:
+    forensic = payload.forensic_context
+    if forensic is None or forensic.fingerprint_components is None:
+        return True
+    return not str(forensic.fingerprint_components.physical_presence_hash or "").strip()
+
+
 def _apply_forensic_scope_guards(
     *,
     payload: AgentActionEvaluateRequest,
@@ -404,6 +674,31 @@ def _apply_forensic_scope_guards(
     if payload.authority_scope is None:
         return response
     disposition = str(response.decision.disposition or "").strip().lower()
+
+    # Remap internal `stale_telemetry` quarantine to the gateway contract's
+    # canonical reason code `telemetry_too_stale_for_scope_validation` so the
+    # external contract stays stable even if the hot path's internal naming
+    # evolves.
+    if disposition == "quarantine" and str(response.decision.reason_code or "").strip().lower() == "stale_telemetry":
+        trust_gaps = list(response.trust_gaps)
+        if "telemetry_too_stale_for_scope_validation" not in trust_gaps:
+            trust_gaps.append("telemetry_too_stale_for_scope_validation")
+        trust_gaps = [item for item in trust_gaps if item != "stale_telemetry"]
+        return response.model_copy(
+            update={
+                "decision": response.decision.model_copy(
+                    update={
+                        "reason_code": "telemetry_too_stale_for_scope_validation",
+                        "reason": (
+                            "Telemetry freshness exceeds the bound required for "
+                            "scope validation."
+                        ),
+                    }
+                ),
+                "trust_gaps": trust_gaps,
+            }
+        )
+
     if disposition != "allow":
         return response
 
@@ -414,9 +709,21 @@ def _apply_forensic_scope_guards(
         if str(item).strip()
     ]
     if mismatch_keys:
+        if "coordinate_scope_mismatch" in mismatch_keys:
+            reason_code = "coordinate_scope_mismatch"
+            reason = "Coordinate-bound authority scope contradicts observed telemetry."
+        elif "asset_product_scope_mismatch" in mismatch_keys:
+            reason_code = "asset_product_scope_mismatch"
+            reason = "Product identity in request contradicts the persisted authority scope."
+        else:
+            reason_code = "authority_scope_mismatch"
+            reason = "Authority scope mismatch detected for the requested transfer."
+
         trust_gaps = list(response.trust_gaps)
         if "authority_scope_mismatch" not in trust_gaps:
             trust_gaps.append("authority_scope_mismatch")
+        if reason_code not in trust_gaps:
+            trust_gaps.append(reason_code)
         minted_artifacts = [item for item in response.minted_artifacts if item != "ExecutionToken"]
         return response.model_copy(
             update={
@@ -424,12 +731,8 @@ def _apply_forensic_scope_guards(
                     update={
                         "allowed": False,
                         "disposition": "deny",
-                        "reason_code": (
-                            "coordinate_scope_mismatch"
-                            if "coordinate_scope_mismatch" in mismatch_keys
-                            else "authority_scope_mismatch"
-                        ),
-                        "reason": "Authority scope mismatch detected for the requested transfer.",
+                        "reason_code": reason_code,
+                        "reason": reason,
                     }
                 ),
                 "execution_token": None,
@@ -440,9 +743,20 @@ def _apply_forensic_scope_guards(
 
     expected_coordinate_ref = str(payload.authority_scope.expected_coordinate_ref or "").strip()
     if expected_coordinate_ref and not str(payload.telemetry.current_coordinate_ref or "").strip():
+        # Distinguish "no coordinate proof at all" (physical presence hash
+        # missing → `physical_presence_proof_missing`) from the weaker
+        # "coordinate telemetry was not delivered in this payload"
+        # (→ `coordinate_scope_unverified`).
+        if _physical_presence_hash_missing(payload):
+            reason_code = "physical_presence_proof_missing"
+            reason = "No physical-presence fingerprint proof was supplied for coordinate-bound authority."
+        else:
+            reason_code = "coordinate_scope_unverified"
+            reason = "Coordinate-bound authority cannot be verified from current telemetry."
+
         trust_gaps = list(response.trust_gaps)
-        if "coordinate_scope_unverified" not in trust_gaps:
-            trust_gaps.append("coordinate_scope_unverified")
+        if reason_code not in trust_gaps:
+            trust_gaps.append(reason_code)
         minted_artifacts = [item for item in response.minted_artifacts if item != "ExecutionToken"]
         return response.model_copy(
             update={
@@ -450,8 +764,8 @@ def _apply_forensic_scope_guards(
                     update={
                         "allowed": False,
                         "disposition": "quarantine",
-                        "reason_code": "coordinate_scope_unverified",
-                        "reason": "Coordinate-bound authority cannot be verified from current telemetry.",
+                        "reason_code": reason_code,
+                        "reason": reason,
                     }
                 ),
                 "execution_token": None,
@@ -970,8 +1284,13 @@ async def _read_request_record(request_id: str) -> _AgentActionStoredRecord | No
                     return _record_from_json_payload(parsed)
         except Exception:
             logger.warning("Agent action Redis request-record read failed; falling back to in-memory.", exc_info=True)
+    _gc_in_memory_stores()
     with _REQUEST_RECORDS_LOCK:
-        return _REQUEST_RECORDS_BY_ID.get(request_id)
+        record = _REQUEST_RECORDS_BY_ID.get(request_id)
+        if record is not None and _is_expired(record.recorded_at):
+            _REQUEST_RECORDS_BY_ID.pop(request_id, None)
+            return None
+        return record
 
 
 async def _write_request_record(record: _AgentActionStoredRecord) -> None:
@@ -1036,8 +1355,12 @@ async def _claim_idempotency_key(
             return False, await _read_idempotency_entry(idempotency_key)
         except Exception:
             logger.warning("Agent action Redis idempotency claim failed; falling back to in-memory.", exc_info=True)
+    _gc_in_memory_stores()
     with _REQUEST_RECORDS_LOCK:
         existing_entry = _IDEMPOTENCY_ENTRIES_BY_KEY.get(idempotency_key)
+        if existing_entry is not None and _is_expired(existing_entry.created_at):
+            _IDEMPOTENCY_ENTRIES_BY_KEY.pop(idempotency_key, None)
+            existing_entry = None
         if existing_entry is None:
             _IDEMPOTENCY_ENTRIES_BY_KEY[idempotency_key] = _AgentActionIdempotencyEntry(
                 request_id=request_id,
@@ -1112,8 +1435,13 @@ async def _read_closure_record(closure_id: str) -> _AgentActionClosureStoredReco
                     return _closure_record_from_json_payload(parsed)
         except Exception:
             logger.warning("Agent action Redis closure-record read failed; falling back to in-memory.", exc_info=True)
+    _gc_in_memory_stores()
     with _REQUEST_RECORDS_LOCK:
-        return _CLOSURE_RECORDS_BY_ID.get(closure_id)
+        record = _CLOSURE_RECORDS_BY_ID.get(closure_id)
+        if record is not None and _is_expired(record.recorded_at):
+            _CLOSURE_RECORDS_BY_ID.pop(closure_id, None)
+            return None
+        return record
 
 
 async def _read_execute_idempotency_entry(idempotency_key: str) -> Dict[str, Any] | None:
@@ -2862,8 +3190,10 @@ async def evaluate_agent_action(
         default=False,
         description="Preflight mode: evaluate policy and trust gaps without minting ExecutionToken.",
     ),
+    _gateway_caller: None = Depends(require_gateway_caller),
 ) -> AgentActionEvaluateResponse:
     payload = _parse_validate_payload(payload_body, model=AgentActionEvaluateRequest)
+    _enforce_gateway_role_scope(payload)
     requested_no_execute = bool(no_execute or payload.options.no_execute)
     request_hash = _canonical_gateway_payload_hash(payload, requested_no_execute=requested_no_execute)
     if get_async_pg_session_factory() is None:
@@ -2981,6 +3311,7 @@ async def evaluate_agent_action(
                 request_payload=payload.model_dump(mode="json"),
             )
         )
+        _log_gateway_decision(payload=payload, response=response)
         return response
     except Exception:
         if claimed:
@@ -2996,8 +3327,10 @@ async def evaluate_agent_action(
 async def execute_agent_action(
     payload_body: Dict[str, Any] = Body(...),
     debug: bool = Query(default=False, description="Include check-by-check diagnostics."),
+    _gateway_caller: None = Depends(require_gateway_caller),
 ) -> AgentActionExecuteResponse:
     payload = _parse_validate_payload(payload_body, model=AgentActionEvaluateRequest)
+    _enforce_gateway_role_scope(payload)
     claimed = False
     execute_request_hash = _canonical_gateway_payload_hash(payload, requested_no_execute=False)
     try:
@@ -3209,7 +3542,10 @@ async def execute_agent_action(
     "/agent-actions/requests/{request_id}",
     response_model=AgentActionRequestRecordResponse,
 )
-async def get_agent_action_request_record(request_id: str) -> AgentActionRequestRecordResponse:
+async def get_agent_action_request_record(
+    request_id: str,
+    _gateway_caller: None = Depends(require_gateway_caller),
+) -> AgentActionRequestRecordResponse:
     request_key = str(request_id).strip()
     record = await _read_request_record(request_key)
     if record is None:
@@ -3224,6 +3560,7 @@ async def get_agent_action_request_record(request_id: str) -> AgentActionRequest
 async def close_agent_action(
     request_id: str,
     payload_body: Dict[str, Any] = Body(...),
+    _gateway_caller: None = Depends(require_gateway_caller),
 ) -> AgentActionClosureResponse:
     payload = _parse_validate_payload(
         payload_body,
@@ -3337,6 +3674,7 @@ async def close_agent_action(
                 response=response,
             )
         )
+        _log_closure_decision(payload=payload, response=response)
         return response
     except Exception:
         if claimed:
@@ -3352,7 +3690,10 @@ async def close_agent_action(
     "/agent-actions/closures/{closure_id}",
     response_model=AgentActionClosureRecordResponse,
 )
-async def get_agent_action_closure_record(closure_id: str) -> AgentActionClosureRecordResponse:
+async def get_agent_action_closure_record(
+    closure_id: str,
+    _gateway_caller: None = Depends(require_gateway_caller),
+) -> AgentActionClosureRecordResponse:
     closure_key = str(closure_id).strip()
     record = await _read_closure_record(closure_key)
     if record is None:

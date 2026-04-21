@@ -28,6 +28,8 @@ class HotPathTelemetryContext(BaseModel):
     observed_at: str
     freshness_seconds: Optional[int] = Field(default=None, ge=0)
     max_allowed_age_seconds: Optional[int] = Field(default=None, ge=0)
+    current_zone: Optional[str] = None
+    current_coordinate_ref: Optional[str] = None
     evidence_refs: List[str] = Field(default_factory=list)
 
 

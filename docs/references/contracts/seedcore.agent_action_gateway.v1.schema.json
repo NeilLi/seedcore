@@ -453,6 +453,18 @@
               "default": null,
               "title": "Lot Id"
             },
+            "order_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Order Ref"
+            },
             "product_ref": {
               "anyOf": [
                 {
@@ -605,6 +617,58 @@
           "title": "AgentActionAuthorityScope",
           "type": "object"
         },
+        "AgentActionExecutionDirective": {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "additionalProperties": true,
+              "title": "Args",
+              "type": "object"
+            },
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool_name"
+          ],
+          "title": "AgentActionExecutionDirective",
+          "type": "object"
+        },
+        "AgentActionExecutionRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "default_directive": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentActionExecutionDirective"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "planner_inputs": {
+              "additionalProperties": true,
+              "title": "Planner Inputs",
+              "type": "object"
+            },
+            "planner_type": {
+              "default": "physical_digital_handover",
+              "enum": [
+                "physical_digital_handover",
+                "conditional_escrow",
+                "delegated_authority"
+              ],
+              "title": "Planner Type",
+              "type": "string"
+            }
+          },
+          "title": "AgentActionExecutionRequest",
+          "type": "object"
+        },
         "AgentActionFingerprintComponents": {
           "additionalProperties": false,
           "properties": {
@@ -704,6 +768,18 @@
               ],
               "default": null,
               "title": "Attestation Type"
+            },
+            "endpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Endpoint Id"
             },
             "fingerprint_id": {
               "title": "Fingerprint Id",
@@ -978,6 +1054,17 @@
           "title": "Contract Version",
           "type": "string"
         },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActionExecutionRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "forensic_context": {
           "anyOf": [
             {
@@ -1047,6 +1134,219 @@
     },
     "AgentActionEvaluateResponse": {
       "$defs": {
+        "AgentActionExecutionDirective": {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "additionalProperties": true,
+              "title": "Args",
+              "type": "object"
+            },
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool_name"
+          ],
+          "title": "AgentActionExecutionDirective",
+          "type": "object"
+        },
+        "AgentActionExecutionPlan": {
+          "additionalProperties": false,
+          "properties": {
+            "metadata": {
+              "additionalProperties": true,
+              "title": "Metadata",
+              "type": "object"
+            },
+            "operation_type": {
+              "title": "Operation Type",
+              "type": "string"
+            },
+            "plan_dag_hash": {
+              "title": "Plan Dag Hash",
+              "type": "string"
+            },
+            "plan_id": {
+              "title": "Plan Id",
+              "type": "string"
+            },
+            "planner_type": {
+              "enum": [
+                "physical_digital_handover",
+                "conditional_escrow",
+                "delegated_authority"
+              ],
+              "title": "Planner Type",
+              "type": "string"
+            },
+            "state_anchors": {
+              "additionalProperties": true,
+              "title": "State Anchors",
+              "type": "object"
+            },
+            "steps": {
+              "items": {
+                "$ref": "#/$defs/AgentActionExecutionPlanStep"
+              },
+              "title": "Steps",
+              "type": "array"
+            }
+          },
+          "required": [
+            "plan_id",
+            "planner_type",
+            "operation_type",
+            "plan_dag_hash"
+          ],
+          "title": "AgentActionExecutionPlan",
+          "type": "object"
+        },
+        "AgentActionExecutionPlanStep": {
+          "additionalProperties": false,
+          "properties": {
+            "depends_on": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Depends On",
+              "type": "array"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "directive": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentActionExecutionDirective"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "title": "Metadata",
+              "type": "object"
+            },
+            "on_failure": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "On Failure"
+            },
+            "state_anchors": {
+              "additionalProperties": true,
+              "title": "State Anchors",
+              "type": "object"
+            },
+            "step_id": {
+              "title": "Step Id",
+              "type": "string"
+            },
+            "step_type": {
+              "title": "Step Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "step_id",
+            "step_type",
+            "description"
+          ],
+          "title": "AgentActionExecutionPlanStep",
+          "type": "object"
+        },
+        "ExecutionPreconditions": {
+          "additionalProperties": false,
+          "properties": {
+            "approval_transition_head": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Approval Transition Head"
+            },
+            "context_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Context Token"
+            },
+            "endpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Endpoint Id"
+            },
+            "payload_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Payload Hash"
+            },
+            "plan_dag_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Dag Hash"
+            },
+            "resource_state_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resource State Hash"
+            }
+          },
+          "title": "ExecutionPreconditions",
+          "type": "object"
+        },
         "ExecutionToken": {
           "properties": {
             "artifact_hash": {
@@ -1062,6 +1362,9 @@
             "contract_version": {
               "title": "Contract Version",
               "type": "string"
+            },
+            "execution_preconditions": {
+              "$ref": "#/$defs/ExecutionPreconditions"
             },
             "intent_id": {
               "title": "Intent Id",
@@ -1168,6 +1471,28 @@
         },
         "decision": {
           "$ref": "#/$defs/HotPathDecisionView"
+        },
+        "execution_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionPreconditions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentActionExecutionPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "execution_token": {
           "anyOf": [

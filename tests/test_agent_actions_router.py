@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1907,3 +1907,448 @@ def test_build_closure_evidence_bundle_includes_telemetry_refs() -> None:
     )
     assert len(bundle["telemetry_refs"]) == 1
     assert bundle["forensic_block"]["physical_evidence"]["telemetry_refs"][0]["telemetry_id"] == "tel-1"
+
+
+# ---------------------------------------------------------------------------
+# Gap-fill tests to cover the agent_action_gateway_contract.md v1 requirements
+# that were previously not exercised directly:
+#   1. asset_product_scope_mismatch surfaces as decision.reason_code
+#   2. stale_telemetry remaps to telemetry_too_stale_for_scope_validation
+#   3. physical_presence_proof_missing quarantine distinct from
+#      coordinate_scope_unverified
+#   4. coordinate_scope_unverified quarantine path
+#   5. escalate disposition passes through untouched
+#   6. target_zone falls back to authority_scope.expected_to_zone
+#   7. hot-path telemetry carries current_zone / current_coordinate_ref
+#   8. feature-flagged auth boundary (401 unauthenticated, 403 role mismatch)
+# ---------------------------------------------------------------------------
+
+
+def _payload_without_product_refs() -> dict:
+    payload = _base_payload()
+    payload["asset"].pop("product_ref", None)
+    payload["authority_scope"].pop("product_ref", None)
+    return payload
+
+
+def _allow_evaluate_response_for_overlay_tests(**overrides) -> agent_actions_router.AgentActionEvaluateResponse:
+    defaults = dict(
+        request_id="req-transfer-2026-0001",
+        decided_at=datetime.now(timezone.utc),
+        latency_ms=10,
+        decision=HotPathDecisionView(
+            allowed=True,
+            disposition="allow",
+            reason_code="restricted_custody_transfer_allowed",
+            reason="all mandatory checks passed",
+            policy_snapshot_ref="snapshot:pkg-prod-2026-03-31",
+        ),
+        execution_token=ExecutionToken(
+            token_id="token-transfer-001",
+            intent_id="req-transfer-2026-0001",
+            issued_at="2026-03-31T10:00:01Z",
+            valid_until="2026-03-31T10:00:06Z",
+            contract_version="rules@8.0.0",
+        ),
+        minted_artifacts=["ExecutionToken", "PolicyReceipt"],
+    )
+    defaults.update(overrides)
+    return agent_actions_router.AgentActionEvaluateResponse(**defaults)
+
+
+def test_forensic_scope_guards_maps_product_mismatch_to_reason_code():
+    # The schema validator rejects contradictory product_ref at parse time, so
+    # this overlay path protects against the case where the authority scope
+    # verdict is derived from persisted truth rather than the caller's claim.
+    payload = agent_actions_router.AgentActionEvaluateRequest.model_validate(_base_payload())
+    response = _allow_evaluate_response_for_overlay_tests(
+        authority_scope_verdict={
+            "status": "mismatch",
+            "scope_id": "scope:rct-2026-0001",
+            "mismatch_keys": ["asset_product_scope_mismatch"],
+        },
+    )
+    updated = agent_actions_router._apply_forensic_scope_guards(payload=payload, response=response)
+    assert updated.decision.disposition == "deny"
+    assert updated.decision.reason_code == "asset_product_scope_mismatch"
+    assert "authority_scope_mismatch" in updated.trust_gaps
+    assert updated.execution_token is None
+    assert "ExecutionToken" not in updated.minted_artifacts
+
+
+def test_forensic_scope_guards_prefers_coordinate_mismatch_over_product_mismatch():
+    payload = agent_actions_router.AgentActionEvaluateRequest.model_validate(_base_payload())
+    response = _allow_evaluate_response_for_overlay_tests(
+        authority_scope_verdict={
+            "status": "mismatch",
+            "scope_id": "scope:rct-2026-0001",
+            "mismatch_keys": [
+                "asset_product_scope_mismatch",
+                "coordinate_scope_mismatch",
+            ],
+        },
+    )
+    updated = agent_actions_router._apply_forensic_scope_guards(payload=payload, response=response)
+    assert updated.decision.disposition == "deny"
+    assert updated.decision.reason_code == "coordinate_scope_mismatch"
+
+
+def test_agent_actions_evaluate_remaps_stale_telemetry_reason_code(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    def _stale_response(*args, **kwargs):
+        return HotPathEvaluateResponse(
+            request_id="req-transfer-2026-0001",
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=33,
+            decision=HotPathDecisionView(
+                allowed=False,
+                disposition="quarantine",
+                reason_code="stale_telemetry",
+                reason="Telemetry freshness exceeds policy limits.",
+                policy_snapshot_ref="snapshot:pkg-prod-2026-03-31",
+            ),
+            trust_gaps=["stale_telemetry"],
+        )
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _stale_response)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["decision"]["disposition"] == "quarantine"
+    assert body["decision"]["reason_code"] == "telemetry_too_stale_for_scope_validation"
+    assert "telemetry_too_stale_for_scope_validation" in body["trust_gaps"]
+    assert "stale_telemetry" not in body["trust_gaps"]
+    assert body["execution_token"] is None
+
+
+def test_agent_actions_evaluate_quarantines_when_coordinate_scope_unverified(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    payload = _base_payload()
+    # Coordinate expected by scope, telemetry cannot prove it, but physical
+    # presence hash is present -> should downgrade to `coordinate_scope_unverified`.
+    payload["telemetry"].pop("current_coordinate_ref", None)
+    payload["forensic_context"] = {
+        "fingerprint_components": {
+            "physical_presence_hash": "sha256:physical-presence",
+        }
+    }
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["decision"]["disposition"] == "quarantine"
+    assert body["decision"]["reason_code"] == "coordinate_scope_unverified"
+    assert "coordinate_scope_unverified" in body["trust_gaps"]
+    assert body["execution_token"] is None
+
+
+def test_agent_actions_evaluate_quarantines_when_physical_presence_proof_missing(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    payload = _base_payload()
+    payload["telemetry"].pop("current_coordinate_ref", None)
+    # No forensic_context at all -> physical_presence_hash missing
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["decision"]["disposition"] == "quarantine"
+    assert body["decision"]["reason_code"] == "physical_presence_proof_missing"
+    assert "physical_presence_proof_missing" in body["trust_gaps"]
+    assert body["execution_token"] is None
+
+
+def test_agent_actions_evaluate_passes_through_escalate_disposition(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    def _escalate_response(*args, **kwargs):
+        return HotPathEvaluateResponse(
+            request_id="req-transfer-2026-0001",
+            decided_at=datetime.now(timezone.utc),
+            latency_ms=55,
+            decision=HotPathDecisionView(
+                allowed=False,
+                disposition="escalate",
+                reason_code="human_review_required",
+                reason="Manual governance review required.",
+                policy_snapshot_ref="snapshot:pkg-prod-2026-03-31",
+            ),
+            required_approvals=["human_governance_review"],
+        )
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _escalate_response)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["decision"]["disposition"] == "escalate"
+    assert body["decision"]["reason_code"] == "human_review_required"
+    assert body["execution_token"] is None
+    assert "human_governance_review" in body["required_approvals"]
+
+
+def test_agent_actions_evaluate_target_zone_falls_back_to_authority_scope(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    captured = {}
+
+    def _fake_evaluate(request, **kwargs):
+        captured["request"] = request
+        return _allow_hot_path_response()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    payload = _base_payload()
+    payload["asset"].pop("to_zone", None)
+    payload["authority_scope"]["expected_to_zone"] = "handoff_bay_3"
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200, response.text
+    mapped_request = captured["request"]
+    assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
+
+
+def test_agent_actions_evaluate_forwards_current_zone_and_coordinate_to_hot_path(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+    captured = {}
+
+    def _fake_evaluate(request, **kwargs):
+        captured["request"] = request
+        return _allow_hot_path_response()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _fake_evaluate)
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200, response.text
+    telemetry = captured["request"].telemetry_context
+    assert telemetry.current_zone == "vault_a"
+    assert telemetry.current_coordinate_ref == "gazebo://warehouse/shelf/A3"
+
+
+def test_agent_actions_evaluate_requires_bearer_when_auth_enabled(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_MODE", "shared_key")
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_TOKEN", "top-secret")
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_ALLOWED_ROLES", set())
+
+    # Missing Authorization header
+    unauth = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert unauth.status_code == 401
+
+    # Wrong bearer
+    wrong = client.post(
+        "/api/v1/agent-actions/evaluate",
+        json=_base_payload(),
+        headers={"Authorization": "Bearer nope"},
+    )
+    assert wrong.status_code == 401
+
+
+def test_agent_actions_evaluate_rejects_role_not_on_allowlist(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_MODE", "shared_key")
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_TOKEN", "top-secret")
+    monkeypatch.setattr(
+        agent_actions_router,
+        "GATEWAY_AUTH_ALLOWED_ROLES",
+        {"SUPPLY_CHAIN_ADMIN"},
+    )
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    # Correct bearer but role is TRANSFER_COORDINATOR (not on allowlist)
+    response = client.post(
+        "/api/v1/agent-actions/evaluate",
+        json=_base_payload(),
+        headers={"Authorization": "Bearer top-secret"},
+    )
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "role_not_authorized_for_workflow"
+    assert detail["role_profile"] == "TRANSFER_COORDINATOR"
+
+
+def test_agent_actions_evaluate_accepts_authenticated_request(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_MODE", "shared_key")
+    monkeypatch.setattr(agent_actions_router, "GATEWAY_AUTH_TOKEN", "top-secret")
+    monkeypatch.setattr(
+        agent_actions_router,
+        "GATEWAY_AUTH_ALLOWED_ROLES",
+        {"TRANSFER_COORDINATOR"},
+    )
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post(
+        "/api/v1/agent-actions/evaluate",
+        json=_base_payload(),
+        headers={"Authorization": "Bearer top-secret"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"]["disposition"] == "allow"
+
+
+def test_agent_action_gateway_decision_log_is_emitted(monkeypatch, caplog):
+    import logging as _stdlib_logging
+
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    with caplog.at_level(_stdlib_logging.INFO, logger="seedcore.api.routers.agent_actions_router"):
+        response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert response.status_code == 200, response.text
+
+    decision_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "agent_action_gateway.evaluate.decision"
+    ]
+    assert decision_records, "expected a structured gateway decision log line"
+    record = decision_records[-1]
+    assert record.request_id == "req-transfer-2026-0001"
+    assert record.idempotency_key == "idem-transfer-2026-0001"
+    assert record.agent_id == "agent:custody_runtime_01"
+    assert record.hardware_fingerprint_id == "fp:jetson-orin-01"
+    assert record.asset_id == "asset:lot-8841"
+    assert record.scope_id == "scope:rct-2026-0001"
+    assert record.disposition == "allow"
+    assert record.reason_code == "restricted_custody_transfer_allowed"
+    assert record.policy_snapshot_ref
+    assert isinstance(record.latency_ms, int)
+
+
+def test_agent_action_gateway_in_memory_idempotency_respects_ttl(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+
+    # Shrink TTL to 1 second for this test.
+    monkeypatch.setattr(agent_actions_router, "REQUEST_RECORD_TTL_SECONDS", 1)
+
+    # Insert stale entries (recorded 10 minutes ago).
+    stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+    fake_idem_entry = agent_actions_router._AgentActionIdempotencyEntry(
+        request_id="req-old",
+        request_hash="hash-old",
+        created_at=stale,
+    )
+    agent_actions_router._IDEMPOTENCY_ENTRIES_BY_KEY["idem-old"] = fake_idem_entry
+
+    fake_record = agent_actions_router._AgentActionStoredRecord(
+        request_id="req-old",
+        idempotency_key="idem-old",
+        request_hash="hash-old",
+        recorded_at=stale,
+        response=agent_actions_router.AgentActionEvaluateResponse(
+            request_id="req-old",
+            decided_at=stale,
+            latency_ms=1,
+            decision=HotPathDecisionView(
+                allowed=False,
+                disposition="deny",
+                reason_code="x",
+                reason="x",
+                policy_snapshot_ref="snap:x",
+            ),
+        ),
+        request_payload={},
+    )
+    agent_actions_router._REQUEST_RECORDS_BY_ID["req-old"] = fake_record
+
+    agent_actions_router._gc_in_memory_stores()
+
+    assert "idem-old" not in agent_actions_router._IDEMPOTENCY_ENTRIES_BY_KEY
+    assert "req-old" not in agent_actions_router._REQUEST_RECORDS_BY_ID
