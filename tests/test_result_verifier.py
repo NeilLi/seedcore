@@ -663,6 +663,157 @@ async def test_process_job_retries_on_retryable_verifier_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_job_quarantines_on_retry_exhaustion_with_operator_escalation_payload() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._max_attempts = 5
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "token_id": "token-123",
+                "policy_receipt": {"asset_ref": "asset-1"},
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {
+                    "action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}},
+                    "resource": {"asset_id": "asset-1"},
+                },
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._job_dao = SimpleNamespace(schedule_retry=AsyncMock())
+    runtime._persist_terminal = AsyncMock()
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 4,
+    }
+    with patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        side_effect=ResultVerifierRetryableError("rust_verify_replay_chain_timeout"),
+    ):
+        await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    runtime._job_dao.schedule_retry.assert_not_awaited()
+    runtime._persist_terminal.assert_awaited_once()
+    outcome = runtime._persist_terminal.await_args.args[3]
+    assert isinstance(outcome, ResultVerifierOutcome)
+    assert outcome.verified is False
+    assert outcome.failure_code == "result_verifier_retry_exhausted"
+    assert outcome.gate_reason_code == "result_verifier_retry_exhausted"
+    assert outcome.failure_class == "trust"
+    assert outcome.twin_event_type == "verification_quarantined"
+    assert outcome.asset_id == "asset-1"
+    assert "result_verifier_retry_exhausted" in outcome.issues
+    exhaustion_details = outcome.artifact_results["result_verifier_retry_exhausted"]
+    assert exhaustion_details["error_code"] == "rust_verify_replay_chain_timeout"
+    assert exhaustion_details["attempt_count"] == 5
+    operator_escalation = outcome.artifact_results["operator_escalation"]
+    assert operator_escalation["code"] == "result_verifier_retry_exhausted"
+    assert operator_escalation["queue"] == "result_verifier_break_glass_review"
+    assert operator_escalation["recommended_action"] == "manual_break_glass_review"
+    assert operator_escalation["token_id"] == "token-123"
+    assert operator_escalation["max_attempts"] == 5
+    metrics.increment_counter.assert_any_call("result_verifier_jobs_processed_total")
+    metrics.increment_counter.assert_any_call("result_verifier_quarantine_total")
+    metrics.increment_counter.assert_any_call("result_verifier_terminal_fail_total")
+
+
+@pytest.mark.asyncio
+async def test_process_job_retries_when_retry_exhaustion_enforcement_is_unavailable() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._max_attempts = 2
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "token_id": "token-123",
+                "policy_receipt": {"asset_ref": "asset-1"},
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {
+                    "action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}},
+                    "resource": {"asset_id": "asset-1"},
+                },
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._job_dao = SimpleNamespace(schedule_retry=AsyncMock())
+    runtime._persist_terminal = AsyncMock(
+        side_effect=ResultVerifierRetryableError("execution_token_revocation_unavailable")
+    )
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 1,
+    }
+    with patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        side_effect=ResultVerifierRetryableError("rust_verify_replay_chain_timeout"),
+    ):
+        await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    runtime._persist_terminal.assert_awaited_once()
+    runtime._job_dao.schedule_retry.assert_awaited_once()
+    kwargs = runtime._job_dao.schedule_retry.await_args.kwargs
+    assert kwargs["terminal"] is False
+    assert kwargs["error_code"] == "execution_token_revocation_unavailable"
+    metrics.increment_counter.assert_any_call("result_verifier_retry_total")
+
+
+@pytest.mark.asyncio
+async def test_process_job_reports_orphan_when_retry_exhaustion_cannot_find_subject() -> None:
+    metrics = MagicMock()
+    runtime = _build_runtime(metrics=metrics)
+    runtime._max_attempts = 2
+    runtime._governance_dao = SimpleNamespace(
+        get_latest_for_task=AsyncMock(
+            return_value={
+                "task_id": "550e8400-e29b-41d4-a716-446655440000",
+                "intent_id": "intent-1",
+                "token_id": "token-123",
+                "policy_receipt": {"asset_ref": "asset-1"},
+                "evidence_bundle": {"evidence_bundle_id": "eb1"},
+                "action_intent": {
+                    "action": {"parameters": {"gateway": {"workflow_type": "restricted_custody_transfer"}}},
+                    "resource": {"asset_id": "asset-1"},
+                },
+            }
+        ),
+        get_latest_for_intent=AsyncMock(return_value=None),
+    )
+    runtime._job_dao = SimpleNamespace(schedule_retry=AsyncMock())
+    runtime._persist_terminal = AsyncMock(side_effect=RuntimeError("missing_subject_for_fail_closed"))
+    job = {
+        "id": str(uuid.uuid4()),
+        "event_journal_id": str(uuid.uuid4()),
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "intent_id": "intent-1",
+        "attempt_count": 1,
+    }
+    with patch(
+        "seedcore.services.result_verifier_runtime.logger.error"
+    ) as error_log, patch(
+        "seedcore.services.result_verifier_runtime.verify_governed_audit_record",
+        side_effect=ResultVerifierRetryableError("rust_verify_replay_chain_timeout"),
+    ):
+        await runtime._process_one_job(MagicMock(), job, SimpleNamespace())
+    runtime._job_dao.schedule_retry.assert_awaited_once()
+    kwargs = runtime._job_dao.schedule_retry.await_args.kwargs
+    assert kwargs["terminal"] is True
+    assert kwargs["error_code"] == "missing_subject_for_fail_closed"
+    metrics.increment_counter.assert_any_call("result_verifier_fail_closed_orphan_total")
+    metrics.increment_counter.assert_any_call("result_verifier_terminal_fail_total")
+    error_log.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_process_job_counts_non_rct_skip_metric() -> None:
     metrics = MagicMock()
     runtime = _build_runtime(metrics=metrics)

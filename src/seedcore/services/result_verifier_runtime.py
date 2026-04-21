@@ -97,6 +97,16 @@ def _execution_token_id_from_record(record: Dict[str, Any]) -> Optional[str]:
     return candidate or None
 
 
+def _asset_id_from_record(record: Dict[str, Any]) -> Optional[str]:
+    policy_receipt = record.get("policy_receipt") if isinstance(record.get("policy_receipt"), dict) else {}
+    action_intent = record.get("action_intent") if isinstance(record.get("action_intent"), dict) else {}
+    resource = action_intent.get("resource") if isinstance(action_intent.get("resource"), dict) else {}
+    for candidate in (policy_receipt.get("asset_ref"), resource.get("asset_id")):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
 class ResultVerifierRuntime:
     def __init__(self, coordinator: "Coordinator") -> None:
         self._coordinator = coordinator
@@ -157,6 +167,58 @@ class ResultVerifierRuntime:
 
     def _metrics(self) -> Any:
         return getattr(self._coordinator, "metrics", None)
+
+    def _build_retry_exhausted_outcome(
+        self,
+        *,
+        record: Dict[str, Any],
+        job_id: str,
+        event_journal_id: str,
+        task_id: Optional[str],
+        intent_id: Optional[str],
+        token_id: Optional[str],
+        error_code: str,
+        attempt_count: int,
+    ) -> ResultVerifierOutcome:
+        operator_escalation = {
+            "code": "result_verifier_retry_exhausted",
+            "priority": "high",
+            "queue": "result_verifier_break_glass_review",
+            "recommended_action": "manual_break_glass_review",
+            "summary": (
+                "RESULT_VERIFIER exhausted its retry budget and forced fail-closed custody quarantine. "
+                "Manual operator review is required before any break-glass recovery."
+            ),
+            "job_id": job_id,
+            "event_journal_id": event_journal_id,
+            "task_id": task_id,
+            "intent_id": intent_id,
+            "token_id": token_id,
+            "attempt_count": int(attempt_count),
+            "max_attempts": int(self._max_attempts),
+            "last_error_code": error_code,
+        }
+        return ResultVerifierOutcome(
+            verified=False,
+            failure_code="result_verifier_retry_exhausted",
+            gate_reason_code="result_verifier_retry_exhausted",
+            failure_class="trust",
+            twin_event_type="verification_quarantined",
+            asset_id=_asset_id_from_record(record),
+            artifact_results={
+                "result_verifier_retry_exhausted": {
+                    "verified": False,
+                    "error_code": error_code,
+                    "attempt_count": int(attempt_count),
+                    "max_attempts": int(self._max_attempts),
+                },
+                "operator_escalation": operator_escalation,
+            },
+            issues=[
+                "result_verifier_retry_exhausted",
+                f"retry_exhausted:{error_code}",
+            ],
+        )
 
     async def _intake_loop(self) -> None:
         sf = self._coordinator._session_factory
@@ -321,9 +383,11 @@ class ResultVerifierRuntime:
         intent_id = job.get("intent_id")
         attempt = int(job.get("attempt_count") or 0)
         token_id: Optional[str] = None
+        record: Optional[Dict[str, Any]] = None
+        resolved_task_id: Optional[str] = str(task_id or "").strip() or None
+        resolved_intent_id: Optional[str] = str(intent_id or "").strip() or None
         t0 = time.perf_counter()
         try:
-            record: Optional[Dict[str, Any]] = None
             if task_id:
                 record = await self._governance_dao.get_latest_for_task(session, task_id=str(task_id))
             if record is None and intent_id:
@@ -382,6 +446,7 @@ class ResultVerifierRuntime:
             err = f"{type(exc).__name__}:{exc}"
             logger.warning("RESULT_VERIFIER job %s failed attempt=%s: %s", job_id, attempt, err)
             error_code = "worker_exception"
+            metrics = self._metrics()
             if isinstance(exc, RuntimeError) and str(exc) == "missing_subject_for_fail_closed":
                 error_code = "missing_subject_for_fail_closed"
                 next_attempt = max(int(self._max_attempts), attempt + 1)
@@ -406,6 +471,60 @@ class ResultVerifierRuntime:
                 terminal = next_attempt >= self._max_attempts
                 delay_s = result_verifier_backoff_seconds(attempt)
                 next_at = utcnow() + timedelta(seconds=delay_s)
+            if terminal and error_code != "missing_subject_for_fail_closed" and record:
+                exhaustion_outcome = self._build_retry_exhausted_outcome(
+                    record=record,
+                    job_id=job_id,
+                    event_journal_id=eid,
+                    task_id=resolved_task_id,
+                    intent_id=resolved_intent_id,
+                    token_id=token_id,
+                    error_code=error_code,
+                    attempt_count=next_attempt,
+                )
+                try:
+                    await self._persist_terminal(
+                        session,
+                        job_id,
+                        eid,
+                        exhaustion_outcome,
+                        dts,
+                        apply_twin=True,
+                        task_id=resolved_task_id,
+                        intent_id=resolved_intent_id,
+                        token_id=token_id,
+                    )
+                except ResultVerifierRetryableError as persist_exc:
+                    err = f"{type(persist_exc).__name__}:{persist_exc}"
+                    error_code = str(persist_exc)[:128] or "result_verifier_terminal_enforcement_retryable_failure"
+                    terminal = False
+                    delay_s = result_verifier_backoff_seconds(attempt)
+                    next_at = utcnow() + timedelta(seconds=delay_s)
+                except Exception as persist_exc:
+                    err = f"{type(persist_exc).__name__}:{persist_exc}"
+                    if isinstance(persist_exc, RuntimeError) and str(persist_exc) == "missing_subject_for_fail_closed":
+                        error_code = "missing_subject_for_fail_closed"
+                        next_attempt = max(int(self._max_attempts), next_attempt)
+                        terminal = True
+                        next_at = utcnow()
+                        logger.error(
+                            "RESULT_VERIFIER fail-closed orphan job_id=%s event_journal_id=%s task_id=%s intent_id=%s token_id=%s",
+                            job_id,
+                            eid,
+                            resolved_task_id,
+                            resolved_intent_id,
+                            token_id,
+                        )
+                    else:
+                        error_code = "worker_exception"
+                        terminal = True
+                        next_at = utcnow()
+                else:
+                    if metrics:
+                        metrics.increment_counter("result_verifier_jobs_processed_total")
+                        metrics.increment_counter("result_verifier_quarantine_total")
+                        metrics.increment_counter("result_verifier_terminal_fail_total")
+                    return
             await self._job_dao.schedule_retry(
                 session,
                 job_id=job_id,
@@ -415,13 +534,13 @@ class ResultVerifierRuntime:
                 error_detail=err[:2000],
                 terminal=terminal,
             )
-            if self._metrics():
+            if metrics:
                 if error_code == "missing_subject_for_fail_closed":
-                    self._metrics().increment_counter("result_verifier_fail_closed_orphan_total")
+                    metrics.increment_counter("result_verifier_fail_closed_orphan_total")
                 if terminal:
-                    self._metrics().increment_counter("result_verifier_terminal_fail_total")
+                    metrics.increment_counter("result_verifier_terminal_fail_total")
                 else:
-                    self._metrics().increment_counter("result_verifier_retry_total")
+                    metrics.increment_counter("result_verifier_retry_total")
         finally:
             metrics = self._metrics()
             if metrics is not None:

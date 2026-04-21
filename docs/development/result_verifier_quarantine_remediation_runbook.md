@@ -19,10 +19,24 @@ Treat the case as active when one or more are observed:
 - authoritative twin governance includes `result_verifier_lockout=true`
 - authoritative disposition is `verification_failed` or
   `verification_quarantined`
+- RESULT_VERIFIER outcome carries
+  `failure_code=result_verifier_retry_exhausted`
 - downstream action evaluation/closure returns gate block reason codes such as:
   - `result_verifier_lockout`
+  - `result_verifier_retry_exhausted`
   - `closure_blocked_by_result_verifier`
   - `settlement_blocked_by_result_verifier`
+
+Retry exhaustion is now a fail-closed condition, not a passive queue terminal
+state. When RESULT_VERIFIER exhausts its retry budget for an RCT record, it:
+
+1. Attempts token revocation first when an execution token is present.
+2. Writes an authoritative `verification_quarantined` twin mutation.
+3. Persists an immutable verifier outcome with
+   `artifact_results.operator_escalation` for manual break-glass review.
+
+If token revocation or fail-closed enforcement infrastructure is unavailable,
+the job stays retryable and is not marked done until enforcement succeeds.
 
 ## Remediation Procedure
 
