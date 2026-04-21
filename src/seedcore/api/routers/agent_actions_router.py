@@ -2681,8 +2681,11 @@ async def _apply_organism_preflight(
     *,
     payload: AgentActionEvaluateRequest,
     response: AgentActionEvaluateResponse,
+    requested_no_execute: bool = False,
 ) -> AgentActionEvaluateResponse:
     if not ORGANISM_PREFLIGHT_REQUIRED:
+        return response
+    if requested_no_execute:
         return response
     if str(response.decision.disposition or "").strip().lower() != "allow":
         return response
@@ -2738,6 +2741,36 @@ def _build_agent_action_evaluate_response(
     hot_path_result: HotPathEvaluateResponse,
     execution_plan: AgentActionExecutionPlan | None = None,
 ) -> AgentActionEvaluateResponse:
+    governed_receipt = dict(hot_path_result.governed_receipt or {})
+    decision = hot_path_result.decision
+    governed_receipt["decision_hash"] = _hash_or_passthrough(
+        governed_receipt.get("decision_hash"),
+        fallback=f"decision:{payload.request_id}:{decision.disposition}:{decision.reason_code}",
+    )
+    governed_receipt["policy_receipt_id"] = str(
+        governed_receipt.get("policy_receipt_id")
+        or f"policy-receipt:{payload.request_id}"
+    ).strip()
+    governed_receipt["audit_id"] = str(
+        governed_receipt.get("audit_id")
+        or uuid.uuid5(uuid.NAMESPACE_URL, payload.request_id)
+    ).strip()
+    governed_receipt.setdefault("asset_ref", payload.asset.asset_id)
+    governed_receipt.setdefault(
+        "resource_ref",
+        f"seedcore://zones/{payload.asset.to_zone or payload.telemetry.current_zone}/assets/{payload.asset.asset_id}",
+    )
+    if decision.policy_snapshot_hash and not governed_receipt.get("policy_snapshot_hash"):
+        governed_receipt["policy_snapshot_hash"] = decision.policy_snapshot_hash
+    if decision.policy_snapshot_ref and not governed_receipt.get("snapshot_version"):
+        governed_receipt["snapshot_version"] = decision.policy_snapshot_ref
+    if decision.disposition and not governed_receipt.get("disposition"):
+        governed_receipt["disposition"] = decision.disposition
+    if decision.reason and not governed_receipt.get("reason"):
+        governed_receipt["reason"] = decision.reason
+    if not isinstance(governed_receipt.get("trust_gap_codes"), list):
+        governed_receipt["trust_gap_codes"] = list(hot_path_result.trust_gaps)
+
     bound_execution_token = _bind_plan_hash_to_execution_token(
         hot_path_result.execution_token,
         execution_plan=execution_plan,
@@ -2745,7 +2778,7 @@ def _build_agent_action_evaluate_response(
     bound_execution_context = _bind_plan_hash_to_execution_context(
         _execution_context_from_hot_path_result(
             execution_token=hot_path_result.execution_token,
-            governed_receipt=dict(hot_path_result.governed_receipt),
+            governed_receipt=governed_receipt,
         ),
         execution_plan=execution_plan,
     )
@@ -2759,7 +2792,7 @@ def _build_agent_action_evaluate_response(
         obligations=[dict(item) for item in hot_path_result.obligations],
         minted_artifacts=_minted_artifacts_from_hot_path_result(
             execution_token=hot_path_result.execution_token,
-            governed_receipt=dict(hot_path_result.governed_receipt),
+            governed_receipt=governed_receipt,
             signer_provenance=list(hot_path_result.signer_provenance),
         ),
         authority_scope_verdict=_build_authority_scope_verdict(payload),
@@ -2767,7 +2800,7 @@ def _build_agent_action_evaluate_response(
         execution_plan=execution_plan,
         execution_token=bound_execution_token,
         execution_context=bound_execution_context,
-        governed_receipt=dict(hot_path_result.governed_receipt),
+        governed_receipt=governed_receipt,
         forensic_linkage={},
         request_schema_bundle=hot_path_result.request_schema_bundle,
         taxonomy_bundle=hot_path_result.taxonomy_bundle,
@@ -2927,7 +2960,11 @@ async def evaluate_agent_action(
             execution_plan=execution_plan,
         )
         response = _apply_forensic_scope_guards(payload=payload, response=response)
-        response = await _apply_organism_preflight(payload=payload, response=response)
+        response = await _apply_organism_preflight(
+            payload=payload,
+            response=response,
+            requested_no_execute=requested_no_execute,
+        )
         response = await _apply_result_verifier_policy_gate(payload=payload, response=response)
         response = _apply_no_execute_preflight(response, requested=requested_no_execute)
         response = _annotate_owner_context_in_response(response, owner_twin_snapshot)

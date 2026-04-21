@@ -85,3 +85,39 @@ def test_result_verifier_postgres_integration_script_is_opt_in_but_hard_fails_wh
     assert "SEEDCORE_ENABLE_RESULT_VERIFIER_PG_TESTS" in script
     assert "SEEDCORE_RESULT_VERIFIER_TEST_DSN" in script
     assert "tests/test_result_verifier_postgres_integration.py" in script
+
+
+def test_verify_design_notes_full_wires_extended_design_notes_gate() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_design_notes_full.sh").read_text()
+
+    assert "verify_host_regression.sh" in script
+    assert "verify_pdp_boundary.sh" in script
+    assert "verify_execution_spine.sh" in script
+    assert "verify_evidence_contracts.sh" in script
+    assert "verify_admission_contract_inventory.sh" in script
+    assert "verify_kafka_ingress_non_bypass.sh" in script
+    assert "verify_agent_action_gateway_productization_real_calls.sh" in script
+    assert "verify_productized_surface.sh" in script
+    assert "verify_q2_verification_contracts.sh" in script
+    assert "maybe_start_verification_api()" in script
+    assert "ts/services/verification-api" in script
+    assert "SEEDCORE_SKIP_Q2_CONTRACT_GATE" in script
+
+
+def test_verify_admission_contract_inventory_tracks_required_components() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_admission_contract_inventory.py").read_text()
+
+    assert "agent_action_gateway_boundary" in script
+    assert "hal_execution_boundary" in script
+    assert "governed_tools_mutation_manager" in script
+    assert "replay_and_custody_trust_surfaces" in script
+    assert "Admission-contract inventory verification passed." in script
+
+
+def test_verify_kafka_ingress_non_bypass_enforces_agent_actions_path() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_kafka_ingress_non_bypass.py").read_text()
+
+    assert "/api/v1/agent-actions/evaluate" in script
+    assert "/api/v1/intents/submit-signed" in script
+    assert "process_delegated_intent_event" in script
+    assert "SEEDCORE_KAFKA_INTENT_INGRESS_NO_EXECUTE" in script

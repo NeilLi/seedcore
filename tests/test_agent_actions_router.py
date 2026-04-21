@@ -1177,6 +1177,63 @@ def test_agent_actions_evaluate_no_execute_option_strips_execution_token(monkeyp
     assert "ExecutionToken" not in body["minted_artifacts"]
 
 
+def test_agent_actions_evaluate_no_execute_skips_organism_preflight(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_fail)
+
+    response = client.post("/api/v1/agent-actions/evaluate?no_execute=true", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "allow"
+    assert str(body["decision"]["reason_code"]).startswith("restricted_custody_transfer")
+    assert "organism_not_ready" not in body["trust_gaps"]
+    assert body["execution_token"] is None
+    assert "ExecutionToken" not in body["minted_artifacts"]
+
+
+def test_agent_actions_evaluate_hydrates_governed_receipt_fields(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    def _allow_without_receipt(*args, **kwargs):
+        return _allow_hot_path_response().model_copy(update={"governed_receipt": {}})
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        _allow_without_receipt,
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    response = client.post("/api/v1/agent-actions/evaluate?no_execute=true", json=_base_payload())
+    assert response.status_code == 200
+    body = response.json()
+    governed_receipt = body["governed_receipt"]
+
+    assert isinstance(governed_receipt.get("decision_hash"), str)
+    assert governed_receipt["decision_hash"].startswith("sha256:")
+    assert governed_receipt.get("policy_receipt_id") == "policy-receipt:req-transfer-2026-0001"
+    assert isinstance(governed_receipt.get("audit_id"), str)
+    assert len(governed_receipt["audit_id"]) > 0
+
+
 def test_agent_actions_evaluate_includes_owner_context_refs_in_governed_receipt(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()

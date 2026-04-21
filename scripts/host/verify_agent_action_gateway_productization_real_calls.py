@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -121,7 +122,6 @@ def main() -> int:
 
     request_id = f"req-local-{uuid.uuid4().hex[:12]}"
     idempotency_key = f"idem-local-{uuid.uuid4().hex[:12]}"
-    payload = _build_payload(request_id, idempotency_key, args.policy_snapshot_ref)
 
     checks: list[CheckResult] = []
     summary: dict[str, Any] = {
@@ -133,6 +133,28 @@ def main() -> int:
     with httpx.Client(timeout=args.timeout) as client:
         health_resp = client.get(f"{args.base_url}/health")
         hal_resp = client.get("http://127.0.0.1:8003/status")
+        pkg_status_resp = client.get(f"{args.base_url}/api/v1/pkg/status")
+        pkg_status_body = _json_or_text(pkg_status_resp)
+        active_snapshot = ""
+        if isinstance(pkg_status_body, dict):
+            active_snapshot = str(pkg_status_body.get("active_version") or "").strip()
+        selected_snapshot = active_snapshot or args.policy_snapshot_ref
+        payload = _build_payload(request_id, idempotency_key, selected_snapshot)
+        summary["policy_snapshot_ref_selected"] = selected_snapshot
+        summary["pkg_status_preflight"] = {
+            "status_code": pkg_status_resp.status_code,
+            "body": pkg_status_body,
+        }
+
+        refresh_resp = client.post(f"{args.base_url}/api/v1/pkg/authz-graph/refresh")
+        refresh_body = _json_or_text(refresh_resp)
+        refresh_ok = (
+            refresh_resp.status_code == 200
+            and isinstance(refresh_body, dict)
+            and bool(refresh_body.get("success", True))
+        )
+        summary["authz_graph_refresh"] = {"status_code": refresh_resp.status_code, "body": refresh_body}
+
         checks.append(
             CheckResult(
                 "runtime.health",
@@ -145,6 +167,23 @@ def main() -> int:
                 "hal.status",
                 hal_resp.status_code == 200,
                 {"status_code": hal_resp.status_code, "body": _json_or_text(hal_resp)},
+            )
+        )
+        checks.append(
+            CheckResult(
+                "runtime.pkg_status",
+                pkg_status_resp.status_code == 200 and bool(active_snapshot),
+                {
+                    "status_code": pkg_status_resp.status_code,
+                    "active_snapshot": active_snapshot,
+                },
+            )
+        )
+        checks.append(
+            CheckResult(
+                "runtime.authz_graph_refresh",
+                refresh_ok,
+                {"status_code": refresh_resp.status_code, "detail": refresh_body},
             )
         )
 
@@ -295,12 +334,29 @@ def main() -> int:
                 f"{args.base_url}/api/v1/replay",
                 params={"audit_id": correlation["audit_id"], "projection": "public"},
             )
+            replay_wait_attempts = 0
+            while (
+                replay_intent_resp.status_code == 404
+                and replay_audit_resp.status_code == 404
+                and replay_wait_attempts < 20
+            ):
+                replay_wait_attempts += 1
+                time.sleep(0.25)
+                replay_intent_resp = client.get(
+                    f"{args.base_url}/api/v1/replay",
+                    params={"intent_id": correlation["intent_id"], "projection": "public"},
+                )
+                replay_audit_resp = client.get(
+                    f"{args.base_url}/api/v1/replay",
+                    params={"audit_id": correlation["audit_id"], "projection": "public"},
+                )
             replay_intent_body = _json_or_text(replay_intent_resp)
             replay_audit_body = _json_or_text(replay_audit_resp)
             summary["replay"] = {
                 "intent": {"status_code": replay_intent_resp.status_code, "body": replay_intent_body},
                 "audit": {"status_code": replay_audit_resp.status_code, "body": replay_audit_body},
             }
+            summary["replay_wait_attempts"] = replay_wait_attempts
             replay_ready = replay_intent_resp.status_code == 200 or replay_audit_resp.status_code == 200
             replay_pending = replay_intent_resp.status_code == 404 and replay_audit_resp.status_code == 404
         if args.strict_replay_ready:
