@@ -51,6 +51,13 @@ Within that plane model, the architecture docs consistently describe a common ze
 - **Custody Graph (CG)**: lineage for who had what, where it moved, and which artifacts justify the transition
 - **Evidence and Replay Layer (ER)**: signed receipts, replay artifacts, trust surfaces, and verification outputs
 
+For the current custody implementation, one clarification matters:
+
+- `custody_transition_event` plus `asset_custody_state` are the canonical custody truth surfaces
+- the Postgres custody graph tables are a derived investigation projection over that truth
+- custody reconciliation and reprojection are therefore explicit operational responsibilities rather than implicit fail-closed guarantees on every governed mutation
+- dispute linkage is append-only; historical dispute edges remain in the graph while current dispute meaning comes from dispute-case status and event history
+
 These subsystem names should remain consistent across architecture, development, and product-facing documents.
 
 ## 3. Judgment vs. Authority

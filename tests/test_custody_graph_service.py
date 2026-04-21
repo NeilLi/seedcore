@@ -11,6 +11,7 @@ import mock_database_dependencies  # noqa: F401
 
 import pytest
 
+from seedcore.coordinator.metrics.tracker import MetricsTracker
 from seedcore.services.custody_graph_service import CustodyGraphService
 
 
@@ -40,17 +41,30 @@ class _FakeTransitionDAO:
             rows = [row for row in rows if row.get("from_zone") == filters["zone"] or row.get("to_zone") == filters["zone"]]
         return rows
 
+    async def list_asset_ids(self, session, *, limit: int = 100, offset: int = 0):
+        asset_ids = sorted({row["asset_id"] for row in self.rows})
+        return asset_ids[offset : offset + limit]
+
 
 class _FakeGraphDAO:
     def __init__(self) -> None:
         self.nodes: Dict[str, Dict[str, Any]] = {}
         self.edges: Dict[str, Dict[str, Any]] = {}
 
-    async def upsert_node(self, session, *, node_id: str, node_kind: str, subject_id: str | None = None, payload: Dict[str, Any] | None = None):
+    async def upsert_node(
+        self,
+        session,
+        *,
+        node_id: str,
+        node_kind: str,
+        subject_id: str | None = None,
+        payload: Dict[str, Any] | None = None,
+        replace_payload: bool = False,
+    ):
         row = self.nodes.get(node_id, {"node_id": node_id, "node_kind": node_kind, "subject_id": subject_id, "payload": {}})
         row["node_kind"] = node_kind
         row["subject_id"] = subject_id
-        row["payload"] = {**row.get("payload", {}), **dict(payload or {})}
+        row["payload"] = dict(payload or {}) if replace_payload else {**row.get("payload", {}), **dict(payload or {})}
         self.nodes[node_id] = row
         return row
 
@@ -145,6 +159,14 @@ class _FakeDigitalTwinDAO:
         return [{"id": f"{twin_type}-rev-1", "twin_type": twin_type, "twin_id": twin_id, "state_version": 1}]
 
 
+class _FakeAssetCustodyDAO:
+    def __init__(self) -> None:
+        self.rows: Dict[str, Dict[str, Any]] = {}
+
+    async def get_snapshot(self, session, *, asset_id: str):
+        return self.rows.get(asset_id)
+
+
 def _build_record(seq: int) -> Dict[str, Any]:
     return {
         "entry_id": f"audit-{seq}",
@@ -186,6 +208,7 @@ async def test_record_transition_builds_lineage_chain_and_projection():
         transition_dao=_FakeTransitionDAO(),
         graph_dao=_FakeGraphDAO(),
         dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=_FakeAssetCustodyDAO(),
         digital_twin_dao=_FakeDigitalTwinDAO(),
     )
 
@@ -233,6 +256,7 @@ async def test_dispute_workflow_and_lineage_attach_disputes():
         transition_dao=_FakeTransitionDAO(),
         graph_dao=_FakeGraphDAO(),
         dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=_FakeAssetCustodyDAO(),
         digital_twin_dao=_FakeDigitalTwinDAO(),
     )
     await service.record_governed_transition(
@@ -289,6 +313,7 @@ async def test_open_dispute_supports_injected_id_generator() -> None:
         transition_dao=_FakeTransitionDAO(),
         graph_dao=_FakeGraphDAO(),
         dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=_FakeAssetCustodyDAO(),
         digital_twin_dao=_FakeDigitalTwinDAO(),
         id_generator=lambda: "00000000-0000-0000-0000-000000000123",
     )
@@ -311,8 +336,176 @@ def test_utcnow_supports_injected_clock() -> None:
         transition_dao=_FakeTransitionDAO(),
         graph_dao=_FakeGraphDAO(),
         dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=_FakeAssetCustodyDAO(),
         digital_twin_dao=_FakeDigitalTwinDAO(),
         clock=lambda: fixed_now,
         id_generator=lambda: uuid.UUID("00000000-0000-0000-0000-000000000999"),
     )
     assert service.utcnow() == fixed_now
+
+
+@pytest.mark.asyncio
+async def test_scan_asset_integrity_detects_chain_and_state_drift() -> None:
+    transition_dao = _FakeTransitionDAO()
+    graph_dao = _FakeGraphDAO()
+    asset_custody_dao = _FakeAssetCustodyDAO()
+    service = CustodyGraphService(
+        transition_dao=transition_dao,
+        graph_dao=graph_dao,
+        dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=asset_custody_dao,
+        digital_twin_dao=_FakeDigitalTwinDAO(),
+    )
+
+    await service.record_governed_transition(
+        object(),
+        record=_build_record(1),
+        governance_ctx=_build_governance(1),
+        custody_update={
+            "asset_id": "asset-1",
+            "current_zone": "vault-a",
+            "authority_source": "governed_transition_receipt",
+            "last_transition_seq": 1,
+            "last_receipt_hash": "hash-1",
+            "last_receipt_nonce": "nonce-1",
+            "last_receipt_counter": 1,
+            "last_endpoint_id": "robot_sim://unit-1",
+            "source_registration_id": "reg-1",
+        },
+    )
+    await service.record_governed_transition(
+        object(),
+        record=_build_record(2),
+        governance_ctx=_build_governance(2),
+        custody_update={
+            "asset_id": "asset-1",
+            "current_zone": "shipping-b",
+            "authority_source": "governed_transition_receipt",
+            "last_transition_seq": 2,
+            "last_receipt_hash": "hash-2",
+            "last_receipt_nonce": "nonce-2",
+            "last_receipt_counter": 2,
+            "last_endpoint_id": "robot_sim://unit-1",
+            "source_registration_id": "reg-1",
+        },
+    )
+
+    transition_dao.rows[1]["previous_transition_event_id"] = "receipt-missing"
+    asset_custody_dao.rows["asset-1"] = {
+        "asset_id": "asset-1",
+        "current_zone": "vault-a",
+        "last_transition_seq": 1,
+        "last_receipt_hash": "hash-1",
+    }
+
+    report = await service.scan_asset_integrity(object(), asset_id="asset-1")
+
+    assert report["verified"] is False
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "previous_transition_mismatch" in codes
+    assert "asset_state_transition_seq_mismatch" in codes
+    assert "asset_state_zone_mismatch" in codes
+
+
+@pytest.mark.asyncio
+async def test_reconcile_and_reproject_refreshes_drifted_projection() -> None:
+    transition_dao = _FakeTransitionDAO()
+    graph_dao = _FakeGraphDAO()
+    service = CustodyGraphService(
+        transition_dao=transition_dao,
+        graph_dao=graph_dao,
+        dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=_FakeAssetCustodyDAO(),
+        digital_twin_dao=_FakeDigitalTwinDAO(),
+    )
+
+    await service.record_governed_transition(
+        object(),
+        record=_build_record(1),
+        governance_ctx=_build_governance(1),
+        custody_update={
+            "asset_id": "asset-1",
+            "current_zone": "vault-a",
+            "authority_source": "governed_transition_receipt",
+            "last_transition_seq": 1,
+            "last_receipt_hash": "hash-1",
+            "last_receipt_nonce": "nonce-1",
+            "last_receipt_counter": 1,
+            "last_endpoint_id": "robot_sim://unit-1",
+            "source_registration_id": "reg-1",
+        },
+    )
+
+    graph_dao.nodes["transition_event:receipt-1"]["payload"]["obsolete"] = True
+    del graph_dao.edges["SETTLED_AS:receipt-1:asset-1"]
+
+    before = await service.reconcile_asset_projection(object(), asset_id="asset-1", repair=False)
+    after = await service.reproject_asset_projection(object(), asset_id="asset-1")
+
+    before_codes = {issue["code"] for issue in before["issues"]}
+    assert "node_payload_drift" in before_codes
+    assert "missing_edge" in before_codes
+    assert after["repair_applied"] is True
+    assert "SETTLED_AS:receipt-1:asset-1" in graph_dao.edges
+    assert "obsolete" not in graph_dao.nodes["transition_event:receipt-1"]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_custody_metrics_and_active_disputes_surface() -> None:
+    metrics = MetricsTracker()
+    transition_dao = _FakeTransitionDAO()
+    dispute_dao = _FakeDisputeDAO()
+    service = CustodyGraphService(
+        transition_dao=transition_dao,
+        graph_dao=_FakeGraphDAO(),
+        dispute_dao=dispute_dao,
+        asset_custody_dao=_FakeAssetCustodyDAO(),
+        digital_twin_dao=_FakeDigitalTwinDAO(),
+        metrics_tracker=metrics,
+        id_generator=lambda: "00000000-0000-0000-0000-000000000321",
+    )
+
+    await service.record_governed_transition(
+        object(),
+        record=_build_record(1),
+        governance_ctx=_build_governance(1),
+        custody_update={
+            "asset_id": "asset-1",
+            "current_zone": "vault-a",
+            "authority_source": "governed_transition_receipt",
+            "last_transition_seq": 1,
+            "last_receipt_hash": "hash-1",
+            "last_receipt_nonce": "nonce-1",
+            "last_receipt_counter": 1,
+            "last_endpoint_id": "robot_sim://unit-1",
+            "source_registration_id": "reg-1",
+        },
+    )
+    dispute = await service.open_dispute(
+        object(),
+        title="Seal mismatch",
+        summary="Barcode and seal photo disagree",
+        opened_by="auditor:1",
+        references={"asset_id": "asset-1", "transition_event_id": "receipt-1"},
+        metadata={"severity": "high"},
+    )
+    await service.scan_asset_integrity(object(), asset_id="asset-1")
+    await service.reconcile_asset_projection(object(), asset_id="asset-1", repair=False)
+
+    active_before = await service.active_disputes_for_asset(object(), asset_id="asset-1")
+    await service.resolve_dispute(
+        object(),
+        dispute_id=dispute["dispute_id"],
+        status="RESOLVED",
+        resolved_by="auditor:2",
+        resolution="Reviewed and cleared",
+    )
+    active_after = await service.active_disputes_for_asset(object(), asset_id="asset-1")
+    metric_snapshot = metrics.get_metrics()
+
+    assert len(active_before) == 1
+    assert active_before[0]["status"] == "OPEN"
+    assert active_after == []
+    assert metric_snapshot["custody_graph_integrity_scans_total"] == 2
+    assert metric_snapshot["custody_graph_reconciliations_total"] == 1
+    assert metric_snapshot["custody_graph_last_integrity_issue_count"] == 0.0

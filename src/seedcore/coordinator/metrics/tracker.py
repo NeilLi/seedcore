@@ -115,6 +115,16 @@ class MetricsTracker:
             # ADR 0006 CPU-pressure trigger: verifier CPU seconds as a fraction
             # of total coordinator replica CPU seconds.
             "result_verifier_job_millis_total": 0,
+            # Custody graph integrity / reconciliation operations
+            "custody_graph_integrity_scans_total": 0,
+            "custody_graph_integrity_failures_total": 0,
+            "custody_graph_reconciliations_total": 0,
+            "custody_graph_reconciliation_drift_total": 0,
+            "custody_graph_repairs_total": 0,
+            "custody_graph_reprojections_total": 0,
+            "custody_graph_batch_runs_total": 0,
+            "custody_graph_batch_assets_total": 0,
+            "custody_graph_batch_drift_assets_total": 0,
         }
 
         # Gauges store the latest observed value (not monotonic). Pre-declare
@@ -127,6 +137,10 @@ class MetricsTracker:
             # scaling-shape trigger (default freshness target: < 60s
             # sustained).
             "result_verifier_watermark_lag_seconds": 0.0,
+            "custody_graph_last_integrity_issue_count": 0.0,
+            "custody_graph_last_reconcile_issue_count": 0.0,
+            "custody_graph_last_batch_asset_count": 0.0,
+            "custody_graph_last_batch_drift_asset_count": 0.0,
         }
     
     def track_routing_decision(self, decision: str, has_plan: bool = False):

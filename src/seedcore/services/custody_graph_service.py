@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 from seedcore.database import get_async_pg_session_factory
+from seedcore.coordinator.metrics.registry import get_global_metrics_tracker
 from seedcore.coordinator.dao import (
+    AssetCustodyStateDAO,
     CustodyDisputeDAO,
     CustodyGraphDAO,
     CustodyTransitionDAO,
@@ -15,6 +17,7 @@ from seedcore.services.digital_twin_service import DigitalTwinService
 
 
 DISPUTE_STATUSES = {"OPEN", "UNDER_REVIEW", "RESOLVED", "REJECTED"}
+ACTIVE_DISPUTE_STATUSES = {"OPEN", "UNDER_REVIEW"}
 
 
 class CustodyGraphService:
@@ -25,14 +28,18 @@ class CustodyGraphService:
         transition_dao: Optional[CustodyTransitionDAO] = None,
         graph_dao: Optional[CustodyGraphDAO] = None,
         dispute_dao: Optional[CustodyDisputeDAO] = None,
+        asset_custody_dao: Optional[AssetCustodyStateDAO] = None,
         digital_twin_dao: Optional[DigitalTwinDAO] = None,
+        metrics_tracker: Any = None,
         clock: Optional[Callable[[], datetime]] = None,
         id_generator: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._transition_dao = transition_dao or CustodyTransitionDAO()
         self._graph_dao = graph_dao or CustodyGraphDAO()
         self._dispute_dao = dispute_dao or CustodyDisputeDAO()
+        self._asset_custody_dao = asset_custody_dao or AssetCustodyStateDAO()
         self._digital_twin_dao = digital_twin_dao or DigitalTwinDAO()
+        self._metrics = metrics_tracker or get_global_metrics_tracker()
         self._clock = clock
         self._id_generator = id_generator
         self._digital_twin_service = DigitalTwinService(
@@ -76,173 +83,10 @@ class CustodyGraphService:
         policy_receipt = governance_ctx.get("policy_receipt") if isinstance(governance_ctx.get("policy_receipt"), Mapping) else {}
 
         asset_node_id = self.node_id("asset", transition_event["asset_id"])
-        touched_nodes = {
-            asset_node_id,
-            self.node_id("transition_event", transition_event["transition_event_id"]),
-        }
-        touched_edges: List[Dict[str, Any]] = []
-
-        await self._graph_dao.upsert_node(
-            session,
-            node_id=asset_node_id,
-            node_kind="asset",
-            subject_id=transition_event["asset_id"],
-            payload={
-                "asset_id": transition_event["asset_id"],
-                "source_registration_id": transition_event.get("source_registration_id"),
-            },
-        )
-        await self._graph_dao.upsert_node(
-            session,
-            node_id=self.node_id("transition_event", transition_event["transition_event_id"]),
-            node_kind="transition_event",
-            subject_id=transition_event["transition_event_id"],
-            payload=dict(transition_event),
-        )
-        touched_edges.append(
-            await self._graph_dao.append_edge(
-                session,
-                edge_id=self.edge_id("SETTLED_AS", transition_event["transition_event_id"], transition_event["asset_id"]),
-                edge_kind="SETTLED_AS",
-                from_node_id=self.node_id("transition_event", transition_event["transition_event_id"]),
-                to_node_id=asset_node_id,
-                source_ref=transition_event["transition_event_id"],
-                payload={"transition_seq": transition_event.get("transition_seq")},
-            )
-        )
-
-        if transition_event.get("previous_transition_event_id"):
-            prev_node_id = self.node_id("transition_event", transition_event["previous_transition_event_id"])
-            touched_nodes.add(prev_node_id)
-            await self._graph_dao.upsert_node(
-                session,
-                node_id=prev_node_id,
-                node_kind="transition_event",
-                subject_id=transition_event["previous_transition_event_id"],
-                payload={"transition_event_id": transition_event["previous_transition_event_id"]},
-            )
-            touched_edges.append(
-                await self._graph_dao.append_edge(
-                    session,
-                    edge_id=self.edge_id("DERIVED_FROM", transition_event["transition_event_id"], transition_event["previous_transition_event_id"]),
-                    edge_kind="DERIVED_FROM",
-                    from_node_id=self.node_id("transition_event", transition_event["transition_event_id"]),
-                    to_node_id=prev_node_id,
-                    source_ref=transition_event["transition_event_id"],
-                    payload={"previous_receipt_hash": transition_event.get("previous_receipt_hash")},
-                )
-            )
-
-        if transition_event.get("from_zone"):
-            from_node = self.node_id("zone", transition_event["from_zone"])
-            touched_nodes.add(from_node)
-            await self._graph_dao.upsert_node(
-                session,
-                node_id=from_node,
-                node_kind="zone",
-                subject_id=transition_event["from_zone"],
-                payload={"zone": transition_event["from_zone"]},
-            )
-            touched_edges.append(
-                await self._graph_dao.append_edge(
-                    session,
-                    edge_id=self.edge_id("MOVED_FROM", transition_event["transition_event_id"], transition_event["from_zone"]),
-                    edge_kind="MOVED_FROM",
-                    from_node_id=self.node_id("transition_event", transition_event["transition_event_id"]),
-                    to_node_id=from_node,
-                    source_ref=transition_event["transition_event_id"],
-                    payload={},
-                )
-            )
-
-        if transition_event.get("to_zone"):
-            to_node = self.node_id("zone", transition_event["to_zone"])
-            touched_nodes.add(to_node)
-            await self._graph_dao.upsert_node(
-                session,
-                node_id=to_node,
-                node_kind="zone",
-                subject_id=transition_event["to_zone"],
-                payload={"zone": transition_event["to_zone"]},
-            )
-            touched_edges.append(
-                await self._graph_dao.append_edge(
-                    session,
-                    edge_id=self.edge_id("MOVED_TO", transition_event["transition_event_id"], transition_event["to_zone"]),
-                    edge_kind="MOVED_TO",
-                    from_node_id=self.node_id("transition_event", transition_event["transition_event_id"]),
-                    to_node_id=to_node,
-                    source_ref=transition_event["transition_event_id"],
-                    payload={},
-                )
-            )
-            touched_edges.append(
-                await self._graph_dao.append_edge(
-                    session,
-                    edge_id=self.edge_id("LOCATED_IN", transition_event["asset_id"], transition_event["to_zone"]),
-                    edge_kind="LOCATED_IN",
-                    from_node_id=asset_node_id,
-                    to_node_id=to_node,
-                    source_ref=transition_event["transition_event_id"],
-                    payload={"transition_seq": transition_event.get("transition_seq")},
-                )
-            )
-
-        for kind, ref_key, edge_kind in (
-            ("intent", transition_event.get("intent_id"), "EXECUTED_VIA"),
-            ("task", transition_event.get("task_id"), "EXECUTED_VIA"),
-            ("execution_token", transition_event.get("token_id"), "AUTHORIZED_BY"),
-            ("evidence_bundle", transition_event.get("evidence_bundle_id"), "HAS_EVIDENCE"),
-            ("transition_receipt", transition_event.get("transition_receipt_id"), "SEALED_BY"),
-        ):
-            if not ref_key:
-                continue
-            node_id = self.node_id(kind, ref_key)
-            touched_nodes.add(node_id)
-            payload = {f"{kind}_id": ref_key}
-            if kind == "execution_token":
-                payload["policy_receipt_id"] = transition_event.get("policy_receipt_id")
-            await self._graph_dao.upsert_node(
-                session,
-                node_id=node_id,
-                node_kind=kind,
-                subject_id=str(ref_key),
-                payload=payload,
-            )
-            touched_edges.append(
-                await self._graph_dao.append_edge(
-                    session,
-                    edge_id=self.edge_id(edge_kind, transition_event["transition_event_id"], ref_key),
-                    edge_kind=edge_kind,
-                    from_node_id=self.node_id("transition_event", transition_event["transition_event_id"]),
-                    to_node_id=node_id,
-                    source_ref=transition_event["transition_event_id"],
-                    payload={},
-                )
-            )
-
-        if transition_event.get("source_registration_id"):
-            registration_id = transition_event["source_registration_id"]
-            registration_node = self.node_id("source_registration", registration_id)
-            touched_nodes.add(registration_node)
-            await self._graph_dao.upsert_node(
-                session,
-                node_id=registration_node,
-                node_kind="source_registration",
-                subject_id=registration_id,
-                payload={"source_registration_id": registration_id},
-            )
-            touched_edges.append(
-                await self._graph_dao.append_edge(
-                    session,
-                    edge_id=self.edge_id("REGISTERED_AS", transition_event["asset_id"], registration_id),
-                    edge_kind="REGISTERED_AS",
-                    from_node_id=asset_node_id,
-                    to_node_id=registration_node,
-                    source_ref=transition_event["transition_event_id"],
-                    payload={},
-                )
-            )
+        base_projection = self._transition_core_projection(transition_event)
+        persisted_projection = await self._persist_projection(session, projection=base_projection)
+        touched_nodes = set(persisted_projection["node_ids"])
+        touched_edges: List[Dict[str, Any]] = list(persisted_projection["edges"])
 
         if principal.get("owner_id"):
             owner_node = self.node_id("owner", principal["owner_id"])
@@ -383,6 +227,270 @@ class CustodyGraphService:
             "edges": edges,
             "twin_refs": twin_refs,
         }
+
+    async def scan_asset_integrity(self, session, *, asset_id: str, limit: int = 500) -> Dict[str, Any]:
+        transitions = await self._transition_dao.list_for_asset(session, asset_id=asset_id, limit=limit)
+        asset_state = await self._asset_custody_dao.get_snapshot(session, asset_id=asset_id)
+        issues: List[Dict[str, Any]] = []
+        previous: Optional[Mapping[str, Any]] = None
+
+        for index, transition in enumerate(transitions):
+            seq = int(transition.get("transition_seq") or 0)
+            if previous is None:
+                if transition.get("previous_transition_event_id"):
+                    issues.append(
+                        {
+                            "code": "unexpected_previous_transition_ref",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "expected": None,
+                            "actual": transition.get("previous_transition_event_id"),
+                        }
+                    )
+                if transition.get("previous_receipt_hash"):
+                    issues.append(
+                        {
+                            "code": "unexpected_previous_receipt_hash",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "expected": None,
+                            "actual": transition.get("previous_receipt_hash"),
+                        }
+                    )
+            else:
+                previous_seq = int(previous.get("transition_seq") or 0)
+                if seq <= previous_seq:
+                    issues.append(
+                        {
+                            "code": "non_monotonic_transition_seq",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "previous_transition_event_id": previous.get("transition_event_id"),
+                            "previous_seq": previous_seq,
+                            "actual_seq": seq,
+                        }
+                    )
+                if seq != previous_seq + 1:
+                    issues.append(
+                        {
+                            "code": "transition_seq_gap",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "previous_transition_event_id": previous.get("transition_event_id"),
+                            "expected_seq": previous_seq + 1,
+                            "actual_seq": seq,
+                        }
+                    )
+                if transition.get("previous_transition_event_id") != previous.get("transition_event_id"):
+                    issues.append(
+                        {
+                            "code": "previous_transition_mismatch",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "expected": previous.get("transition_event_id"),
+                            "actual": transition.get("previous_transition_event_id"),
+                        }
+                    )
+                if self._normalized_value(transition.get("previous_receipt_hash")) != self._normalized_value(previous.get("receipt_hash")):
+                    issues.append(
+                        {
+                            "code": "previous_receipt_hash_mismatch",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "expected": previous.get("receipt_hash"),
+                            "actual": transition.get("previous_receipt_hash"),
+                        }
+                    )
+                previous_counter = previous.get("receipt_counter")
+                current_counter = transition.get("receipt_counter")
+                if previous_counter is not None and current_counter is not None and int(current_counter) <= int(previous_counter):
+                    issues.append(
+                        {
+                            "code": "receipt_counter_not_increasing",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "previous_transition_event_id": previous.get("transition_event_id"),
+                            "previous_counter": previous_counter,
+                            "actual_counter": current_counter,
+                        }
+                    )
+                previous_zone = previous.get("to_zone")
+                current_from_zone = transition.get("from_zone")
+                if previous_zone and current_from_zone and str(previous_zone) != str(current_from_zone):
+                    issues.append(
+                        {
+                            "code": "zone_continuity_mismatch",
+                            "transition_event_id": transition.get("transition_event_id"),
+                            "previous_transition_event_id": previous.get("transition_event_id"),
+                            "expected_from_zone": previous_zone,
+                            "actual_from_zone": current_from_zone,
+                        }
+                    )
+            previous = transition
+
+        latest = transitions[-1] if transitions else None
+        if latest is not None and asset_state is not None:
+            if int(asset_state.get("last_transition_seq") or 0) != int(latest.get("transition_seq") or 0):
+                issues.append(
+                    {
+                        "code": "asset_state_transition_seq_mismatch",
+                        "expected": latest.get("transition_seq"),
+                        "actual": asset_state.get("last_transition_seq"),
+                    }
+                )
+            if self._normalized_value(asset_state.get("last_receipt_hash")) != self._normalized_value(latest.get("receipt_hash")):
+                issues.append(
+                    {
+                        "code": "asset_state_receipt_hash_mismatch",
+                        "expected": latest.get("receipt_hash"),
+                        "actual": asset_state.get("last_receipt_hash"),
+                    }
+                )
+            if self._normalized_value(asset_state.get("current_zone")) != self._normalized_value(latest.get("to_zone")):
+                issues.append(
+                    {
+                        "code": "asset_state_zone_mismatch",
+                        "expected": latest.get("to_zone"),
+                        "actual": asset_state.get("current_zone"),
+                    }
+                )
+
+        report = {
+            "asset_id": asset_id,
+            "transition_count": len(transitions),
+            "verified": not issues,
+            "issues": issues,
+            "latest_transition_event_id": latest.get("transition_event_id") if isinstance(latest, Mapping) else None,
+            "latest_transition_seq": latest.get("transition_seq") if isinstance(latest, Mapping) else None,
+            "asset_custody_state": asset_state,
+        }
+        self._record_integrity_metrics(report)
+        return report
+
+    async def reconcile_asset_projection(
+        self,
+        session,
+        *,
+        asset_id: str,
+        limit: int = 500,
+        repair: bool = False,
+    ) -> Dict[str, Any]:
+        transitions = await self._transition_dao.list_for_asset(session, asset_id=asset_id, limit=limit)
+        disputes = await self._dispute_dao.list_cases(session, asset_id=asset_id, limit=limit)
+        asset_state = await self._asset_custody_dao.get_snapshot(session, asset_id=asset_id)
+
+        expected_projection = self._asset_projection(
+            asset_id=asset_id,
+            transitions=transitions,
+            disputes=disputes,
+            asset_state=asset_state,
+        )
+        node_ids = sorted(expected_projection["nodes"])
+        existing_nodes = {
+            item["node_id"]: item for item in await self._graph_dao.list_nodes(session, node_ids=node_ids)
+        }
+        existing_edges = {
+            item["edge_id"]: item for item in await self._graph_dao.list_edges_for_nodes(session, node_ids=node_ids)
+        }
+        issues: List[Dict[str, Any]] = []
+
+        for node_id, expected in expected_projection["nodes"].items():
+            actual = existing_nodes.get(node_id)
+            if actual is None:
+                issues.append(
+                    {
+                        "code": "missing_node",
+                        "node_id": node_id,
+                        "node_kind": expected.get("node_kind"),
+                    }
+                )
+                continue
+            drift = self._payload_drift(expected.get("payload"), actual.get("payload"))
+            if expected.get("node_kind") != actual.get("node_kind") or expected.get("subject_id") != actual.get("subject_id"):
+                issues.append(
+                    {
+                        "code": "node_identity_mismatch",
+                        "node_id": node_id,
+                        "expected": {
+                            "node_kind": expected.get("node_kind"),
+                            "subject_id": expected.get("subject_id"),
+                        },
+                        "actual": {
+                            "node_kind": actual.get("node_kind"),
+                            "subject_id": actual.get("subject_id"),
+                        },
+                    }
+                )
+            if drift["missing_keys"] or drift["changed_keys"] or drift["extra_keys"]:
+                issues.append(
+                    {
+                        "code": "node_payload_drift",
+                        "node_id": node_id,
+                        "node_kind": expected.get("node_kind"),
+                        **drift,
+                    }
+                )
+
+        for edge_id, expected in expected_projection["edges"].items():
+            actual = existing_edges.get(edge_id)
+            if actual is None:
+                issues.append(
+                    {
+                        "code": "missing_edge",
+                        "edge_id": edge_id,
+                        "edge_kind": expected.get("edge_kind"),
+                    }
+                )
+                continue
+            if (
+                expected.get("edge_kind") != actual.get("edge_kind")
+                or expected.get("from_node_id") != actual.get("from_node_id")
+                or expected.get("to_node_id") != actual.get("to_node_id")
+                or self._normalized_value(expected.get("source_ref")) != self._normalized_value(actual.get("source_ref"))
+                or self._normalized_value(expected.get("payload")) != self._normalized_value(actual.get("payload"))
+            ):
+                issues.append(
+                    {
+                        "code": "edge_drift",
+                        "edge_id": edge_id,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+
+        integrity = await self.scan_asset_integrity(session, asset_id=asset_id, limit=limit)
+        repair_result = None
+        if repair:
+            repair_result = await self._persist_projection(
+                session,
+                projection=expected_projection,
+                replace_payload=True,
+            )
+
+        report = {
+            "asset_id": asset_id,
+            "transition_count": len(transitions),
+            "dispute_count": len(disputes),
+            "expected_node_count": len(expected_projection["nodes"]),
+            "expected_edge_count": len(expected_projection["edges"]),
+            "drift_detected": bool(issues) or not integrity.get("verified", False),
+            "issues": issues,
+            "integrity": integrity,
+            "repair_applied": bool(repair),
+            "repair_result": repair_result,
+        }
+        self._record_reconcile_metrics(report)
+        return report
+
+    async def reproject_asset_projection(self, session, *, asset_id: str, limit: int = 500) -> Dict[str, Any]:
+        result = await self.reconcile_asset_projection(
+            session,
+            asset_id=asset_id,
+            limit=limit,
+            repair=True,
+        )
+        result["reprojected"] = True
+        try:
+            self._metrics.increment_counter("custody_graph_reprojections_total")
+        except Exception:
+            pass
+        return result
+
+    async def list_asset_ids(self, session, *, limit: int = 100, offset: int = 0) -> List[str]:
+        return await self._transition_dao.list_asset_ids(session, limit=limit, offset=offset)
 
     async def query(self, session, **filters: Any) -> Dict[str, Any]:
         dispute_status = filters.pop("dispute_status", None)
@@ -576,6 +684,14 @@ class CustodyGraphService:
                 results.append(dispute)
         return results
 
+    async def list_active_disputes(self, session, *, asset_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        disputes = await self.list_disputes(session, asset_id=asset_id, limit=max(limit * 2, limit))
+        active = [item for item in disputes if item.get("status") in ACTIVE_DISPUTE_STATUSES]
+        return active[:limit]
+
+    async def active_disputes_for_asset(self, session, *, asset_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        return await self.list_active_disputes(session, asset_id=asset_id, limit=limit)
+
     async def get_dispute(self, session, *, dispute_id: str) -> Optional[Dict[str, Any]]:
         case = await self._dispute_dao.get_case(session, dispute_id=dispute_id)
         if case is None:
@@ -730,6 +846,337 @@ class CustodyGraphService:
             if isinstance(product_id, str) and product_id.strip():
                 result["product"] = f"product:{product_id.strip()}"
         return result
+
+    def _asset_projection(
+        self,
+        *,
+        asset_id: str,
+        transitions: Iterable[Mapping[str, Any]],
+        disputes: Iterable[Mapping[str, Any]],
+        asset_state: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        projection: Dict[str, Dict[str, Dict[str, Any]]] = {"nodes": {}, "edges": {}}
+        for transition in transitions:
+            self._merge_projection(projection, self._transition_core_projection(transition))
+        if asset_state is not None:
+            asset_node_id = self.node_id("asset", asset_id)
+            self._merge_projection(
+                projection,
+                {
+                    "nodes": {
+                        asset_node_id: {
+                            "node_id": asset_node_id,
+                            "node_kind": "asset",
+                            "subject_id": asset_id,
+                            "payload": {
+                                "asset_id": asset_id,
+                                "source_registration_id": asset_state.get("source_registration_id"),
+                            },
+                        }
+                    },
+                    "edges": {},
+                },
+            )
+        for dispute in disputes:
+            self._merge_projection(projection, self._dispute_projection(dispute))
+        return projection
+
+    def _transition_core_projection(self, transition_event: Mapping[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        projection: Dict[str, Dict[str, Dict[str, Any]]] = {"nodes": {}, "edges": {}}
+        asset_id = str(transition_event["asset_id"])
+        transition_event_id = str(transition_event["transition_event_id"])
+        asset_node_id = self.node_id("asset", asset_id)
+        transition_node_id = self.node_id("transition_event", transition_event_id)
+
+        projection["nodes"][asset_node_id] = {
+            "node_id": asset_node_id,
+            "node_kind": "asset",
+            "subject_id": asset_id,
+            "payload": {
+                "asset_id": asset_id,
+                "source_registration_id": transition_event.get("source_registration_id"),
+            },
+        }
+        projection["nodes"][transition_node_id] = {
+            "node_id": transition_node_id,
+            "node_kind": "transition_event",
+            "subject_id": transition_event_id,
+            "payload": dict(transition_event),
+        }
+        projection["edges"][self.edge_id("SETTLED_AS", transition_event_id, asset_id)] = {
+            "edge_id": self.edge_id("SETTLED_AS", transition_event_id, asset_id),
+            "edge_kind": "SETTLED_AS",
+            "from_node_id": transition_node_id,
+            "to_node_id": asset_node_id,
+            "source_ref": transition_event_id,
+            "payload": {"transition_seq": transition_event.get("transition_seq")},
+        }
+
+        previous_transition_event_id = transition_event.get("previous_transition_event_id")
+        if previous_transition_event_id:
+            previous_node_id = self.node_id("transition_event", str(previous_transition_event_id))
+            projection["nodes"][previous_node_id] = {
+                "node_id": previous_node_id,
+                "node_kind": "transition_event",
+                "subject_id": str(previous_transition_event_id),
+                "payload": {"transition_event_id": str(previous_transition_event_id)},
+            }
+            projection["edges"][self.edge_id("DERIVED_FROM", transition_event_id, str(previous_transition_event_id))] = {
+                "edge_id": self.edge_id("DERIVED_FROM", transition_event_id, str(previous_transition_event_id)),
+                "edge_kind": "DERIVED_FROM",
+                "from_node_id": transition_node_id,
+                "to_node_id": previous_node_id,
+                "source_ref": transition_event_id,
+                "payload": {"previous_receipt_hash": transition_event.get("previous_receipt_hash")},
+            }
+
+        for zone_key, edge_kind in (("from_zone", "MOVED_FROM"), ("to_zone", "MOVED_TO")):
+            zone = transition_event.get(zone_key)
+            if not zone:
+                continue
+            zone_id = str(zone)
+            zone_node_id = self.node_id("zone", zone_id)
+            projection["nodes"][zone_node_id] = {
+                "node_id": zone_node_id,
+                "node_kind": "zone",
+                "subject_id": zone_id,
+                "payload": {"zone": zone_id},
+            }
+            projection["edges"][self.edge_id(edge_kind, transition_event_id, zone_id)] = {
+                "edge_id": self.edge_id(edge_kind, transition_event_id, zone_id),
+                "edge_kind": edge_kind,
+                "from_node_id": transition_node_id,
+                "to_node_id": zone_node_id,
+                "source_ref": transition_event_id,
+                "payload": {},
+            }
+            if zone_key == "to_zone":
+                projection["edges"][self.edge_id("LOCATED_IN", asset_id, zone_id)] = {
+                    "edge_id": self.edge_id("LOCATED_IN", asset_id, zone_id),
+                    "edge_kind": "LOCATED_IN",
+                    "from_node_id": asset_node_id,
+                    "to_node_id": zone_node_id,
+                    "source_ref": transition_event_id,
+                    "payload": {"transition_seq": transition_event.get("transition_seq")},
+                }
+
+        for kind, ref_key, edge_kind in (
+            ("intent", transition_event.get("intent_id"), "EXECUTED_VIA"),
+            ("task", transition_event.get("task_id"), "EXECUTED_VIA"),
+            ("execution_token", transition_event.get("token_id"), "AUTHORIZED_BY"),
+            ("evidence_bundle", transition_event.get("evidence_bundle_id"), "HAS_EVIDENCE"),
+            ("transition_receipt", transition_event.get("transition_receipt_id"), "SEALED_BY"),
+        ):
+            if not ref_key:
+                continue
+            subject_id = str(ref_key)
+            node_id = self.node_id(kind, subject_id)
+            payload = {f"{kind}_id": subject_id}
+            if kind == "execution_token":
+                payload["policy_receipt_id"] = transition_event.get("policy_receipt_id")
+            projection["nodes"][node_id] = {
+                "node_id": node_id,
+                "node_kind": kind,
+                "subject_id": subject_id,
+                "payload": payload,
+            }
+            projection["edges"][self.edge_id(edge_kind, transition_event_id, subject_id)] = {
+                "edge_id": self.edge_id(edge_kind, transition_event_id, subject_id),
+                "edge_kind": edge_kind,
+                "from_node_id": transition_node_id,
+                "to_node_id": node_id,
+                "source_ref": transition_event_id,
+                "payload": {},
+            }
+
+        source_registration_id = transition_event.get("source_registration_id")
+        if source_registration_id:
+            registration_id = str(source_registration_id)
+            registration_node_id = self.node_id("source_registration", registration_id)
+            projection["nodes"][registration_node_id] = {
+                "node_id": registration_node_id,
+                "node_kind": "source_registration",
+                "subject_id": registration_id,
+                "payload": {"source_registration_id": registration_id},
+            }
+            projection["edges"][self.edge_id("REGISTERED_AS", asset_id, registration_id)] = {
+                "edge_id": self.edge_id("REGISTERED_AS", asset_id, registration_id),
+                "edge_kind": "REGISTERED_AS",
+                "from_node_id": asset_node_id,
+                "to_node_id": registration_node_id,
+                "source_ref": transition_event_id,
+                "payload": {},
+            }
+
+        return projection
+
+    def _dispute_projection(self, dispute: Mapping[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        dispute_id = str(dispute["dispute_id"])
+        projection: Dict[str, Dict[str, Dict[str, Any]]] = {
+            "nodes": {
+                self.node_id("dispute_case", dispute_id): {
+                    "node_id": self.node_id("dispute_case", dispute_id),
+                    "node_kind": "dispute_case",
+                    "subject_id": dispute_id,
+                    "payload": dict(dispute),
+                }
+            },
+            "edges": {},
+        }
+        for ref in self._iter_reference_nodes(dispute.get("references", {})):
+            projection["nodes"][ref["node_id"]] = {
+                "node_id": ref["node_id"],
+                "node_kind": ref["node_kind"],
+                "subject_id": ref["subject_id"],
+                "payload": {ref["field"]: ref["subject_id"]},
+            }
+            projection["edges"][self.edge_id("DISPUTES", dispute_id, ref["subject_id"])] = {
+                "edge_id": self.edge_id("DISPUTES", dispute_id, ref["subject_id"]),
+                "edge_kind": "DISPUTES",
+                "from_node_id": self.node_id("dispute_case", dispute_id),
+                "to_node_id": ref["node_id"],
+                "source_ref": dispute_id,
+                "payload": {"field": ref["field"]},
+            }
+        return projection
+
+    def _merge_projection(
+        self,
+        base: Dict[str, Dict[str, Dict[str, Any]]],
+        other: Dict[str, Dict[str, Dict[str, Any]]],
+    ) -> None:
+        for node_id, node in other.get("nodes", {}).items():
+            existing = base["nodes"].get(node_id)
+            if existing is None:
+                base["nodes"][node_id] = {
+                    "node_id": node["node_id"],
+                    "node_kind": node["node_kind"],
+                    "subject_id": node.get("subject_id"),
+                    "payload": dict(node.get("payload") or {}),
+                }
+                continue
+            existing_payload = dict(existing.get("payload") or {})
+            existing_payload.update(dict(node.get("payload") or {}))
+            existing["node_kind"] = node.get("node_kind", existing.get("node_kind"))
+            existing["subject_id"] = node.get("subject_id", existing.get("subject_id"))
+            existing["payload"] = existing_payload
+        for edge_id, edge in other.get("edges", {}).items():
+            base["edges"][edge_id] = {
+                "edge_id": edge["edge_id"],
+                "edge_kind": edge["edge_kind"],
+                "from_node_id": edge["from_node_id"],
+                "to_node_id": edge["to_node_id"],
+                "source_ref": edge.get("source_ref"),
+                "payload": dict(edge.get("payload") or {}),
+            }
+
+    async def _persist_projection(
+        self,
+        session,
+        *,
+        projection: Dict[str, Dict[str, Dict[str, Any]]],
+        replace_payload: bool = False,
+    ) -> Dict[str, Any]:
+        touched_nodes: List[str] = []
+        touched_edges: List[Dict[str, Any]] = []
+        for node_id in sorted(projection.get("nodes", {})):
+            node = projection["nodes"][node_id]
+            await self._upsert_graph_node(
+                session,
+                node_id=node["node_id"],
+                node_kind=node["node_kind"],
+                subject_id=node.get("subject_id"),
+                payload=dict(node.get("payload") or {}),
+                replace_payload=replace_payload,
+            )
+            touched_nodes.append(node_id)
+        for edge_id in sorted(projection.get("edges", {})):
+            edge = projection["edges"][edge_id]
+            touched_edges.append(
+                await self._graph_dao.append_edge(
+                    session,
+                    edge_id=edge["edge_id"],
+                    edge_kind=edge["edge_kind"],
+                    from_node_id=edge["from_node_id"],
+                    to_node_id=edge["to_node_id"],
+                    source_ref=edge.get("source_ref"),
+                    payload=dict(edge.get("payload") or {}),
+                )
+            )
+        return {"node_ids": touched_nodes, "edges": touched_edges}
+
+    async def _upsert_graph_node(
+        self,
+        session,
+        *,
+        node_id: str,
+        node_kind: str,
+        subject_id: Optional[str],
+        payload: Dict[str, Any],
+        replace_payload: bool = False,
+    ) -> Dict[str, Any]:
+        if replace_payload:
+            try:
+                return await self._graph_dao.upsert_node(
+                    session,
+                    node_id=node_id,
+                    node_kind=node_kind,
+                    subject_id=subject_id,
+                    payload=payload,
+                    replace_payload=True,
+                )
+            except TypeError:
+                pass
+        return await self._graph_dao.upsert_node(
+            session,
+            node_id=node_id,
+            node_kind=node_kind,
+            subject_id=subject_id,
+            payload=payload,
+        )
+
+    def _payload_drift(self, expected_payload: Any, actual_payload: Any) -> Dict[str, Any]:
+        expected = dict(expected_payload or {})
+        actual = dict(actual_payload or {})
+        missing_keys = sorted(key for key in expected if key not in actual)
+        changed_keys = sorted(
+            key for key in expected if key in actual and self._normalized_value(expected[key]) != self._normalized_value(actual[key])
+        )
+        extra_keys = sorted(key for key in actual if key not in expected)
+        return {
+            "missing_keys": missing_keys,
+            "changed_keys": changed_keys,
+            "extra_keys": extra_keys,
+        }
+
+    def _normalized_value(self, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {str(key): self._normalized_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+        if isinstance(value, list):
+            return [self._normalized_value(item) for item in value]
+        return value
+
+    def _record_integrity_metrics(self, report: Mapping[str, Any]) -> None:
+        try:
+            self._metrics.increment_counter("custody_graph_integrity_scans_total")
+            issue_count = len(report.get("issues") or [])
+            self._metrics.set_gauge("custody_graph_last_integrity_issue_count", float(issue_count))
+            if not bool(report.get("verified", False)):
+                self._metrics.increment_counter("custody_graph_integrity_failures_total")
+        except Exception:
+            return
+
+    def _record_reconcile_metrics(self, report: Mapping[str, Any]) -> None:
+        try:
+            self._metrics.increment_counter("custody_graph_reconciliations_total")
+            issue_count = len(report.get("issues") or []) + len((report.get("integrity") or {}).get("issues") or [])
+            self._metrics.set_gauge("custody_graph_last_reconcile_issue_count", float(issue_count))
+            if bool(report.get("drift_detected", False)):
+                self._metrics.increment_counter("custody_graph_reconciliation_drift_total")
+            if bool(report.get("repair_applied", False)):
+                self._metrics.increment_counter("custody_graph_repairs_total")
+        except Exception:
+            return
 
     async def _sync_dispute_twins(
         self,

@@ -1784,6 +1784,7 @@ class CustodyGraphDAO:
         node_kind: str,
         subject_id: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
+        replace_payload: bool = False,
     ) -> Dict[str, Any]:
         row = (
             await session.execute(
@@ -1804,10 +1805,13 @@ class CustodyGraphDAO:
         row.node_kind = str(node_kind)
         if subject_id is not None:
             row.subject_id = str(subject_id)
-        if payload:
-            merged = dict(row.payload or {})
-            merged.update(dict(payload))
-            row.payload = merged
+        if payload is not None:
+            if replace_payload:
+                row.payload = dict(payload or {})
+            else:
+                merged = dict(row.payload or {})
+                merged.update(dict(payload))
+                row.payload = merged
         await session.flush()
         return self._node_to_dict(row)
 
@@ -1961,6 +1965,16 @@ class CustodyTransitionDAO:
             )
         ).scalars().all()
         return [self._row_to_dict(row) for row in rows]
+
+    async def list_asset_ids(self, session, *, limit: int = 100, offset: int = 0) -> List[str]:
+        rows = await session.execute(
+            select(CustodyTransitionEvent.asset_id)
+            .distinct()
+            .order_by(CustodyTransitionEvent.asset_id.asc())
+            .offset(max(0, int(offset)))
+            .limit(max(1, min(int(limit), 5000)))
+        )
+        return [str(value) for value in rows.scalars().all() if str(value).strip()]
 
     async def get_by_transition_event_id(self, session, *, transition_event_id: str) -> Optional[Dict[str, Any]]:
         row = (

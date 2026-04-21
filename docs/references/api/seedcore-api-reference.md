@@ -234,6 +234,10 @@ This surface exposes the new custody graph, lineage, search, and dispute workflo
 | `GET` | `/api/v1/custody/assets/{asset_id}/lineage` | Return the ordered lineage chain for an asset plus linked artifacts and disputes. |
 | `GET` | `/api/v1/custody/assets/{asset_id}/transitions` | Return custody transition events for an asset. |
 | `GET` | `/api/v1/custody/assets/{asset_id}/graph` | Return a graph projection with `{nodes, edges, root_node_id}` for the asset investigation view. |
+| `GET` | `/api/v1/custody/assets/{asset_id}/disputes/active` | Return only currently active disputes (`OPEN`, `UNDER_REVIEW`) for the asset. |
+| `GET` | `/api/v1/custody/assets/{asset_id}/integrity` | Run the asset-level chain integrity scanner over ordered transition events and current custody state. |
+| `POST` | `/api/v1/custody/assets/{asset_id}/reconcile` | Compare canonical custody truth against the persisted custody-graph projection, optionally applying repair. |
+| `POST` | `/api/v1/custody/assets/{asset_id}/reproject` | Rebuild the custody-graph projection for one asset from canonical transition and dispute rows. |
 | `GET` | `/api/v1/custody/query` | Search custody transitions by asset, intent, task, token, zone, actor, endpoint, time range, and dispute status. |
 | `GET` | `/api/v1/custody/disputes` | List dispute cases, optionally filtered by asset or status. |
 | `GET` | `/api/v1/custody/disputes/{dispute_id}` | Fetch one dispute case with append-only dispute events. |
@@ -245,6 +249,9 @@ This surface exposes the new custody graph, lineage, search, and dispute workflo
 
 - Custody lineage is now persisted in `custody_transition_event` and treated as the canonical append-only transition chain.
 - Graph projection is Postgres-first and does not rely on Neo4j for correctness.
+- `custody_graph_node` and `custody_graph_edge` are derived projection tables. Reconciliation and reprojection should treat `custody_transition_event` and `asset_custody_state` as canonical custody truth.
+- Dispute linkage edges are intentionally immutable. Resolving a dispute updates the `dispute_case` node status and dispute-event log; it does not remove historical `DISPUTES` edges.
+- Consumers that need a current-view dispute surface should use dispute status or the active-disputes endpoint rather than inferring liveness from graph-edge presence.
 - Replay records now surface linked custody transition refs and dispute refs without exposing the full internal graph by default.
 
 ## 10. Control API

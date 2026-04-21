@@ -65,6 +65,57 @@ async def get_asset_graph(
     return await custody_graph_service.get_asset_graph(session, asset_id=asset_id, limit=limit)
 
 
+@router.get("/custody/assets/{asset_id}/disputes/active")
+async def get_active_asset_disputes(
+    asset_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    return {
+        "asset_id": asset_id,
+        "disputes": await custody_graph_service.active_disputes_for_asset(session, asset_id=asset_id, limit=limit),
+    }
+
+
+@router.get("/custody/assets/{asset_id}/integrity")
+async def get_asset_integrity(
+    asset_id: str,
+    limit: int = Query(default=500, ge=1, le=1000),
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    return await custody_graph_service.scan_asset_integrity(session, asset_id=asset_id, limit=limit)
+
+
+@router.post("/custody/assets/{asset_id}/reconcile")
+async def reconcile_asset_projection(
+    asset_id: str,
+    repair: bool = Query(default=False),
+    limit: int = Query(default=500, ge=1, le=1000),
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    async with session.begin():
+        return await custody_graph_service.reconcile_asset_projection(
+            session,
+            asset_id=asset_id,
+            limit=limit,
+            repair=repair,
+        )
+
+
+@router.post("/custody/assets/{asset_id}/reproject")
+async def reproject_asset_graph(
+    asset_id: str,
+    limit: int = Query(default=500, ge=1, le=1000),
+    session: AsyncSession = Depends(get_async_pg_session),
+):
+    async with session.begin():
+        return await custody_graph_service.reproject_asset_projection(
+            session,
+            asset_id=asset_id,
+            limit=limit,
+        )
+
+
 @router.get("/custody/query")
 async def query_custody(
     asset_id: Optional[str] = None,
