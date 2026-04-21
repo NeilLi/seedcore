@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from seedcore.coordinator.dao import (
+    CustodyGraphDAO,
     DigitalTwinEventJournalDAO,
     GovernedExecutionAuditDAO,
     TaskRouterTelemetryDAO,
@@ -20,6 +21,7 @@ from seedcore.coordinator.dao import (
     TaskProtoPlanDAO,
     TransferApprovalEnvelopeDAO,
 )
+from seedcore.models.custody_graph import CustodyGraphEdge
 
 
 class TestTaskRouterTelemetryDAO:
@@ -64,6 +66,45 @@ class TestTaskRouterTelemetryDAO:
         )
         
         assert session.execute.called
+
+
+class TestCustodyGraphDAO:
+    """Tests for CustodyGraphDAO."""
+
+    @pytest.mark.asyncio
+    async def test_append_edge_rereads_existing_row_after_conflict(self):
+        """Test duplicate edge inserts remain idempotent under races."""
+        dao = CustodyGraphDAO()
+        existing = CustodyGraphEdge(
+            edge_id="DISPUTES:dispute-1:transition-1",
+            edge_kind="DISPUTES",
+            from_node_id="dispute_case:dispute-1",
+            to_node_id="transition_event:transition-1",
+            source_ref="dispute-1",
+            payload={"field": "transition_event_id"},
+        )
+        initial_select = MagicMock()
+        initial_select.scalars.return_value.first.return_value = None
+        insert_result = MagicMock()
+        reread_select = MagicMock()
+        reread_select.scalars.return_value.first.return_value = existing
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=[initial_select, insert_result, reread_select])
+
+        row = await dao.append_edge(
+            session,
+            edge_id="DISPUTES:dispute-1:transition-1",
+            edge_kind="DISPUTES",
+            from_node_id="dispute_case:dispute-1",
+            to_node_id="transition_event:transition-1",
+            source_ref="dispute-1",
+            payload={"field": "transition_event_id"},
+        )
+
+        assert row["edge_id"] == "DISPUTES:dispute-1:transition-1"
+        assert row["to_node_id"] == "transition_event:transition-1"
+        assert session.execute.await_count == 3
 
 
 class TestTaskOutboxDAO:

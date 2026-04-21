@@ -7,6 +7,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import func, select, text, tuple_  # pyright: ignore[reportMissingImports]
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..integrations.rust_kernel import (
     approval_binding_hash_with_rust,
@@ -1832,16 +1833,25 @@ class CustodyGraphDAO:
             )
         ).scalars().first()
         if row is None:
-            row = CustodyGraphEdge(
-                edge_id=str(edge_id),
-                edge_kind=str(edge_kind),
-                from_node_id=str(from_node_id),
-                to_node_id=str(to_node_id),
-                source_ref=str(source_ref) if source_ref is not None else None,
-                payload=dict(payload or {}),
+            await session.execute(
+                pg_insert(CustodyGraphEdge)
+                .values(
+                    edge_id=str(edge_id),
+                    edge_kind=str(edge_kind),
+                    from_node_id=str(from_node_id),
+                    to_node_id=str(to_node_id),
+                    source_ref=str(source_ref) if source_ref is not None else None,
+                    payload=dict(payload or {}),
+                )
+                .on_conflict_do_nothing(index_elements=[CustodyGraphEdge.edge_id])
             )
-            session.add(row)
-            await session.flush()
+            row = (
+                await session.execute(
+                    select(CustodyGraphEdge).where(CustodyGraphEdge.edge_id == str(edge_id))
+                )
+            ).scalars().first()
+            if row is None:
+                raise RuntimeError(f"Failed to persist custody graph edge '{edge_id}'")
             return self._edge_to_dict(row)
 
         return self._edge_to_dict(row)

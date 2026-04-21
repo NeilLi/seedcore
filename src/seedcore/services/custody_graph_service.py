@@ -565,12 +565,13 @@ class CustodyGraphService:
             payload={"references": dict(references)},
             status="OPEN",
         )
-        await self._graph_dao.upsert_node(
+        await self._upsert_graph_node(
             session,
             node_id=self.node_id("dispute_case", dispute_id),
             node_kind="dispute_case",
             subject_id=dispute_id,
             payload=case,
+            replace_payload=True,
         )
         for ref in self._iter_reference_nodes(references):
             await self._graph_dao.upsert_node(
@@ -620,6 +621,17 @@ class CustodyGraphService:
             payload=dict(payload or {}),
             status=next_status,
         )
+        if next_status is not None:
+            case = await self._dispute_dao.get_case(session, dispute_id=dispute_id)
+            if case is not None:
+                await self._upsert_graph_node(
+                    session,
+                    node_id=self.node_id("dispute_case", dispute_id),
+                    node_kind="dispute_case",
+                    subject_id=dispute_id,
+                    payload=case,
+                    replace_payload=True,
+                )
         return event
 
     async def resolve_dispute(
@@ -652,12 +664,13 @@ class CustodyGraphService:
             payload={},
             status=normalized_status,
         )
-        await self._graph_dao.upsert_node(
+        await self._upsert_graph_node(
             session,
             node_id=self.node_id("dispute_case", dispute_id),
             node_kind="dispute_case",
             subject_id=dispute_id,
             payload=case,
+            replace_payload=True,
         )
         dispute = await self.get_dispute(session, dispute_id=dispute_id)
         if dispute is not None:

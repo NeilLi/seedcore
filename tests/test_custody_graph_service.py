@@ -308,6 +308,39 @@ async def test_dispute_workflow_and_lineage_attach_disputes():
 
 
 @pytest.mark.asyncio
+async def test_append_dispute_event_refreshes_dispute_case_node_payload() -> None:
+    graph_dao = _FakeGraphDAO()
+    service = CustodyGraphService(
+        transition_dao=_FakeTransitionDAO(),
+        graph_dao=graph_dao,
+        dispute_dao=_FakeDisputeDAO(),
+        asset_custody_dao=_FakeAssetCustodyDAO(),
+        digital_twin_dao=_FakeDigitalTwinDAO(),
+    )
+
+    dispute = await service.open_dispute(
+        object(),
+        title="Seal mismatch",
+        summary="Barcode and seal photo disagree",
+        opened_by="auditor:1",
+        references={"asset_id": "asset-1", "transition_event_id": "receipt-1"},
+        metadata={"severity": "high"},
+    )
+
+    await service.append_dispute_event(
+        object(),
+        dispute_id=dispute["dispute_id"],
+        actor_id="auditor:2",
+        note="Review started",
+        payload={},
+        status="UNDER_REVIEW",
+    )
+
+    dispute_node = graph_dao.nodes[f"dispute_case:{dispute['dispute_id']}"]
+    assert dispute_node["payload"]["status"] == "UNDER_REVIEW"
+
+
+@pytest.mark.asyncio
 async def test_open_dispute_supports_injected_id_generator() -> None:
     service = CustodyGraphService(
         transition_dao=_FakeTransitionDAO(),
