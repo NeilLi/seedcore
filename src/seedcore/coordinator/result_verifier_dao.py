@@ -143,23 +143,39 @@ class ResultVerifierJobDAO:
         *,
         stale_before: datetime,
     ) -> list[dict[str, Any]]:
+        """Requeue abandoned processing jobs without blocking live workers.
+
+        Claimed RESULT_VERIFIER jobs stay row-locked for the lifetime of the
+        worker transaction. By selecting reclaim candidates through
+        ``FOR UPDATE SKIP LOCKED`` first, the sweeper only reclaims unlocked
+        rows from crashed/abandoned workers and skips jobs still owned by a
+        healthy in-flight transaction.
+        """
         stmt = text(
             """
-            UPDATE result_verifier_jobs
+            WITH stale AS (
+                SELECT id
+                FROM result_verifier_jobs
+                WHERE status = 'processing'
+                  AND updated_at < :stale_before
+                ORDER BY updated_at ASC, id ASC
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE result_verifier_jobs AS j
             SET status = 'queued', updated_at = NOW()
-            WHERE status = 'processing'
-              AND updated_at < :stale_before
+            FROM stale
+            WHERE j.id = stale.id
             RETURNING
-                id::text AS id,
-                event_journal_id::text AS event_journal_id,
-                task_id::text AS task_id,
-                intent_id AS intent_id,
-                asset_id AS asset_id,
-                status AS status,
-                attempt_count AS attempt_count,
-                next_attempt_at AS next_attempt_at,
-                last_error_code AS last_error_code,
-                last_error_detail AS last_error_detail
+                j.id::text AS id,
+                j.event_journal_id::text AS event_journal_id,
+                j.task_id::text AS task_id,
+                j.intent_id AS intent_id,
+                j.asset_id AS asset_id,
+                j.status AS status,
+                j.attempt_count AS attempt_count,
+                j.next_attempt_at AS next_attempt_at,
+                j.last_error_code AS last_error_code,
+                j.last_error_detail AS last_error_detail
             """
         )
         result = await session.execute(stmt, {"stale_before": stale_before})

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
@@ -203,6 +204,49 @@ async def test_result_verifier_claim_jobs_uses_skip_locked_under_contention(_pos
             remaining = await dao.claim_jobs(session, batch_size=5)
             remaining_ids = {row["id"] for row in remaining}
             assert job_a in remaining_ids
+
+
+async def test_result_verifier_stale_requeue_skips_locked_processing_rows(_postgres_session_factory) -> None:
+    dao = ResultVerifierJobDAO()
+    event_id = str(uuid.uuid4())
+    task_id = str(uuid.uuid4())
+
+    async with _postgres_session_factory() as session:
+        async with session.begin():
+            job_id = await dao.enqueue_job(
+                session,
+                event_journal_id=event_id,
+                task_id=task_id,
+                intent_id="intent-stale-lock",
+                asset_id="asset:stale-lock",
+            )
+            assert job_id is not None
+
+    async with _postgres_session_factory() as locking_session:
+        async with locking_session.begin():
+            claimed = await dao.claim_jobs(locking_session, batch_size=5)
+            assert len(claimed) == 1
+            assert claimed[0]["id"] == job_id
+
+            async with _postgres_session_factory() as reclaim_session:
+                async with reclaim_session.begin():
+                    requeued = await asyncio.wait_for(
+                        dao.requeue_stale_processing_jobs(
+                            reclaim_session,
+                            stale_before=datetime.now(timezone.utc) + timedelta(seconds=1),
+                        ),
+                        timeout=1.0,
+                    )
+                    assert requeued == []
+
+    async with _postgres_session_factory() as session:
+        async with session.begin():
+            requeued = await dao.requeue_stale_processing_jobs(
+                session,
+                stale_before=datetime.now(timezone.utc) + timedelta(seconds=1),
+            )
+            assert len(requeued) == 1
+            assert requeued[0]["id"] == job_id
 
 
 async def test_result_verifier_runtime_watermark_round_trip_on_postgres(_postgres_session_factory) -> None:
