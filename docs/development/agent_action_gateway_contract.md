@@ -295,6 +295,36 @@ Any change that adds real latency on the evaluate path — a new PG read, a
 synchronous crypto call, an un-cached snapshot fetch — surfaces on the
 benchmark lane before it ships.
 
+**Current status (2026-04-22, local host runtime)**
+
+Done now:
+
+- owner delegation lookup narrowed at query time in
+  `src/seedcore/api/external_authority.py` (`_list_owner_delegations`) by
+  filtering `Fact.predicate` with the `delegation:` prefix in SQL, reducing
+  owner-twin resolution scan cost under hot-path load.
+- gateway request-record/idempotency Redis writes in
+  `src/seedcore/api/routers/agent_actions_router.py`
+  (`_write_request_record`) switched from two sequential `SETEX` calls to one
+  Redis pipeline execution, reducing write round-trips on the evaluate path.
+- verification lanes remain green after the change:
+  `tests/test_external_authority.py`,
+  `tests/test_agent_action_gateway_productization.py`,
+  `tests/test_benchmark_rct_hot_path.py`,
+  `tests/test_capture_hot_path_deployment_baseline.py`.
+
+Still remaining:
+
+- close the concurrent-load latency gap to promotion SLOs
+  (`p50 < 25ms`, `p95 < 50ms`, `p99 < 100ms`) in
+  `docs/development/hot_path_enforcement_promotion_contract.md`;
+  local benchmark still shows tail latency above this envelope.
+- reduce non-policy overhead (boundary I/O, contention, and queueing) that
+  dominates end-to-end gateway wall time relative to reported hot-path policy
+  evaluation time.
+- re-run the same benchmark and parity evidence on dedicated gateway-process
+  split and real cluster topology as the source-of-truth performance sign-off.
+
 **The apples-to-apples comparison**
 
 The fair comparison is not "delegated authority vs. nothing." It is
@@ -1108,6 +1138,12 @@ Delivered:
   `settlement_status=pending_reconcile` and are retried by
   `reconcile_pending_closures(...)` with a bounded retry budget and an
   explicit escalation path
+- delegation lookup optimization on owner-twin resolution path:
+  `_list_owner_delegations` now filters `delegation:*` rows at SQL selection
+  time instead of scanning all owner facts in Python
+- idempotency/request-record Redis write optimization:
+  `_write_request_record` now pipelines Redis writes to reduce evaluate-path
+  round-trip cost
 
 Still pending:
 
@@ -1115,6 +1151,8 @@ Still pending:
   coordinate-mismatch drill (delegation replay, stale-telemetry reuse)
 - mTLS + detached-signature hardening of the external boundary (Security
   track B)
+- promotion-SLO closure under concurrent load for hot-path benchmark lanes
+  (keep parity at zero mismatches while meeting p50/p95/p99 thresholds)
 
 ## Acceptance Criteria
 

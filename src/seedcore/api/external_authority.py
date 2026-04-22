@@ -767,6 +767,7 @@ async def _list_owner_delegations(session: AsyncSession, owner_id: str) -> list[
         select(Fact).where(
             Fact.namespace == IDENTITY_NAMESPACE,
             Fact.subject == owner_id,
+            Fact.predicate.like(f"{DELEGATION_PREDICATE_PREFIX}%"),
         )
     )
     delegations: list[DelegationRecord] = []

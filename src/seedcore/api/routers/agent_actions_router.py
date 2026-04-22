@@ -1313,25 +1313,29 @@ async def _write_request_record(record: _AgentActionStoredRecord) -> None:
     redis_client = await _resolve_redis_client()
     if redis_client is not None:
         record_payload = _record_to_json_payload(record)
+        serialized_record = json.dumps(record_payload, sort_keys=True, separators=(",", ":"), default=str)
+        serialized_idempotency = json.dumps(
+            {
+                "request_id": record.request_id,
+                "request_hash": record.request_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
         try:
-            await redis_client.setex(
+            pipeline = redis_client.pipeline(transaction=False)
+            pipeline.setex(
                 _request_record_redis_key(record.request_id),
                 REQUEST_RECORD_TTL_SECONDS,
-                json.dumps(record_payload, sort_keys=True, separators=(",", ":"), default=str),
+                serialized_record,
             )
-            await redis_client.setex(
+            pipeline.setex(
                 _idempotency_redis_key(record.idempotency_key),
                 REQUEST_RECORD_TTL_SECONDS,
-                json.dumps(
-                    {
-                        "request_id": record.request_id,
-                        "request_hash": record.request_hash,
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ),
+                serialized_idempotency,
             )
+            await pipeline.execute()
             return
         except Exception:
             logger.warning("Agent action Redis write failed; falling back to in-memory.", exc_info=True)
