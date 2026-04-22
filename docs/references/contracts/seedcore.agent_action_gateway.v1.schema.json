@@ -322,7 +322,9 @@
           "default": "pending",
           "enum": [
             "pending",
-            "ready"
+            "pending_reconcile",
+            "ready",
+            "contradicted"
           ],
           "title": "Replay Status",
           "type": "string"
@@ -340,7 +342,9 @@
           "default": "pending",
           "enum": [
             "pending",
+            "pending_reconcile",
             "applied",
+            "contradicted",
             "rejected"
           ],
           "title": "Settlement Status",

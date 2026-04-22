@@ -513,8 +513,19 @@ class AgentActionClosureResponse(BaseModel):
     closure_id: str
     accepted_at: datetime
     status: Literal["accepted_pending_settlement"] = "accepted_pending_settlement"
-    settlement_status: Literal["pending", "applied", "rejected"] = "pending"
-    replay_status: Literal["pending", "ready"] = "pending"
+    settlement_status: Literal[
+        "pending",
+        "pending_reconcile",
+        "applied",
+        "contradicted",
+        "rejected",
+    ] = "pending"
+    replay_status: Literal[
+        "pending",
+        "pending_reconcile",
+        "ready",
+        "contradicted",
+    ] = "pending"
     linked_disposition: str
     forensic_block_id: Optional[str] = None
     telemetry_refs: List[SignedEdgeTelemetryRefV0] = Field(default_factory=list)

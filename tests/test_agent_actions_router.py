@@ -1329,8 +1329,18 @@ def test_agent_actions_closure_accepts_allow_request_and_records(monkeypatch):
     assert close_body["request_id"] == "req-transfer-2026-0001"
     assert close_body["closure_id"] == "closure-transfer-2026-0001"
     assert close_body["status"] == "accepted_pending_settlement"
-    assert close_body["settlement_status"] == "pending"
-    assert close_body["replay_status"] == "pending"
+    # SEEDCORE_AGENT_ACTION_ENABLE_SETTLEMENT_HANDOFF now defaults to `true`
+    # (see agent_action_gateway_contract.md §Closure Surface), so with the
+    # twin service mocked the closure reaches a terminal status rather than
+    # the legacy `feature_flag_disabled` short-circuit.  Accept any of the
+    # terminal statuses so this smoke test does not couple to the mock
+    # twin service's internal behavior.
+    assert close_body["settlement_status"] in {
+        "applied",
+        "pending",
+        "pending_reconcile",
+    }
+    assert close_body["replay_status"] in {"ready", "pending", "pending_reconcile"}
     assert close_body["linked_disposition"] == "allow"
 
     get_response = client.get("/api/v1/agent-actions/closures/closure-transfer-2026-0001")
@@ -1533,6 +1543,260 @@ def test_agent_actions_closure_marks_replay_ready_when_settlement_applied(monkey
     assert body["settlement_status"] == "applied"
     assert body["replay_status"] == "ready"
     assert body["settlement_result"]["updated"] == 3
+
+
+def test_agent_actions_closure_detects_outcome_contradiction(monkeypatch):
+    """A closure that reports `quarantined` against an `allow` evaluate must
+    flip to `settlement_status=contradicted` without touching the twin
+    service, and its `next_actions` must include the documented
+    `quarantine_asset` + `investigate_scope_mismatch` remediation steps.
+    """
+
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    closure_payload = _base_closure_payload()
+    closure_payload["outcome"] = "quarantined"
+
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=closure_payload,
+    )
+    assert close_response.status_code == 200
+    body = close_response.json()
+    assert body["settlement_status"] == "contradicted"
+    assert body["replay_status"] == "contradicted"
+    assert body["settlement_result"]["error_code"] == "closure_contradicts_authority_scope"
+    reason_codes = {
+        entry.get("reason_code")
+        for entry in body["settlement_result"]["contradictions"]
+    }
+    assert "outcome_contradicts_allow_decision" in reason_codes
+    assert "quarantine_asset" in body["next_actions"]
+    assert "investigate_scope_mismatch" in body["next_actions"]
+
+
+def test_agent_actions_closure_detects_summary_zone_contradiction(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    closure_payload = _base_closure_payload()
+    closure_payload["summary"] = {
+        "observed_to_zone": "zone_red_unauthorized",
+    }
+
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=closure_payload,
+    )
+    assert close_response.status_code == 200
+    body = close_response.json()
+    assert body["settlement_status"] == "contradicted"
+    reason_codes = {
+        entry.get("reason_code")
+        for entry in body["settlement_result"]["contradictions"]
+    }
+    assert "summary_to_zone_mismatch" in reason_codes
+
+
+class _SettlementRaisingTwinService:
+    """Passes the RESULT_VERIFIER gate but raises from
+    `settle_from_evidence_bundle` — simulates a transient backend fault.
+    """
+
+    async def evaluate_result_verifier_gate(self, *, twin_refs):
+        return {"blocked": False, "checked_refs": len(list(twin_refs or []))}
+
+    async def settle_from_evidence_bundle(self, **_kwargs):
+        raise RuntimeError("transient settlement fault")
+
+
+def test_agent_actions_closure_pending_reconcile_when_settlement_raises(monkeypatch):
+    """When the twin service accepts the gate check but `settle_from_evidence_bundle`
+    raises transiently, the closure path must not drop the closure or mark it
+    rejected — it must return `pending_reconcile` and enqueue the closure for
+    later reconciliation so no action becomes a zombie.
+    """
+
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    monkeypatch.setattr(agent_actions_router, "DISABLE_REDIS_STORE", True)
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _SettlementRaisingTwinService(),
+    )
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    assert close_response.status_code == 200
+    body = close_response.json()
+    assert body["settlement_status"] == "pending_reconcile"
+    assert body["replay_status"] == "pending_reconcile"
+    assert body["settlement_result"]["error_code"] == "settlement_exception"
+    assert body["settlement_result"]["requeued"] is True
+    assert "await_settlement_reconcile" in body["next_actions"]
+
+    with agent_actions_router._REQUEST_RECORDS_LOCK:
+        queued_ids = [
+            entry["closure_id"]
+            for entry in agent_actions_router._PENDING_RECONCILE_QUEUE
+        ]
+    assert "closure-transfer-2026-0001" in queued_ids
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_closures_applies_when_service_recovers(monkeypatch):
+    """The reconciler must be able to promote a `pending_reconcile` closure
+    to `applied` on a subsequent run once the twin service is back up.
+    """
+
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    monkeypatch.setattr(agent_actions_router, "DISABLE_REDIS_STORE", True)
+
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _SettlementRaisingTwinService(),
+    )
+
+    eval_response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    assert eval_response.status_code == 200
+    close_response = client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    assert close_response.json()["settlement_status"] == "pending_reconcile"
+
+    async def _settlement_applied(*args, **kwargs):
+        return "applied", {"updated": 1, "version_bumped": 1}
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_apply_closure_settlement_handoff",
+        _settlement_applied,
+    )
+
+    summary = await agent_actions_router.reconcile_pending_closures(max_batch=10)
+    assert summary["processed"] == 1
+    assert summary["applied"] == 1
+
+    record_response = client.get("/api/v1/agent-actions/closures/closure-transfer-2026-0001")
+    assert record_response.status_code == 200
+    stored = record_response.json()
+    assert stored["response"]["settlement_status"] == "applied"
+    assert stored["response"]["replay_status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_closures_escalates_after_max_attempts(monkeypatch):
+    """After `SETTLEMENT_RECONCILE_MAX_ATTEMPTS` retries, the reconciler must
+    escalate a stuck closure to `rejected` with a specific error code so it
+    cannot linger as a zombie.
+    """
+
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    monkeypatch.setattr(agent_actions_router, "DISABLE_REDIS_STORE", True)
+    client = _make_client()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "_resolve_digital_twin_service",
+        lambda: _SettlementRaisingTwinService(),
+    )
+
+    client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+    client.post(
+        "/api/v1/agent-actions/req-transfer-2026-0001/closures",
+        json=_base_closure_payload(),
+    )
+    # Pre-age the queue entry so we exercise the escalation branch on the
+    # very next reconcile call without needing to loop.
+    with agent_actions_router._REQUEST_RECORDS_LOCK:
+        agent_actions_router._PENDING_RECONCILE_QUEUE[0]["attempts"] = 99
+
+    summary = await agent_actions_router.reconcile_pending_closures(max_batch=10)
+    assert summary["escalated"] == 1
+
+    record_response = client.get("/api/v1/agent-actions/closures/closure-transfer-2026-0001")
+    assert record_response.status_code == 200
+    stored = record_response.json()
+    assert stored["response"]["settlement_status"] == "rejected"
+    assert (
+        stored["response"]["settlement_result"]["error_code"]
+        == "settlement_reconcile_max_attempts_exceeded"
+    )
 
 
 @pytest.mark.asyncio

@@ -125,6 +125,15 @@ _CLOSURE_RECORDS_BY_ID: Dict[str, _AgentActionClosureStoredRecord] = {}
 _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
 _EXECUTE_RECORDS_BY_REQUEST_ID: Dict[str, _AgentActionExecuteStoredRecord] = {}
 _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
+
+# In-memory fallback queue for closures whose settlement handoff returned
+# `pending_reconcile` (for example because the twin service was transiently
+# unavailable).  Each entry carries the attempt count so the reconciler can
+# escalate after a bounded number of retries.  Redis is the preferred
+# transport when available.
+_PENDING_RECONCILE_QUEUE: "List[Dict[str, Any]]" = []
+_PENDING_RECONCILE_REDIS_LIST = "seedcore:agent_actions:closure_reconcile"
+
 _REQUEST_RECORDS_LOCK = Lock()
 _REDIS_CLIENT: Any = None
 _REDIS_CLIENT_LOCK = asyncio.Lock()
@@ -224,8 +233,15 @@ DISABLE_REDIS_STORE = os.getenv(
 ).strip().lower() in {"1", "true", "yes", "on"}
 SETTLEMENT_HANDOFF_ENABLED = os.getenv(
     "SEEDCORE_AGENT_ACTION_ENABLE_SETTLEMENT_HANDOFF",
-    "false",
+    "true",
 ).strip().lower() in {"1", "true", "yes", "on"}
+
+# Max bounded retries for a closure stuck in `pending_reconcile`.  After this
+# many attempts the reconciler escalates it to `rejected` with the specific
+# reason code `settlement_reconcile_max_attempts_exceeded`.
+SETTLEMENT_RECONCILE_MAX_ATTEMPTS = int(
+    os.getenv("SEEDCORE_AGENT_ACTION_SETTLEMENT_RECONCILE_MAX_ATTEMPTS", "5")
+)
 
 
 # --- Gateway authentication (feature-flagged) ---
@@ -2586,6 +2602,396 @@ async def _persist_closure_governed_audit_record(
         return None
 
 
+def _detect_closure_contradictions(
+    *,
+    request_record: _AgentActionStoredRecord,
+    closure_payload: AgentActionClosureRequest,
+) -> List[Dict[str, Any]]:
+    """Diff closure evidence against the persisted authority scope for the
+    original evaluate request.
+
+    Returns a list of contradiction records; an empty list means the closure
+    is consistent with the authority scope it was authorized against.
+
+    Contradictions currently detected:
+
+    - `outcome_contradicts_allow_decision` — an `allow` evaluate is being
+      closed with a `quarantined` or `failed` outcome.
+    - `summary_to_zone_mismatch` — the closure summary reports a final zone
+      other than `authority_scope.expected_to_zone`.
+    - `summary_coordinate_mismatch` — the closure summary reports a final
+      coordinate ref other than `authority_scope.expected_coordinate_ref`.
+    - `summary_product_mismatch` — the closure summary reports a product ref
+      other than the original `authority_scope.product_ref` / `asset.product_ref`.
+    """
+
+    contradictions: List[Dict[str, Any]] = []
+
+    outcome = str(closure_payload.outcome or "").strip().lower()
+    linked_disposition = str(request_record.response.decision.disposition or "").strip().lower()
+    if linked_disposition == "allow" and outcome in {"quarantined", "failed"}:
+        contradictions.append(
+            {
+                "reason_code": "outcome_contradicts_allow_decision",
+                "detail": (
+                    "evaluate returned allow but closure reports "
+                    f"outcome={outcome!r}"
+                ),
+                "linked_disposition": linked_disposition,
+                "outcome": outcome,
+            }
+        )
+
+    request_payload = (
+        dict(request_record.request_payload)
+        if isinstance(request_record.request_payload, dict)
+        else {}
+    )
+    authority_scope = (
+        request_payload.get("authority_scope")
+        if isinstance(request_payload.get("authority_scope"), dict)
+        else {}
+    )
+    asset_payload = (
+        request_payload.get("asset")
+        if isinstance(request_payload.get("asset"), dict)
+        else {}
+    )
+    summary = (
+        dict(closure_payload.summary)
+        if isinstance(closure_payload.summary, dict)
+        else {}
+    )
+
+    expected_to_zone = str(authority_scope.get("expected_to_zone") or "").strip()
+    observed_to_zone = str(summary.get("observed_to_zone") or "").strip()
+    if expected_to_zone and observed_to_zone and expected_to_zone != observed_to_zone:
+        contradictions.append(
+            {
+                "reason_code": "summary_to_zone_mismatch",
+                "expected_to_zone": expected_to_zone,
+                "observed_to_zone": observed_to_zone,
+            }
+        )
+
+    expected_coordinate_ref = str(authority_scope.get("expected_coordinate_ref") or "").strip()
+    observed_coordinate_ref = str(summary.get("observed_coordinate_ref") or "").strip()
+    if (
+        expected_coordinate_ref
+        and observed_coordinate_ref
+        and expected_coordinate_ref != observed_coordinate_ref
+    ):
+        contradictions.append(
+            {
+                "reason_code": "summary_coordinate_mismatch",
+                "expected_coordinate_ref": expected_coordinate_ref,
+                "observed_coordinate_ref": observed_coordinate_ref,
+            }
+        )
+
+    expected_product_ref = str(
+        authority_scope.get("product_ref") or asset_payload.get("product_ref") or ""
+    ).strip()
+    observed_product_ref = str(summary.get("observed_product_ref") or "").strip()
+    if (
+        expected_product_ref
+        and observed_product_ref
+        and expected_product_ref != observed_product_ref
+    ):
+        contradictions.append(
+            {
+                "reason_code": "summary_product_mismatch",
+                "expected_product_ref": expected_product_ref,
+                "observed_product_ref": observed_product_ref,
+            }
+        )
+
+    return contradictions
+
+
+async def _enqueue_pending_reconcile(
+    *,
+    request_id: str,
+    closure_id: str,
+    idempotency_key: str,
+    reason: str,
+) -> None:
+    """Queue a closure for later reconciliation by `reconcile_pending_closures`.
+
+    Uses Redis (`seedcore:agent_actions:closure_reconcile` list) when reachable
+    and falls back to an in-memory queue when it is not.  Either way, each
+    entry carries an `attempts` counter so the reconciler can escalate after
+    `SETTLEMENT_RECONCILE_MAX_ATTEMPTS` retries.
+    """
+
+    entry: Dict[str, Any] = {
+        "request_id": request_id,
+        "closure_id": closure_id,
+        "idempotency_key": idempotency_key,
+        "reason": reason,
+        "attempts": 0,
+        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    pushed_to_redis = False
+    try:
+        client = await _resolve_redis_client()
+    except Exception:
+        client = None
+        logger.debug(
+            "Failed to resolve Redis client for pending closure queue",
+            exc_info=True,
+        )
+    if client is not None:
+        try:
+            await client.rpush(
+                _PENDING_RECONCILE_REDIS_LIST,
+                json.dumps(entry, sort_keys=True),
+            )
+            pushed_to_redis = True
+        except Exception:
+            logger.debug(
+                "Failed to push pending closure onto Redis; falling back to memory",
+                exc_info=True,
+            )
+    if not pushed_to_redis:
+        with _REQUEST_RECORDS_LOCK:
+            _PENDING_RECONCILE_QUEUE.append(entry)
+
+
+async def _drain_pending_reconcile_queue(max_batch: int) -> List[Dict[str, Any]]:
+    """Pull up to `max_batch` pending closures off the reconcile queue.
+
+    Redis (a shared list across gateway replicas) takes precedence over the
+    in-memory fallback.
+    """
+
+    drained: List[Dict[str, Any]] = []
+    try:
+        client = await _resolve_redis_client()
+    except Exception:
+        client = None
+    if client is not None:
+        try:
+            for _ in range(max_batch):
+                raw = await client.lpop(_PENDING_RECONCILE_REDIS_LIST)
+                if raw is None:
+                    break
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                try:
+                    drained.append(json.loads(raw))
+                except Exception:
+                    logger.debug(
+                        "Dropping malformed pending closure entry from Redis",
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.debug(
+                "Failed to drain pending closure queue from Redis; falling back to memory",
+                exc_info=True,
+            )
+    remaining = max_batch - len(drained)
+    if remaining > 0:
+        with _REQUEST_RECORDS_LOCK:
+            if _PENDING_RECONCILE_QUEUE:
+                drained.extend(_PENDING_RECONCILE_QUEUE[:remaining])
+                del _PENDING_RECONCILE_QUEUE[:remaining]
+    return drained
+
+
+async def reconcile_pending_closures(
+    *,
+    max_batch: int = 25,
+    max_attempts: int | None = None,
+) -> Dict[str, Any]:
+    """Retry closures that previously returned `pending_reconcile`.
+
+    Returns a summary dict:
+
+        {
+          "processed": int,
+          "applied": int,
+          "contradicted": int,
+          "rejected": int,
+          "requeued": int,
+          "escalated": int,
+          "entries": [ {closure_id, status, reason?, ...} ]
+        }
+
+    Escalation:  if an entry's `attempts` field meets or exceeds
+    `max_attempts` (default = `SETTLEMENT_RECONCILE_MAX_ATTEMPTS`), it is
+    dropped from the queue and its closure record is rewritten to
+    `settlement_status="rejected"` with
+    `error_code="settlement_reconcile_max_attempts_exceeded"`.
+    """
+
+    limit = int(max_attempts if max_attempts is not None else SETTLEMENT_RECONCILE_MAX_ATTEMPTS)
+    summary: Dict[str, Any] = {
+        "processed": 0,
+        "applied": 0,
+        "contradicted": 0,
+        "rejected": 0,
+        "requeued": 0,
+        "escalated": 0,
+        "entries": [],
+    }
+    pending = await _drain_pending_reconcile_queue(max_batch)
+    for entry in pending:
+        closure_id = str(entry.get("closure_id") or "").strip()
+        request_id = str(entry.get("request_id") or "").strip()
+        attempts = int(entry.get("attempts") or 0)
+        summary["processed"] += 1
+
+        closure_record = await _read_closure_record(closure_id)
+        request_record = await _read_request_record(request_id)
+        if closure_record is None or request_record is None:
+            summary["rejected"] += 1
+            summary["entries"].append(
+                {
+                    "closure_id": closure_id,
+                    "status": "rejected",
+                    "error_code": "closure_or_request_record_missing",
+                }
+            )
+            continue
+
+        if attempts >= limit:
+            escalated = closure_record.response.model_copy(
+                update={
+                    "settlement_status": "rejected",
+                    "replay_status": "pending",
+                    "settlement_result": {
+                        **(closure_record.response.settlement_result or {}),
+                        "error_code": "settlement_reconcile_max_attempts_exceeded",
+                        "attempts": attempts,
+                    },
+                }
+            )
+            await _write_closure_record(
+                _AgentActionClosureStoredRecord(
+                    closure_id=closure_record.closure_id,
+                    request_id=closure_record.request_id,
+                    idempotency_key=closure_record.idempotency_key,
+                    request_hash=closure_record.request_hash,
+                    recorded_at=datetime.now(timezone.utc),
+                    response=escalated,
+                )
+            )
+            summary["escalated"] += 1
+            summary["entries"].append(
+                {
+                    "closure_id": closure_id,
+                    "status": "escalated",
+                    "attempts": attempts,
+                }
+            )
+            continue
+
+        status, result = await _apply_closure_settlement_handoff(
+            request_record=request_record,
+            closure_payload=closure_record_to_request_payload(closure_record, request_record),
+        )
+
+        updated_response = closure_record.response.model_copy(
+            update={
+                "settlement_status": status,
+                "replay_status": _derive_replay_status(status),
+                "settlement_result": {
+                    **(closure_record.response.settlement_result or {}),
+                    **(result if isinstance(result, dict) else {}),
+                    "attempts": attempts + 1,
+                },
+            }
+        )
+        await _write_closure_record(
+            _AgentActionClosureStoredRecord(
+                closure_id=closure_record.closure_id,
+                request_id=closure_record.request_id,
+                idempotency_key=closure_record.idempotency_key,
+                request_hash=closure_record.request_hash,
+                recorded_at=datetime.now(timezone.utc),
+                response=updated_response,
+            )
+        )
+
+        if status == "applied":
+            summary["applied"] += 1
+            summary["entries"].append({"closure_id": closure_id, "status": "applied"})
+        elif status == "contradicted":
+            summary["contradicted"] += 1
+            summary["entries"].append({"closure_id": closure_id, "status": "contradicted"})
+        elif status == "rejected":
+            summary["rejected"] += 1
+            summary["entries"].append({"closure_id": closure_id, "status": "rejected"})
+        else:
+            new_entry = dict(entry)
+            new_entry["attempts"] = attempts + 1
+            await _enqueue_pending_reconcile(
+                request_id=new_entry["request_id"],
+                closure_id=new_entry["closure_id"],
+                idempotency_key=new_entry.get("idempotency_key", ""),
+                reason=str(new_entry.get("reason") or "retry"),
+            )
+            summary["requeued"] += 1
+            summary["entries"].append({"closure_id": closure_id, "status": "requeued"})
+
+    return summary
+
+
+def _derive_replay_status(settlement_status: str) -> str:
+    """Map a settlement status to the canonical replay_status vocabulary."""
+
+    normalized = str(settlement_status or "").strip().lower()
+    if normalized == "applied":
+        return "ready"
+    if normalized == "contradicted":
+        return "contradicted"
+    if normalized == "pending_reconcile":
+        return "pending_reconcile"
+    return "pending"
+
+
+def closure_record_to_request_payload(
+    closure_record: "_AgentActionClosureStoredRecord",
+    request_record: _AgentActionStoredRecord,
+) -> AgentActionClosureRequest:
+    """Rebuild an AgentActionClosureRequest from a stored closure record.
+
+    Used by the reconciler to re-enter `_apply_closure_settlement_handoff`.
+    The rebuilt request is deterministically derived from the original
+    closure response; fields not needed for settlement retry (`summary`,
+    `forensic_block` fingerprint hashes) are replaced with placeholders.
+    """
+
+    response = closure_record.response
+    return AgentActionClosureRequest.model_validate(
+        {
+            "request_id": response.request_id,
+            "closure_id": response.closure_id,
+            "idempotency_key": closure_record.idempotency_key,
+            "closed_at": response.accepted_at.isoformat(),
+            "outcome": "completed",
+            "evidence_bundle_id": (
+                response.settlement_result.get("evidence_bundle_id")
+                if isinstance(response.settlement_result, dict)
+                else None
+            ) or response.forensic_block_id or response.closure_id,
+            "telemetry_refs": [ref.model_dump(mode="json") for ref in response.telemetry_refs],
+            "forensic_block": {
+                "forensic_block_id": response.forensic_block_id or response.closure_id,
+                "fingerprint_components": {
+                    "economic_hash": "sha256:reconcile-placeholder",
+                    "physical_presence_hash": "sha256:reconcile-placeholder",
+                    "reasoning_hash": "sha256:reconcile-placeholder",
+                    "actuator_hash": "sha256:reconcile-placeholder",
+                },
+            },
+            "summary": {},
+        }
+    )
+
+
 async def _apply_closure_settlement_handoff(
     *,
     request_record: _AgentActionStoredRecord,
@@ -2594,9 +3000,33 @@ async def _apply_closure_settlement_handoff(
     if not SETTLEMENT_HANDOFF_ENABLED:
         return "pending", {"enabled": False, "reason": "feature_flag_disabled"}
 
+    # Contradiction check runs before anything that talks to the twin service.
+    # A contradicted closure is a governance outcome, not a transport error —
+    # there is no point retrying it, and it must not be marked `applied`.
+    contradictions = _detect_closure_contradictions(
+        request_record=request_record,
+        closure_payload=closure_payload,
+    )
+    if contradictions:
+        return "contradicted", {
+            "enabled": True,
+            "error_code": "closure_contradicts_authority_scope",
+            "contradictions": contradictions,
+        }
+
     twin_service = _resolve_digital_twin_service()
     if twin_service is None:
-        return "rejected", {"enabled": True, "error_code": "settlement_session_unavailable"}
+        await _enqueue_pending_reconcile(
+            request_id=closure_payload.request_id,
+            closure_id=closure_payload.closure_id,
+            idempotency_key=closure_payload.idempotency_key,
+            reason="settlement_session_unavailable",
+        )
+        return "pending_reconcile", {
+            "enabled": True,
+            "error_code": "settlement_session_unavailable",
+            "requeued": True,
+        }
 
     gate_verdict = await _evaluate_result_verifier_gate_for_twin_refs(
         twin_refs=_closure_gate_subject_refs(
@@ -2654,10 +3084,20 @@ async def _apply_closure_settlement_handoff(
             closure_payload.closure_id,
             exc_info=True,
         )
-        return "rejected", {
+        # A raised exception is treated as a *transient* fault and queued for
+        # reconciliation rather than silently rejected.  The reconciler will
+        # escalate to `rejected` if retries exceed the configured bound.
+        await _enqueue_pending_reconcile(
+            request_id=closure_payload.request_id,
+            closure_id=closure_payload.closure_id,
+            idempotency_key=closure_payload.idempotency_key,
+            reason=f"settlement_exception:{type(exc).__name__}",
+        )
+        return "pending_reconcile", {
             "enabled": True,
             "error_code": "settlement_exception",
             "detail": type(exc).__name__,
+            "requeued": True,
         }
 
     rejected_reason = str(settlement_result.get("rejected_reason") or "").strip()
@@ -3639,10 +4079,31 @@ async def close_agent_action(
             request_record=request_record,
             closure_payload=payload,
         )
-        replay_status = "ready" if settlement_status == "applied" else "pending"
+        replay_status = _derive_replay_status(settlement_status)
         settlement_with_refs = dict(settlement_result)
         if payload.telemetry_refs:
             settlement_with_refs["telemetry_refs"] = [ref.model_dump(mode="json") for ref in payload.telemetry_refs]
+
+        if settlement_status == "applied":
+            next_actions = ["assemble_replay_record", "publish_verification_surface"]
+        elif settlement_status == "contradicted":
+            next_actions = [
+                "quarantine_asset",
+                "investigate_scope_mismatch",
+                "assemble_replay_record",
+            ]
+        elif settlement_status == "pending_reconcile":
+            next_actions = [
+                "await_settlement_reconcile",
+                "assemble_replay_record",
+                "publish_verification_surface",
+            ]
+        else:
+            next_actions = [
+                "settle_digital_twin",
+                "assemble_replay_record",
+                "publish_verification_surface",
+            ]
 
         response = AgentActionClosureResponse(
             request_id=payload.request_id,
@@ -3654,15 +4115,7 @@ async def close_agent_action(
             replay_status=replay_status,
             telemetry_refs=list(payload.telemetry_refs),
             settlement_result=settlement_with_refs,
-            next_actions=(
-                ["assemble_replay_record", "publish_verification_surface"]
-                if settlement_status == "applied"
-                else [
-                    "settle_digital_twin",
-                    "assemble_replay_record",
-                    "publish_verification_surface",
-                ]
-            ),
+            next_actions=next_actions,
         )
         await _write_closure_record(
             _AgentActionClosureStoredRecord(
@@ -3710,6 +4163,7 @@ def _clear_agent_action_request_store_for_tests() -> None:
         _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY.clear()
         _EXECUTE_RECORDS_BY_REQUEST_ID.clear()
         _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.clear()
+        _PENDING_RECONCILE_QUEUE.clear()
     _REDIS_CLIENT = None
     _REDIS_CLIENT_INITIALIZED = False
     _DIGITAL_TWIN_SERVICE = None

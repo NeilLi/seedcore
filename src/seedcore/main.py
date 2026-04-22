@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 ENABLE_ENV_ENDPOINT = os.getenv("ENABLE_DEBUG_ENV", "false").lower() in ("1","true","yes")
 RUN_DDL_ON_STARTUP = os.getenv("RUN_DDL_ON_STARTUP", "true").lower() in ("1","true","yes")  # set false in prod
 
+# When the dedicated `seedcore.gateway_service` process is deployed, set this to
+# "false" so the monolithic API stops advertising the gateway surface.
+# Defaults to "true" to preserve historical behavior where the monolith also
+# serves `/api/v1/agent-actions/*`.
+MOUNT_AGENT_ACTION_GATEWAY = os.getenv(
+    "SEEDCORE_MAIN_API_MOUNT_AGENT_ACTION_GATEWAY",
+    "true",
+).strip().lower() in ("1", "true", "yes", "on")
+
 async def init_db(engine: AsyncEngine):
     """Create tables in dev; in prod prefer Alembic/migrations."""
     if not RUN_DDL_ON_STARTUP:
@@ -150,6 +159,12 @@ app.add_middleware(
 )
 
 for tag, router in get_active_routers():
+    if tag == "Agent Actions" and not MOUNT_AGENT_ACTION_GATEWAY:
+        logger.info(
+            "Skipping Agent Action Gateway router mount (SEEDCORE_MAIN_API_MOUNT_AGENT_ACTION_GATEWAY=false); "
+            "serve it from seedcore.gateway_service instead.",
+        )
+        continue
     app.include_router(router, prefix="/api/v1", tags=[tag])
 
 @app.get("/health")
