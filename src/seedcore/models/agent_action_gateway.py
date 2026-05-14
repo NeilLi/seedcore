@@ -439,6 +439,22 @@ class AgentActionEvaluateResponse(BaseModel):
             "forensic_block_id": None,
             "reason_trace_ref": None,
             "public_replay_ready": False,
+            # Commerce slice join keys: kept on every evaluate response so
+            # degraded-edge drills (stale-graph / dependency outage /
+            # coordinate tamper / replay injection) can bind their evidence
+            # to product_ref and the workflow audit join key, not just to a
+            # generic asset_id. See
+            # `src/seedcore/adapters/rct_gateway_correlation.py` for the
+            # canonical `workflow_join_key` contract (= audit_id, with a
+            # deterministic UUIDv5 fallback derived from request_id when no
+            # audit_id was minted).
+            "workflow_join_key": None,
+            "audit_id": None,
+            "request_id": None,
+            "product_ref": None,
+            "order_ref": None,
+            "quote_ref": None,
+            "asset_id": None,
         }
     )
     request_schema_bundle: Optional[Dict[str, Any]] = None

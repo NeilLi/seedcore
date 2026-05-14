@@ -571,12 +571,28 @@ operational closure and external-boundary productization.
      `scripts/host/verify_hot_path_observability.sh`.
 3. **Apr 2026 (late): degraded-edge and adversarial drill matrix**
    - completed: true
-   - status: **drill matrix enforced in CI + host mode**.
+   - status: **drill matrix enforced in CI + host mode**, and the
+     commerce-slice binding (product_ref / workflow join keys) is now a
+     first-class assertion in the matrix.
    - expand the repeatable verification slice to include:
      stale-graph + stale telemetry (RCT hot-path drill matrix),
      intermittent-connectivity (synthetic flaky transport benchmark),
      coordinate tamper (agent action gateway coordinate mismatch),
      and replay-injection / authority mismatch (replay router tamper surfaces).
+   - **commerce-shaped drill matrix** (`tests/test_rct_commerce_drill_matrix.py`,
+     marked `rct_commerce_drill`): runs stale-graph, PKG dependency outage,
+     approval-store outage (503 `dependency_unavailable`),
+     approval-resolver raise (fail-closed), coordinate tamper, and
+     cross-product replay injection through the
+     `seedcore.agent_action_gateway.v1` contract; every drill asserts the
+     response `forensic_linkage` carries `product_ref`, `order_ref`,
+     `quote_ref`, `workflow_join_key`, `audit_id`, and `request_id`.
+     `_build_forensic_linkage` in
+     `src/seedcore/api/routers/agent_actions_router.py` is the single
+     plumbing point — aligned with
+     `src/seedcore/adapters/rct_gateway_correlation.py` so gateway join
+     keys and replay lookup keys stay deterministic even on
+     deny / quarantine outcomes.
    - enforce the drill bundle explicitly in CI and host mode via:
      `scripts/ci/q2_degraded_edge_drill_matrix.sh` and
      `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.

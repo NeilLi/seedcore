@@ -6,6 +6,9 @@
 # - coordinate tamper (agent action gateway coordinate mismatch)
 # - replay injection / authority mismatch (replay router tamper surfaces)
 # - repeatable forensic/evidence export checks for quarantine / rollback investigations
+# - commerce-slice drill matrix: stale-graph / dependency outage / coordinate
+#   tamper / cross-product replay injection, with drill evidence tied to
+#   product_ref / order_ref / quote_ref / workflow_join_key
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -23,5 +26,11 @@ python -m pytest -q tests/test_replay_router.py::test_materialized_custody_event
 python -m pytest -q tests/test_replay_router.py::test_governance_search_filters_quarantine_and_trust_gap_records
 python -m pytest -q tests/test_forensic_block_contract.py
 python -m pytest -q tests/test_end_to_end_product_verification.py
+
+echo "== Q2 commerce-slice drill matrix =="
+# Commerce-shaped drills that bind drill evidence to product_ref / workflow
+# join keys via the agent-action-gateway contract. This closes the gap
+# called out in docs/development/README.md section 6 item 2.
+python -m pytest -q tests/test_rct_commerce_drill_matrix.py
 
 echo "Q2 degraded-edge drill matrix passed."

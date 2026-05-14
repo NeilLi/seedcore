@@ -151,6 +151,20 @@ Near-term execution order (commerce-coherent):
 2. Expand stale-graph, dependency outage, replay injection, and coordinate
    tamper drills on the **RCT commerce** slice; keep drill evidence tied to
    `product_ref` / workflow join keys.
+   - **Shipped**: commerce-shaped drill matrix
+     (`tests/test_rct_commerce_drill_matrix.py`) runs stale-graph, PKG
+     dependency outage, approval-store outage (503
+     `dependency_unavailable`), approval-resolver raise (fail-closed),
+     coordinate tamper, and cross-product replay injection through the
+     `seedcore.agent_action_gateway.v1` contract; every drill asserts the
+     response `forensic_linkage` carries `product_ref` / `order_ref` /
+     `quote_ref` / `workflow_join_key` (see `_build_forensic_linkage` in
+     `src/seedcore/api/routers/agent_actions_router.py`, aligned with
+     `src/seedcore/adapters/rct_gateway_correlation.py`). CI-enforced via
+     `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
+   - **Remaining**: broaden the outage drills beyond PKG / approval store
+     (Redis bus-level, commerce adapter timeout as real HTTP) and pin
+     workflow-key assertions into the replay-router tamper drills.
 3. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."

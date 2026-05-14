@@ -797,9 +797,37 @@ def _build_forensic_linkage(
     payload: AgentActionEvaluateRequest,
     response: AgentActionEvaluateResponse,
 ) -> Dict[str, Any]:
+    # Commerce join keys: keep drill evidence tied to product_ref / workflow
+    # join keys so degraded-edge drills (stale-graph, dependency outage,
+    # coordinate tamper, replay injection) remain attributable to the
+    # RCT commerce slice rather than a generic asset_id.
     forensic_block_id = None
+    audit_id: Optional[str] = None
     if isinstance(response.governed_receipt, dict):
         forensic_block_id = response.governed_receipt.get("forensic_block_id")
+        raw_audit_id = response.governed_receipt.get("audit_id")
+        if raw_audit_id is not None:
+            audit_id = str(raw_audit_id).strip() or None
+
+    # workflow_join_key stays consistent with
+    # ``seedcore.adapters.rct_gateway_correlation`` (audit_id from the
+    # governed receipt, deterministic UUIDv5 fallback from request_id so the
+    # key is stable even on deny/quarantine where no audit_id was minted).
+    workflow_join_key = audit_id
+    if not workflow_join_key:
+        try:
+            workflow_join_key = str(
+                uuid.uuid5(uuid.NAMESPACE_URL, str(payload.request_id).strip() or "unknown")
+            )
+        except Exception:
+            workflow_join_key = None
+
+    product_ref = None
+    if payload.asset.product_ref:
+        product_ref = payload.asset.product_ref
+    elif payload.authority_scope is not None and payload.authority_scope.product_ref:
+        product_ref = payload.authority_scope.product_ref
+
     return {
         "forensic_block_id": forensic_block_id,
         "reason_trace_ref": (
@@ -808,6 +836,13 @@ def _build_forensic_linkage(
             else None
         ),
         "public_replay_ready": False,
+        "workflow_join_key": workflow_join_key,
+        "audit_id": audit_id,
+        "request_id": payload.request_id,
+        "product_ref": product_ref,
+        "order_ref": payload.asset.order_ref,
+        "quote_ref": payload.asset.quote_ref,
+        "asset_id": payload.asset.asset_id,
     }
 
 
