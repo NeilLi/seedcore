@@ -1,16 +1,62 @@
-# Q2 2026 Video Orchestration Baseline And Plan
+# Q2 2026 Video Orchestration Extension Baseline And Plan
 
 Date: 2026-05-14
-Status: Draft plan grounded in the current `docs/development/` baseline
+Status: Public extension plan aligned with SeedCore's governed execution focus
 
 ## Purpose
 
-This note translates the SeedCore Video Orchestration direction into a Q2
-engineering plan using the repository as it exists now.
+This note translates the SeedCore Video Orchestration direction into an
+engineering extension plan using the repository as it exists now.
 
-The strategy is intentionally conservative: build the verifiable media custody
-and discovery substrate first, then attach richer temporal comprehension later.
-The autonomous "Story Graph" should not become the Q2 critical path.
+This plan is scoped as an extension of SeedCore's primary governed execution
+runtime direction. The current flagship workflow remains **Restricted Custody
+Transfer**, while video/media orchestration demonstrates how the same trust
+runtime can extend to media-heavy autonomous workflows.
+
+Video/media orchestration should currently be treated as:
+
+- proof of extensibility
+- a future vertical
+- a useful evidence modality
+- a secondary demonstration that the same trust runtime can govern media-heavy
+  workflows
+
+The intent is continuity: media orchestration is an extension surface for the
+trust runtime, not a separate product category.
+
+The engineering strategy is intentionally conservative: if this track is
+activated, build the verifiable media custody and discovery substrate first,
+then attach richer temporal comprehension later. The autonomous "Story Graph"
+is treated as a later-stage capability built on top of verifiable media
+custody.
+
+## Strategic Positioning
+
+SeedCore's public category is a governed execution runtime for autonomous
+systems. It sits between AI intent and real-world execution, issuing bounded
+authority and producing replayable proof that the action was authorized,
+executed, and closed under policy.
+
+Core positioning:
+
+```text
+SeedCore is a governed execution runtime for autonomous systems.
+```
+
+Near-term execution story:
+
+```text
+AI requested action
+  -> SeedCore policy checks
+  -> delegated authorization
+  -> controlled execution
+  -> evidence sealing
+  -> replayable proof
+```
+
+The flagship demo remains **Restricted Custody Transfer**, especially the
+autonomous repair / high-trust handoff scenario. Video becomes one possible
+evidence and orchestration extension after that story is tight.
 
 ## Current Baseline
 
@@ -48,24 +94,23 @@ Already present and reusable:
   authority. Local topics and optional publishers exist, but Kafka is not yet
   the source of truth for evidence.
 
-What is not yet present:
+Planned extension work:
 
-- no first-class `RawVideoAsset` / media ledger aggregate
-- no object-storage adapter or bucket policy contract specifically for raw
-  video, proxy renditions, thumbnails, clips, or transcript artifacts
-- no streaming binary hash workflow that computes SHA-256 while accepting large
-  video uploads
-- no video-specific ingestion job model for Ray workers
-- no media segment / keyframe / transcript / scene table
-- no legal-rights or usage-rights model tied to media assets
-- no video-discovery API or read model
-- no Story Graph persistence contract
-- no topology signoff proving large media ingestion under Kubernetes/Ray
+- define a first-class `RawVideoAsset` / media ledger aggregate
+- add an object-storage adapter and bucket policy contract for raw video, proxy
+  renditions, thumbnails, clips, and transcript artifacts
+- implement streaming binary hashing so SeedCore can compute SHA-256 while
+  accepting large video uploads
+- add a video-specific ingestion job model for Ray workers
+- add media segment, keyframe, transcript, and scene-index tables
+- bind legal-rights and usage-rights metadata to media assets
+- expose a video-discovery API and read model
+- defer Story Graph persistence until the verifiable media ledger is stable
+- capture topology signoff for large media ingestion under Kubernetes/Ray
 
 ## Planning Implication
 
-Do not build video orchestration as a separate product surface in Q2. Build it
-as a bounded sidecar on the existing trust/runtime spine:
+Video orchestration should build on the existing trust/runtime spine:
 
 ```text
 object storage bytes
@@ -80,12 +125,43 @@ object storage bytes
 The Q2 deliverable should be a trustworthy media ledger and ingestion path, not
 autonomous narrative understanding.
 
-## Q2 Goal
+Product implication:
 
-By the end of Q2, SeedCore should be able to ingest a video, prove the exact
-bytes that entered the system, record provenance and rights metadata, run a
-Ray-managed processing workflow, and expose a replayable operator/read API for
-the resulting media artifacts.
+- RCT is the buyer-facing wedge.
+- Video is an expansion proof.
+- Media custody should be explained as another case where autonomous systems
+  need authorized, replayable, auditable execution.
+- The media plan should reinforce the current RCT roadmap and demo story.
+
+## Readiness Criteria Before Active Video Work
+
+The video track is most useful once these foundations are in place:
+
+1. The Restricted Custody Transfer demo is polished enough to show in under
+   five minutes.
+2. The product narrative can be stated in one sentence:
+
+   ```text
+   We prevent autonomous systems from operating without accountable
+   authorization and verifiable closure.
+   ```
+
+3. The demo package has a clear buyer, workflow, and pain statement.
+4. The verification surface can show request, authority, execution evidence,
+   and replay outcome without source-code explanation.
+5. At least one pilot-style conversation is in motion around governed
+   autonomous execution, high-trust handoff, robotics/logistics, controlled
+   inventory movement, or enterprise automation.
+
+Until these criteria are satisfied, this document is best read as an
+implementation-ready extension plan rather than the active critical path.
+
+## Extension Goal
+
+When activated, this track should prove that SeedCore can ingest a video, prove
+the exact bytes that entered the system, record provenance and rights metadata,
+run a Ray-managed processing workflow, and expose a replayable operator/read API
+for the resulting media artifacts.
 
 Success means an operator can answer:
 
@@ -99,7 +175,7 @@ Success means an operator can answer:
 
 ## Phase 1: Custody And Ingestion Engine
 
-Target window: mid-May through June 2026
+Target window: after the RCT demo package is stable
 
 Goal: establish the Verifiable Media Ledger and high-speed ingestion pipeline.
 
@@ -255,12 +331,12 @@ Verification response should include:
 - processing job summary
 - replay or runbook links for mismatch/quarantine
 
-Do not expose mutation/control tools to external agents in Q2. Follow the same
-read-only rule used for the current Gemini-visible verification bundle.
+External agent access should remain read-only in this phase, following the
+same rule used for the current Gemini-visible verification bundle.
 
 ## Discovery Layer Scope
 
-Q2 discovery should be intentionally modest:
+Discovery should be intentionally modest:
 
 - searchable title / filename / owner / submitter / tags
 - duration, codec, resolution, ingest timestamp
@@ -268,7 +344,7 @@ Q2 discovery should be intentionally modest:
 - transcript reference if produced
 - scene summary as an artifact, not as authority
 
-Out of scope for Q2:
+Out of scope for this extension phase:
 
 - autonomous Story Graph
 - cross-video narrative inference
@@ -277,7 +353,7 @@ Out of scope for Q2:
 
 ## Acceptance Criteria
 
-The Q2 video custody slice is acceptable when:
+The video custody slice is acceptable when:
 
 - a raw video can be ingested through a local/dev API without loading the full
   file into memory
@@ -293,9 +369,29 @@ The Q2 video custody slice is acceptable when:
 - the docs explicitly state that media events and ledger rows are evidence
   inputs, not policy authority by themselves
 
+These criteria should reinforce the central SeedCore claim:
+
+```text
+SeedCore governs autonomous execution and proves closure.
+```
+
 ## Work Plan
 
-### Week 1: Baseline Contract
+### Stage 0: RCT Demo And Market Focus
+
+Recommended preparation before active video implementation:
+
+- tighten the Restricted Custody Transfer demo around one clear scene:
+  autonomous repair transfer, robotics handoff, warehouse transfer, controlled
+  inventory movement, or another high-trust workflow
+- produce a concise external narrative:
+  problem, wedge, product, demo proof, expansion path
+- define one buyer, one workflow, and one measurable pain
+- frame SeedCore as a governed execution runtime rather than a generic agent
+  framework
+- use video/media only as an expansion proof in the final slide or appendix
+
+### Stage 1: Baseline Contract
 
 - Freeze the media-ledger schema and status vocabulary.
 - Decide whether `RawVideoAsset` is a new aggregate or a specialization of the
@@ -305,14 +401,14 @@ The Q2 video custody slice is acceptable when:
 - Add a short ADR or development note tying video custody to the existing
   tracking-event and evidence-bundle model.
 
-### Week 2: Storage And Hashing
+### Stage 2: Storage And Hashing
 
 - Add the storage adapter interface.
 - Implement local filesystem or MinIO-compatible dev storage.
 - Implement streaming SHA-256 computation.
 - Add mismatch behavior and tests.
 
-### Week 3: Postgres Ledger
+### Stage 3: Postgres Ledger
 
 - Add migrations and SQLAlchemy models for raw video assets, media artifacts,
   media rights profiles, and ingestion jobs.
@@ -320,34 +416,34 @@ The Q2 video custody slice is acceptable when:
 - Add idempotency constraints around `asset_id`, `raw_sha256`, and derived
   artifact hash.
 
-### Week 4: API Slice
+### Stage 4: API Slice
 
 - Add create/read endpoints for media assets.
 - Add artifact and ledger read endpoints.
 - Keep write-side scope narrow: ingest/register only.
 - Add contract tests and fixture payloads.
 
-### Week 5: Ray Ingestion Worker
+### Stage 5: Ray Ingestion Worker
 
 - Add a Ray-backed ingestion job runner.
 - Produce metadata artifact first; proxy/keyframes can follow behind feature
   flags if local tooling varies.
 - Persist job transitions as governed tracking events.
 
-### Week 6: Verification Readback
+### Stage 6: Verification Readback
 
 - Add the media verification endpoint.
 - Bind media refs into `EvidenceBundle.media_refs` for at least one fixture.
 - Add mismatch/quarantine runbook entries for hash mismatch, missing object,
   and derived artifact drift.
 
-### Week 7: Discovery Index
+### Stage 7: Discovery Index
 
 - Add a read model for basic search/filter.
 - Index only deterministic metadata and references to derived artifacts.
 - Keep scene summaries and transcripts as non-authoritative artifacts.
 
-### Week 8: Topology Drill
+### Stage 8: Topology Drill
 
 - Run the slice in the existing local or Kind topology.
 - Capture evidence for ingest, processing retry, hash mismatch, and object
@@ -366,10 +462,15 @@ The Q2 video custody slice is acceptable when:
   later consumer of the verifiable media ledger.
 - Rights metadata is easy to under-model. Even a small `MediaRightsProfile` is
   better than treating legal rights as free-form metadata.
+- Category clarity is important. This track should be presented as an extension
+  of the trust runtime, not as a standalone media product.
 
 ## Recommended Next Implementation Slice
 
-Start with the smallest vertical:
+Start here after Stage 0 is satisfied.
+
+If the video extension becomes useful for a demo, start with the smallest
+vertical:
 
 1. `RawVideoAsset` + `MediaArtifact` models and migration
 2. local storage adapter with streaming SHA-256
@@ -379,3 +480,27 @@ Start with the smallest vertical:
 
 That slice proves the custody and ingestion engine without committing the team
 to full video understanding or Story Graph autonomy in Q2.
+
+## Public Narrative Usage
+
+Use this plan as an extension note once the core wedge is established.
+
+Primary SeedCore sentence:
+
+```text
+SeedCore is a governed execution runtime for autonomous systems.
+```
+
+Video extension sentence:
+
+```text
+The same runtime can also govern media-heavy workflows by making raw video,
+derived artifacts, and discovery outputs hash-bound, rights-aware, and
+replay-verifiable.
+```
+
+Category clarification:
+
+```text
+Media orchestration is one future vertical for the same trust runtime.
+```
