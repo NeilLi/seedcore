@@ -235,6 +235,7 @@ async def get_replay_artifacts(
             "projection": projection.value,
             "verification_status": replay.verification_status.model_dump(mode="json"),
             "public_artifacts": {
+                "workflow_join_key": (view.get("policy_summary") or {}).get("workflow_join_key"),
                 "authority_consistency": view.get("authority_consistency"),
                 "authority_consistency_hash": view.get("authority_consistency_hash"),
                 "operator_actions": view.get("operator_actions"),

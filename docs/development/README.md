@@ -150,41 +150,33 @@ Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 
 ## 6. Next Plan
 
-Near-term execution order (commerce-coherent):
+Cleanup note: the RCT commerce degraded-edge drill expansion is now complete.
+It is no longer active next-plan work. The shipped coverage is preserved in
+`tests/test_rct_commerce_drill_matrix.py` and enforced by
+`scripts/host/verify_q2_degraded_edge_drill_matrix.sh`: stale graph, PKG
+outage, approval-store outage, approval-resolver fail-closed, Redis bus
+fallback, commerce-adapter HTTP timeout, coordinate tamper, cross-product
+replay injection, and replay-router workflow-key assertions all keep evidence
+tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
+
+Real near-term execution order (commerce-coherent):
 
 1. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per
    [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md).
-2. Expand stale-graph, dependency outage, replay injection, and coordinate
-   tamper drills on the **RCT commerce** slice; keep drill evidence tied to
-   `product_ref` / workflow join keys.
-   - **Shipped**: commerce-shaped drill matrix
-     (`tests/test_rct_commerce_drill_matrix.py`) runs stale-graph, PKG
-     dependency outage, approval-store outage (503
-     `dependency_unavailable`), approval-resolver raise (fail-closed),
-     coordinate tamper, and cross-product replay injection through the
-     `seedcore.agent_action_gateway.v1` contract; every drill asserts the
-     response `forensic_linkage` carries `product_ref` / `order_ref` /
-     `quote_ref` / `workflow_join_key` (see `_build_forensic_linkage` in
-     `src/seedcore/api/routers/agent_actions_router.py`, aligned with
-     `src/seedcore/adapters/rct_gateway_correlation.py`). CI-enforced via
-     `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
-   - **Remaining**: broaden the outage drills beyond PKG / approval store
-     (Redis bus-level, commerce adapter timeout as real HTTP) and pin
-     workflow-key assertions into the replay-router tamper drills.
-3. Keep the four-screen verification surface contract-stable while hardening
+2. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-4. Add the rare-shoe RCT fixture path as a commercial vertical scene:
+3. Add the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
    adapter inputs for listing/quote/order/value, signed edge telemetry for
    NFC/scan handoff, hash-bound forensic video proof, and proof-surface checks
    that keep public proof narrow.
-5. Advance edge telemetry closure and signed forensic-block linkage without
+4. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-6. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
-7. Start the governance-aware learning track only after the current trust slice
+5. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
+6. Start the governance-aware learning track only after the current trust slice
    remains stable under the above pressures:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 

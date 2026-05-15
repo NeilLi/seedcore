@@ -6,9 +6,10 @@
 # - coordinate tamper (agent action gateway coordinate mismatch)
 # - replay injection / authority mismatch (replay router tamper surfaces)
 # - repeatable forensic/evidence export checks for quarantine / rollback investigations
-# - commerce-slice drill matrix: stale-graph / dependency outage / coordinate
-#   tamper / cross-product replay injection, with drill evidence tied to
-#   product_ref / order_ref / quote_ref / workflow_join_key
+# - commerce-slice drill matrix: stale-graph / dependency outage, including
+#   Redis bus and commerce HTTP timeout / coordinate tamper / cross-product
+#   replay injection, with drill evidence tied to product_ref / order_ref /
+#   quote_ref / workflow_join_key
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

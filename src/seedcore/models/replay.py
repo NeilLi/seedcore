@@ -92,6 +92,7 @@ class VerificationResult(BaseModel):
     verification_id: str
     reference_type: str
     reference_id: str
+    workflow_join_key: Optional[str] = None
     subject_id: Optional[str] = None
     subject_type: Optional[str] = None
     verified: bool

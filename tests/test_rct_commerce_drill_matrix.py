@@ -14,6 +14,8 @@ Drill categories covered here:
     * approval-store outage (``get_async_pg_session_factory`` returns None →
       503 ``dependency_unavailable`` / ``approval_store_unavailable``)
     * authoritative approval resolver raises (DB/vault-style outage)
+    * Redis request/idempotency bus unavailable (in-memory fallback)
+    * Shopify-sandbox commerce adapter HTTP timeout
 - coordinate tamper (gateway coordinate mismatch)
 - replay injection:
     * cross-product injection — request for product_A gets paired with a
@@ -29,9 +31,9 @@ import os
 import sys
 import uuid
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any, Dict
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -42,6 +44,10 @@ import mock_ray_dependencies  # noqa: F401
 import mock_eventizer_dependencies  # noqa: F401
 
 import seedcore.api.routers.agent_actions_router as agent_actions_router
+from seedcore.adapters.shopify_sandbox_commerce_adapter import (
+    CommerceAdapterTimeout,
+    fetch_shopify_sandbox_transaction_to_gateway_commerce_fields,
+)
 from seedcore.models.action_intent import ExecutionToken
 from seedcore.models.pdp_hot_path import HotPathDecisionView, HotPathEvaluateResponse
 from seedcore.ops.hot_path_parity_log import reset_hot_path_parity_logger_for_tests
@@ -83,6 +89,25 @@ async def _empty_authoritative_approval(*args, **kwargs) -> Dict[str, Any]:
 
 async def _organism_preflight_ok(*args, **kwargs):
     return True, "ok"
+
+
+class _FailingRedisPipeline:
+    def setex(self, *_args, **_kwargs):
+        return self
+
+    async def execute(self):
+        raise RuntimeError("redis_bus_write_unavailable")
+
+
+class _FailingRedisBus:
+    async def get(self, *_args, **_kwargs):
+        raise RuntimeError("redis_bus_read_unavailable")
+
+    async def set(self, *_args, **_kwargs):
+        raise RuntimeError("redis_bus_claim_unavailable")
+
+    def pipeline(self, *_args, **_kwargs):
+        return _FailingRedisPipeline()
 
 
 def _commerce_payload(
@@ -398,6 +423,99 @@ def test_drill_commerce_approval_resolver_raises_surfaces_failure(monkeypatch):
     # And it MUST NOT mint an ExecutionToken; an error body is acceptable.
     body_text = response.text or ""
     assert "ExecutionToken" not in body_text
+
+
+@pytest.mark.rct_commerce_drill
+def test_drill_commerce_redis_bus_outage_falls_back_with_join_keys(monkeypatch):
+    """Redis request-record/idempotency bus outage must not become a token
+    minting regression. The gateway should use its in-memory fallback and
+    still return commerce forensic linkage."""
+
+    _wire_router_happy_defaults(monkeypatch)
+
+    async def _failing_redis_client():
+        return _FailingRedisBus()
+
+    monkeypatch.setattr(
+        agent_actions_router,
+        "get_async_redis_client",
+        _failing_redis_client,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        _allow_hot_path_response,
+    )
+
+    client = _make_client()
+    payload = _commerce_payload(
+        request_id="req-commerce-drill-redis-bus-0001",
+        idempotency_key="idem-commerce-drill-redis-bus-0001",
+    )
+
+    first = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["decision"]["disposition"] == "allow"
+    assert first_body["execution_token"] is not None
+    assert "ExecutionToken" in first_body["minted_artifacts"]
+    _assert_join_keys_carried(
+        first_body,
+        request_id="req-commerce-drill-redis-bus-0001",
+    )
+
+    # Idempotent replay should read through the same failing Redis surface and
+    # still recover the in-memory request record.
+    second = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["request_id"] == first_body["request_id"]
+    assert second_body["execution_token"]["token_id"] == "token-commerce-drill-001"
+    _assert_join_keys_carried(
+        second_body,
+        request_id="req-commerce-drill-redis-bus-0001",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.rct_commerce_drill
+async def test_drill_commerce_adapter_http_timeout_emits_join_keyed_evidence():
+    """The commerce adapter outage drill crosses a real HTTP client boundary
+    and classifies timeouts with the stable commerce reason code."""
+
+    def _timeout(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("shopify sandbox adapter timed out")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_timeout),
+        base_url="https://shopify-sandbox.test",
+    ) as client:
+        with pytest.raises(CommerceAdapterTimeout) as exc_info:
+            await fetch_shopify_sandbox_transaction_to_gateway_commerce_fields(
+                transaction_url="/transactions/quote-timeout-0001",
+                client=client,
+            )
+
+    payload = _commerce_payload(request_id="req-commerce-drill-commerce-http-timeout")
+    fallback_join_key = str(
+        uuid.uuid5(uuid.NAMESPACE_URL, "req-commerce-drill-commerce-http-timeout")
+    )
+    drill_evidence = {
+        "forensic_linkage": {
+            "workflow_join_key": fallback_join_key,
+            "product_ref": payload["asset"]["product_ref"],
+            "order_ref": payload["asset"]["order_ref"],
+            "quote_ref": payload["asset"]["quote_ref"],
+            "asset_id": payload["asset"]["asset_id"],
+            "request_id": payload["request_id"],
+        }
+    }
+
+    assert exc_info.value.reason_code == "commerce_adapter_timeout"
+    _assert_join_keys_carried(
+        drill_evidence,
+        request_id="req-commerce-drill-commerce-http-timeout",
+    )
 
 
 # ---------------------------------------------------------------------------

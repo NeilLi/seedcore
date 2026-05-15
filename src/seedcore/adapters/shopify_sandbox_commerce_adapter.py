@@ -2,6 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import httpx
+
+
+class CommerceAdapterTimeout(TimeoutError):
+    """Typed commerce-adapter timeout used by degraded-edge drills."""
+
+    reason_code = "commerce_adapter_timeout"
+
+    def __init__(self, message: str = "commerce adapter timed out") -> None:
+        super().__init__(message)
+        self.reason_code = self.__class__.reason_code
+
 
 def map_shopify_sandbox_transaction_to_gateway_commerce_fields(
     *,
@@ -56,3 +68,40 @@ def map_shopify_sandbox_transaction_to_gateway_commerce_fields(
             }
         },
     }
+
+
+async def fetch_shopify_sandbox_transaction_to_gateway_commerce_fields(
+    *,
+    transaction_url: str,
+    client: httpx.AsyncClient | None = None,
+    timeout: float = 2.0,
+) -> Dict[str, Any]:
+    """
+    Fetch a Shopify-Sandbox-shaped transaction over HTTP and map it through
+    the existing pure commerce mapper.
+
+    This keeps the gateway payload contract unchanged while giving outage
+    drills a real HTTP boundary to exercise.
+    """
+    close_client = client is None
+    http_client = client or httpx.AsyncClient(timeout=timeout)
+    try:
+        response = await http_client.get(transaction_url)
+        response.raise_for_status()
+        transaction = response.json()
+    except httpx.TimeoutException as exc:
+        raise CommerceAdapterTimeout() from exc
+    finally:
+        if close_client:
+            await http_client.aclose()
+
+    if not isinstance(transaction, dict):
+        raise ValueError("commerce transaction response must be a JSON object")
+
+    return map_shopify_sandbox_transaction_to_gateway_commerce_fields(
+        product_ref=transaction.get("product_ref"),
+        order_ref=transaction.get("order_ref"),
+        quote_ref=transaction.get("quote_ref"),
+        declared_value_usd=transaction.get("declared_value_usd"),
+        economic_hash=transaction.get("economic_hash"),
+    )

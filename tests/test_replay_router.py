@@ -37,6 +37,10 @@ from test_replay_service import (
     _build_audit_record,
 )
 
+COMMERCE_PRODUCT_REF = "shopify:gid://shopify/Product/1234567890"
+COMMERCE_ORDER_REF = "shopify:gid://shopify/Order/1002003004"
+COMMERCE_QUOTE_REF = "shopify:quote:tea-set-2026-04-03-0001"
+
 
 class _FakeRedis:
     def __init__(self) -> None:
@@ -125,6 +129,38 @@ def _make_client(
 
     replay_router_module.get_async_redis_client = fake_get_async_redis_client
     return TestClient(app)
+
+
+def _attach_commerce_join_keys(record: Dict[str, Any]) -> Dict[str, Any]:
+    policy_decision = record.setdefault("policy_decision", {})
+    governed_receipt = policy_decision.setdefault("governed_receipt", {})
+    governed_receipt.update(
+        {
+            "audit_id": record["id"],
+            "workflow_join_key": record["id"],
+            "product_ref": COMMERCE_PRODUCT_REF,
+            "order_ref": COMMERCE_ORDER_REF,
+            "quote_ref": COMMERCE_QUOTE_REF,
+        }
+    )
+    authz_graph = policy_decision.setdefault("authz_graph", {})
+    authz_graph.update(
+        {
+            "product_ref": COMMERCE_PRODUCT_REF,
+            "order_ref": COMMERCE_ORDER_REF,
+            "quote_ref": COMMERCE_QUOTE_REF,
+        }
+    )
+    action_intent = record.setdefault("action_intent", {})
+    resource = action_intent.setdefault("resource", {})
+    resource.update(
+        {
+            "product_ref": COMMERCE_PRODUCT_REF,
+            "order_ref": COMMERCE_ORDER_REF,
+            "quote_ref": COMMERCE_QUOTE_REF,
+        }
+    )
+    return record
 
 
 def test_publish_trust_reference_and_fetch_projection_and_verify() -> None:
@@ -540,6 +576,7 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
         "creator_profile_ref": {"owner_id": "did:seedcore:owner:other-999", "version": "v2"},
         "trust_preferences_ref": {"owner_id": "did:seedcore:owner:other-999", "trust_version": "v1"},
     }
+    _attach_commerce_join_keys(record)
     client = _make_client(record)
 
     response = client.post("/verify", json={"audit_id": record["id"]})
@@ -553,10 +590,14 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     assert body["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in body["authority_consistency"]["issues"]
     assert body["authority_consistency_hash"] == body["authority_consistency"]["hash"]
+    assert body["workflow_join_key"] == record["id"]
 
     replay = client.get("/replay", params={"audit_id": record["id"], "projection": "public"})
     assert replay.status_code == 200
     view = replay.json()["view"]
+    assert view["policy_summary"]["workflow_join_key"] == record["id"]
+    assert view["verification_status"]["workflow_join_key"] == record["id"]
+    assert view["authorization"]["workflow_join_key"] == record["id"]
     assert view["policy_summary"]["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in view["policy_summary"]["authority_consistency"]["issues"]
     assert view["policy_summary"]["authority_consistency"]["hash"].startswith("sha256:")
@@ -581,6 +622,8 @@ def test_verify_by_audit_id_surfaces_owner_identity_mismatch() -> None:
     artifacts = client.get("/replay/artifacts", params={"audit_id": record["id"], "projection": "public"})
     assert artifacts.status_code == 200
     public_artifacts = artifacts.json()["public_artifacts"]
+    assert public_artifacts["workflow_join_key"] == record["id"]
+    assert public_artifacts["policy_summary"]["workflow_join_key"] == record["id"]
     assert public_artifacts["authority_consistency"]["ok"] is False
     assert "owner_identity_mismatch" in public_artifacts["authority_consistency"]["issues"]
     assert public_artifacts["authority_consistency_hash"] == view["authority_consistency_hash"]
@@ -661,6 +704,7 @@ def test_trust_publish_and_refresh_reject_authority_binding_mismatch() -> None:
 
 def test_verify_token_surfaces_reference_subject_mismatch() -> None:
     record = _build_audit_record(task_id="task-router-ref-mismatch-1", intent_id="intent-router-ref-mismatch-1", asset_id="asset-ref-mismatch-1")
+    _attach_commerce_join_keys(record)
     client = _make_client(record)
 
     publish = client.post("/trust/publish", json={"audit_id": record["id"], "ttl_hours": 4})
@@ -680,6 +724,19 @@ def test_verify_token_surfaces_reference_subject_mismatch() -> None:
     assert body["authority_consistency"]["ok"] is True
     assert body["authority_consistency_hash"] == body["authority_consistency"]["hash"]
     assert body["operator_actions"] == []
+    assert body["workflow_join_key"] == record["id"]
+
+    replay = client.get("/replay", params={"audit_id": record["id"], "projection": "public"})
+    assert replay.status_code == 200
+    view = replay.json()["view"]
+    assert view["policy_summary"]["workflow_join_key"] == record["id"]
+    assert view["verification_status"]["workflow_join_key"] == record["id"]
+
+    artifacts = client.get("/replay/artifacts", params={"audit_id": record["id"], "projection": "public"})
+    assert artifacts.status_code == 200
+    public_artifacts = artifacts.json()["public_artifacts"]
+    assert public_artifacts["workflow_join_key"] == record["id"]
+    assert public_artifacts["policy_summary"]["workflow_join_key"] == record["id"]
 
 
 def test_materialized_custody_event_endpoint_uses_replay_service_jsonld() -> None:

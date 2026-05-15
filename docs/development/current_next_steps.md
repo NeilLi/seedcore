@@ -620,11 +620,14 @@ operational closure and external-boundary productization.
    - **commerce-shaped drill matrix** (`tests/test_rct_commerce_drill_matrix.py`,
      marked `rct_commerce_drill`): runs stale-graph, PKG dependency outage,
      approval-store outage (503 `dependency_unavailable`),
-     approval-resolver raise (fail-closed), coordinate tamper, and
+     approval-resolver raise (fail-closed), Redis bus outage fallback,
+     commerce adapter HTTP timeout, coordinate tamper, and
      cross-product replay injection through the
      `seedcore.agent_action_gateway.v1` contract; every drill asserts the
      response `forensic_linkage` carries `product_ref`, `order_ref`,
      `quote_ref`, `workflow_join_key`, `audit_id`, and `request_id`.
+     Replay-router tamper drills also assert `workflow_join_key` on
+     verify/replay/artifact surfaces.
      `_build_forensic_linkage` in
      `src/seedcore/api/routers/agent_actions_router.py` is the single
      plumbing point — aligned with

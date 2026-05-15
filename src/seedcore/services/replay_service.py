@@ -1056,6 +1056,7 @@ class ReplayService:
                 verification_id=self._new_id(),
                 reference_type="trust_token",
                 reference_id=reference_id,
+                workflow_join_key=self._workflow_join_key(replay),
                 subject_id=reference.subject_id,
                 subject_type=reference.subject_type,
                 verified=False,
@@ -2059,6 +2060,7 @@ class ReplayService:
             subject_summary = f"{subject_summary} Authority binding mismatches require operator review."
         verification_status = replay.verification_status.model_dump(mode="json")
         verification_status["authority_consistency"] = authority_consistency
+        verification_status["workflow_join_key"] = self._workflow_join_key(replay)
         return TrustPageProjection(
             workflow_type=workflow_type,
             status=workflow_status,
@@ -2165,6 +2167,7 @@ class ReplayService:
             "owner_context": self._owner_context_summary(replay),
             "owner_context_hash": self._owner_context_hash(self._owner_context_summary(replay)),
             "authority_consistency": self._authority_consistency_summary(replay),
+            "workflow_join_key": self._workflow_join_key(replay),
         }
 
     def _build_dispute_summary(self, replay: ReplayRecord) -> Dict[str, Any]:
@@ -3212,6 +3215,7 @@ class ReplayService:
             "owner_context": self._owner_context_summary(replay),
             "owner_context_hash": self._owner_context_hash(self._owner_context_summary(replay)),
             "authority_consistency": self._authority_consistency_summary(replay),
+            "workflow_join_key": self._workflow_join_key(replay),
         }
 
     def _build_verifiable_claims(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
@@ -3594,6 +3598,7 @@ class ReplayService:
             verification_id=self._new_id(),
             reference_type=reference_type,
             reference_id=reference_id,
+            workflow_join_key=self._workflow_join_key(replay),
             subject_id=replay.subject_id,
             subject_type=replay.subject_type,
             verified=verified,
@@ -3652,6 +3657,22 @@ class ReplayService:
             owner_context_hash=None,
             reason=reason,
         )
+
+    def _workflow_join_key(self, replay: ReplayRecord) -> Optional[str]:
+        record = replay.audit_record if isinstance(replay.audit_record, Mapping) else {}
+        candidates = [
+            replay.governed_receipt.get("workflow_join_key"),
+            replay.governed_receipt.get("audit_id"),
+            record.get("id"),
+            replay.audit_record_id,
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            value = str(candidate).strip()
+            if value:
+                return value
+        return None
 
     def _owner_context_hash(self, owner_context: Mapping[str, Any]) -> Optional[str]:
         return _owner_context_hash_value(owner_context)
