@@ -3,25 +3,29 @@
 CI is active for `push` to `main`, `pull_request`, and manual dispatch
 (`.github/workflows/unit-tests.yml`).
 
-## Zero-Trust Runtime for High-Consequence AI Actions
+## Governed Execution Runtime for Autonomous Systems
 
-AI agents are becoming operational, but governance has not kept pace.
-Enterprises are under pressure to automate, yet they still need reliable
-ways to control what high-consequence AI actions are allowed to do, prove
-why an action was permitted, and contain failures before they become
-liabilities.
+Agent frameworks help AI decide what to do. Prompt guardrails control
+what AI says. SeedCore controls what AI is allowed to execute.
 
-SeedCore is a deterministic, zero-trust runtime for high-consequence AI
-actions. It evaluates governed requests in real time through a
-synchronous, stateless-at-decision-time **Policy Decision Point (PDP)**
-over a pinned PKG snapshot and bounded request context. Advisory AI can
-propose; governance issues a short-lived `ExecutionToken` only when the
-decision is `allow`.
+SeedCore is a governed execution runtime for autonomous systems. It sits
+between AI intent and real-world execution, verifying delegation, policy
+scope, asset state, hardware authority, custody telemetry, and evidence
+requirements before execution authority can exist.
 
-All outcomes (`allow` / `deny` / `quarantine` / `escalate`) are recorded
-with replayable, auditable evidence. SeedCore is not another model layer;
-it is the runtime that makes high-consequence AI action safe enough to
-execute.
+Unlike an AI agent framework or a prompt guardrail, SeedCore is a
+deterministic execution gate. It rejects ambient authority, mints
+short-lived `ExecutionToken`s only when policy admits the action, and
+produces replayable evidence chains that can be verified after the fact.
+
+The core runtime is already implemented and contract-tested, including
+Agent Action Gateway v1, `ExecutionToken` lifecycle, Policy Decision
+Points, evidence bundles, `RESULT_VERIFIER`, generic Restricted Custody
+Transfer proof surfaces, and replay verification primitives. The current
+commercial demo direction packages that baseline into a rare-shoe
+Restricted Custody Transfer scene to show how SeedCore binds
+authentication, delegated AI intent, custody telemetry, and verifier
+closure into one replayable proof chain.
 
 The long ambition is large: become the trust substrate between frontier
 models and real-world execution. The execution strategy is deliberately
@@ -143,6 +147,24 @@ dated rollout, status, and next-step plan live in the development docs:
 - [Q2 product spec](docs/development/q2_2026_audit_trail_ui_spec.md)
 - [hot-path shadow to enforce breakdown](docs/development/hot_path_shadow_to_enforce_breakdown.md)
 - [kube topology validation Q2 signoff](docs/development/kube_topology_validation_q2_signoff.md)
+
+## Rare-Shoe RCT Demo Direction
+
+The generic SeedCore RCT runtime is implemented and contract-tested. The
+current commercial demo direction verticalizes that baseline into a rare-shoe
+Restricted Custody Transfer scene, focused on deterministic fixtures,
+proof-path tests, a happy-path replay bundle, and public/operator proof
+redaction.
+
+The rare-shoe scene is not a sneaker marketplace and does not assert legal
+ownership transfer. It is a compact commercial proof that SeedCore can govern
+high-value physical asset movement when authentication, delegated AI intent,
+custody telemetry, and verifier closure must all agree before execution is
+accepted.
+
+The full development spec lives in:
+
+- [rare-shoe RCT demo spec](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
 
 ## Current Capability Baseline
 
