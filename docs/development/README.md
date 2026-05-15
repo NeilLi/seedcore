@@ -70,6 +70,10 @@ Start here for the active spine:
    collectible rare-shoe transfer as a commercial vertical scene on the same
    RCT contract: authentication registration first, bounded custody authority
    second, replayable proof last.
+6. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
+   technical memo for turning customer business rules into executable,
+   testable Policy Knowledge Graphs that compile into PDP rules, authority
+   constraints, evidence requirements, reason codes, and replay fixtures.
 
 ## 3. Stage Goals And Status Map
 
