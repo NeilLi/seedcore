@@ -13,6 +13,7 @@ windows, or implementation rewrites.
 - [ADR 0004: Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](./adr-0004-result-verifier-runtime.md)
 - [ADR 0005: Preserve Replayable Evidence for Governed Digital Twin State Transitions](./adr-0005-replayable-evidence-governed-state-transitions.md)
 - [ADR 0006: Split RESULT_VERIFIER Into a Dedicated Process on Measurable Triggers](./adr-0006-result-verifier-deployment-split-trigger.md)
+- [ADR 0007: Treat NVIDIA cuOpt as an Optional Optimization Sidecar](./adr-0007-cuopt-optimization-sidecar.md)
 
 ## Conventions
 
