@@ -66,6 +66,10 @@ Start here for the active spine:
 4. [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) section 4.1 -
    operator legibility layer (queue signals, replay verdict, deterministic +
    optional LLM copilot API).
+5. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
+   collectible rare-shoe transfer as a commercial vertical scene on the same
+   RCT contract: authentication registration first, bounded custody authority
+   second, replayable proof last.
 
 ## 3. Stage Goals And Status Map
 
@@ -124,6 +128,10 @@ integration**, still on one wedge:
 
 - **Commerce RCT** remains the only must-win workflow; docs and code should
   default to "order/quote/value + physical scope + token + evidence" language.
+- **Collectible rare-shoe transfer** is now the recommended commercial-grade
+  vertical scene for the commerce RCT wedge, because it makes authentication,
+  provenance, high-value policy gates, physical handoff, and replayable proof
+  concrete without changing the underlying runtime category.
 - Host-first and CI gates for verification contracts and degraded-edge drills
   are implemented; **remote Kind + GCP-style topology** is green for API,
   Ray, ingress, HAL, hot-path status/metrics, and scripted kube verification
@@ -168,10 +176,15 @@ Near-term execution order (commerce-coherent):
 3. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-4. Advance edge telemetry closure and signed forensic-block linkage without
+4. Add the rare-shoe RCT fixture path as a commercial vertical scene:
+   source-registration artifacts for authentication/provenance, gateway
+   adapter inputs for listing/quote/order/value, signed edge telemetry for
+   NFC/scan handoff, hash-bound forensic video proof, and proof-surface checks
+   that keep public proof narrow.
+5. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-5. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
-6. Start the governance-aware learning track only after the current trust slice
+6. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
+7. Start the governance-aware learning track only after the current trust slice
    remains stable under the above pressures:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 
@@ -194,6 +207,7 @@ Primary planning docs:
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+- [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)
 - [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
 - [`rct_control_posture_env_matrix.md`](rct_control_posture_env_matrix.md) - operator
   env matrix for `dev/advisory` vs fail-closed `control-rct`

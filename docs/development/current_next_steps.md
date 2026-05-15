@@ -13,6 +13,44 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-05-15, Commercial RCT Vertical Scene)
+
+The next commercial-grade demo scene should be **Collectible Rare-Shoe
+Restricted Custody Transfer**, documented in
+[rare_shoes_collecting_transfer_demo_spec.md](/Users/ningli/project/seedcore/docs/development/rare_shoes_collecting_transfer_demo_spec.md).
+
+This does not change the product center. It makes the existing commerce RCT
+wedge more legible by binding a high-value physical collectible to:
+
+- source-registration-first authentication and provenance
+- buyer/seller/order/quote/value context
+- explicit delegated authority and approval envelopes
+- signed NFC/scan/edge telemetry evidence
+- RESULT_VERIFIER quarantine and replayable proof
+
+Immediate implementation order:
+
+1. Add rare-shoe source-registration fixtures for authentication packet, NFC
+   binding, condition grade, and provenance refs.
+2. Add a gateway fixture/adapter path that maps listing, quote, order, value,
+   buyer delegation, and destination scope into
+   `seedcore.agent_action_gateway.v1`, including stable rare-shoe reason
+   codes and `workflow_join_key` expectations.
+3. Add signed edge telemetry closure fixtures for origin scan, delivery scan,
+   dynamic NFC challenge-response failure, tamper-state failure, delayed
+   telemetry, and delayed-submission-window expiry. Use deterministic simulated
+   scan fixtures first; real NFC hardware is an extension interface.
+4. Add the golden replay/proof bundle
+   `rare_shoe_happy_path_replay_bundle.json` so the demo can be inspected
+   through public proof, operator forensics, forensic video proof, and replay
+   surfaces early.
+5. Extend the commerce degraded-edge drill matrix with rare-shoe toxic paths:
+   authentication mismatch, NFC challenge failure, delayed telemetry,
+   signer-chain violation, condition drift, and cross-asset replay.
+6. Keep public proof narrow while operator forensics shows the richer
+   authentication and telemetry chain; publish hash-bound forensic video proof
+   linked to replayable receipts for human inspection.
+
 ## Status Update (2026-04-10, Remote Kube Topology)
 
 Latest live deployment-topology status:
