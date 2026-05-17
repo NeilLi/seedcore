@@ -78,6 +78,10 @@ Start here for the active spine:
    for declaring governed action boundaries without making developers manually
    wire PDP calls, execution tokens, evidence bundles, verifier outcomes, and
    replay proof chains.
+8. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+   implementation contract for making hardware-bound signer identity, signed
+   telemetry, asset anchors, zone evidence, and verifier replay central to
+   physical execution proof.
 
 ## 3. Stage Goals And Status Map
 
@@ -208,6 +212,7 @@ Primary planning docs:
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`gated_action_dx_layer.md`](gated_action_dx_layer.md)
+- [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md)
 - [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)
 - [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
 - [`rct_control_posture_env_matrix.md`](rct_control_posture_env_matrix.md) - operator

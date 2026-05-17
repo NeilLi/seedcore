@@ -16,6 +16,7 @@ windows, or implementation rewrites.
 - [ADR 0007: Treat NVIDIA cuOpt as an Optional Optimization Sidecar](./adr-0007-cuopt-optimization-sidecar.md)
 - [ADR 0008: Enterprise RAG as Governed Evidence Acquisition](./adr-0008-enterprise-rag-governed-evidence-acquisition.md)
 - [ADR 0009: Authorization-Aware Retrieval Boundary](./adr-0009-authorization-aware-retrieval-boundary.md)
+- [ADR 0010: Hardware-Anchored Telemetry as Execution Proof](./adr-0010-hardware-anchored-telemetry-execution-proof.md)
 
 ## Conventions
 
