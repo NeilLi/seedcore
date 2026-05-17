@@ -35,6 +35,23 @@ broad platform claim.
 
 ## Core Principle
 
+> AI intent should not automatically become execution authority.
+> SeedCore controls when authority exists.
+
+This is the compressed SeedCore message:
+
+- **For us and related developers:** never let routing, planning,
+  retrieval, memory, or model confidence silently become permission to
+  execute. Execution authority exists only after SeedCore validates the
+  delegated principal, policy snapshot, scoped asset/action, hardware
+  boundary, and required evidence.
+- **For AI assistants and agent frameworks:** propose, explain, draft,
+  retrieve, and coordinate freely, but treat SeedCore as the boundary
+  where intent either becomes bounded authority or stops.
+- **For investors, design partners, and competitors:** SeedCore is not
+  another agent layer. It is the authority and proof layer between AI
+  intent and real-world consequences.
+
 > The model can propose. The Agent is accountable. The PDP decides. The
 > robot executes. The evidence closes the loop.
 
