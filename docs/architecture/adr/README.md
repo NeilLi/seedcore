@@ -14,6 +14,8 @@ windows, or implementation rewrites.
 - [ADR 0005: Preserve Replayable Evidence for Governed Digital Twin State Transitions](./adr-0005-replayable-evidence-governed-state-transitions.md)
 - [ADR 0006: Split RESULT_VERIFIER Into a Dedicated Process on Measurable Triggers](./adr-0006-result-verifier-deployment-split-trigger.md)
 - [ADR 0007: Treat NVIDIA cuOpt as an Optional Optimization Sidecar](./adr-0007-cuopt-optimization-sidecar.md)
+- [ADR 0008: Enterprise RAG as Governed Evidence Acquisition](./adr-0008-enterprise-rag-governed-evidence-acquisition.md)
+- [ADR 0009: Authorization-Aware Retrieval Boundary](./adr-0009-authorization-aware-retrieval-boundary.md)
 
 ## Conventions
 
