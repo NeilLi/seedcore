@@ -74,6 +74,10 @@ Start here for the active spine:
    technical memo for turning customer business rules into executable,
    testable Policy Knowledge Graphs that compile into PDP rules, authority
    constraints, evidence requirements, reason codes, and replay fixtures.
+7. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
+   for declaring governed action boundaries without making developers manually
+   wire PDP calls, execution tokens, evidence bundles, verifier outcomes, and
+   replay proof chains.
 
 ## 3. Stage Goals And Status Map
 
@@ -203,6 +207,7 @@ Primary planning docs:
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+- [`gated_action_dx_layer.md`](gated_action_dx_layer.md)
 - [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)
 - [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
 - [`rct_control_posture_env_matrix.md`](rct_control_posture_env_matrix.md) - operator
