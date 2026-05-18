@@ -54,6 +54,8 @@ That means the active docs should be read through one question:
 - External contract and MCP evaluate surface:
   [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md),
   [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md)
+- Strategic delegation thesis and frontier alignment:
+  [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 
 Start here for the active spine:
 
@@ -82,6 +84,11 @@ Start here for the active spine:
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
+9. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+   strategic memo connecting SeedCore's implemented delegation path to
+   cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
+   capability attenuation, ReBAC graph paths, SCITT-style evidence, and
+   hardware-backed intent.
 
 ## 3. Stage Goals And Status Map
 
@@ -211,6 +218,7 @@ Primary planning docs:
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+- [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - [`gated_action_dx_layer.md`](gated_action_dx_layer.md)
 - [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md)
 - [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)
