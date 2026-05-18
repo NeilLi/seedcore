@@ -58,6 +58,8 @@ That means the active docs should be read through one question:
   [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - Execution-token lifecycle and capability hardening:
   [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
+- Legible local advisory memory:
+  [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
 
 Start here for the active spine:
 
@@ -96,6 +98,10 @@ Start here for the active spine:
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
+11. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+   development memo for an Obsidian-compatible Markdown memory vault that makes
+   advisory memory, admitted facts, rejected claims, and operator notes readable
+   and editable without making memory an authority source.
 
 ## 3. Stage Goals And Status Map
 
@@ -227,6 +233,7 @@ Primary planning docs:
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
+- [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
 - [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - [`gated_action_dx_layer.md`](gated_action_dx_layer.md)
 - [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md)
@@ -260,6 +267,9 @@ Primary planning docs:
 - [`memory_module_refactor_spec.md`](memory_module_refactor_spec.md) — draft plan
   for narrowing `memory/` into explicit working / semantic / incident contracts
   aligned to the current trust-runtime architecture
+- [`legible_local_memory_vault.md`](legible_local_memory_vault.md) — local-first
+  Markdown vault pattern for human-readable advisory memory, admitted/rejected
+  claim mirrors, and privacy-preserving manual inspection
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`language_evolution_map.md`](language_evolution_map.md)
 - [`rust_workspace_proposal.md`](rust_workspace_proposal.md)

@@ -11,6 +11,9 @@ the current SeedCore architecture, product boundary, and runtime contracts.
 For the trading/runtime-side flow that uses these contracts without allowing
 memory to become hidden authority, see
 [Trading Memory Admissibility Flow](./trading_memory_admissibility_flow.md).
+For the human-readable local memory pattern that makes advisory memory
+inspectable and editable without making it authoritative, see
+[Legible Local Memory Vault](./legible_local_memory_vault.md).
 
 The current memory package still reflects an older "cognitive-first platform"
 shape. The rest of the repository has narrowed around a different center:
@@ -38,6 +41,12 @@ Memory is also not a threat-intelligence or defensive decision plane. In the
 current SeedCore architecture, memory supports context, salience, and operator
 legibility around the trust runtime; it does not replace the PDP, and it does
 not redefine SeedCore as a cybersecurity detection system.
+
+The memory package should also support a legible local mirror for advisory
+memory. The mirror may use Markdown and frontmatter so operators can inspect,
+edit, or delete what the advisory layer remembers. That mirror is a transparency
+surface over memory-derived context; it is not a system of record for approvals,
+delegation, custody, telemetry, or policy.
 
 ## Current Implementation Status
 
@@ -492,8 +501,28 @@ The refactored memory module must document and enforce that:
 - governed PDP decisions do not call general-purpose memory services directly
 - any hot-path-relevant context must arrive via owned, freshness-aware,
   replay-visible services outside this package
+- Markdown vault notes, vector embeddings, local search indexes, and LLM-written
+  summaries are advisory artifacts until an admission service converts them into
+  bounded, typed, replay-visible facts
+- manual edit/delete operations in a legible local memory vault must either
+  remove the item from future retrieval or mark derived indexes stale
 
 This is a doc and interface constraint, not only an implementation detail.
+
+### Legible local memory mirror
+
+The target memory architecture should include an optional local Markdown mirror
+for human-readable advisory memory. This adapts the OpenHuman / Karpathy-style
+"LLM knowledgebase" pattern to SeedCore's trust runtime:
+
+- store curated advisory memory as plain Markdown with frontmatter;
+- keep the folder compatible with Obsidian or other local Markdown tools;
+- mirror admitted, rejected, and advisory-only claims for operator inspection;
+- make deletion and manual correction visible to retrieval and indexing;
+- keep raw vault contents outside the PDP hot path.
+
+The mirror should sit beside `WorkingMemory`, `SemanticMemory`, and
+`IncidentMemory`. It should not replace the typed runtime contracts.
 
 ## 5. Move legacy energy-tier abstractions out of the default package surface
 

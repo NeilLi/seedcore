@@ -56,6 +56,10 @@ Memory belongs to this same model. It is a bounded supporting subsystem for
 context, retrieval, and salience logging, not a threat-intelligence database or
 security operations center.
 
+When SeedCore exposes memory through a legible local Markdown vault, that vault
+is an operator transparency surface. It helps humans inspect, correct, or erase
+advisory memory, but it does not become a policy database or authority source.
+
 ### 3. Auditability-first architecture, not general infrastructure hardening
 
 SeedCore's architecture is shaped around auditability and closure integrity:

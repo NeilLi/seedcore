@@ -34,6 +34,8 @@ typed, freshness-aware context envelope, never raw memory search output.
 - make every admitted memory-derived fact visible in replay and operator tools
 - fail closed when freshness, provenance, or scope requirements are not met
 - preserve clear ownership between advisory systems and authoritative systems
+- optionally mirror advisory, admitted, and rejected memory-derived claims into
+  a local Markdown vault for human inspection and correction
 
 ## Non-Goals
 
@@ -301,6 +303,45 @@ Rules:
 - admitted facts must be small, typed, and replayable
 - rejected and advisory-only claims should also be retained for operator review
 - envelope contents must be deterministic from the same inputs
+- if a legible local memory vault is enabled, the envelope may reference
+  Markdown claim mirrors by id or path, but the PDP must evaluate the typed
+  envelope fields, not the raw Markdown body
+
+### Stage 5A: Mirror claim status to a legible local vault
+
+Owner:
+
+- memory support plane
+- operator legibility layer
+
+Current repo fit:
+
+- `docs/development/legible_local_memory_vault.md`
+- `docs/development/memory_module_refactor_spec.md`
+
+Input:
+
+- admitted facts
+- rejected claims
+- advisory-only claims
+- source refs and provenance hashes
+
+Output:
+
+- optional Markdown notes under `admitted-facts/`, `rejected-claims/`, and
+  `advisory-only/`
+- stale-index markers when source notes are edited or deleted
+
+Rules:
+
+- the vault is a human-readable mirror, not the authoritative PDP input
+- notes must carry `authority_class=advisory_context` unless they are pure source
+  references
+- vault notes must not store secrets, session tokens, private keys, or bearer
+  credentials
+- editing a note should mark derived indexes stale until rebuilt
+- deleting a note should remove it from future advisory retrieval unless a
+  minimal tombstone is required for replay/audit linkage
 
 ### Stage 6: PDP evaluation
 
