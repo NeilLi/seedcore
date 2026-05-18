@@ -23,6 +23,10 @@ To ensure deterministic execution against the mock actuator, the `constraints` f
 
 This guarantees the execution layer receives the exact same cryptographic bounds every time, removing prompt-drift from the execution loop.
 
+For the full lifecycle view of intake, preflight, minting, TTL bounding,
+delegated subtokens, execution binding, replay, and quarantine, see
+`docs/development/execution_token_lifecycle_management.md`.
+
 ## Delegation And Owner Authority Gates
 
 The Agent Action Gateway extends the PDP boundary from "valid principal" to

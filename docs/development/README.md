@@ -56,6 +56,8 @@ That means the active docs should be read through one question:
   [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md)
 - Strategic delegation thesis and frontier alignment:
   [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
+- Execution-token lifecycle and capability hardening:
+  [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
 
 Start here for the active spine:
 
@@ -89,6 +91,11 @@ Start here for the active spine:
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
+10. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+   lifecycle memo for `ExecutionToken` as a short-lived deterministic
+   capability artifact, including mint/withhold semantics, TTL bounding,
+   constraint freezing, delegated subtokens, replay, quarantine, and candidate
+   hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
 
 ## 3. Stage Goals And Status Map
 
@@ -204,6 +211,7 @@ Primary planning docs:
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+- [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
 - [`edge_telemetry_evidence_closure_draft.md`](edge_telemetry_evidence_closure_draft.md)
 - [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
 - [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
@@ -218,6 +226,7 @@ Primary planning docs:
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+- [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
 - [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - [`gated_action_dx_layer.md`](gated_action_dx_layer.md)
 - [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md)

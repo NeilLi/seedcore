@@ -46,6 +46,23 @@ Verifier replay decides whether the chain held.
 
 If hardware-anchored telemetry is required by policy and is missing or invalid, the action must not settle as accepted.
 
+## RATS Vocabulary Alignment
+
+This MVP should use IETF RATS terminology when the implementation moves beyond
+fixture signer checks into real attestation:
+
+| RATS role / object | SeedCore mapping |
+| :--- | :--- |
+| Attester | physical endpoint, simulator endpoint, TPM/KMS/TEE-backed signer, or trusted edge node |
+| Evidence | signed telemetry envelope, signer proof, attestation quote, asset anchor, zone evidence |
+| Verifier | `seedcore-verify`, RESULT_VERIFIER, or replay verifier path |
+| Appraisal Policy | PKG policy snapshot, signer trust bundle, revocation lists, attestation freshness rules |
+| Attestation Result | replay/verifier output that can admit, deny, or quarantine closure |
+| Relying Party | gateway closure path, twin settlement service, operator proof surface |
+
+For the broader token lifecycle framing, see
+`docs/development/execution_token_lifecycle_management.md`.
+
 ## Contract Objects
 
 ### 1. DeviceIdentity
