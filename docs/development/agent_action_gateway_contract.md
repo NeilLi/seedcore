@@ -131,6 +131,21 @@ gateway also performs runtime verification against persisted truth:
    is therefore always checked against durable identity facts, not
    against the caller's header state.
 
+   Rollout is intentionally staged. `SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_MODE`
+   defaults to `shadow`, where validation failures emit structured warning
+   logs but do not block legacy/internal callers. Set the mode to `enforce`
+   to fail closed with `403` for missing, mismatched, inactive, or wrong-agent
+   delegations, and `503 delegation_store_unavailable` when the identity store
+   cannot be reached. The check is read-only and runs after the canonical
+   evaluate payload hash is computed, so it does not mutate the
+   `delegation_ref`, `ActionIntent`, signature surface, or replay identity.
+   A short in-process TTL cache
+   (`SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_CACHE_TTL_SECONDS`, default
+   30 seconds) bounds the added identity-fact lookup cost on the request path.
+   Historical replay/read paths use the stored governed request and receipt;
+   they do not re-authorize an old action against the delegation's current
+   active/revoked state.
+
 4. **Approval envelope resolution.** `resolve_authoritative_transfer_approval`
    in `src/seedcore/ops/pdp_hot_path.py` reads the persisted
    `transfer_approval` record keyed by `approval.approval_envelope_id` and
@@ -1050,6 +1065,8 @@ callers; enable it for any external-facing deployment:
 | `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_MODE` | `off` | `shared_key` or `bearer` activates enforcement |
 | `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_TOKEN` | empty | Required bearer secret when auth is enabled; missing secret produces `503 gateway_auth_not_configured` |
 | `SEEDCORE_AGENT_ACTION_GATEWAY_ALLOWED_ROLES` | empty | Optional comma-separated allowlist; unknown role produces `403 role_not_authorized_for_workflow` |
+| `SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_MODE` | `shadow` | `shadow` logs owner/delegation/agent mismatches without blocking; `enforce` fails closed; `off` skips the guard |
+| `SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_CACHE_TTL_SECONDS` | `30` | In-process TTL cache for delegation validation lookups |
 
 When enforcement is on, callers must send `Authorization: Bearer <token>`.
 Missing or malformed headers return `401 missing_credentials`; wrong tokens
@@ -1210,6 +1227,10 @@ Feature flags:
   truth for `/api/v1/agent-actions/*` (default `true` for back-compat)
 - `SEEDCORE_AGENT_ACTION_GATEWAY_AUTH_MODE` / `..._AUTH_TOKEN` /
   `..._ALLOWED_ROLES` — activate the authentication boundary
+- `SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_MODE` — choose `shadow`,
+  `enforce`, or `off` for persisted delegation validation
+- `SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_CACHE_TTL_SECONDS` — tune the
+  short in-process cache used by delegation validation
 - `SEEDCORE_AGENT_ACTION_DISABLE_REDIS_STORE` — force the in-memory
   idempotency/record store for tests or local-only deployments
 - `SEEDCORE_AGENT_ACTION_REQUEST_RECORD_TTL_SECONDS` — override the default

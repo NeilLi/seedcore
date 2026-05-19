@@ -140,6 +140,8 @@ Its role is to:
 - receive agent-originated governed requests
 - normalize them deterministically into runtime contracts such as `ActionIntent`
 - preserve proof and replay correlation from the first external request onward
+- validate the declared owner/delegation/agent binding against persisted
+  identity facts, currently in shadow mode by default with an `enforce` switch
 
 That distinction matters. Public-facing contracts may evolve by workflow. The governed execution substrate must remain internally coherent across workflows.
 

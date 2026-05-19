@@ -1300,6 +1300,139 @@ def test_agent_actions_evaluate_includes_owner_context_refs_in_governed_receipt(
     assert "owner" in captured["relevant_twin_snapshot"]
 
 
+def test_agent_actions_delegation_validation_shadow_logs_and_allows(monkeypatch, caplog):
+    import logging as _stdlib_logging
+
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeOwnerTwin:
+        def model_dump(self, mode="json"):
+            return {
+                "identity": {"did": "did:seedcore:owner:acme-001"},
+                "delegation": {"delegations": []},
+                "provenance": {},
+            }
+
+    fake_get_delegation = AsyncMock(return_value=None)
+    fake_build_owner = AsyncMock(return_value=_FakeOwnerTwin())
+
+    monkeypatch.setattr(agent_actions_router, "DELEGATION_VALIDATION_MODE", "shadow")
+    monkeypatch.setattr(agent_actions_router, "DELEGATION_VALIDATION_CACHE_TTL_SECONDS", 0)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "get_async_pg_session_factory",
+        lambda: (lambda: _SessionCtx()),
+    )
+    monkeypatch.setattr(agent_actions_router, "get_delegation", fake_get_delegation)
+    monkeypatch.setattr(agent_actions_router, "build_owner_twin_snapshot", fake_build_owner)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+    monkeypatch.setattr(
+        agent_actions_router,
+        "evaluate_pdp_hot_path",
+        lambda *args, **kwargs: _allow_hot_path_response(),
+    )
+    monkeypatch.setattr(agent_actions_router, "_organism_preflight_check", _organism_preflight_ok)
+
+    with caplog.at_level(_stdlib_logging.WARNING, logger="seedcore.api.routers.agent_actions_router"):
+        response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+
+    assert response.status_code == 200, response.text
+    assert fake_get_delegation.await_count == 1
+    assert fake_build_owner.await_count == 1
+    validation_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "agent_action_gateway.delegation_validation.failed"
+    ]
+    assert validation_records
+    assert validation_records[-1].mode == "shadow"
+    assert validation_records[-1].reason_code == "delegation_not_found"
+
+
+def test_agent_actions_delegation_validation_enforce_rejects_owner_mismatch(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    client = _make_client()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    fake_get_delegation = AsyncMock(
+        return_value=SimpleNamespace(
+            owner_id="did:seedcore:owner:someone-else",
+            assistant_id="agent:custody_runtime_01",
+            status="ACTIVE",
+        )
+    )
+    fake_build_owner = AsyncMock()
+
+    monkeypatch.setattr(agent_actions_router, "DELEGATION_VALIDATION_MODE", "enforce")
+    monkeypatch.setattr(agent_actions_router, "DELEGATION_VALIDATION_CACHE_TTL_SECONDS", 0)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "get_async_pg_session_factory",
+        lambda: (lambda: _SessionCtx()),
+    )
+    monkeypatch.setattr(agent_actions_router, "get_delegation", fake_get_delegation)
+    monkeypatch.setattr(agent_actions_router, "build_owner_twin_snapshot", fake_build_owner)
+    monkeypatch.setattr(
+        agent_actions_router,
+        "resolve_authoritative_transfer_approval",
+        _empty_authoritative_approval,
+    )
+
+    def _should_not_evaluate(*args, **kwargs):
+        raise AssertionError("PDP should not run when delegation validation is enforced and fails")
+
+    monkeypatch.setattr(agent_actions_router, "evaluate_pdp_hot_path", _should_not_evaluate)
+
+    response = client.post("/api/v1/agent-actions/evaluate", json=_base_payload())
+
+    assert response.status_code == 403, response.text
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "delegation_owner_mismatch"
+    assert detail["request_id"] == "req-transfer-2026-0001"
+    assert fake_get_delegation.await_count == 1
+    assert fake_build_owner.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_actions_delegation_validation_caches_missing_records(monkeypatch):
+    agent_actions_router._clear_agent_action_request_store_for_tests()
+    fake_get_delegation = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(agent_actions_router, "DELEGATION_VALIDATION_CACHE_TTL_SECONDS", 60)
+    monkeypatch.setattr(agent_actions_router, "get_delegation", fake_get_delegation)
+
+    first = await agent_actions_router._get_delegation_for_validation(
+        object(),
+        "owner-8841-transfer",
+    )
+    second = await agent_actions_router._get_delegation_for_validation(
+        object(),
+        "owner-8841-transfer",
+    )
+
+    assert first is None
+    assert second is None
+    assert fake_get_delegation.await_count == 1
+
+
 def test_agent_actions_closure_accepts_allow_request_and_records(monkeypatch):
     agent_actions_router._clear_agent_action_request_store_for_tests()
     client = _make_client()

@@ -299,6 +299,9 @@ Latest repo-aligned critical-path status:
     `audit_id` fallback when `governed_receipt.audit_id` is absent and explicit
     `replay_state` / `replay_lookup.preferred_key` semantics:
     `src/seedcore/adapters/rct_gateway_correlation.py`
+  - persisted owner/delegation/agent validation now runs as a read-only gateway
+    guard with `shadow` rollout mode, `enforce` fail-closed mode, and a short TTL
+    cache for the added identity-fact lookup.
   - MCP tool `seedcore.agent_action.evaluate` (adapter input -> gateway call ->
     correlation) in `src/seedcore/plugin/mcp_server.py`
   - contract and E2E tests: `tests/test_agent_action_gateway_productization.py`

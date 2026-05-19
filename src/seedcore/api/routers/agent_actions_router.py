@@ -119,12 +119,19 @@ class _AgentActionExecuteStoredRecord:
     response: AgentActionExecuteResponse
 
 
+@dataclass
+class _DelegationValidationCacheEntry:
+    delegation: Any | None
+    expires_at: datetime
+
+
 _REQUEST_RECORDS_BY_ID: Dict[str, _AgentActionStoredRecord] = {}
 _IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
 _CLOSURE_RECORDS_BY_ID: Dict[str, _AgentActionClosureStoredRecord] = {}
 _CLOSURE_IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
 _EXECUTE_RECORDS_BY_REQUEST_ID: Dict[str, _AgentActionExecuteStoredRecord] = {}
 _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY: Dict[str, _AgentActionIdempotencyEntry] = {}
+_DELEGATION_VALIDATION_CACHE_BY_ID: Dict[str, _DelegationValidationCacheEntry] = {}
 
 # In-memory fallback queue for closures whose settlement handoff returned
 # `pending_reconcile` (for example because the twin service was transiently
@@ -135,6 +142,7 @@ _PENDING_RECONCILE_QUEUE: "List[Dict[str, Any]]" = []
 _PENDING_RECONCILE_REDIS_LIST = "seedcore:agent_actions:closure_reconcile"
 
 _REQUEST_RECORDS_LOCK = Lock()
+_DELEGATION_VALIDATION_CACHE_LOCK = Lock()
 _REDIS_CLIENT: Any = None
 _REDIS_CLIENT_LOCK = asyncio.Lock()
 _REDIS_CLIENT_INITIALIZED = False
@@ -242,6 +250,16 @@ SETTLEMENT_HANDOFF_ENABLED = os.getenv(
 SETTLEMENT_RECONCILE_MAX_ATTEMPTS = int(
     os.getenv("SEEDCORE_AGENT_ACTION_SETTLEMENT_RECONCILE_MAX_ATTEMPTS", "5")
 )
+
+DELEGATION_VALIDATION_MODE = os.getenv(
+    "SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_MODE",
+    "shadow",
+).strip().lower()
+DELEGATION_VALIDATION_CACHE_TTL_SECONDS = max(
+    0,
+    int(os.getenv("SEEDCORE_AGENT_ACTION_DELEGATION_VALIDATION_CACHE_TTL_SECONDS", "30")),
+)
+_DELEGATION_VALIDATION_MODES = {"off", "shadow", "enforce"}
 
 
 # --- Gateway authentication (feature-flagged) ---
@@ -1017,6 +1035,171 @@ def _normalize_delegation_id(value: str | None) -> str | None:
     return normalized or None
 
 
+def _delegation_validation_mode() -> str:
+    mode = str(DELEGATION_VALIDATION_MODE or "shadow").strip().lower()
+    if mode not in _DELEGATION_VALIDATION_MODES:
+        return "shadow"
+    return mode
+
+
+def _cached_delegation_validation_record(delegation_id: str) -> tuple[bool, Any | None]:
+    if DELEGATION_VALIDATION_CACHE_TTL_SECONDS <= 0:
+        return False, None
+    now = _utcnow()
+    with _DELEGATION_VALIDATION_CACHE_LOCK:
+        entry = _DELEGATION_VALIDATION_CACHE_BY_ID.get(delegation_id)
+        if entry is None:
+            return False, None
+        if entry.expires_at <= now:
+            _DELEGATION_VALIDATION_CACHE_BY_ID.pop(delegation_id, None)
+            return False, None
+        return True, entry.delegation
+
+
+def _store_delegation_validation_record(delegation_id: str, delegation: Any | None) -> None:
+    if DELEGATION_VALIDATION_CACHE_TTL_SECONDS <= 0:
+        return
+    expires_at = _utcnow() + timedelta(seconds=DELEGATION_VALIDATION_CACHE_TTL_SECONDS)
+    with _DELEGATION_VALIDATION_CACHE_LOCK:
+        _DELEGATION_VALIDATION_CACHE_BY_ID[delegation_id] = _DelegationValidationCacheEntry(
+            delegation=delegation,
+            expires_at=expires_at,
+        )
+
+
+async def _get_delegation_for_validation(session: Any, delegation_id: str) -> Any | None:
+    found, cached = _cached_delegation_validation_record(delegation_id)
+    if found:
+        return cached
+    delegation = await get_delegation(session, delegation_id)
+    _store_delegation_validation_record(delegation_id, delegation)
+    return delegation
+
+
+def _handle_delegation_validation_failure(
+    *,
+    payload: AgentActionEvaluateRequest,
+    mode: str,
+    reason_code: str,
+    message: str,
+    status_code: int = 403,
+) -> None:
+    delegation_id = _normalize_delegation_id(payload.principal.delegation_ref)
+    logger.warning(
+        "agent_action_gateway.delegation_validation.failed",
+        extra={
+            "event": "agent_action_gateway.delegation_validation.failed",
+            "request_id": payload.request_id,
+            "mode": mode,
+            "reason_code": reason_code,
+            "agent_id": payload.principal.agent_id,
+            "owner_id": payload.principal.owner_id,
+            "delegation_id": delegation_id,
+        },
+    )
+    if mode == "enforce":
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error_code": reason_code,
+                "message": message,
+                "request_id": payload.request_id,
+                "owner_id": payload.principal.owner_id,
+                "delegation_ref": payload.principal.delegation_ref,
+                "agent_id": payload.principal.agent_id,
+            },
+        )
+
+
+async def _validate_gateway_delegation_claim(
+    *,
+    payload: AgentActionEvaluateRequest,
+    session: Any,
+) -> None:
+    mode = _delegation_validation_mode()
+    if mode == "off":
+        return
+
+    delegation_id = _normalize_delegation_id(payload.principal.delegation_ref)
+    if delegation_id is None:
+        _handle_delegation_validation_failure(
+            payload=payload,
+            mode=mode,
+            reason_code="delegation_ref_missing",
+            message="principal.delegation_ref is required for gateway delegation validation",
+            status_code=422,
+        )
+        return
+
+    try:
+        delegation = await _get_delegation_for_validation(session, delegation_id)
+    except Exception:
+        logger.warning(
+            "agent_action_gateway.delegation_validation.unavailable",
+            extra={
+                "event": "agent_action_gateway.delegation_validation.unavailable",
+                "request_id": payload.request_id,
+                "mode": mode,
+                "reason_code": "delegation_store_unavailable",
+                "agent_id": payload.principal.agent_id,
+                "owner_id": payload.principal.owner_id,
+                "delegation_id": delegation_id,
+            },
+            exc_info=True,
+        )
+        if mode == "enforce":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error_code": "delegation_store_unavailable",
+                    "message": "delegation validation store is unavailable",
+                    "request_id": payload.request_id,
+                    "delegation_ref": payload.principal.delegation_ref,
+                },
+            )
+        return
+
+    if delegation is None:
+        _handle_delegation_validation_failure(
+            payload=payload,
+            mode=mode,
+            reason_code="delegation_not_found",
+            message="declared delegation_ref was not found in persisted identity facts",
+        )
+        return
+
+    expected_owner_id = str(payload.principal.owner_id or "").strip()
+    actual_owner_id = str(getattr(delegation, "owner_id", "") or "").strip()
+    if actual_owner_id != expected_owner_id:
+        _handle_delegation_validation_failure(
+            payload=payload,
+            mode=mode,
+            reason_code="delegation_owner_mismatch",
+            message="declared delegation_ref does not belong to principal.owner_id",
+        )
+        return
+
+    expected_agent_id = str(payload.principal.agent_id or "").strip()
+    actual_assistant_id = str(getattr(delegation, "assistant_id", "") or "").strip()
+    if actual_assistant_id != expected_agent_id:
+        _handle_delegation_validation_failure(
+            payload=payload,
+            mode=mode,
+            reason_code="delegation_agent_mismatch",
+            message="declared delegation_ref does not authorize principal.agent_id",
+        )
+        return
+
+    status = str(getattr(delegation, "status", "") or "").strip().upper()
+    if status != "ACTIVE":
+        _handle_delegation_validation_failure(
+            payload=payload,
+            mode=mode,
+            reason_code="delegation_not_active",
+            message="declared delegation_ref is not active",
+        )
+
+
 async def _resolve_owner_twin_snapshot_for_payload(payload: AgentActionEvaluateRequest) -> dict[str, Any] | None:
     owner_id = str(payload.principal.owner_id or "").strip() or None
     delegation_id = _normalize_delegation_id(payload.principal.delegation_ref)
@@ -1025,14 +1208,17 @@ async def _resolve_owner_twin_snapshot_for_payload(payload: AgentActionEvaluateR
         return None
     try:
         async with session_factory() as session:
+            await _validate_gateway_delegation_claim(payload=payload, session=session)
             if owner_id is None and delegation_id is not None:
-                delegation = await get_delegation(session, delegation_id)
+                delegation = await _get_delegation_for_validation(session, delegation_id)
                 if delegation is not None:
                     owner_id = delegation.owner_id
             if owner_id is None:
                 return None
             owner_twin = await build_owner_twin_snapshot(session, owner_id)
             return owner_twin.model_dump(mode="json")
+    except HTTPException:
+        raise
     except Exception:
         logger.debug(
             "Failed to resolve owner twin snapshot for agent action request_id=%s",
@@ -3813,15 +3999,15 @@ async def execute_agent_action(
     claimed = False
     execute_request_hash = _canonical_gateway_payload_hash(payload, requested_no_execute=False)
     try:
+        preliminary_request_hash = _canonical_gateway_payload_hash(
+            payload,
+            requested_no_execute=False,
+        )
         owner_twin_snapshot = await _resolve_owner_twin_snapshot_for_payload(payload)
         relevant_twin_snapshot = (
             {"owner": owner_twin_snapshot}
             if isinstance(owner_twin_snapshot, dict)
             else None
-        )
-        preliminary_request_hash = _canonical_gateway_payload_hash(
-            payload,
-            requested_no_execute=False,
         )
         preliminary_hot_path_request = _map_to_hot_path_request(
             payload,
@@ -4203,6 +4389,8 @@ def _clear_agent_action_request_store_for_tests() -> None:
         _EXECUTE_RECORDS_BY_REQUEST_ID.clear()
         _EXECUTE_IDEMPOTENCY_ENTRIES_BY_KEY.clear()
         _PENDING_RECONCILE_QUEUE.clear()
+    with _DELEGATION_VALIDATION_CACHE_LOCK:
+        _DELEGATION_VALIDATION_CACHE_BY_ID.clear()
     _REDIS_CLIENT = None
     _REDIS_CLIENT_INITIALIZED = False
     _DIGITAL_TWIN_SERVICE = None
