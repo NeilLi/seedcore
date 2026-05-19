@@ -1,5 +1,8 @@
 # SeedCore Design Notes: Zero-Trust Execution Substrate
 
+Status: Current architectural anchor; refreshed 2026-05-19 against
+`docs/development/`.
+
 This document is the enduring design anchor for SeedCore. It is intentionally architectural rather than procedural: it explains what SeedCore is, what boundaries it must preserve, and what implementation invariants every serious runtime component must satisfy.
 
 SeedCore is not a chat interface with tools attached. It is a zero-trust execution substrate for custody-aware digital twins, where AI judgment, policy authority, physical execution, and replay evidence are deliberately separated.
@@ -19,9 +22,18 @@ This intent is not aspirational. It is the core runtime posture that architectur
 Current execution context matters:
 
 - the must-win workflow remains **Restricted Custody Transfer**
+- the active commercial scene is **Collectible Rare-Shoe Restricted Custody
+  Transfer**, which verticalizes the same RCT contract with authentication,
+  provenance, NFC/scan telemetry, and public/operator proof redaction
 - the first durable product surface is the **proof / verification surface**
+- the policy-assistant lane is advisory: it may draft, simulate, explain, and
+  recommend, but it is not a direct runtime policy authority
 - the PDP decision boundary is synchronous and stateless at decision time
 - stateful context, custody, approval, and replay systems sit around that boundary rather than inside it
+- current PKG/RCT posture is honest about its hardening level: signed-bundle
+  enforcement and strict replay / activation controls are available but remain
+  environment-gated, so product copy should not imply full freeze certainty
+  unless `requires_signed_bundle` and the strict RCT posture are enforced
 
 ## 2. The Four-Plane Model
 
@@ -76,6 +88,12 @@ This boundary is why the system is legally and operationally defensible:
 - replay artifacts prove what happened
 
 The same principle applies to ingress. If delegated intent arrives over Kafka or another transport, that transport is ingress only. It is not an alternate policy engine or a bypass around the authoritative `agent-actions` runtime.
+
+The same principle also applies to policy authoring. Consumer policy UX should
+be guided and simulation-backed rather than raw rule editing as the main path.
+Assistant-initiated policy changes must go through deterministic simulation /
+preflight and explicit human confirmation before any PKG activation path is
+allowed to affect runtime policy.
 
 ## 4. Governed Execution Substrate
 
@@ -200,6 +218,11 @@ If a component cannot meet these expectations, that should be treated as an expl
 
 This note is the architectural anchor, not the complete implementation manual.
 
+Do not remove this document while it is linked from `README.md`; it is the
+short architect-facing bridge between the root overview, ADRs, and the more
+volatile development memos. Update it when the system's authority boundary
+changes, but keep operational details in the development docs.
+
 Use it to answer:
 
 - what SeedCore is fundamentally trying to preserve
@@ -214,5 +237,9 @@ Use the linked documents for workflow-specific contracts, execution wedges, depl
 - [Zero-Trust Custody and Digital-Twin Runtime](architecture/overview/zero_trust_custody_digital_twin_runtime.md)
 - [Sequence Of Trust: Zero-Trust Physical Custody](architecture/overview/sequence_of_trust_zero_trust_physical_custody.md)
 - [SeedCore 2026 Execution Plan](development/seedcore_2026_execution_plan.md)
+- [Current Next Steps](development/current_next_steps.md)
+- [Rare-Shoe RCT Demo Spec](development/rare_shoes_collecting_transfer_demo_spec.md)
 - [Agent Action Gateway Contract](development/agent_action_gateway_contract.md)
+- [AI Policy Assistant Decision Memo](development/ai_policy_assistant_decision_memo.md)
+- [RCT Control Posture Environment Matrix](development/rct_control_posture_env_matrix.md)
 - [Owner / Creator External SDK and Plugin Surface](development/owner_creator_external_sdk_and_plugin_surface.md)
