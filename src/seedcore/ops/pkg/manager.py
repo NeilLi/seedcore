@@ -897,6 +897,7 @@ class PKGManager:
                 "request_schema_bundle": request_schema_payload,
                 "taxonomy_bundle": taxonomy_payload,
                 "activation_manifest": activation_payload,
+                "snapshot_manifest": manifest_payload,
             }
         except Exception as e:
             logger.warning(

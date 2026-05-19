@@ -124,6 +124,8 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
         get_active_contract_artifacts=lambda: {
             "request_schema_bundle": {"artifact_type": "request_schema_bundle"},
             "taxonomy_bundle": {"artifact_type": "taxonomy_bundle"},
+            "activation_manifest": {"shadow_only": True},
+            "snapshot_manifest": {"requires_signed_bundle": False},
         },
     )
     monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
@@ -140,6 +142,10 @@ async def test_pkg_status_includes_authz_graph_summary(monkeypatch):
     assert result["authz_graph"]["active_snapshot_version"] == "rules@7.0.0"
     assert result["authz_graph"]["snapshot_hash"] == "hash-7"
     assert result["active_contract_artifacts"]["request_schema_bundle"]["artifact_type"] == "request_schema_bundle"
+    assert result["runtime_posture"]["consumer_policy_ux"] == "guided_policy_workbench_not_raw_rule_authoring"
+    assert result["runtime_posture"]["requires_signed_bundle"] is False
+    assert result["runtime_posture"]["full_freeze_certainty"] is False
+    assert result["runtime_posture"]["assistant_can_activate_directly"] is False
 
 
 @pytest.mark.asyncio
@@ -156,6 +162,54 @@ async def test_pkg_activate_snapshot_calls_manager(monkeypatch):
     monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
 
     payload = pkg_router.PKGActivateSnapshotRequest(actor="ops", reason="test-activation")
+    result = await pkg_router.pkg_activate_snapshot("rules@8.0.0", payload)
+
+    assert result["success"] is True
+    manager.activate_snapshot_version.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pkg_activate_snapshot_blocks_assistant_without_simulation_and_confirmation(monkeypatch):
+    manager = SimpleNamespace(activate_snapshot_version=AsyncMock())
+    monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
+
+    payload = pkg_router.PKGActivateSnapshotRequest(
+        actor="policy-assistant",
+        reason="assistant recommendation",
+        assistant_initiated=True,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await pkg_router.pkg_activate_snapshot("rules@8.0.0", payload)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"] == "assistant_activation_requires_simulation_and_confirmation"
+    assert "simulation_report_ref" in exc.value.detail["missing"]
+    assert "human_confirmation_ref" in exc.value.detail["missing"]
+    manager.activate_snapshot_version.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pkg_activate_snapshot_allows_assistant_with_simulation_and_confirmation(monkeypatch):
+    manager = SimpleNamespace(
+        activate_snapshot_version=AsyncMock(
+            return_value={
+                "success": True,
+                "version": "rules@8.0.0",
+                "snapshot_id": 8,
+            }
+        )
+    )
+    monkeypatch.setattr(pkg_router, "get_global_pkg_manager", lambda: manager)
+
+    payload = pkg_router.PKGActivateSnapshotRequest(
+        actor="policy-assistant",
+        reason="human-reviewed simulation passed",
+        assistant_initiated=True,
+        confirm_activation=True,
+        simulation_report_ref="sim:rare-shoe-rct:123",
+        human_confirmation_ref="approval:ops:456",
+    )
     result = await pkg_router.pkg_activate_snapshot("rules@8.0.0", payload)
 
     assert result["success"] is True

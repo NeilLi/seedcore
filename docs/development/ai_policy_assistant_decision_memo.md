@@ -1,12 +1,44 @@
 # AI Policy Assistant Decision Memo
 
 Date: 2026-04-08  
-Status: Proposed decision
+Status: Proposed decision; baseline inspection passed on 2026-05-19
 
 Implementation follow-up:
 
 - [Policy Assistant MVP Spec (SeedCore API + Runtime)](/Users/ningli/project/seedcore/docs/development/policy_assistant_mvp_spec.md)
 - [Policy Assistant MVP Spec (pkg-simulator UI + Integration)](/Users/ningli/project/pkg-simulator/docs/POLICY_ASSISTANT_MVP_SPEC.md)
+
+## Implementation Status (2026-05-19)
+
+Inspection result: the current SeedCore baseline now follows the four
+policy-assistant guardrails in this memo:
+
+- raw rule authoring is not the main consumer policy UX; the documented product
+  lane remains a guided workbench / simulator
+- assistant-initiated PKG activation is blocked unless it carries a reviewed
+  simulation/preflight report, an explicit human confirmation ref, and
+  `confirm_activation=true`
+- the policy-assistant lane remains advisory / simulation / explanation, while
+  runtime authority remains in the deterministic PKG activation, Agent Action
+  Gateway, PDP, and verifier paths
+- `/api/v1/pkg/status` now reports `runtime_posture` so product surfaces can
+  distinguish current policy-checked behavior from full freeze certainty
+
+Current PKG posture is still intentionally reported as **not full freeze
+certainty**: generated RCT manifests still set `requires_signed_bundle=false`,
+and strict replay / activation hardening controls remain environment-gated.
+Until those controls are default-on, product copy should continue to describe
+PKG outcomes as simulated, preflighted, and policy-checked rather than
+absolutely frozen or irreversible.
+
+Relevant runtime anchors:
+
+- `src/seedcore/api/routers/policy_assistant_router.py` keeps scenario-pack
+  evaluation on the `no_execute=true` preflight path
+- `src/seedcore/api/routers/pkg_router.py` gates assistant-initiated activation
+  and exposes `runtime_posture`
+- `src/seedcore/ops/pkg/manager.py` persists active manifest posture, including
+  `requires_signed_bundle=false` for the current shadow-only RCT manifest
 
 ## Decision
 

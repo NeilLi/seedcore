@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import timezone
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -43,6 +44,25 @@ class PKGActivateSnapshotRequest(BaseModel):
     region: str = Field(default="global", description="Deployment region.")
     rollout_percent: int = Field(default=100, ge=0, le=100, description="Rollout percent for target lane.")
     publish_update: bool = Field(default=True, description="Publish update to the runtime hot-update channel.")
+    assistant_initiated: bool = Field(
+        default=False,
+        description=(
+            "Set true when an AI policy assistant is requesting activation. "
+            "Assistant-initiated activation requires simulation and human confirmation refs."
+        ),
+    )
+    confirm_activation: bool = Field(
+        default=False,
+        description="Explicit human confirmation for assistant-initiated activation.",
+    )
+    simulation_report_ref: Optional[str] = Field(
+        default=None,
+        description="Reference to the reviewed simulation/preflight report for assistant-initiated activation.",
+    )
+    human_confirmation_ref: Optional[str] = Field(
+        default=None,
+        description="Reference to the human approval/confirmation record for assistant-initiated activation.",
+    )
     edge_targets: List[str] = Field(
         default_factory=list,
         description="Optional additional edge rollout lanes (for example edge:door, edge:robot).",
@@ -190,6 +210,74 @@ def _parse_pkg_stream_message(raw: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+_ASSISTANT_ACTOR_MARKERS = ("assistant", "copilot", "llm", "policy-assistant", "policy_assistant")
+_STRICT_RCT_POSTURE_FLAGS = (
+    "SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH",
+    "SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE",
+    "SEEDCORE_PKG_RCT_ACTIVATION_PREFLIGHT",
+    "SEEDCORE_PKG_RCT_PUBLISH_VALIDATE",
+)
+
+
+def _env_truthy(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _activation_is_assistant_initiated(payload: PKGActivateSnapshotRequest) -> bool:
+    actor = str(payload.actor or "").strip().lower()
+    return bool(payload.assistant_initiated) or any(marker in actor for marker in _ASSISTANT_ACTOR_MARKERS)
+
+
+def _activation_guard_missing_fields(payload: PKGActivateSnapshotRequest) -> List[str]:
+    if not _activation_is_assistant_initiated(payload):
+        return []
+    missing: List[str] = []
+    if not payload.confirm_activation:
+        missing.append("confirm_activation")
+    if not str(payload.simulation_report_ref or "").strip():
+        missing.append("simulation_report_ref")
+    if not str(payload.human_confirmation_ref or "").strip():
+        missing.append("human_confirmation_ref")
+    return missing
+
+
+def _build_runtime_posture(active_contract_artifacts: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot_manifest = active_contract_artifacts.get("snapshot_manifest")
+    if not isinstance(snapshot_manifest, dict):
+        snapshot_manifest = {}
+    activation_manifest = active_contract_artifacts.get("activation_manifest")
+    if not isinstance(activation_manifest, dict):
+        activation_manifest = {}
+
+    strict_flags = {name: _env_truthy(name) for name in _STRICT_RCT_POSTURE_FLAGS}
+    requires_signed_bundle = bool(snapshot_manifest.get("requires_signed_bundle"))
+    strict_replay_enabled = bool(strict_flags["SEEDCORE_RCT_REPLAY_STRICT_TRIPLE_HASH"])
+    full_freeze_ready = requires_signed_bundle and all(strict_flags.values())
+
+    return {
+        "policy_authoring_lane": "advisory_simulation_preflight",
+        "runtime_authority_lane": "pkg_snapshot_activation",
+        "assistant_can_activate_directly": False,
+        "assistant_activation_requirements": [
+            "simulation_report_ref",
+            "human_confirmation_ref",
+            "confirm_activation",
+        ],
+        "consumer_policy_ux": "guided_policy_workbench_not_raw_rule_authoring",
+        "requires_signed_bundle": requires_signed_bundle,
+        "strict_replay_enabled": strict_replay_enabled,
+        "strict_rct_posture_flags": strict_flags,
+        "shadow_only": bool(activation_manifest.get("shadow_only")),
+        "full_freeze_certainty": full_freeze_ready,
+        "claim_guidance": (
+            "full_freeze_certainty"
+            if full_freeze_ready
+            else "describe current PKG behavior as simulated/preflighted/policy-checked; "
+            "do not claim full freeze certainty until signed bundles and strict replay controls are enforced"
+        ),
+    }
+
+
 @router.post("/pkg/reload", response_model=Dict[str, Any])
 async def pkg_reload() -> Dict[str, Any]:
     """
@@ -228,6 +316,20 @@ async def pkg_activate_snapshot(
     """
     Activate a snapshot and broadcast hot-update events fleet-wide.
     """
+    missing_guard_fields = _activation_guard_missing_fields(payload)
+    if missing_guard_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "assistant_activation_requires_simulation_and_confirmation",
+                "message": (
+                    "Assistant-initiated PKG activation must reference a reviewed "
+                    "simulation/preflight report and an explicit human confirmation."
+                ),
+                "missing": missing_guard_fields,
+            },
+        )
+
     pkg_mgr = get_global_pkg_manager()
     if not pkg_mgr:
         raise HTTPException(
@@ -336,6 +438,7 @@ async def pkg_status() -> Dict[str, Any]:
             "authz_graph_ready": False,
             "error": "PKG manager not initialized",
             "suggestion": "PKG manager needs to be initialized. Check application startup logs.",
+            "runtime_posture": _build_runtime_posture({}),
         }
     
     evaluator = pkg_mgr.get_active_evaluator()
@@ -384,6 +487,11 @@ async def pkg_status() -> Dict[str, Any]:
             "error": last_error or "No active evaluator available",
             "message": error_message,
             "suggestion": suggestion,
+            "runtime_posture": _build_runtime_posture(
+                pkg_mgr.get_active_contract_artifacts()
+                if hasattr(pkg_mgr, "get_active_contract_artifacts")
+                else {}
+            ),
         }
     
     # PKG is ready
@@ -415,6 +523,12 @@ async def pkg_status() -> Dict[str, Any]:
     except Exception as e:
         logger.debug(f"Could not fetch artifact info: {e}")
     
+    active_contract_artifacts = (
+        pkg_mgr.get_active_contract_artifacts()
+        if hasattr(pkg_mgr, "get_active_contract_artifacts")
+        else {}
+    )
+
     return {
         "available": True,
         "manager_exists": True,
@@ -430,11 +544,8 @@ async def pkg_status() -> Dict[str, Any]:
         "cortex_enabled": metadata.get("cortex_enabled", False),
         "authz_graph": metadata.get("authz_graph", {}),
         "artifact_info": artifact_info,  # Diagnostic info about artifact
-        "active_contract_artifacts": (
-            pkg_mgr.get_active_contract_artifacts()
-            if hasattr(pkg_mgr, "get_active_contract_artifacts")
-            else {}
-        ),
+        "active_contract_artifacts": active_contract_artifacts,
+        "runtime_posture": _build_runtime_posture(active_contract_artifacts),
     }
 
 
