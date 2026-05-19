@@ -17,7 +17,7 @@ product-relevant.
 
 The next commercial-grade demo scene should be **Collectible Rare-Shoe
 Restricted Custody Transfer**, documented in
-[rare_shoes_collecting_transfer_demo_spec.md](/Users/ningli/project/seedcore/docs/development/rare_shoes_collecting_transfer_demo_spec.md).
+[rare_shoes_collecting_transfer_demo_spec.md](rare_shoes_collecting_transfer_demo_spec.md).
 
 This does not change the product center. It makes the existing commerce RCT
 wedge more legible by binding a high-value physical collectible to:
@@ -88,7 +88,7 @@ Immediate decision:
 
 Reference:
 
-- [Kube Topology Validation Q2 Signoff](/Users/ningli/project/seedcore/docs/development/kube_topology_validation_q2_signoff.md)
+- [Kube Topology Validation Q2 Signoff](kube_topology_validation_q2_signoff.md)
 
 ## Status Update (2026-04-07)
 
@@ -687,7 +687,7 @@ Recommended dependency rule:
 ### Explicit Sidecar
 
 The VLA track in
-[vla_2026_optimizations.md](/Users/ningli/project/seedcore/docs/development/vla_2026_optimizations.md)
+[vla_2026_optimizations.md](vla_2026_optimizations.md)
 remains sidecar for this phase.
 
 It may continue in parallel as research or future-performance work, but it is
@@ -973,7 +973,7 @@ Current closure checkpoint for strict TPM attestation path:
   (`verify_restricted_transition_receipt_strict_attestation_with_real_fixture`)
   before declaring Phase A mathematically closed
 - operationalize fleet rollout using the TPM checklist and drills in
-  [tpm_fleet_rollout_runbook.md](/Users/ningli/project/seedcore/docs/development/tpm_fleet_rollout_runbook.md)
+  [tpm_fleet_rollout_runbook.md](tpm_fleet_rollout_runbook.md)
 
 ### Phase B: Multi-Party Governance
 
@@ -1088,15 +1088,15 @@ offline and what still genuinely demands a live runtime proof, now lives in
 [restricted_custody_transfer_demo_signoff_report.md](archive/historical/restricted_custody_transfer_demo_signoff_report.md).
 
 The recommended multi-language boundary plan for that work now lives in
-[language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/language_evolution_map.md).
+[language_evolution_map.md](language_evolution_map.md).
 
 The concrete service/CLI-first Rust kernel proposal for that same track now
 lives in
-[rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
+[rust_workspace_proposal.md](rust_workspace_proposal.md).
 
 For post-2026 high-vertical staging (SeedCore trust boundary + IGX/Jetson
 physical execution boundary), see:
-[seedcore_2027_high_vertical_direction.md](/Users/ningli/project/seedcore/docs/development/seedcore_2027_high_vertical_direction.md).
+[seedcore_2027_high_vertical_direction.md](seedcore_2027_high_vertical_direction.md).
 
 ## Red-Team Program
 
