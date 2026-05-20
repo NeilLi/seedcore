@@ -16,6 +16,7 @@ from seedcore.hal.drivers.robot_sim_driver import RobotSimExecutionDriver
 from seedcore.hal.robot_sim.actuator.execution_registry import ExecutionRegistry
 from seedcore.hal.service import main as hal_main
 from seedcore.ops.evidence.builder import attach_evidence_bundle
+from seedcore.hal.custody import execution_token_revocation as revocation
 
 
 def _token_dict(
@@ -312,6 +313,7 @@ async def test_robot_sim_endpoint_rejects_revoked_execution_token(monkeypatch) -
             return None
 
     monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(revocation, "get_redis_client", lambda: FakeRedis())
 
     driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
     assert driver.connect() is True
@@ -345,6 +347,7 @@ async def test_robot_sim_endpoint_rejects_execution_token_after_estop_cutoff(mon
             return None
 
     monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(revocation, "get_redis_client", lambda: FakeRedis())
 
     driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
     assert driver.connect() is True
@@ -378,6 +381,7 @@ async def test_admin_revoke_execution_token_stores_crl_entry(monkeypatch) -> Non
             return True
 
     monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(revocation, "get_redis_client", lambda: FakeRedis())
 
     response = await hal_main.revoke_execution_token(
         hal_main.RevokeExecutionTokenRequest(token_id="tok-admin-1", reason="operator revoke")
@@ -386,7 +390,7 @@ async def test_admin_revoke_execution_token_stores_crl_entry(monkeypatch) -> Non
     assert response["status"] == "revoked"
     assert response["token_id"] == "tok-admin-1"
     assert captured["key"] == f"{hal_main.EXECUTION_TOKEN_REVOCATION_PREFIX}tok-admin-1"
-    assert captured["ttl_seconds"] == hal_main.DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS
+    assert captured["ttl_seconds"] == revocation.DEFAULT_EXECUTION_TOKEN_CRL_TTL_SECONDS
     assert captured["value"] == "1"
 
 
@@ -401,6 +405,7 @@ async def test_admin_estop_sets_cutoff_and_stops_driver(monkeypatch) -> None:
             return True
 
     monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(revocation, "get_redis_client", lambda: FakeRedis())
 
     driver = RobotSimExecutionDriver(config={"runtime": "in_memory"})
     assert driver.connect() is True
@@ -429,6 +434,7 @@ async def test_admin_clear_estop_removes_cutoff(monkeypatch) -> None:
             return 1
 
     monkeypatch.setattr(hal_main, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(revocation, "get_redis_client", lambda: FakeRedis())
 
     response = await hal_main.clear_emergency_stop_execution_tokens()
 
