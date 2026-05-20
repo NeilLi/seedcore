@@ -54,6 +54,8 @@ That means the active docs should be read through one question:
 - External contract and MCP evaluate surface:
   [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md),
   [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md)
+- AP2 / payment-protocol boundary and alignment memo:
+  [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
 - Strategic delegation thesis and frontier alignment:
   [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - Execution-token lifecycle and capability hardening:
@@ -76,29 +78,32 @@ Start here for the active spine:
    collectible rare-shoe transfer as a commercial vertical scene on the same
    RCT contract: authentication registration first, bounded custody authority
    second, replayable proof last.
-6. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
+6. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
+   boundary memo for using AP2 as the upstream agent-payment protocol while
+   keeping SeedCore focused on custody, evidence, and replay-valid closure.
+7. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
    technical memo for turning customer business rules into executable,
    testable Policy Knowledge Graphs that compile into PDP rules, authority
    constraints, evidence requirements, reason codes, and replay fixtures.
-7. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
+8. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
    for declaring governed action boundaries without making developers manually
    wire PDP calls, execution tokens, evidence bundles, verifier outcomes, and
    replay proof chains.
-8. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+9. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-9. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+10. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-10. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+11. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-11. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+12. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
@@ -217,6 +222,7 @@ Primary planning docs:
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+- [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
 - [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
 - [`edge_telemetry_evidence_closure_draft.md`](edge_telemetry_evidence_closure_draft.md)
 - [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
