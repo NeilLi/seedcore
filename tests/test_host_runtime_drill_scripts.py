@@ -121,3 +121,26 @@ def test_verify_kafka_ingress_non_bypass_enforces_agent_actions_path() -> None:
     assert "/api/v1/intents/submit-signed" in script
     assert "process_delegated_intent_event" in script
     assert "SEEDCORE_KAFKA_INTENT_INGRESS_NO_EXECUTE" in script
+
+
+def test_local_stop_runtime_covers_seedcore_processes_and_shared_services_are_opt_in() -> None:
+    script = (ROOT / "deploy" / "local" / "stop-local-runtime.sh").read_text()
+    readme = (ROOT / "deploy" / "local" / "README.md").read_text()
+
+    assert "run-ray-head.sh\" stop" in script
+    assert "ray stop --force" in script
+    assert "seedcore.main:app" in script
+    assert "seedcore.gateway_service.main:app" in script
+    assert "seedcore.hal.service.main" in script
+    assert "run-serve-app.py" in script
+    assert "bootstrap_entry.py" in script
+    assert "@seedcore/verification-api" in script
+    assert "@seedcore/proof-surface" in script
+    assert "@seedcore/operator-console" in script
+    assert "docker-compose.kafka.yml" in script
+    assert "seedcore-neo4j" in script
+    assert "WITH_SHARED_SERVICES=false" in script
+    assert "--with-shared-services" in script
+
+    assert "./deploy/local/stop-local-runtime.sh" in readme
+    assert "Homebrew Postgres/Redis are left alone by default" in readme

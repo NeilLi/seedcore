@@ -237,10 +237,32 @@ curl http://127.0.0.1:8000/-/routes
 
 ### Shutdown
 
-Stop the local runtime:
+Stop all SeedCore-owned local runtime:
 
 ```bash
-bash deploy/local/run-ray-head.sh stop
+./deploy/local/stop-local-runtime.sh
+```
+
+This stops the host API/HAL/Gateway processes, Ray/Serve, local drill APIs,
+TypeScript verification/proof/operator services, and SeedCore-named Kafka/Neo4j
+containers. Homebrew Postgres/Redis are left alone by default because they are
+often shared developer services.
+
+To preview what would be stopped:
+
+```bash
+./deploy/local/stop-local-runtime.sh --dry-run
+```
+
+To also stop shared Homebrew backing services:
+
+```bash
+./deploy/local/stop-local-runtime.sh --with-shared-services
+```
+
+Manual equivalent for only the backing services:
+
+```bash
 brew services stop postgresql@17
 brew services stop redis
 docker stop seedcore-neo4j
