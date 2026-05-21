@@ -231,14 +231,12 @@ tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
 Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Landed and targeted-test validated: Gated Action DX + Agent Self-Regulation baseline** over one RCT path. The SDK now supports shadow and guarded enforce modes; MCP `check_policy` exposes explicit-authority preflight; and the schema exporter creates path-qualified gated-action manifests for PDP/PKG scaffolding.
-2. **Next highest-priority implementation:** turn the shipped self-regulation
-   surface into a narrow end-to-end assistant drill: generate a manifest from a
-   real `@gated_action`, run MCP `check_policy` with explicit authority, execute
-   the SDK shadow/enforce tests, and capture the resulting replay/evidence refs
-   as reviewable gate evidence. Assistants (like Antigravity and Codex) can
-   check policy admissibility without minting authority or bypassing
-   PDP/verifier closure.
+1. **Landed and targeted-test validated: Gated Action DX + Agent Self-Regulation drill** over one RCT path. The SDK now supports shadow and guarded enforce modes; MCP `check_policy` exposes explicit-authority preflight; the schema exporter creates path-qualified gated-action manifests; and `scripts/host/verify_agent_self_regulation_drill.sh` captures reviewable replay/evidence refs without live mutation.
+2. **Next highest-priority implementation:** promote the self-regulation drill
+   into the standard host/CI acceptance bundle and add deny/quarantine variants
+   so agents prove they can stop before execution, not only confirm a happy
+   path. Assistants (like Antigravity and Codex) can check policy admissibility
+   without minting authority or bypassing PDP/verifier closure.
 3. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per

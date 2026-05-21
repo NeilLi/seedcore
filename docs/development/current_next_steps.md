@@ -13,14 +13,14 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
-## Status Update (2026-05-21, Bounded Autonomy Acceleration & DX MVP Landed)
+## Status Update (2026-05-21, Bounded Autonomy Acceleration & Self-Regulation Drill Landed)
 
-SeedCore has landed and targeted-test validated the **Gated Action DX MVP** in
-the new SDK namespace (`src/seedcore/sdk/`), preparing SeedCore for autonomous
-coding and action agents (like Antigravity and Codex) that can inspect,
-simulate, propose, and repair system behaviors. The strategic shift is to make
-SeedCore **autonomy-ready** and support **Agent Self-Regulation** without
-letting autonomy become unchecked authority.
+SeedCore has landed and targeted-test validated the **Gated Action DX MVP** and
+the first **Agent Self-Regulation drill**. The SDK namespace
+(`src/seedcore/sdk/`) now gives autonomous coding and action agents (like
+Antigravity and Codex) a bounded way to inspect, simulate, propose, and repair
+system behaviors. The strategic shift is to make SeedCore **autonomy-ready**
+without letting autonomy become unchecked authority.
 
 The core planning rule for agentic interactions is now:
 
@@ -31,17 +31,21 @@ The PDP, verifier, and operator promotion gates still decide what is allowed.
 
 This creates an accelerated, higher-priority overlay across the existing RCT plan:
 
-1. **Gated Action DX landed.** The `@gated_action(...)` decorator,
-   thread-local evaluator injection context manager (`using_evaluator`), and
-   `GovernedResult` are implemented at `src/seedcore/sdk/gated_action.py` for
-   one preflight-only RCT adapter path. Targeted tests validate strict
-   fail-closed security, SDK-side telemetry validation, and zero execution of
-   wrapped business logic.
+1. **Gated Action DX + self-regulation drill landed.** The
+   `@gated_action(...)` decorator, thread-local evaluator/executor injection,
+   and `GovernedResult` are implemented at
+   `src/seedcore/sdk/gated_action.py` for one RCT path with shadow and guarded
+   enforce modes. Enforce mode requires an allow decision with an
+   `ExecutionToken` and configured executor before business logic can run. The
+   new drill harness at `src/seedcore/drills/agent_self_regulation.py` and
+   `scripts/host/verify_agent_self_regulation_drill.sh` generates a real gated
+   action manifest, runs MCP `seedcore.agent_action.check_policy` with explicit
+   authority, and captures reviewable replay/evidence refs.
 2. **Bounded autonomy interface.** Treat MCP `seedcore.agent_action.evaluate`
-   and the gateway SDK surface as the primary **Agent Self-Regulation** lane.
-   Agents can ask SeedCore whether a proposed action is admissible, but they
-   cannot bypass PDP evaluation, and the SDK decorator prevents silent
-   permissive execution.
+   / `seedcore.agent_action.check_policy` and the gateway SDK surface as the
+   primary **Agent Self-Regulation** lane. Agents can ask SeedCore whether a
+   proposed action is admissible, but they cannot bypass PDP evaluation, and
+   the SDK decorator prevents silent permissive execution.
 3. **Governance-aware learning earlier.** Pull the Scenario Generator and
    Governance Reward Scorer forward as simulation and training infrastructure
    for coding/action agents. They remain shadow/simulation only: they consume
@@ -58,11 +62,13 @@ This creates an accelerated, higher-priority overlay across the existing RCT pla
 
 Immediate priority order:
 
-1. **Landed and targeted-test verified:** Gated Action DX MVP over one RCT path
-   (`src/seedcore/sdk/`);
-2. **Active next step:** Expose the evaluate/preflight path as the safe agent
-   self-regulation lane via Gemini MCP tool bundles / Agent Self-Regulation
-   (Window D & Window F pulled forward);
+1. **Landed and targeted-test verified:** Gated Action DX + Agent
+   Self-Regulation drill over one RCT path (`src/seedcore/sdk/`,
+   `src/seedcore/drills/agent_self_regulation.py`,
+   `scripts/host/verify_agent_self_regulation_drill.sh`);
+2. **Active next step:** promote the self-regulation drill into the standard
+   host/CI acceptance bundle and add deny/quarantine variants so agents prove
+   they can stop before execution, not only confirm a happy path;
 3. Expose Scenario Generator + Governance Reward Scorer scaffolds for RCT drills in shadow/simulation only;
 4. Define the AI-led self-healing milestone ladder and first degraded-edge target;
 5. Continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion.

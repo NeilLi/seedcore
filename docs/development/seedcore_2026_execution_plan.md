@@ -44,13 +44,16 @@ evidence closure, and verifier acceptance.
 This pulls four workstreams forward:
 
 1. **Bounded autonomy interfaces.** Accelerate the Q3 agent boundary around MCP and `seedcore.agent_action.evaluate`, integrating them directly with the public SDK for **Agent Self-Regulation**. Assistants can run preflight simulation checks ("would this action be admissible?") prior to execution.
-2. **Gated Action DX (MVP landed).** The `@gated_action` decorator,
-   thread-local evaluator injection, and `GovernedResult` are implemented at
-   `src/seedcore/sdk/gated_action.py` for one preflight-only RCT adapter path.
-   Targeted tests validate strict fail-closed behavior, missing telemetry
-   evidence handling (`origin_scan`, `delivery_scan`, `signed_edge_telemetry`),
-   and zero execution of wrapped business functions in MVP preflight/shadow
-   mode.
+2. **Gated Action DX + self-regulation drill (MVP landed).** The
+   `@gated_action` decorator, thread-local evaluator/executor injection, and
+   `GovernedResult` are implemented at `src/seedcore/sdk/gated_action.py` for
+   one RCT path with shadow and guarded enforce modes. Enforce mode requires an
+   allow decision with an `ExecutionToken` and configured executor before
+   business logic can run. The first drill harness
+   (`src/seedcore/drills/agent_self_regulation.py`,
+   `scripts/host/verify_agent_self_regulation_drill.sh`) generates a manifest,
+   runs explicit-authority MCP `check_policy`, and captures reviewable
+   replay/evidence refs without live mutation.
 3. **Governance-aware learning (Elevated).** Elevate the Scenario Generator and Governance Reward Scorer as active simulation infrastructure for coding/action agents. They produce probes, typed verdicts, and training samples. They do not authorize execution, override the PDP, or reinterpret `RESULT_VERIFIER`, but actively drive reinforcement learning and self-correction loops.
 4. **AI-led self-healing.** Add a staged operational-autonomy ladder:
    diagnose -> propose patch -> run degraded-edge gates -> open PR or patch
@@ -398,11 +401,17 @@ Status:
 
 - **Implemented and targeted-test validated:** The SDK surface
   (`src/seedcore/sdk/`) provides the `@gated_action` decorator, thread-local
-  evaluator injection (`using_evaluator`), and `GovernedResult` for one
-  preflight-only RCT adapter path. It enforces preflight-only execution,
-  SDK-side telemetry evidence checks (supporting `origin_scan`, `delivery_scan`,
-  and `signed_edge_telemetry`), and strict fail-closed exceptions
-  (`GatedActionEvaluatorNotConfigured`).
+  evaluator/executor injection (`using_evaluator`), and `GovernedResult` for
+  one RCT path with shadow and guarded enforce modes. It enforces no-execute
+  shadow behavior, SDK-side telemetry evidence checks (supporting
+  `origin_scan`, `delivery_scan`, and `signed_edge_telemetry`), strict
+  fail-closed exceptions (`GatedActionEvaluatorNotConfigured`), and
+  token/executor-gated enforce behavior.
+- **Agent Self-Regulation drill landed:** `scripts/host/verify_agent_self_regulation_drill.sh`
+  runs a local no-live-mutation drill that exports real `@gated_action`
+  declarations, calls MCP `seedcore.agent_action.check_policy` with explicit
+  authority, and captures reviewable replay/evidence refs for SDK shadow and
+  enforce flows.
 - **Validated with pytest:** Targeted coverage tests preflight zero-execution,
   telemetry validation quarantine, evaluator isolation, HTTP-style evaluator
   responses, and fail-closed evaluator errors.
