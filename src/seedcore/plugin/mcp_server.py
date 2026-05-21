@@ -1887,6 +1887,121 @@ if FastMCP is not None:
             no_execute=no_execute,
         )
 
+    @mcp.tool(name="seedcore.agent_action.check_policy")
+    async def seedcore_agent_action_check_policy(
+        ctx: AppContext,
+        action_name: str,
+        asset_ref: str,
+        declared_value_usd: float | None = None,
+        telemetry_evidence: list[str] | None = None,
+        buyer_did: str | None = None,
+        delegation_id: str | None = None,
+        session_token: str | None = None,
+        actor_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Simplified Gemini MCP tool to check policy admissibility (preflight).
+
+        Provides predictive policy outcomes (allow, deny, quarantine, escalate)
+        without requiring assistants to construct complex gateway v1 schema payloads.
+        """
+        import uuid
+        import datetime
+
+        normalized_action = str(action_name or "").strip().upper()
+        if normalized_action != "TRANSFER_CUSTODY":
+            raise ValueError("check_policy currently supports action_name='TRANSFER_CUSTODY' only")
+
+        normalized_asset_ref = str(asset_ref or "").strip()
+        if not normalized_asset_ref:
+            raise ValueError("asset_ref is required")
+        if telemetry_evidence is None:
+            raise ValueError("telemetry_evidence is required")
+        if not str(buyer_did or "").strip():
+            raise ValueError("buyer_did is required")
+        if not str(delegation_id or "").strip():
+            raise ValueError("delegation_id is required")
+        normalized_session_token = str(session_token or "").strip() or None
+        normalized_actor_token = str(actor_token or "").strip() or None
+        if not normalized_session_token and not normalized_actor_token:
+            raise ValueError("session_token or actor_token is required")
+
+        req_id = f"req-check-policy-{uuid.uuid4()}"
+        idem_key = f"idem-check-policy-{uuid.uuid4()}"
+        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        valid_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)).isoformat()
+
+        adapter_input = {
+            "request_id": req_id,
+            "idempotency_key": idem_key,
+            "requested_at": now_str,
+            "policy_snapshot_ref": "snapshot:pkg-prod-2026-03-31",
+            "principal": {
+                "agent_id": "agent:custody_runtime_01",
+                "role_profile": "TRANSFER_COORDINATOR",
+                "session_token": normalized_session_token,
+                "actor_token": normalized_actor_token,
+                "owner_id": str(buyer_did).strip(),
+                "delegation_ref": str(delegation_id).strip(),
+                "organization_ref": "org:warehouse-north",
+                "hardware_fingerprint": {
+                    "fingerprint_id": "fp:jetson-orin-01",
+                    "node_id": "node:jetson-orin-01",
+                    "public_key_fingerprint": "sha256:fingerprint-key",
+                    "attestation_type": "tpm",
+                    "key_ref": "tpm2:jetson-orin-01-ak",
+                },
+            },
+            "workflow_valid_until": valid_until,
+            "asset_base": {
+                "asset_id": normalized_asset_ref,
+                "lot_id": (
+                    normalized_asset_ref.split(":")[-1]
+                    if ":" in normalized_asset_ref
+                    else normalized_asset_ref
+                ),
+                "from_custodian_ref": "principal:facility_mgr_001",
+                "to_custodian_ref": "principal:outbound_mgr_002",
+                "from_zone": "vault_a",
+                "to_zone": "handoff_bay_3",
+                "provenance_hash": "sha256:asset-provenance",
+            },
+            "approval_envelope_id": "approval-transfer-001",
+            "approval_expected_envelope_version": "23",
+            "authority_scope_base": {
+                "scope_id": "scope:rct-2026-0001",
+                "asset_ref": normalized_asset_ref,
+                "expected_from_zone": "vault_a",
+                "expected_to_zone": "handoff_bay_3",
+                "expected_coordinate_ref": "gazebo://warehouse/shelf/A3",
+            },
+            "telemetry": {
+                "observed_at": now_str,
+                "freshness_seconds": 2,
+                "max_allowed_age_seconds": 300,
+                "current_zone": "vault_a",
+                "current_coordinate_ref": "gazebo://warehouse/shelf/A3",
+                "evidence_refs": telemetry_evidence,
+            },
+            "security_contract": {
+                "hash": "sha256:contract-hash",
+                "version": "rules@8.0.0",
+            },
+            "shopify_sandbox_transaction": {
+                "product_ref": "shopify:gid://shopify/Product/1234567890",
+                "order_ref": "shopify:gid://shopify/Order/1002003004",
+                "quote_ref": "shopify:quote:tea-set-2026-04-01-0001",
+                "declared_value_usd": declared_value_usd if declared_value_usd is not None else 1500.0,
+                "economic_hash": "sha256:shopify-order",
+            },
+        }
+
+        return await handle_agent_action_evaluate(
+            _runtime(ctx),
+            adapter_input=adapter_input,
+            debug=True,
+            no_execute=True,
+        )
+
 
     @mcp.tool(name="seedcore.agent_action.evaluate")
     async def seedcore_agent_action_evaluate(

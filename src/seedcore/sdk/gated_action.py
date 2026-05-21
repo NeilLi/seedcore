@@ -14,9 +14,14 @@ _evaluator: Optional[Callable[[Dict[str, Any]], Any]] = None
 _evaluator_lock = threading.Lock()
 _evaluator_local = threading.local()
 
+_executor: Optional[Callable[[Dict[str, Any]], Any]] = None
+_executor_lock = threading.Lock()
+_executor_local = threading.local()
+
 SUPPORTED_POLICY = "strict_custody"
 SUPPORTED_EVIDENCE_LABELS = frozenset({"origin_scan", "delivery_scan", "signed_edge_telemetry"})
 SUPPORTED_FAIL_MODES = frozenset({"deny", "quarantine", "escalate"})
+SUPPORTED_MODES = frozenset({"shadow", "enforce"})
 
 
 class GatedActionEvaluatorNotConfigured(Exception):
@@ -30,6 +35,7 @@ class GatedActionEvaluatorNotConfigured(Exception):
 
 class GatedActionEvaluationError(Exception):
     """Raised when the configured evaluator fails or returns an invalid response."""
+    pass
 
 
 @dataclass
@@ -47,6 +53,7 @@ class GovernedResult:
     execution_token_id: Optional[str] = None
     evidence_bundle_id: Optional[str] = None
     verification_status: str = "incomplete"
+    execution_result: Any = None
 
 
 def set_evaluator(eval_fn: Callable[[Dict[str, Any]], Any]) -> None:
@@ -60,27 +67,45 @@ def set_evaluator(eval_fn: Callable[[Dict[str, Any]], Any]) -> None:
         _evaluator = eval_fn
 
 
+def set_executor(exec_fn: Callable[[Dict[str, Any]], Any]) -> None:
+    """Register the global gateway executor function.
+
+    Example:
+        set_executor(lambda payload: client.post("/api/v1/agent-actions/execute", json=payload))
+    """
+    global _executor
+    with _executor_lock:
+        _executor = exec_fn
+
+
 def reset_evaluator() -> None:
-    """Reset and clear any configured evaluator.
+    """Reset and clear any configured evaluator and executor.
 
     Ensures clean environment state and fail-closed posture between test executions.
     """
-    global _evaluator
+    global _evaluator, _executor
     with _evaluator_lock:
         _evaluator = None
+    with _executor_lock:
+        _executor = None
     if hasattr(_evaluator_local, "evaluator"):
         delattr(_evaluator_local, "evaluator")
+    if hasattr(_executor_local, "executor"):
+        delattr(_executor_local, "executor")
 
 
 @contextlib.contextmanager
-def using_evaluator(eval_fn: Callable[[Dict[str, Any]], Any]):
-    """Thread-local context manager to inject an evaluator function temporarily.
+def using_evaluator(eval_fn: Callable[[Dict[str, Any]], Any], exec_fn: Optional[Callable[[Dict[str, Any]], Any]] = None):
+    """Thread-local context manager to inject an evaluator and optional executor function temporarily.
 
     Guarantees clean test isolation and prevents state leakage between unit tests.
     """
     sentinel = object()
     old_evaluator = getattr(_evaluator_local, "evaluator", sentinel)
+    old_executor = getattr(_executor_local, "executor", sentinel)
     _evaluator_local.evaluator = eval_fn
+    if exec_fn is not None:
+        _executor_local.executor = exec_fn
     try:
         yield
     finally:
@@ -90,6 +115,12 @@ def using_evaluator(eval_fn: Callable[[Dict[str, Any]], Any]):
         else:
             _evaluator_local.evaluator = old_evaluator
 
+        if old_executor is sentinel:
+            if hasattr(_executor_local, "executor"):
+                delattr(_executor_local, "executor")
+        else:
+            _executor_local.executor = old_executor
+
 
 def _configured_evaluator() -> Optional[Callable[[Dict[str, Any]], Any]]:
     local_evaluator = getattr(_evaluator_local, "evaluator", None)
@@ -97,6 +128,14 @@ def _configured_evaluator() -> Optional[Callable[[Dict[str, Any]], Any]]:
         return local_evaluator
     with _evaluator_lock:
         return _evaluator
+
+
+def _configured_executor() -> Optional[Callable[[Dict[str, Any]], Any]]:
+    local_executor = getattr(_executor_local, "executor", None)
+    if local_executor is not None:
+        return local_executor
+    with _executor_lock:
+        return _executor
 
 
 def _normalize_evaluator_response(raw_response: Any) -> Dict[str, Any]:
@@ -124,6 +163,7 @@ def gated_action(
     policy: str = "strict_custody",
     evidence_required: Optional[List[str]] = None,
     fail_mode: str = "quarantine",
+    mode: str = "shadow",
 ):
     """Lightweight developer-experience (DX) decorator to protect actions with SeedCore.
 
@@ -135,11 +175,14 @@ def gated_action(
         - policy="strict_custody"
         - evidence_required=["origin_scan", "delivery_scan", "signed_edge_telemetry"]
         - fail_modes: "deny", "quarantine", "escalate"
+        - modes: "shadow", "enforce"
     """
     if policy != SUPPORTED_POLICY:
         raise ValueError(f"Unsupported gated action policy: {policy}")
     if fail_mode not in SUPPORTED_FAIL_MODES:
         raise ValueError(f"Unsupported gated action fail_mode: {fail_mode}")
+    if mode not in SUPPORTED_MODES:
+        raise ValueError(f"Unsupported gated action mode: {mode}")
     required_evidence = list(evidence_required or ["origin_scan", "delivery_scan", "signed_edge_telemetry"])
     unsupported_evidence = sorted(set(required_evidence) - SUPPORTED_EVIDENCE_LABELS)
     if unsupported_evidence:
@@ -210,9 +253,12 @@ def gated_action(
                 security_contract = intent["security_contract"]
                 shopify_sandbox_transaction = intent["shopify_sandbox_transaction"]
 
-                # Force no_execute = True for MVP preflight/shadow enforcement
+                # Set no_execute options flag based on mode
                 options_dict = dict(intent.get("options") or {})
-                options_dict["no_execute"] = True
+                if mode == "shadow":
+                    options_dict["no_execute"] = True
+                elif mode == "enforce":
+                    options_dict["no_execute"] = False
 
             except KeyError as e:
                 # Missing delegation, principal, or asset mappings fails closed with ValueError
@@ -272,15 +318,46 @@ def gated_action(
             else:
                 verification_status = "failed"
 
+            # Parse execution_token_id if present
+            execution_token = evaluate_response.get("execution_token") or {}
+            execution_token_id = (
+                execution_token.get("token_id")
+                if isinstance(execution_token, dict)
+                else getattr(execution_token, "token_id", None)
+            )
+
+            # 7. Execute wrapped business logic and close execution (Enforce mode only)
+            execution_result = None
+            if mode == "enforce":
+                if decision == "allow":
+                    if not execution_token_id:
+                        raise GatedActionEvaluationError(
+                            "Enforce mode requires an ExecutionToken before running business logic."
+                        )
+                    exec_fn = _configured_executor()
+                    if exec_fn is None:
+                        raise GatedActionEvaluationError(
+                            "Enforce mode requires an executor to close governed execution."
+                        )
+                    execution_result = func(*args, **kwargs)
+                    try:
+                        exec_fn(gateway_payload)
+                    except Exception as e:
+                        raise GatedActionEvaluationError(f"Post-execution closure failed: {e}") from e
+                else:
+                    # Retain fail-closed posture: return without executing the inner business function.
+                    pass
+
             return GovernedResult(
                 request_id=request_id,
                 decision=decision,
                 reason_code=reason_code,
                 replay_ref=replay_ref,
                 audit_id=audit_id,
-                execution_token_id=None,  # Preflight/No-execute is guaranteed None
+                execution_token_id=execution_token_id,
                 evidence_bundle_id=evidence_bundle_id,
                 verification_status=verification_status,
+                execution_result=execution_result,
             )
 
         return wrapper

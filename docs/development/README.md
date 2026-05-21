@@ -90,8 +90,11 @@ Start here for the active spine:
    agents manually wire PDP calls, execution tokens, evidence bundles, verifier
    outcomes, and replay proof chains. **MVP implemented and targeted-test
    validated:** the SDK surface (`src/seedcore/sdk/gated_action.py`) provides
-   `@gated_action`, `using_evaluator`, and `GovernedResult` for one
-   preflight-only RCT adapter path.
+   `@gated_action`, `using_evaluator`, `set_executor`, and `GovernedResult` for
+   RCT shadow and guarded enforce flows; the MCP helper
+   `seedcore.agent_action.check_policy` exposes explicit-authority preflight
+   checks; and `src/seedcore/sdk/schema_exporter.py` exports path-qualified
+   gated-action manifests for PDP/PKG scaffolding.
 9. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
@@ -127,7 +130,7 @@ This table is the shortest answer to "what stage are we in?"
 | 7. Hot-path operability | Promote `shadow -> canary -> enforce` with parity, latency, and rollback evidence | Contract + observability implemented; **remote Kind topology green** for core gates and drills; full **verification API inside cluster** still the open topology milestone | [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md), [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md), [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md), [`kube_topology_validation_q2_signoff.md`](kube_topology_validation_q2_signoff.md) |
 | 8. Verification product surface | Make operator/replay UX contract-driven and legible without weakening proof | Advanced and active | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) |
 | 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
-| 10. External agent boundary | Expose a stable agent-action gateway and public SDK for developer convenience | **v1 productized + SDK MVP landed**: `@gated_action` wrapper, SDK preflight, telemetry checks, thread-local test utilities in `src/seedcore/sdk/`; plus reference adapters and MCP evaluate path | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gated_action_dx_layer.md`](gated_action_dx_layer.md) |
+| 10. External agent boundary | Expose a stable agent-action gateway and public SDK for developer convenience | **v1 productized + Agent Self-Regulation baseline landed**: `@gated_action` shadow/enforce wrapper, SDK preflight, telemetry checks, thread-local evaluator/executor utilities, explicit-authority MCP `check_policy`, schema exporter scaffolding, reference adapters, and MCP evaluate path | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gated_action_dx_layer.md`](gated_action_dx_layer.md) |
 | 11. Sidecar innovation tracks | Keep robotics/VLA and deep twin research from diluting the commerce RCT story | Sidecar: intake/twin tracks support the wedge as **upstream evidence**, not a second product center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
 | 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, and simulation RL as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Pulled forward for shadow/simulation scaffolding; never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`current_next_steps.md`](current_next_steps.md) |
 | 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
@@ -147,12 +150,24 @@ Treat these as real repo capabilities, not aspirational roadmap items:
   export, and rollback triggers
 - Agent Action Gateway v1 schema hardening, idempotency, **commerce-shaped**
   field binding (reference + Shopify-sandbox adapters), and MCP evaluate path
-- **Gated Action DX MVP and SDK surface**: `@gated_action` decorator,
-  thread-local evaluator injection context managers (`using_evaluator`), and
-  `GovernedResult` are implemented at `src/seedcore/sdk/gated_action.py` for a
-  preflight-only RCT adapter path. Targeted tests validate fail-closed
-  exceptions, preflight shadow isolation, and SDK-side telemetry evidence
-  validation.
+- **Gated Action DX MVP and Agent Self-Regulation surface**: `@gated_action`
+  now supports shadow and guarded enforce mode at
+  `src/seedcore/sdk/gated_action.py`. Enforce mode requires an allow decision
+  with an `ExecutionToken` and a configured executor before business logic can
+  run, preserving fail-closed behavior at the SDK boundary. Targeted tests cover
+  fail-closed evaluator/executor paths, thread-local isolation, telemetry
+  evidence validation, no-execute shadow behavior, and post-execution closure
+  failures.
+- **Explicit-authority MCP policy helper**:
+  `seedcore.agent_action.check_policy` is registered in
+  `src/seedcore/plugin/mcp_server.py` as a high-level preflight helper for
+  agents. It requires caller-provided `buyer_did`, `delegation_id`, and
+  `session_token` or `actor_token`; it no longer fabricates delegation or
+  identity defaults.
+- **Gated action schema scaffolding**:
+  `src/seedcore/sdk/schema_exporter.py` scans `@gated_action` declarations and
+  emits path-qualified manifest IDs, avoiding duplicate function-name
+  collisions when generating PDP/PKG scaffolds.
 - PKG/RCT contract alignment through manifest, taxonomy, decision-graph, and
   triple-hash replay binding
 - operator console **legibility layer**: case verdict strip, replay verdict,
@@ -195,6 +210,11 @@ agent integration**, still on one wedge:
 - The autonomy-ready overlay is now explicit: coding and action agents may use
   evaluate/preflight, simulation, diagnosis, and patch-proposal loops, but the
   PDP, verifier, and operator promotion gates remain the only authority path.
+- The latest Agent Self-Regulation implementation has been review-fixed and
+  targeted-test verified: `@gated_action` enforce mode is token/executor gated,
+  MCP `check_policy` requires explicit authority and identity, and the gated
+  action schema exporter preserves duplicate function names with path-qualified
+  action IDs.
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 
@@ -211,10 +231,14 @@ tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
 Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Landed and targeted-test validated: Gated Action DX MVP** over one RCT
-   path (`src/seedcore/sdk/gated_action.py`) protecting action boundaries with
-   strict telemetry evidence checks and preflight-only shadow enforcement.
-2. **Expose evaluate/preflight as Agent Self-Regulation** through accelerated Gemini MCP tool bundles and the gateway SDK lane. Assistants (like Antigravity and Codex) can check policy admissibility without minting authority or bypassing PDP/verifier closure.
+1. **Landed and targeted-test validated: Gated Action DX + Agent Self-Regulation baseline** over one RCT path. The SDK now supports shadow and guarded enforce modes; MCP `check_policy` exposes explicit-authority preflight; and the schema exporter creates path-qualified gated-action manifests for PDP/PKG scaffolding.
+2. **Next highest-priority implementation:** turn the shipped self-regulation
+   surface into a narrow end-to-end assistant drill: generate a manifest from a
+   real `@gated_action`, run MCP `check_policy` with explicit authority, execute
+   the SDK shadow/enforce tests, and capture the resulting replay/evidence refs
+   as reviewable gate evidence. Assistants (like Antigravity and Codex) can
+   check policy admissibility without minting authority or bypassing
+   PDP/verifier closure.
 3. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per
