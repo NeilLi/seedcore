@@ -1,469 +1,257 @@
 # SeedCore
 
-CI is active for `push` to `main`, `pull_request`, and manual dispatch
-(`.github/workflows/unit-tests.yml`).
+[![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-## Governed Execution Runtime for Autonomous Systems
+## Governed Execution and Trust Runtime for Autonomous Systems
 
-Agent frameworks help AI decide what to do. Prompt guardrails control
-what AI says. SeedCore controls what AI is allowed to execute.
+Agent frameworks decide **what to do**. Prompt guardrails control **what is said**. SeedCore controls **what is allowed to execute**.
 
-SeedCore is a governed execution runtime for autonomous systems. It sits
-between AI intent and real-world execution, verifying delegation, policy
-scope, asset state, hardware authority, custody telemetry, and evidence
-requirements before execution authority can exist.
+SeedCore is a zero-trust execution and proof runtime for high-consequence autonomous workflows. It sits between advisory AI intent and real-world execution, then checks identity, delegation, policy scope, asset state, hardware or custody boundaries, and evidence requirements before execution authority can exist.
 
-Unlike an AI agent framework or a prompt guardrail, SeedCore is a
-deterministic execution gate. It rejects ambient authority, mints
-short-lived `ExecutionToken`s only when policy admits the action, and
-produces replayable evidence chains that can be verified after the fact.
+Unlike a model guardrail, tool-calling wrapper, or heuristic security detector, SeedCore is a deterministic execution gate:
 
-The core runtime is already implemented and contract-tested, including
-Agent Action Gateway v1, `ExecutionToken` lifecycle, Policy Decision
-Points, evidence bundles, `RESULT_VERIFIER`, generic Restricted Custody
-Transfer proof surfaces, and replay verification primitives. The current
-commercial demo direction packages that baseline into a rare-shoe
-Restricted Custody Transfer scene to show how SeedCore binds
-authentication, delegated AI intent, custody telemetry, and verifier
-closure into one replayable proof chain.
+- rejects ambient or implicit authority
+- mints short-lived, scoped `ExecutionToken`s only after policy admits an `ActionIntent`
+- preserves signed receipts, transition evidence, and replayable bundles for post-hoc verification
 
-The long ambition is large: become the trust substrate between frontier
-models and real-world execution. The execution strategy is deliberately
-narrow: win one high-trust vertical workflow first, make it operationally
-credible, and expand from a hardened proof boundary rather than from a
-broad platform claim.
+The core principle is simple:
 
-## Core Principle
+```text
+AI intent should not automatically become execution authority.
+The model can propose. The Agent is accountable. The PDP decides.
+The actuator executes. The evidence closes the loop.
+```
 
-> AI intent should not automatically become execution authority.
-> SeedCore controls when authority exists.
+## Current Status
 
-This is the compressed SeedCore message:
+SeedCore already has an implemented and contract-tested baseline for the trust-runtime slice: Agent Action Gateway v1, `ExecutionToken` lifecycle, stateless PDP evaluation, evidence bundles, replay verification, Rust proof-kernel paths, and a coordinator-embedded `RESULT_VERIFIER` for Restricted Custody Transfer (RCT) enforcement.
 
-- **For us and related developers:** never let routing, planning,
-  retrieval, memory, or model confidence silently become permission to
-  execute. Execution authority exists only after SeedCore validates the
-  delegated principal, policy snapshot, scoped asset/action, hardware
-  boundary, and required evidence.
-- **For AI assistants and agent frameworks:** propose, explain, draft,
-  retrieve, and coordinate freely, but treat SeedCore as the boundary
-  where intent either becomes bounded authority or stops.
-- **For investors, design partners, and competitors:** SeedCore is not
-  another agent layer. It is the authority and proof layer between AI
-  intent and real-world consequences.
+The current product focus is narrower and deliberately commercial: package that baseline into an **Agent-Governed Restricted Custody Transfer** workflow, with a collectible rare-shoe custody handoff as the first legible vertical scene.
 
-> The model can propose. The Agent is accountable. The PDP decides. The
-> robot executes. The evidence closes the loop.
+Important boundaries:
 
-This is the one-line statement of SeedCore's authority and accountability
-model. Everything in the runtime — from the `ActionIntent` contract to
-the `EvidenceBundle`, from the authz graph to the `RESULT_VERIFIER` — is
-a materialization of this principle.
+- The rare-shoe scene is an active verticalization of the existing RCT runtime, not a sneaker marketplace.
+- SeedCore proves governed custody movement and evidence integrity; it does not assert legal ownership transfer in v0.
+- Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff depends on deploying the verification API and capturing runtime audit rows in that topology.
 
-## Trust Runtime, Not A Cybersecurity Product
+Read the current execution docs:
 
-SeedCore uses zero-trust language but is not a traditional cybersecurity
-product. Cybersecurity systems protect environments by detecting threats,
-hardening perimeters, or blocking suspicious behavior. SeedCore governs
-execution *within* an environment: it decides whether a high-consequence
-action is admissible, issues bounded authority when policy allows it, and
-produces replayable proof that explains exactly why the action was
-allowed.
-
-- Deterministic, policy-driven execution rather than heuristic threat
-  detection.
-- Signed receipts, transition evidence, and replayable forensic bundles
-  rather than alerts or perimeter blocks.
-- The PDP is synchronous and stateless at decision time; it evaluates
-  admissibility against current policy, not whether an actor "looks
-  malicious."
-- Memory is a bounded supporting subsystem for context and salience, not
-  a threat-intelligence plane or an alternate authority path.
-
-For the canonical category framing, see
-[trust runtime category distinction](docs/development/trust_runtime_category_distinction.md).
-
-## Where SeedCore Sits
-
-SeedCore is designed to sit between powerful ecosystems, not to replace
-them.
-
-- Model providers supply reasoning, planning, and multimodal
-  intelligence.
-- Identity and cloud platforms supply first-mile operator identity and
-  access control.
-- Edge and robotics platforms supply the physical execution substrate,
-  perception stack, and trusted hardware boundary.
-- SeedCore provides the governed admissibility and proof layer between
-  those worlds: who was allowed to act, under which exact policy and
-  scope, on which device or custody boundary, with what evidence before
-  and after execution.
-
-> External systems can authenticate who reached the system and run the
-> physical AI stack. SeedCore decides what is admissible, issues bounded
-> authority, and proves what happened afterward.
-
-## What SeedCore Is, And Isn't
-
-SeedCore is a governed runtime that converts advisory AI output into
-policy-checked execution. It binds identity, policy, hardware scope, and
-replayable evidence into one execution boundary.
-
-It is **not** a chatbot wrapper, a tool-calling layer, a cybersecurity
-detection product, an identity provider, a model provider, a robotics
-SDK, or a generic workflow orchestrator.
-
-In the current repository baseline, **AI judgment** lives in the
-cognitive and coordinator planning stack. That layer can interpret,
-enrich, and route work, but it does not authorize high-stakes execution.
-
-The current baseline provides:
-
-- deny-by-default authorization before movement or release
-- governed dispatch through accountable agents
-- policy-bound robotic and operator execution
-- playback-grade telemetry and black-box forensics
-- quarantine, rollback, and recovery paths that preserve custody state
-
-## Judgment and Authority Split
-
-SeedCore separates orchestration from authorization:
-
-- **`TaskPayload`** is the judgment envelope — routing, multimodal
-  context, planning inputs.
-- **`ActionIntent`** is the accountability contract — the narrower policy
-  object submitted to the PDP by the accountable agent.
-- Routing may select an agent; routing does not grant authority.
-- High-stakes actions remain deny-by-default until the PDP returns a
-  signed `ExecutionToken`.
-
-For the full contract shape (including TTL, `security_contract`, and
-`TaskPayload → ActionIntent` mapping), see
-[agent action gateway contract](docs/development/agent_action_gateway_contract.md).
-
-## 2026 Product Focus
-
-For the current execution phase, SeedCore is intentionally constrained to
-one must-win product workflow:
-
-- **Agent-Governed Restricted Custody Transfer (RCT)**
-
-Read that wedge in commerce terms: a governed path where **digital
-transaction identity** (for example order, quote, line item, declared
-value) is bound to **physical custody and scope** before SeedCore issues
-bounded execution authority, and where closure produces **replayable
-proof** suitable for high-trust fulfillment. This is not a general
-robotics stack and not a perimeter-security product.
-
-The root README describes the active product boundary. The detailed
-dated rollout, status, and next-step plan live in the development docs:
-
-- [development docs index](docs/development/README.md)
-- [current next steps](docs/development/current_next_steps.md)
+- [Development docs index](docs/development/README.md)
+- [Current next steps](docs/development/current_next_steps.md)
 - [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
-- [Q2 product spec](docs/development/q2_2026_audit_trail_ui_spec.md)
-- [hot-path shadow to enforce breakdown](docs/development/hot_path_shadow_to_enforce_breakdown.md)
-- [kube topology validation Q2 signoff](docs/development/kube_topology_validation_q2_signoff.md)
+- [Kube topology validation Q2 signoff](docs/development/kube_topology_validation_q2_signoff.md)
+- [Rare-shoe RCT demo spec](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
 
-## Rare-Shoe RCT Demo Direction
+## Trust Runtime, Not Traditional Cybersecurity
 
-The generic SeedCore RCT runtime is implemented and contract-tested. The
-current commercial demo direction verticalizes that baseline into a rare-shoe
-Restricted Custody Transfer scene, focused on deterministic fixtures,
-proof-path tests, a happy-path replay bundle, and public/operator proof
-redaction.
+SeedCore uses zero-trust language, but it is not primarily a perimeter-defense product. Traditional cybersecurity protects environments by detecting threats, hardening boundaries, or blocking suspicious behavior. SeedCore governs execution **inside** an environment: it decides whether a proposed action is admissible, issues bounded authority when policy allows it, and produces proof explaining what happened afterward.
 
-The rare-shoe scene is not a sneaker marketplace and does not assert legal
-ownership transfer. It is a compact commercial proof that SeedCore can govern
-high-value physical asset movement when authentication, delegated AI intent,
-custody telemetry, and verifier closure must all agree before execution is
-accepted.
+```text
+Cybersecurity protects the environment.
+SeedCore governs execution within it.
+```
 
-The full development spec lives in:
+| Feature | Traditional cybersecurity | SeedCore Trust Runtime |
+| --- | --- | --- |
+| Primary goal | Detect threats, reduce attack success, harden perimeters | Govern admissible action and produce replayable proof |
+| Primary question | "Is this malicious or suspicious?" | "Is this action admissible under policy and authority?" |
+| Decision core | Heuristic, anomaly-based, or signature-driven | Synchronous, stateless Policy Decision Point (PDP) |
+| Runtime output | Alerts, blocks, detections, logs | Signed tokens, transition receipts, forensic bundles |
+| Success metric | Breaches prevented or detected | Cryptographic verifiability and replayability of state transitions |
 
-- [rare-shoe RCT demo spec](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
+For the canonical category framing, see [Trust Runtime Category Distinction](docs/development/trust_runtime_category_distinction.md).
 
-## Current Capability Baseline
+## Commercial Wedge: Restricted Custody Transfer
 
-The repository currently implements the three unresolved trust gaps in
-agent execution — **verifiable authority boundary**, **policy enforcement
-layer**, and **trusted chain of custody** — with the following live
-surfaces:
+The must-win product wedge is **Agent-Governed Restricted Custody Transfer (RCT)**: a governed path where digital transaction identity is bound to physical custody, scope, and evidence before SeedCore issues execution authority.
 
-- **Authority boundary**: short-lived `ExecutionToken` issuance with TTL,
-  revocation, and HAL emergency-stop enforcement at the actuator edge.
-- **Policy layer**: PKG evaluation through `ops/pkg` with OPA WASM
-  support, PKG-mandatory gate for action tasks, hot-activation of
-  snapshots, compiled authz graph with dry-run publish gates, and edge
-  OTA heartbeat/stream for desired-version resolution.
-- **Chain of custody**: `EvidenceBundle` with `policy_snapshot_hash`,
-  `decision_graph_snapshot_hash`, and `state_binding_hash` for
-  replay-grade binding; HAL-backed `transition_receipt` with
-  nonce-based replay detection; forensic sealing on attested endpoints.
-- **Result verification**: `RESULT_VERIFIER` P0 is embedded in the
-  Coordinator runtime, verifies source-preserving replay bundles in the
-  Rust kernel, writes authoritative fail-closed lockout/quarantine
-  state on replay mismatch in the RCT slice, and revokes the specific
-  execution token in the Redis CRL on terminal fail-closed outcomes.
-- **Trust proofs**: restricted-custody flows support explicit
-  `trust_proof` material for offline artifact and trust-bundle
-  verification via the Rust `seedcore-verify` kernel.
-- **Signing posture**: TPM/KMS-backed signing for trust-critical
-  receipts on attested endpoints; software-backed Ed25519/HMAC remain
-  available for local development.
+The current commerce-shaped integration maps Shopify-Sandbox-style fields into the gateway and proof surface:
 
-For implementation detail and rollout posture, see
-[current next steps](docs/development/current_next_steps.md) and the
-[development docs index](docs/development/README.md).
+```text
+product_ref + order_ref + quote_ref + declared_value_usd + economic_hash
+```
+
+The first commercial scene is **Collectible Rare-Shoe Custody Handoff**. Rare shoes make the trust failures obvious: counterfeit risk, stale authentication, swapped assets, condition drift, replay attacks, and opaque custody. The same proof pattern is relevant to luxury logistics, regulated parts, lab samples, robotics handoff, and other high-value physical workflows.
+
+```text
+Seller / consignor
+  -> Authenticator signs provenance, condition, and NFC/scan evidence
+  -> Buyer or buyer agent expresses intent
+  -> SeedCore PDP evaluates authority, policy, scope, and evidence
+  -> Courier or edge operator receives bounded execution authority
+  -> RESULT_VERIFIER replays the chain and closes or quarantines the case
+```
+
+Commercial actors stay explicit:
+
+- **Seller / consignor** submits the physical asset for registration and sale.
+- **Authenticator** provides authentication, condition grade, and evidence refs.
+- **Marketplace / listing partner** provides `product_ref`, `quote_ref`, `order_ref`, and value context.
+- **Buyer and buyer agent** express commercial intent, but cannot authorize custody alone.
+- **Courier / edge operator** executes only inside scoped, time-bounded authority.
+- **Verifier** replays the evidence chain and surfaces verified, rejected, review, or quarantine outcomes.
+
+## Implemented Runtime Capabilities
+
+SeedCore's current baseline includes the technical primitives needed for governed execution:
+
+- **Stateless PDP and compiled authz graph**: deterministic evaluation of `ActionIntent` against policy, OPA/WASM support, and ReBAC graph paths.
+- **Short-lived `ExecutionToken`s**: bounded capability artifacts with TTL, frozen constraints, execution preconditions, Redis CRL revocation, and local development fallbacks.
+- **Coordinator-embedded `RESULT_VERIFIER`**: a background runtime that polls `digital_twin_event_journal`, persists verifier jobs and outcomes, reuses the replay path, calls the Rust proof kernel, and fail-closes RCT state on terminal mismatch.
+- **Replayable evidence bundles**: policy receipts, execution tokens, transition receipts, telemetry refs, and source-preserving replay bundles for independent verification.
+- **Hardware-anchored telemetry path**: signed transition receipts and telemetry envelopes, with TPM/KMS-backed signing posture for attested deployments and software-backed signing for local development.
+- **Operator-readable verification surface**: versioned `/api/v1/verification/*` endpoints plus TypeScript UI surfaces for queue, audit trail, asset forensics, replay, and runbook lookup.
+
+Key architecture references:
+
+- [Architecture overview](docs/architecture/overview/architecture.md)
+- [Agent Action Gateway contract](docs/development/agent_action_gateway_contract.md)
+- [ExecutionToken lifecycle management](docs/development/execution_token_lifecycle_management.md)
+- [Policy gate matrix](docs/development/policy_gate_matrix.md)
+- [Hardware-anchored telemetry MVP contract](docs/development/hardware_anchored_telemetry_mvp_contract.md)
+- [ADR 0004: Coordinator-Embedded RESULT_VERIFIER](docs/architecture/adr/adr-0004-result-verifier-runtime.md)
+- [ADR 0005: Replayable Evidence for Governed State Transitions](docs/architecture/adr/adr-0005-replayable-evidence-governed-state-transitions.md)
+
+## Operator Verification Console
+
+SeedCore exposes a four-screen TypeScript operator surface backed by the verification API. The goal is to make cryptographic and policy outcomes legible without weakening the proof boundary.
+
+| Screen | Purpose | Backing surface |
+| --- | --- | --- |
+| Screen 1: Anomaly-first queue | Filter by status and prefixes such as `envelope:`, `approval:`, and `request:` | `/api/v1/verification/transfers/queue`, operator `/queue` |
+| Screen 2: Side-by-side audit trail | Compare transaction request, PDP authority, and physical closure | `/api/v1/verification/transfers/review` and audit-trail endpoints |
+| Screen 3: Asset forensics | Inspect custody state, telemetry refs, signer provenance, and transition receipts | `/api/v1/verification/assets/forensics` |
+| Screen 4: Replay and verification | Show replay detail, failure reasons, and runbook lookup links | `/api/v1/verification/workflows/{workflow_id}/verification-detail`, `/replay`, `/runbook/lookup` |
+
+The operator console also provides a deterministic legibility layer: case verdicts, trust-gap counts, missing prerequisites, and runbook links derived from structured verification payloads.
 
 ## Architecture at a Glance
 
-### Substrate
+SeedCore is designed as a distributed execution fabric rather than a single-model application.
 
-- **Ray Serve** for service orchestration
-- **Ray Actors** for governed agent and execution runtime behavior
-- **Postgres / Redis / Neo4j** for state, memory, telemetry, and policy
-  foundations
-
-| Substrate | Operational role |
+| Layer | Role |
 | --- | --- |
-| Confluent Kafka | Event backbone for intent, telemetry, and policy outcome streams |
-| Ray + Kubernetes | Distributed execution for compiled authz graph and shard-aware hot-path routing |
-| Redis | Token revocation and emergency cutoff propagation |
-| Cloud KMS | Hardware-backed signing for policy and transition artifacts |
-| Durable forensic store | Long-lived persistence for signed forensic blocks and replay evidence |
+| Ray Serve and Ray Actors | Long-lived accountable actors, service orchestration, and distributed runtime behavior |
+| Postgres | Durable audit rows, verifier jobs, evidence state, and transaction records |
+| Redis | Token revocation, emergency cutoff propagation, and hot-path runtime support |
+| Neo4j | Graph-backed policy and authorization relationships |
+| Rust `seedcore-verify` | Offline and embedded proof-kernel verification paths |
+| TypeScript verification apps | Operator console, proof surface, and verification API |
 
-Ray is used because SeedCore is an execution runtime, not a single-model
-application. It gives SeedCore a practical control plane for long-lived
-accountable actors, distributed scheduling across heterogeneous
-environments, coordinated policy evaluation and execution routing, and
-a gradual expansion from centralized cloud orchestration toward
-edge/local inference without rebuilding the control plane later.
-
-### Governed state transition flow
+The governed state transition is:
 
 ```text
-Ingress:            Event       -> AI
-Formulation:        AI          -> AdvisoryPlan  -> Agent
-Governance:         Agent       -> ActionIntent  -> PDP -> ExecutionToken
-Actuation:          ExecutionToken -> Robot      -> EvidenceBundle
-Validation/Closing: EvidenceBundle -> Agent      -> Validation -> Custody_Ledger_Updated
+Event -> AI advisory plan -> Agent -> ActionIntent -> PDP
+  -> ExecutionToken or PolicyDeny
+  -> Actuator / edge path
+  -> EvidenceBundle and transition receipts
+  -> Replay / RESULT_VERIFIER
+  -> verified, rejected, review_required, or quarantined state
 ```
-
-The accountable agent remains the central actor that closes the custody
-loop; the PDP, the actuator, and the verifier are deterministic gates
-around that agent.
-
-For the full architectural picture, see:
-
-- [Architecture Overview](docs/architecture/overview/architecture.md)
-- [Design Notes](docs/design-notes.md)
-- [Zero-Trust Custody and Digital-Twin Runtime](docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md)
-- [Source Registration Architecture](docs/development/source_registration_architecture.md)
-- [Policy Gate Matrix](docs/development/policy_gate_matrix.md)
-- [Evidence Bundle Example](docs/development/evidence_bundle_example.json)
-
-## Decision Records (ADRs)
-
-- [ADR 0001 — Keep the PDP Stateless and Synchronous at Decision Time](docs/architecture/adr/adr-0001-pdp-hot-path.md)
-- [ADR 0002 — Use Google IAP as the First-Mile Identity Gate for Non-Public SeedCore Ingress](docs/architecture/adr/adr-0002-iap-edge-identity.md)
-- [ADR 0003 — Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](docs/architecture/adr/adr-0003-igx-thor-trusted-edge-profile.md)
-- [ADR 0004 — Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](docs/architecture/adr/adr-0004-result-verifier-runtime.md)
-- [ADR 0005 — Preserve Replayable Evidence for Governed Digital Twin State Transitions](docs/architecture/adr/adr-0005-replayable-evidence-governed-state-transitions.md)
-
-## Physical Proof Pilot
-
-SeedCore currently runs a verifiable "Digital Twin of Trust" pilot where
-a single robot or sensor stack manages a narrow physical-goods workflow
-with zero manual intervention.
-
-```text
-Tracking Event -> Policy Decision -> Execution Token -> Edge Actuator -> Signed Evidence Bundle
-```
-
-The next-step pilot keeps the demo centered on **Restricted Custody
-Transfer**, treats the flow as a **Forensic Handshake**
-(request → decision → scoped execution → forensic closure), and uses the
-first red-team drill — **MITM coordinate redirect** — to prove that
-scope mismatch becomes `deny` or `quarantine` rather than silent drift.
-
-An automated serial runner reproduces the full end-to-end custody loop:
-
-```bash
-python scripts/host/run_closed_loop_demo.py
-```
-
-Outputs are generated under `demo-output/`. Key implementation
-boundaries:
-
-- `src/seedcore/api/routers/source_registrations_router.py`
-- `src/seedcore/ops/source_registration/projector.py`
-- `src/seedcore/coordinator/core/governance.py`
-- `src/seedcore/hal/drivers/robot_sim_driver.py`
-- `src/seedcore/ops/evidence/builder.py`
-- `src/seedcore/models/evidence_bundle.py`
-
-## Who This Repository Is For
-
-- **Evaluators / Reviewers** — read *Zero-Trust Runtime*, *Core
-  Principle*, *Architecture at a Glance*, and the ADRs.
-- **System Builders / Contributors** — read *Quick Start*, the
-  [development docs index](docs/development/README.md), and
-  [deploy/local/README.md](deploy/local/README.md).
-- **Researchers / Architects** — read [Design Notes](docs/design-notes.md),
-  [Architecture Overview](docs/architecture/overview/architecture.md),
-  and the ADR set above.
 
 ## Quick Start
 
-### Host-Mode Local Runtime (recommended for day-to-day development)
+### Host-Mode Local Runtime
 
-For macOS or laptop development, use the host-mode helpers under
-[deploy/local/README.md](deploy/local/README.md). They avoid the full
-Kind/Kubernetes footprint and are the best path for routine runtime
-bring-up and verification.
+For macOS or laptop development, use the host-mode helpers in [deploy/local/README.md](deploy/local/README.md). They avoid the full Kind/Kubernetes footprint and are the best path for routine bring-up.
 
-Typical startup sequence:
+Prerequisites:
+
+- PostgreSQL 17
+- Redis
+- Python virtual environment with project dependencies installed
+
+Typical startup:
 
 ```bash
 brew services start postgresql@17
 brew services start redis
+
 PGUSER=$(whoami) bash deploy/local/init-full-db-direct.sh
+
 bash deploy/local/run-api.sh
 bash deploy/local/run-hal.sh
 bash deploy/local/run-task-stack.sh start
 ```
 
-Core local endpoints:
+Local endpoints:
 
-- API: `http://127.0.0.1:8002`
-- HAL: `http://127.0.0.1:8003`
-- Serve apps: `http://127.0.0.1:8000`
+- API ingress: `http://127.0.0.1:8002`
+- HAL bridge: `http://127.0.0.1:8003`
+- Ray Serve / actor apps: `http://127.0.0.1:8000`
+- Live API docs: `http://127.0.0.1:8002/docs`
 
-Focused authz-graph RFC-phase verification:
+Focused host verification:
 
 ```bash
 bash scripts/host/verify_authz_graph_rfc_phases.sh
+bash scripts/host/verify_q2_verification_contracts.sh
 ```
 
 ### Kind + Kubernetes
 
-Prerequisites: `kubectl`, `kind`, `helm`, Docker, `envsubst` (macOS:
-`gettext`), and 16 GB+ RAM / 4+ CPU.
+Prerequisites: `kubectl`, `kind`, `helm`, Docker, `envsubst` (macOS: `gettext`), and enough local resources for the cluster.
 
 ```bash
-git clone https://github.com/NeilLi/seedcore.git
-cd seedcore
 cp docker/env.example docker/.env
 ./deploy/deploy-all.sh
-```
-
-`deploy-all.sh` builds the image (unless `--skip-build`), creates or
-reuses a local `kind` cluster, deploys PostgreSQL/MySQL/Redis/Neo4j,
-applies migrations, then deploys Ray, the SeedCore API, bootstrap jobs,
-ingress, and the HAL bridge. Useful flags: `--skip-build`, `--skip-hal`,
-`--skip-ingress`, `--worker-replicas N`.
-
-After the cluster is up, forward the standard ports:
-
-```bash
 ./deploy/port-forward.sh
 ```
 
-Verify:
+Useful deployment flags include `--skip-build`, `--skip-hal`, `--skip-ingress`, `--worker-replicas N`, and `--deploy-verification-api`.
+
+Verify the core runtime after port-forwarding:
 
 ```bash
 curl http://localhost:8002/health
 curl http://localhost:8002/readyz
-curl http://localhost:8002/api/v1/pkg/status
+curl http://localhost:8002/api/v1/pdp/hot-path/status
+curl http://localhost:8002/api/v1/pdp/hot-path/metrics
 ```
 
-Full deployment walkthroughs, environment variable reference, and HAL
-signing posture live in
-[deploy/local/README.md](deploy/local/README.md) and
-[docs/development/tpm_fleet_rollout_runbook.md](docs/development/tpm_fleet_rollout_runbook.md).
-
-### Rust + TypeScript Proof Surface
+### Rust Proof Kernel and TypeScript Surfaces
 
 ```bash
 cargo test --workspace --manifest-path rust/Cargo.toml
 cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
-rust/target/debug/seedcore-verify summarize-transfer --dir rust/fixtures/transfers/allow_case
-bash scripts/ci/build_seedcore_proof_py_bridge.sh
-python -m pip install "$(ls -1 artifacts/wheels/seedcore_proof_py-*.whl | head -n 1)"
 
 npm --prefix ts install
 npm --prefix ts run typecheck
 npm --prefix ts run build
-npm --prefix ts run serve:verification-api   # :7071
-npm --prefix ts run serve:proof-surface      # :7072
+
+npm --prefix ts run serve:verification-api    # http://127.0.0.1:7071
+npm --prefix ts run serve:proof-surface       # http://127.0.0.1:7072
+npm --prefix ts run serve:operator-console    # http://127.0.0.1:7073
+```
+
+Offline transfer proof example:
+
+```bash
+cargo run -q --manifest-path rust/Cargo.toml -p seedcore-verify -- \
+  summarize-transfer --dir rust/fixtures/transfers/allow_case
 ```
 
 ### Gemini CLI Extension
 
-SeedCore ships a Gemini CLI extension scaffold that exposes the
-read-only `seedcore.*` MCP tools:
+SeedCore ships a Gemini CLI extension scaffold that exposes read-only `seedcore.*` MCP tools. Bring up the runtime first, then install the extension:
 
 ```bash
 gemini extensions install .
 ```
 
-The extension does not start SeedCore for you. Bring up the runtime
-first, then confirm tools are visible via `/extensions list` in Gemini.
-For the full tool catalog and troubleshooting, see
-[GEMINI.md](GEMINI.md),
-[gemini-tools.md](skills/using-seedcore/references/gemini-tools.md), and
-[gemini-troubleshooting.md](skills/using-seedcore/references/gemini-troubleshooting.md).
-
-## Runtime Surfaces
-
-Governed API surfaces (versioned under `/api/v1`):
-
-- **Tasks** — submission, status, governance, cancel, logs
-- **Agent Actions** — external gateway evaluate + request lookup
-- **Source Registrations & Tracking Events** — custody ingress
-- **Facts / Advisory** — control-plane facts and advisory outputs
-- **PKG** — snapshot status, activation, OTA heartbeat/stream,
-  authz-graph refresh, async evaluate, snapshot compare/compile
-- **Capabilities** — capability registration
-
-Actuator surface (HAL bridge, `:8003`): `GET /status`, `GET /state`,
-`POST /actuate`, `POST /forensic-seal`, and admin execution-token
-revocation / E-STOP endpoints. `POST /actuate` accepts an
-`execution_token` payload and returns a `transition_receipt` on governed
-actuation; expired, over-TTL, or revoked tokens are rejected.
-
-Observability: Ray Serve at `:8000`, Ray Dashboard at `:8265`. Logs:
-
-```bash
-kubectl logs -l app=seedcore-api -n seedcore-dev -f
-```
-
-For the full endpoint reference, use the live OpenAPI docs at
-`http://localhost:8002/docs` after bring-up, or see the routers under
-`src/seedcore/api/routers/`.
+Confirm tools with `/extensions list`. For details, see [GEMINI.md](GEMINI.md), [gemini-tools.md](skills/using-seedcore/references/gemini-tools.md), and [gemini-troubleshooting.md](skills/using-seedcore/references/gemini-troubleshooting.md).
 
 ## Testing
 
-Unit-test workflow: `.github/workflows/unit-tests.yml`.
-
 ```bash
-pytest -q
+.venv/bin/pytest
+npm --prefix ts run test
+cargo test --workspace --manifest-path rust/Cargo.toml
 ```
 
-## Contributing
-
-1. Fork the repo
-2. Create a feature branch
-3. Test locally (host-mode) and in Kubernetes where relevant
-4. Submit a PR
+The CI workflow is defined in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).
 
 ## License
 
-See [`LICENSE`](LICENSE).
-
-## Support
-
-- See [`docs/`](docs/) — particularly [`docs/development/`](docs/development/)
-- Review [`deploy/`](deploy/)
-- Open a GitHub issue
+SeedCore is licensed under the Apache-2.0 License. See [LICENSE](LICENSE).
