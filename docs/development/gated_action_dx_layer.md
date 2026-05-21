@@ -1,7 +1,7 @@
 # Gated Action DX Layer
 
 Date: 2026-05-17
-Status: Lightweight developer-experience spec
+Status: Priority 30-day MVP spec for autonomy-ready developer experience; not yet implemented as `seedcore.sdk`
 
 ## Purpose
 
@@ -10,8 +10,11 @@ PDP evaluation, short-lived execution tokens, evidence bundles, receipts,
 verifier outcomes, quarantine, and replay. That is the right internal shape.
 
 It should not be the shape every application developer has to wire manually.
+It also should not be the shape every coding agent has to rediscover from
+source files before it can safely add a governed endpoint.
 
-The Gated Action DX layer gives developers a simple way to declare:
+In the target shape, the Gated Action DX layer gives developers a simple way to
+declare:
 
 ```text
 this action is governed
@@ -27,6 +30,67 @@ Compressed message:
 
 > Developers should not manually wire cryptographic proof chains. They should
 > declare the policy boundary, and SeedCore should enforce it.
+
+## Autonomy-Ready Role
+
+The DX layer is now the first practical bridge between SeedCore and the coming
+AI-assisted development loop.
+
+Coding agents should be able to:
+
+- identify that a new endpoint or function is a governed action;
+- declare the policy, evidence, and fail-closed boundary;
+- generate a gateway/evaluate payload shape and schema scaffolding;
+- generate or update OPA/PDP gate inputs without inventing authority semantics;
+- run preflight and fixture checks before any enforce-mode path exists;
+- return replay/audit references for human and agent review.
+
+The boundary remains strict:
+
+```text
+The decorator declares governance.
+It does not grant authority.
+Only PDP allow can produce a scoped ExecutionToken.
+Only evidence closure and replay can settle the outcome.
+```
+
+This keeps the DX layer useful for autonomous coding agents while preventing it
+from becoming an alternate authorization path.
+
+## Baseline Reality Check
+
+As of 2026-05-21, this document is a **specification and immediate
+implementation target**, not a shipped SDK surface.
+
+Implemented baseline to build on:
+
+- strict Agent Action Gateway v1 request/response models:
+  `src/seedcore/models/agent_action_gateway.py`
+- runtime gateway routes for evaluate and execute:
+  `src/seedcore/api/routers/agent_actions_router.py`
+- RCT reference adapter that constructs validated gateway evaluate payloads:
+  `src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py`
+- commerce-shaped mapping for `product_ref`, `quote_ref`,
+  `declared_value_usd`, and `economic_hash`:
+  `src/seedcore/adapters/shopify_sandbox_commerce_adapter.py`
+- MCP/plugin wrappers for `seedcore.agent_action.evaluate` and
+  `seedcore.agent_action.execute`:
+  `src/seedcore/plugin/mcp_server.py`
+- productization coverage:
+  `tests/test_agent_action_gateway_productization.py`
+
+Not implemented yet:
+
+- no `src/seedcore/sdk/` package;
+- no `from seedcore.sdk import gated_action` import path;
+- no Python decorator that converts an arbitrary function call into a gateway
+  evaluate request;
+- no automatic OPA/PDP schema generation from a decorator declaration;
+- no enforce-mode switch or promotion workflow for decorated actions.
+
+Until those pieces land, references to `@gated_action(...)` are target API
+examples. The only current executable path is the lower-level gateway/MCP
+evaluate path listed above.
 
 ## Non-Goal
 
@@ -58,7 +122,7 @@ SeedCore exposes replay
 
 ## Target Developer Experience
 
-### Python decorator shape
+### Target Python decorator shape
 
 ```python
 from seedcore.sdk import gated_action
@@ -200,12 +264,40 @@ The first implementation should be deliberately small:
 4. Support three fail modes: `deny`, `quarantine`, `escalate`.
 5. Convert the decorated call into an existing Agent Action Gateway evaluate
    request.
-6. Return a governed result object with decision, reason code, evidence bundle
+6. Generate or validate the minimal gate schema needed by the PDP/OPA path:
+   principal, delegation ref, asset, action, scope, policy label, required
+   evidence, fail mode, and workflow correlation fields.
+7. Start in preflight/shadow mode: return the evaluate result and contract
+   scaffold without executing business logic.
+8. Add enforce mode only after allow/deny/quarantine fixture behavior is green.
+9. Return a governed result object with decision, reason code, evidence bundle
    ID, verification status, replay reference, and audit ID where available.
-7. Add fixtures proving allow, deny, quarantine, and missing-evidence behavior.
+10. Add fixtures proving allow, deny, quarantine, and missing-evidence behavior.
+11. Add one assistant-oriented fixture where a generated gated action is
+    rejected for missing delegation rather than silently executing.
 
 Do not start with a broad plugin framework, general workflow engine, or every
 possible evidence type.
+
+## Assistant Workflow Contract
+
+For coding agents, the first safe workflow should be:
+
+1. read the local declaration;
+2. generate or update the schema scaffold;
+3. call `seedcore.agent_action.evaluate` or the equivalent local preflight;
+4. run the gated-action fixture tests;
+5. propose a patch or PR with the proof/replay references attached;
+6. wait for human/operator promotion before enforce mode is enabled.
+
+An assistant must not:
+
+- bypass the generated gateway/evaluate payload;
+- mint or simulate an `ExecutionToken`;
+- clear quarantine;
+- treat passing business logic as proof that SeedCore allowed the action;
+- switch a gated action from preflight/shadow to enforce without an explicit
+  promotion gate.
 
 ## Acceptance Criteria
 
@@ -222,6 +314,9 @@ Acceptance tests should prove:
 6. verifier failure returns or persists a governed quarantine outcome;
 7. every invocation has an audit or replay reference;
 8. direct business-logic success cannot override SeedCore denial.
+9. generated schema scaffolding is deterministic for the same declaration;
+10. preflight/shadow mode never executes business logic;
+11. enforce mode cannot be enabled without explicit test/promotion evidence.
 
 ## Positioning
 

@@ -13,6 +13,57 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-05-21, Bounded Autonomy Acceleration)
+
+SeedCore should now prepare for coding and action agents that can inspect,
+simulate, propose, and repair much more of the system by themselves. The
+strategic shift is to make SeedCore **autonomy-ready** without letting
+autonomy become authority.
+
+The new planning rule is:
+
+```text
+Agents may evaluate, simulate, diagnose, and propose.
+The PDP, verifier, and operator promotion gates still decide what is allowed.
+```
+
+This creates a higher-priority overlay across the existing RCT plan:
+
+1. **Gated Action DX first.** Move
+   [gated_action_dx_layer.md](gated_action_dx_layer.md) to the top of the
+   immediate implementation list. The 30-day MVP should let developers and
+   coding agents declare one governed action, generate or validate the
+   gateway/PDP/OPA/evidence contract, run preflight, and only then move to
+   enforce mode.
+2. **Bounded autonomy interface.** Treat MCP
+   `seedcore.agent_action.evaluate` and related gateway adapters as the first
+   **Agent Self-Regulation** surface: agents can ask SeedCore whether a
+   proposed action would be admissible, but cannot mint authority or bypass the
+   PDP.
+3. **Governance-aware learning earlier.** Pull the Scenario Generator and
+   Governance Reward Scorer forward as simulation and training infrastructure
+   for coding/action agents. They must remain shadow/simulation only: they
+   consume PDP, replay, and `RESULT_VERIFIER` outcomes, but never issue or
+   override `ExecutionToken`s.
+4. **AI-led self-healing as staged autonomy.** Add a workstream where
+   assistants run degraded-edge drills, diagnose telemetry/outbox failures,
+   propose patches, execute host/CI gates, and open reviewable changes. Live
+   production mutation remains blocked until explicit promotion criteria,
+   rollback behavior, and operator approval are defined.
+5. **Keep RCT as the proving ground.** Rare-shoe RCT remains the must-win
+   workflow. The autonomy work should make that workflow faster to build,
+   test, verify, and repair; it should not broaden the product story before the
+   wedge is credible.
+
+Immediate priority order:
+
+1. land the Gated Action DX MVP over one RCT path;
+2. expose the evaluate/preflight path as the safe agent self-regulation lane;
+3. add Scenario Generator + Governance Reward Scorer scaffolds for RCT drills;
+4. define the AI-led self-healing milestone ladder and first degraded-edge
+   target;
+5. continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion.
+
 ## Status Update (2026-05-15, Commercial RCT Vertical Scene)
 
 The next commercial-grade demo scene should be **Collectible Rare-Shoe

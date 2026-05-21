@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-04-18  
+Date: 2026-05-21
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -86,9 +86,10 @@ Start here for the active spine:
    testable Policy Knowledge Graphs that compile into PDP rules, authority
    constraints, evidence requirements, reason codes, and replay fixtures.
 8. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
-   for declaring governed action boundaries without making developers manually
-   wire PDP calls, execution tokens, evidence bundles, verifier outcomes, and
-   replay proof chains.
+   for declaring governed action boundaries without making developers or coding
+   agents manually wire PDP calls, execution tokens, evidence bundles, verifier
+   outcomes, and replay proof chains. Current status: spec / immediate MVP
+   target only; no `seedcore.sdk.gated_action` decorator exists yet.
 9. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
@@ -126,7 +127,8 @@ This table is the shortest answer to "what stage are we in?"
 | 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
 | 10. External agent boundary | Expose one narrow stable gateway for agent-originated requests | **v1 productized in-repo**: strict schema, correlation, reference adapter, commerce field mapping, MCP `seedcore.agent_action.evaluate` | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md) |
 | 11. Sidecar innovation tracks | Keep robotics/VLA and deep twin research from diluting the commerce RCT story | Sidecar: intake/twin tracks support the wedge as **upstream evidence**, not a second product center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
-| 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, and simulation RL as bounded trust-slice components, wired as a four-node governed self-improvement loop (Advisory Student, Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Planned next-stage track | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`current_next_steps.md`](current_next_steps.md) |
+| 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, and simulation RL as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Pulled forward for shadow/simulation scaffolding; never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`current_next_steps.md`](current_next_steps.md) |
+| 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
 
 ## 4. What Is Done
 
@@ -160,8 +162,8 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-04-18**, the project is in **Q2 operational closure -> Q3 external
-integration**, still on one wedge:
+As of **2026-05-21**, the project is in **Q2 operational closure -> Q3 bounded
+agent integration**, still on one wedge:
 
 - **Commerce RCT** remains the only must-win workflow; docs and code should
   default to "order/quote/value + physical scope + token + evidence" language.
@@ -182,6 +184,9 @@ integration**, still on one wedge:
   token-specific CRL revocation on terminal mismatch; remaining risk is
   operational hardening (DB integration tests, multi-worker contention,
   quarantine runbooks)—see top of [`current_next_steps.md`](current_next_steps.md).
+- The autonomy-ready overlay is now explicit: coding and action agents may use
+  evaluate/preflight, simulation, diagnosis, and patch-proposal loops, but the
+  PDP, verifier, and operator promotion gates remain the only authority path.
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 
@@ -196,26 +201,35 @@ fallback, commerce-adapter HTTP timeout, coordinate tamper, cross-product
 replay injection, and replay-router workflow-key assertions all keep evidence
 tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
-Real near-term execution order (commerce-coherent):
+Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Close deployment-realistic proof topology**: same cluster runs that already
+1. **Land the Gated Action DX MVP** over one RCT path so developers and coding
+   agents can declare the governed boundary, generate/validate schema
+   scaffolding, run preflight, and keep enforce mode behind explicit gates.
+2. **Expose evaluate/preflight as agent self-regulation** through the existing
+   MCP/gateway lane. Assistants can ask whether an action is admissible; they
+   cannot mint authority or bypass PDP/verifier closure.
+3. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per
    [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md).
-2. Keep the four-screen verification surface contract-stable while hardening
+4. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-3. Add the rare-shoe RCT fixture path as a commercial vertical scene:
+5. Add the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
    adapter inputs for listing/quote/order/value, signed edge telemetry for
    NFC/scan handoff, hash-bound forensic video proof, and proof-surface checks
    that keep public proof narrow.
-4. Advance edge telemetry closure and signed forensic-block linkage without
+6. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-5. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
-6. Start the governance-aware learning track only after the current trust slice
-   remains stable under the above pressures:
+7. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
+   drills in shadow/simulation only:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
+8. Define the first AI-led self-healing target around a degraded-edge or
+   telemetry/outbox failure, with the repair loop ending in a reviewable patch
+   and gate evidence rather than direct production mutation.
+9. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
 
 Primary planning docs:
 

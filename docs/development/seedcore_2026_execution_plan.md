@@ -25,6 +25,91 @@ This plan is grounded in the current repo state:
 This is not a speculative "future platform" plan. It is a wedge-first
 execution plan.
 
+## Execution Update (2026-05-21, Autonomy-Ready Trust Runtime)
+
+The 2026 plan should now explicitly support the coming wave of coding and
+action agents. The goal is not to make agents trusted by default. The goal is
+to give agents stronger **self-regulation**, **simulation**, and
+**self-healing** interfaces while keeping SeedCore's deterministic authority
+boundary intact.
+
+New operating principle:
+
+```text
+Autonomy can increase inside the proposal, simulation, and repair loops.
+Authority still enters only through PDP allow, scoped ExecutionToken issuance,
+evidence closure, and verifier acceptance.
+```
+
+This pulls four workstreams forward:
+
+1. **Bounded autonomy interfaces.** Accelerate the Q3 agent boundary around
+   MCP and `seedcore.agent_action.evaluate`, but keep the surface as
+   evaluate/preflight/gateway correlation unless an explicit enforce gate is
+   present. The correct framing is **Agent Self-Regulation**: an assistant can
+   ask "would this action be admissible?" before it attempts to act.
+2. **Gated Action DX.** Promote the Gated Action DX layer to an immediate
+   enablement track. The first SDK/decorator/annotation MVP should generate or
+   validate the gateway payload, evidence requirements, OPA/PDP policy
+   scaffolding, and replay references for one RCT path. It starts as preflight
+   and shadow; enforce mode requires the normal hot-path promotion controls.
+3. **Governance-aware learning.** Elevate the Scenario Generator and
+   Governance Reward Scorer as near-term simulation infrastructure for coding
+   and action agents. They produce probes, typed verdicts, and training
+   samples. They do not authorize execution, override the PDP, or reinterpret
+   `RESULT_VERIFIER`.
+4. **AI-led self-healing.** Add a staged operational-autonomy ladder:
+   diagnose -> propose patch -> run degraded-edge gates -> open PR or patch
+   review -> canary/shadow validation -> operator-approved promotion. Until a
+   separate promotion contract exists, assistants must not directly mutate live
+   production trust state.
+
+The program remains locked to Restricted Custody Transfer. Autonomy work must
+make the RCT wedge easier to implement, test, replay, and repair; it must not
+turn the 2026 plan into a broad autonomous-agent platform.
+
+### AI-Led Self-Healing Workstream
+
+This workstream is about operational repair loops, not autonomous production
+authority.
+
+Milestone ladder:
+
+1. **Read-only diagnosis.** Assistant runs hot-path status, verification queue,
+   replay detail, runbook lookup, and degraded-edge drill summaries; produces a
+   bounded incident hypothesis with cited evidence.
+2. **Fixture reproduction.** Assistant turns the failure into a local fixture
+   or host drill that reproduces telemetry loss, outbox delay, stale graph,
+   stale telemetry, Redis outage, or replay mismatch.
+3. **Patch proposal.** Assistant edits only the scoped code/docs/tests needed
+   for the reproduced failure and attaches the before/after gate output.
+4. **Gate execution.** Assistant runs the relevant host or CI gate, beginning
+   with `verify_q2_degraded_edge_drill_matrix.sh`,
+   `verify_q2_verification_contracts.sh`, targeted pytest, TypeScript tests,
+   or Rust verifier checks as appropriate.
+5. **Reviewable promotion.** Assistant opens a PR or patch review with
+   replay/audit references, changed files, residual risk, and rollback notes.
+6. **Shadow/canary only.** Assistant may help prepare a shadow or canary
+   promotion plan, but enforce-mode changes and quarantine clearance require
+   operator approval until a dedicated promotion ADR exists.
+
+Initial repair targets:
+
+- telemetry envelope schema drift;
+- missing or delayed outbox publication;
+- fixture/runtime mismatch in verification API projections;
+- stale graph or stale telemetry degraded-edge failures;
+- replay lookup or workflow correlation breaks across gateway and verifier
+  surfaces.
+
+Hard stops:
+
+- no direct production mutation;
+- no quarantine clearance;
+- no signer or token revocation bypass;
+- no `shadow` -> `enforce` promotion without explicit gate evidence and human
+  approval.
+
 ## Execution Update (2026-04-07)
 
 The highest-risk north-star verification gap is now closed for the current RCT

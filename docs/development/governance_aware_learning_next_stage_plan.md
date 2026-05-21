@@ -1,7 +1,7 @@
 # Governance-Aware Learning Next Stage Plan
 
-Date: 2026-04-20
-Status: Working implementation plan for the post-Q2/Q3 bridge; four-node loop topology and verdict-taxonomy grounded in accepted trust-runtime ADRs
+Date: 2026-05-21
+Status: Priority implementation plan for autonomy-ready simulation and training; four-node loop topology and verdict-taxonomy grounded in accepted trust-runtime ADRs
 Related:
 
 - [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](../architecture/adr/adr-0001-pdp-hot-path.md)
@@ -28,6 +28,36 @@ to make learning systems useful inside the existing trust boundary:
   compliance natively
 - proof/refinement loops that improve evidence quality without bypassing
   verification
+
+## Priority Update (2026-05-21)
+
+Governance-aware learning should move earlier in the roadmap because coding and
+action agents now need safe environments where they can practice, diagnose, and
+improve without gaining authority.
+
+The first priority is not a broad RL platform. It is a compact autonomy-ready
+simulation loop for SeedCore's RCT trust slice:
+
+1. **Scenario Generator first.** Generate synthetic `ActionIntent` probes for
+   stale telemetry, scope mismatch, approval gaps, coordinate redirect,
+   evidence omission, outbox delay, and cross-asset replay. These probes run
+   only in fixture, CI, host, simulation, or shadow lanes.
+2. **Governance Reward Scorer second.** Convert PDP, replay, and
+   `RESULT_VERIFIER` outcomes into typed verdicts and training samples. The
+   scorer evaluates contract compliance, not business success, and never
+   participates in live authorization.
+3. **Learning Sample Store third.** Persist replay-linkable
+   `GovernanceLearningSampleV1` records so coding/action agents can learn from
+   admissible cases, near misses, and verifier failures without treating them
+   as permission.
+4. **Advisory Student later.** Distillation and abstention tuning consume the
+   samples only after the scenario/scorer contracts are stable.
+
+This plan also supports AI-led self-healing, but only in a staged form:
+assistants may run drills, cluster failures, propose patches, and execute
+verification gates. They may not patch production trust state, clear
+quarantine, or promote enforce mode without the existing PDP/verifier/operator
+promotion controls.
 
 ## Core Rule
 
@@ -153,38 +183,39 @@ explains why they are connected, not just co-located.
 
 ### The four nodes
 
-1. **Advisory Student** — the distilled reasoning scaffold (Workstream 1 + 2).
+1. **Scenario Generator** — the first implementation node. Observes recent
+   evidence and verdict history, then emits new `ActionIntent` candidates
+   shaped as governance probes (scope mismatch, stale-context, coordinate
+   redirect, near-miss approvals, expired-TTL retries, telemetry/outbox delay).
+   Runs only in simulation, CI, fixture, host, or shadow lanes. Home:
+   `src/seedcore/ml/curriculum/` (new), feeding the existing red-team drill
+   scripts referenced in `current_next_steps.md`.
+
+2. **Governance Reward Scorer** — the second implementation node.
+   Multi-signal evaluator of a completed attempt. Scores **contract
+   compliance** rather than raw task success: zone compliance, token-scope
+   compliance, E-STOP preference, evidence-capture completeness, replay
+   consistency, outbox delivery posture, and mission completion. Emits a typed
+   verdict (see next section), never a scalar. Home: upgrade the placeholders in
+   `src/seedcore/tools/training_tools.py`; add
+   `src/seedcore/ml/reward/governance_reward.py`.
+
+3. **Governance Learning Sample Store** — the bounded experience database
+   (`GovernanceLearningSampleV1`, formalized in Window G). Every sample carries
+   the real hot-path verdict (`allow` / `deny` / `quarantine` / `escalate`),
+   the verifier outcome, the pinned PKG snapshot hash, the decision-graph
+   snapshot hash, and the `EvidenceBundle` reference so distillation and
+   evaluation remain replay-linkable. Home: generalize
+   `src/seedcore/ml/distillation/sample_store.py`; add an exporter from
+   `EvidenceBundle` and `RESULT_VERIFIER` outputs.
+
+4. **Advisory Student** — the distilled reasoning scaffold (Workstream 1 + 2).
    Emits bounded outputs (`reason_code`, `trust_gap_codes`, obligation
    suggestions, explanation scaffold, abstention codes). Never
    authority-bearing; consumed by the operator copilot and the preflight path.
    Home: `src/seedcore/ml/scaffolds/` (new) plus hooks in
    `src/seedcore/cognitive/advisory.py` and
    `src/seedcore/coordinator/core/advisory.py`.
-
-2. **Scenario Generator** — synthetic probe producer. Observes recent
-   evidence and verdict history, then emits new `ActionIntent` candidates
-   shaped as governance probes (scope mismatch, stale-context, coordinate
-   redirect, near-miss approvals, expired-TTL retries). Runs only in
-   simulation, CI, or shadow lanes. Home: `src/seedcore/ml/curriculum/` (new),
-   feeding the existing red-team drill scripts referenced in
-   `current_next_steps.md`.
-
-3. **Governance Reward Scorer** — multi-signal evaluator of a completed
-   attempt. Scores **contract compliance** rather than raw task success: zone
-   compliance, token-scope compliance, E-STOP preference, evidence-capture
-   completeness, and mission completion. Emits a typed verdict (see next
-   section), never a scalar. Home: upgrade the placeholders in
-   `src/seedcore/tools/training_tools.py`; add
-   `src/seedcore/ml/reward/governance_reward.py`.
-
-4. **Governance Learning Sample Store** — the bounded experience database
-   (`GovernanceLearningSampleV1`, formalized in Window G). Every sample
-   carries the real hot-path verdict (`allow` / `deny` / `quarantine` /
-   `escalate`), the verifier outcome, the pinned PKG snapshot hash, the
-   decision-graph snapshot hash, and the `EvidenceBundle` reference so
-   distillation and evaluation remain replay-linkable. Home: generalize
-   `src/seedcore/ml/distillation/sample_store.py`; add an exporter from
-   `EvidenceBundle` and `RESULT_VERIFIER` outputs.
 
 ### Conceptual flow
 
