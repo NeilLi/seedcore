@@ -43,21 +43,15 @@ evidence closure, and verifier acceptance.
 
 This pulls four workstreams forward:
 
-1. **Bounded autonomy interfaces.** Accelerate the Q3 agent boundary around
-   MCP and `seedcore.agent_action.evaluate`, but keep the surface as
-   evaluate/preflight/gateway correlation unless an explicit enforce gate is
-   present. The correct framing is **Agent Self-Regulation**: an assistant can
-   ask "would this action be admissible?" before it attempts to act.
-2. **Gated Action DX.** Promote the Gated Action DX layer to an immediate
-   enablement track. The first SDK/decorator/annotation MVP should generate or
-   validate the gateway payload, evidence requirements, OPA/PDP policy
-   scaffolding, and replay references for one RCT path. It starts as preflight
-   and shadow; enforce mode requires the normal hot-path promotion controls.
-3. **Governance-aware learning.** Elevate the Scenario Generator and
-   Governance Reward Scorer as near-term simulation infrastructure for coding
-   and action agents. They produce probes, typed verdicts, and training
-   samples. They do not authorize execution, override the PDP, or reinterpret
-   `RESULT_VERIFIER`.
+1. **Bounded autonomy interfaces.** Accelerate the Q3 agent boundary around MCP and `seedcore.agent_action.evaluate`, integrating them directly with the public SDK for **Agent Self-Regulation**. Assistants can run preflight simulation checks ("would this action be admissible?") prior to execution.
+2. **Gated Action DX (MVP landed).** The `@gated_action` decorator,
+   thread-local evaluator injection, and `GovernedResult` are implemented at
+   `src/seedcore/sdk/gated_action.py` for one preflight-only RCT adapter path.
+   Targeted tests validate strict fail-closed behavior, missing telemetry
+   evidence handling (`origin_scan`, `delivery_scan`, `signed_edge_telemetry`),
+   and zero execution of wrapped business functions in MVP preflight/shadow
+   mode.
+3. **Governance-aware learning (Elevated).** Elevate the Scenario Generator and Governance Reward Scorer as active simulation infrastructure for coding/action agents. They produce probes, typed verdicts, and training samples. They do not authorize execution, override the PDP, or reinterpret `RESULT_VERIFIER`, but actively drive reinforcement learning and self-correction loops.
 4. **AI-led self-healing.** Add a staged operational-autonomy ladder:
    diagnose -> propose patch -> run degraded-edge gates -> open PR or patch
    review -> canary/shadow validation -> operator-approved promotion. Until a
@@ -398,21 +392,26 @@ Must land:
 
 Goal:
 
-- start Q3 agent-boundary productization without reopening frozen contracts
+- Land Gated Action DX MVP and establish agent self-regulation foundations
 
-Entry condition update:
+Status:
 
-- this may now begin in a narrow read-only form for the kube topology, because
-  hot-path and observability contracts are stable enough for external-agent
-  debugging there
-- do **not** widen write/control surfaces or claim full verification-surface
-  readiness until the verification API and Kafka are live in-cluster
+- **Implemented and targeted-test validated:** The SDK surface
+  (`src/seedcore/sdk/`) provides the `@gated_action` decorator, thread-local
+  evaluator injection (`using_evaluator`), and `GovernedResult` for one
+  preflight-only RCT adapter path. It enforces preflight-only execution,
+  SDK-side telemetry evidence checks (supporting `origin_scan`, `delivery_scan`,
+  and `signed_edge_telemetry`), and strict fail-closed exceptions
+  (`GatedActionEvaluatorNotConfigured`).
+- **Validated with pytest:** Targeted coverage tests preflight zero-execution,
+  telemetry validation quarantine, evaluator isolation, HTTP-style evaluator
+  responses, and fail-closed evaluator errors.
 
 Must land:
 
-- one reference adapter for a current agent platform
-- one narrow commerce-side adapter for the canonical transaction flow
-- deterministic gateway request -> decision -> replay lookup mapping
+- one reference adapter for a current agent platform (Completed)
+- one narrow commerce-side adapter for the canonical transaction flow (Completed)
+- deterministic gateway request -> decision -> replay lookup mapping (Completed)
 
 ### Window E: 2026-05-15 to 2026-06-07
 
@@ -427,19 +426,22 @@ Must land:
   path
 - fixture and test expansion for signed edge telemetry in the RCT closure flow
 
-### Window F: 2026-06-01 onward
+### Window F (Pulled Forward & Elevated): 2026-05-21 onward
 
 Goal:
 
-- publish a minimal Gemini-visible read tool bundle without widening the
-  product boundary
+- Publish accelerated Gemini MCP tool bundles and operationalize Agent Self-Regulation
+
+Status:
+
+- **Pulled Forward:** Shifted from Q3 to late Q2/immediate execution to align with rapid advancements in AI agents (e.g. Antigravity and Codex).
+- **Agent Self-Regulation:** Exposes the `seedcore.agent_action.evaluate` preflight path through Gemini MCP tools, enabling coding and action agents to run self-regulated simulation drills and verify policy compliance without granting write authority.
 
 Must land:
 
-- read-only wrappers for verification queue, detail, replay, runbook lookup,
-  and hot-path metrics/status
-- explicit documentation that the Gemini surface is read-only and contract
-  driven
+- read-only wrappers for verification queue, detail, replay, runbook lookup, and hot-path metrics/status as Gemini MCP tools.
+- explicit documentation that the Gemini surface is read-only, contract-driven, and designed for self-healing diagnosis.
+- integration of Scenario Generator and Governance Reward Scorer scaffolds from the Governance-Aware Learning (GAL) loop as active shadow/simulation tools for agent training and drills.
 
 ## 2026 Objective
 

@@ -13,56 +13,59 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
-## Status Update (2026-05-21, Bounded Autonomy Acceleration)
+## Status Update (2026-05-21, Bounded Autonomy Acceleration & DX MVP Landed)
 
-SeedCore should now prepare for coding and action agents that can inspect,
-simulate, propose, and repair much more of the system by themselves. The
-strategic shift is to make SeedCore **autonomy-ready** without letting
-autonomy become authority.
+SeedCore has landed and targeted-test validated the **Gated Action DX MVP** in
+the new SDK namespace (`src/seedcore/sdk/`), preparing SeedCore for autonomous
+coding and action agents (like Antigravity and Codex) that can inspect,
+simulate, propose, and repair system behaviors. The strategic shift is to make
+SeedCore **autonomy-ready** and support **Agent Self-Regulation** without
+letting autonomy become unchecked authority.
 
-The new planning rule is:
+The core planning rule for agentic interactions is now:
 
 ```text
 Agents may evaluate, simulate, diagnose, and propose.
 The PDP, verifier, and operator promotion gates still decide what is allowed.
 ```
 
-This creates a higher-priority overlay across the existing RCT plan:
+This creates an accelerated, higher-priority overlay across the existing RCT plan:
 
-1. **Gated Action DX first.** Move
-   [gated_action_dx_layer.md](gated_action_dx_layer.md) to the top of the
-   immediate implementation list. The 30-day MVP should let developers and
-   coding agents declare one governed action, generate or validate the
-   gateway/PDP/OPA/evidence contract, run preflight, and only then move to
-   enforce mode.
-2. **Bounded autonomy interface.** Treat MCP
-   `seedcore.agent_action.evaluate` and related gateway adapters as the first
-   **Agent Self-Regulation** surface: agents can ask SeedCore whether a
-   proposed action would be admissible, but cannot mint authority or bypass the
-   PDP.
+1. **Gated Action DX landed.** The `@gated_action(...)` decorator,
+   thread-local evaluator injection context manager (`using_evaluator`), and
+   `GovernedResult` are implemented at `src/seedcore/sdk/gated_action.py` for
+   one preflight-only RCT adapter path. Targeted tests validate strict
+   fail-closed security, SDK-side telemetry validation, and zero execution of
+   wrapped business logic.
+2. **Bounded autonomy interface.** Treat MCP `seedcore.agent_action.evaluate`
+   and the gateway SDK surface as the primary **Agent Self-Regulation** lane.
+   Agents can ask SeedCore whether a proposed action is admissible, but they
+   cannot bypass PDP evaluation, and the SDK decorator prevents silent
+   permissive execution.
 3. **Governance-aware learning earlier.** Pull the Scenario Generator and
    Governance Reward Scorer forward as simulation and training infrastructure
-   for coding/action agents. They must remain shadow/simulation only: they
-   consume PDP, replay, and `RESULT_VERIFIER` outcomes, but never issue or
-   override `ExecutionToken`s.
+   for coding/action agents. They remain shadow/simulation only: they consume
+   PDP, replay, and `RESULT_VERIFIER` outcomes, but never issue or override
+   `ExecutionToken`s.
 4. **AI-led self-healing as staged autonomy.** Add a workstream where
    assistants run degraded-edge drills, diagnose telemetry/outbox failures,
    propose patches, execute host/CI gates, and open reviewable changes. Live
    production mutation remains blocked until explicit promotion criteria,
    rollback behavior, and operator approval are defined.
 5. **Keep RCT as the proving ground.** Rare-shoe RCT remains the must-win
-   workflow. The autonomy work should make that workflow faster to build,
-   test, verify, and repair; it should not broaden the product story before the
-   wedge is credible.
+   commerce fulfillment scene. The autonomy work makes this workflow faster to
+   build, test, verify, and repair under automated agent assistance.
 
 Immediate priority order:
 
-1. land the Gated Action DX MVP over one RCT path;
-2. expose the evaluate/preflight path as the safe agent self-regulation lane;
-3. add Scenario Generator + Governance Reward Scorer scaffolds for RCT drills;
-4. define the AI-led self-healing milestone ladder and first degraded-edge
-   target;
-5. continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion.
+1. **Landed and targeted-test verified:** Gated Action DX MVP over one RCT path
+   (`src/seedcore/sdk/`);
+2. **Active next step:** Expose the evaluate/preflight path as the safe agent
+   self-regulation lane via Gemini MCP tool bundles / Agent Self-Regulation
+   (Window D & Window F pulled forward);
+3. Expose Scenario Generator + Governance Reward Scorer scaffolds for RCT drills in shadow/simulation only;
+4. Define the AI-led self-healing milestone ladder and first degraded-edge target;
+5. Continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion.
 
 ## Status Update (2026-05-15, Commercial RCT Vertical Scene)
 
