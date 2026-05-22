@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-04-02
 - Scope: SeedCore policy decision path for Restricted Custody Transfer and related governed actions
-- Related: [Architecture Overview](../overview/architecture.md), [Asset-Centric PDP Hot Path Contract](../../development/asset_centric_pdp_hot_path_contract.md), [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md)
+- Related: [Architecture Overview](../overview/architecture.md), [Asset-Centric PDP Hot Path Contract](../../development/asset_centric_pdp_hot_path_contract.md), [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md), [PDP Architecture Research Synthesis](../../references/pdp-architecture-research-synthesis.md)
 
 ## Context
 
@@ -65,6 +65,18 @@ This ADR does require that the final governed decision remains a single synchron
 
 This ADR also requires that the systems feeding that step be designed so the PDP
 does not need to perform live, multi-hop consistency discovery at request time.
+
+### Research Disposition
+
+The broader PDP research landscape, including OPA/Rego, Cedar, Cerbos,
+Zanzibar-style ReBAC, OPAL-style synchronization, Biscuit-style attenuation, and
+visual policy-builder patterns, is captured as reference material rather than
+folded directly into this ADR.
+
+Those patterns inform follow-on implementation specs, but they do not change
+the accepted decision in this ADR: SeedCore's final governed decision remains a
+single synchronous, stateless, deterministic, fail-closed evaluation over pinned
+inputs.
 
 ## Why
 
