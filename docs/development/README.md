@@ -63,6 +63,25 @@ That means the active docs should be read through one question:
 - Legible local advisory memory:
   [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
 
+**Architecture posture for the supporting ecosystem:**
+
+The PDP remains internal, synchronous, deterministic, and stateless at decision
+time. The infrastructure around it should evolve in four specific directions:
+
+- Signed Context Envelopes and caveat-style attenuation, informed by Biscuit and
+  Macaroons, push cryptographically verifiable context into requests instead of
+  making the PDP perform hot-path user-attribute lookups.
+- Causality tokens, informed by SpiceDB `ZedToken` and Zanzibar zookie
+  semantics, let a request demand context at least as fresh as the user's last
+  relevant action, closing "New Enemy" and "Ghost Resource" races.
+- CDC-backed subscribed local views, informed by Debezium-style architectures,
+  keep approval, custody, delegation, resource, and edge state near the PDP for
+  synchronous low-latency reads.
+- Zanzibar-style external graph PDPs stay future-facing only. They may matter
+  for massive relationship scale, but the current wedge keeps the default hot
+  path compiled, near-local, and focused on restricted custody, evidence, and
+  execution-token semantics.
+
 Start here for the active spine:
 
 1. [`current_next_steps.md`](current_next_steps.md) - what is done now, current

@@ -613,6 +613,23 @@ Ray actors are a good fit for:
 
 The PDP decision function (stateless at decision time) should ask a local or near-local compiled cache first and only fall back to graph refresh or rebuild workflows outside the synchronous request path.
 
+### Ecosystem Boundary
+
+The authorization graph may borrow diagnostic vocabulary and tuple export
+formats from Zanzibar, SpiceDB, and OpenFGA, but the current RCT wedge should
+not move the final PDP decision into an external graph service. The graph's job
+is to produce bounded, compiled, replayable decision artifacts for a stateless
+PDP.
+
+Context freshness should be handled with the same supporting patterns as ADR
+0001:
+
+- Signed Context Envelopes for request-carried, cryptographically verifiable
+  claims and caveats.
+- Causality tokens for "at least as fresh as my last action" checks.
+- CDC-backed subscribed local views for custody, delegation, approval,
+  resource, and telemetry state.
+
 ### Longer Term
 
 Benchmark alternative graph stores only after the decision path is stable and measurable. If streaming updates or traversal speed become dominant bottlenecks, evaluate whether Memgraph or a multimodel store adds real value behind the same projection contract.

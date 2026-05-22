@@ -17,6 +17,27 @@ This contract is intentionally narrow: one workflow, one evidence model, one dec
 2. No best-effort authorization.
 3. No free-form LLM policy reasoning.
 4. If any hard dependency is unavailable, fail closed (`quarantine` or `deny` based on policy).
+5. No request-time remote database fan-out for trust-critical context.
+6. Context must arrive as pinned local view state, a causality/freshness token,
+   or a signed context envelope.
+7. Causality-sensitive requests must prove the local view is at least as fresh
+   as the user's last relevant mutation or fail closed.
+8. Zanzibar-style external graph checks are not part of the default RCT hot
+   path; graph inputs must be compiled into bounded local decision artifacts
+   before evaluation.
+
+## Context Infrastructure Pattern
+
+The hot path follows ADR 0001's ecosystem posture:
+
+- Signed Context Envelopes use Biscuit/Macaroon-style caveats for verifiable,
+  request-bound context.
+- Freshness tokens use SpiceDB `ZedToken`/Zanzibar zookie-style semantics to
+  prevent stale authorization after a causally relevant update.
+- Approval, custody, delegation, resource, and telemetry state are projected
+  into subscribed local views through CDC or equivalent event streams.
+- External graph PDP services remain future scale options, not the current
+  execution gate for Restricted Custody Transfer.
 
 ## Endpoint (Proposed)
 
@@ -34,6 +55,11 @@ Optional debug:
   "request_id": "pdp-req-2026-04-02-0001",
   "requested_at": "2026-04-02T08:00:15Z",
   "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+  "context_freshness": {
+    "causality_token": "ctx:approval-transfer-001:000042",
+    "minimum_observed_at": "2026-04-02T08:00:12Z",
+    "local_view_ref": "view:rct-edge-handoff-bay-3:000042"
+  },
   "action_intent": {
     "intent_id": "intent-transfer-001",
     "timestamp": "2026-04-02T08:00:15Z",
@@ -76,6 +102,20 @@ Optional debug:
       "origin_network": "network:warehouse_core"
     }
   },
+  "signed_context_envelopes": [
+    {
+      "envelope_id": "sce-edge-telemetry-001",
+      "issuer": "device:edge-node-7",
+      "issued_at": "2026-04-02T08:00:10Z",
+      "claims_hash": "sha256:edge-context-claims-001",
+      "caveats": [
+        "asset_id=asset:lot-8841",
+        "target_zone=handoff_bay_3",
+        "max_age_seconds=60"
+      ],
+      "signature_ref": "sig:edge-context-001"
+    }
+  ],
   "asset_context": {
     "asset_ref": "asset:lot-8841",
     "current_custodian_ref": "principal:facility_mgr_001",
@@ -95,6 +135,7 @@ Optional debug:
 ### Required Request Fields
 
 - `policy_snapshot_ref`
+- `context_freshness.local_view_ref`
 - `action_intent` (existing SeedCore model shape)
 - `asset_context.asset_ref`
 - `telemetry_context.observed_at`
@@ -106,6 +147,8 @@ Optional debug:
 3. `policy_snapshot_ref` must equal active compiled snapshot for the hot path or `quarantine`.
 4. Missing required approval role -> `deny` or `escalate` (policy-driven).
 5. Telemetry staleness breach -> `quarantine`.
+6. Required local view freshness below `context_freshness.causality_token` -> `quarantine`.
+7. Invalid signed context envelope signature, caveat, or scope -> `deny` or `quarantine` based on policy.
 
 ## Response Contract
 

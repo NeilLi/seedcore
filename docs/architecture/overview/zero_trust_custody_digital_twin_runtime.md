@@ -58,6 +58,24 @@ This is the trust and execution control core:
 - `Custody Graph`: records ownership, storage, transfer, release, and handling transitions for provenance and disputes.
 - `Evidence and Replay Layer`: produces signed, timestamped, replayable evidence for auditability and trust transparency.
 
+### Supporting Context Ecosystem
+
+The PDP remains internal, synchronous, and stateless at decision time. SeedCore
+uses surrounding infrastructure to make that stateless decision safe:
+
+- Biscuit and Macaroon-style caveats inform Signed Context Envelopes, where
+  verifiable context travels with the request instead of being discovered by PDP
+  lookups.
+- Zanzibar zookies and SpiceDB `ZedToken` semantics inform causality/freshness
+  tokens, so a check can require context at least as recent as a user's last
+  relevant action.
+- Debezium-style CDC informs subscribed local views for custody, approval,
+  delegation, resource, and edge state, keeping hot-path reads local and
+  synchronous.
+- Zanzibar-style external graph PDPs remain future scale options. They are not
+  the default current wedge because SeedCore is optimizing first for restricted
+  custody, evidence generation, and execution-token semantics.
+
 ### Cloud Platform Layer
 
 SeedCore integrates with cloud providers, commerce systems, creator platforms, and marketplaces. It acts as a trust layer between AI decisions and platform execution.

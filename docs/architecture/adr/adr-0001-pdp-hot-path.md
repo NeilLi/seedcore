@@ -78,6 +78,18 @@ the accepted decision in this ADR: SeedCore's final governed decision remains a
 single synchronous, stateless, deterministic, fail-closed evaluation over pinned
 inputs.
 
+### The Evolving Technology Ecosystem
+
+SeedCore should adopt proven authorization and consistency patterns around the
+PDP without turning the PDP itself into a stateful service.
+
+| Pattern | Reference direction | SeedCore use | Hot-path disposition |
+| :--- | :--- | :--- | :--- |
+| Tokens and caveats | Biscuit, Macaroons | Signed Context Envelopes and attenuated execution authority. Clients or request assemblers carry cryptographically verifiable context into the request so the PDP does not look up user attributes on the hot path. | Adopt around the PDP. |
+| Causality and consistency | SpiceDB `ZedToken`, Zanzibar zookies | Per-request freshness bounds requiring evaluation against context at least as recent as the user's last relevant action, preventing "New Enemy" and "Ghost Resource" races without locking the source database. | Adopt as request/context metadata. |
+| Subscribed local views | Debezium-style CDC architecture | Stream resource, custody, approval, delegation, and telemetry mutations asynchronously into local or near-local read views so PDP reads stay synchronous and ultra-fast. | Adopt for trust-critical context supply. |
+| External graph PDP | Google Zanzibar-style ReBAC | Useful later if relationship scale dominates. Not the default current wedge because SeedCore must prioritize restricted custody, replayable evidence, and execution-token semantics. | Keep out of the default hot path. |
+
 ## Why
 
 This design is the best balance of feasibility and advantage for the next several years because it matches how modern authorization systems are actually built while staying aligned with SeedCore's custody and replay requirements.

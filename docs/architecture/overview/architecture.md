@@ -10,6 +10,28 @@ For the replayable governed-transition evidence contract, see [ADR 0005: Preserv
 For the ADR index, see [Architecture ADR Index](../adr/README.md).
 In this architecture, "stateless PDP" means stateless at decision time: the final authorization call is synchronous and deterministic over pinned snapshot/context inputs, while surrounding systems manage state assembly and evidence persistence.
 
+## Evolving Technology Ecosystem
+
+SeedCore's PDP stays internal, synchronous, and stateless at decision time. The
+supporting context infrastructure borrows from proven systems:
+
+- **Tokens and caveats:** Biscuit and Macaroon-style attenuation inform Signed
+  Context Envelopes and constrained `ExecutionToken` semantics. Context is
+  pushed into the request as verifiable claims, rather than fetched by the PDP
+  through late user-attribute lookups.
+- **Causality and consistency:** Zanzibar zookies and SpiceDB `ZedToken`
+  semantics inform freshness tokens that require evaluation against context at
+  least as recent as a user's last relevant mutation, preventing "New Enemy" and
+  "Ghost Resource" races.
+- **Subscribed local views:** Debezium-style CDC informs local materialized
+  views for approval, custody, delegation, resource, and edge state. The hot
+  path reads pinned local context synchronously instead of querying remote
+  databases during evaluation.
+- **External graph PDP:** Zanzibar-style ReBAC remains a future scale option,
+  not the default current wedge. SeedCore keeps graph work compiled, bounded,
+  and near-local while prioritizing restricted custody, evidence generation, and
+  execution-token semantics.
+
 ## Primary Flow (Diagram Left → Right)
 1. Human/agent intent is submitted as an action request and routed to the PDP.
 2. The PDP evaluates under a versioned policy snapshot and returns an allow/deny/quarantine decision plus the execution-scoped authority envelope.
