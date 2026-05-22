@@ -14,7 +14,7 @@ import mock_ray_dependencies  # noqa: F401
 
 from seedcore.hal.custody.transition_receipts import build_transition_receipt
 from seedcore.ops.evidence.builder import attach_evidence_bundle
-from seedcore.ops.evidence.verification import canonical_json
+from seedcore.ops.evidence.verification import canonical_json, verify_evidence_bundle_result
 
 
 def test_attach_evidence_bundle_uses_new_canonical_fields():
@@ -191,6 +191,49 @@ def test_evidence_bundle_includes_causal_parent_refs_from_governance_context():
         {"relation": "authorized_by", "artifact_type": "policy_receipt", "artifact_id": bundle["policy_receipt_id"]},
         {"relation": "authorized_by", "artifact_type": "governed_receipt", "artifact_id": "sha256:governed-receipt-1"},
     ]
+
+
+def test_evidence_bundle_carries_signed_state_transition_bindings():
+    task_dict = {
+        "task_id": "task-e-7",
+        "type": "action",
+        "params": {
+            "governance": {
+                "prior_state_binding": {
+                    "twin_type": "asset",
+                    "twin_id": "asset:asset-7",
+                    "state_version": 1,
+                    "binding_hash": "sha256:prior-asset-7",
+                },
+                "result_state_binding": {
+                    "twin_type": "asset",
+                    "twin_id": "asset:asset-7",
+                    "state_version": 2,
+                    "binding_hash": "sha256:result-asset-7",
+                },
+                "action_intent": {
+                    "intent_id": "intent-e-7",
+                    "resource": {"asset_id": "asset-7", "provenance_hash": "prov-7"},
+                },
+                "execution_token": {"token_id": "token-e-7"},
+                "policy_decision": {"allowed": True},
+            }
+        },
+    }
+    envelope = {"payload": {"results": []}, "meta": {"exec": {"finished_at": "2026-03-10T10:12:12+00:00"}}}
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="organ-r",
+        agent_id="agent-r",
+    )["meta"]["evidence_bundle"]
+
+    assert bundle["prior_state_binding"]["binding_hash"] == "sha256:prior-asset-7"
+    assert bundle["result_state_binding"]["binding_hash"] == "sha256:result-asset-7"
+    verification = verify_evidence_bundle_result(bundle)
+    assert verification["verified"] is True
+    assert verification.get("error") is None
 
 
 def test_evidence_bundle_can_select_ed25519_when_policy_allows(monkeypatch):

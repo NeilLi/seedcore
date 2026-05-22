@@ -236,6 +236,12 @@ def build_evidence_bundle(
             ],
         },
     )
+    prior_state_binding, result_state_binding = _resolve_state_transition_bindings(
+        governance=governance,
+        policy_case=policy_case if isinstance(policy_case, dict) else {},
+        authz_graph=authz_graph,
+        governed_receipt=governed_receipt,
+    )
     causal_parent_refs = _extract_causal_parent_refs(
         approval_context=approval_context if isinstance(approval_context, dict) else {},
         policy_receipt=(
@@ -298,6 +304,8 @@ def build_evidence_bundle(
             else None
         ),
         "state_binding_hash": state_binding_hash,
+        "prior_state_binding": prior_state_binding,
+        "result_state_binding": result_state_binding,
         "co_sign_required": co_sign_contract["co_sign_required"],
         "co_sign_status": co_sign_contract["co_sign_status"],
         "transfer_outcome": co_sign_contract["transfer_outcome"],
@@ -456,6 +464,38 @@ def _extract_causal_parent_refs(
     _append("authorized_by", "policy_receipt", policy_receipt.get("policy_receipt_id"))
     _append("authorized_by", "governed_receipt", governed_receipt.get("decision_hash"))
     return refs
+
+
+def _resolve_state_transition_bindings(
+    *,
+    governance: Dict[str, Any],
+    policy_case: Dict[str, Any],
+    authz_graph: Dict[str, Any],
+    governed_receipt: Dict[str, Any],
+) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    containers: List[Dict[str, Any]] = [
+        governance,
+        policy_case,
+        authz_graph,
+        governed_receipt,
+    ]
+    for key in ("state_transition", "state_transition_binding", "replay_state_transition"):
+        for source in (governance, policy_case, authz_graph, governed_receipt):
+            nested = source.get(key) if isinstance(source, dict) else None
+            if isinstance(nested, dict):
+                containers.append(nested)
+
+    prior = _first_mapping_value(containers, "prior_state_binding")
+    result = _first_mapping_value(containers, "result_state_binding")
+    return prior, result
+
+
+def _first_mapping_value(containers: List[Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+    for container in containers:
+        value = container.get(key) if isinstance(container, dict) else None
+        if isinstance(value, dict):
+            return dict(value)
+    return None
 
 
 def _resolve_request_schema_bundle(

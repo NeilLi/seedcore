@@ -188,6 +188,8 @@ class EvidenceBundle(BaseModel):
     decision_graph_snapshot_hash: Optional[str] = None
     decision_graph_snapshot_version: Optional[str] = None
     state_binding_hash: Optional[str] = None
+    prior_state_binding: Optional[Dict[str, Any]] = None
+    result_state_binding: Optional[Dict[str, Any]] = None
     co_sign_required: bool = False
     co_sign_status: Optional[str] = None
     transfer_outcome: Optional[str] = None

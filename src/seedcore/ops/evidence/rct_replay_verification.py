@@ -205,6 +205,8 @@ def evaluate_opt_in_rct_replay_state_transition_fields(
     ]
 
     available = bool(causal_parent_refs or prior_bindings or result_bindings)
+    if not available:
+        issues.append("state_transition_fields_missing")
 
     for ref in causal_parent_refs:
         if not _norm(ref.get("relation")):
@@ -227,7 +229,15 @@ def evaluate_opt_in_rct_replay_state_transition_fields(
         "artifact_type": "rct_state_transition_fields_opt_in",
         "verified": len(issues) == 0,
         "available": available,
-        "error_code": None if len(issues) == 0 else "rct_state_transition_fields_invalid",
+        "error_code": (
+            None
+            if len(issues) == 0
+            else (
+                "rct_state_transition_fields_missing"
+                if not available
+                else "rct_state_transition_fields_invalid"
+            )
+        ),
         "causal_parent_ref_count": len(causal_parent_refs),
         "digital_twin_history_binding_count": max(len(prior_bindings), len(result_bindings)),
     }

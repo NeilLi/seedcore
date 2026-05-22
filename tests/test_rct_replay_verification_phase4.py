@@ -103,6 +103,17 @@ def test_opt_in_state_transition_fields_pass_when_present_and_well_formed():
     assert out["issues"] == []
 
 
+def test_opt_in_state_transition_fields_fail_when_required_fields_are_absent():
+    out = evaluate_opt_in_rct_replay_state_transition_fields(
+        evidence_bundle={},
+        digital_twin_history_refs=[],
+    )
+    assert out["verified"] is False
+    assert out["artifact"]["available"] is False
+    assert out["artifact"]["error_code"] == "rct_state_transition_fields_missing"
+    assert "state_transition_fields_missing" in out["issues"]
+
+
 def test_opt_in_state_transition_fields_fail_when_refs_or_bindings_are_incomplete():
     out = evaluate_opt_in_rct_replay_state_transition_fields(
         evidence_bundle={

@@ -1479,7 +1479,7 @@ class ReplayService:
                 digital_twin_history_refs=list(digital_twin_history_refs),
             )
             artifact_results["rct_state_transition_fields_opt_in"] = strict_state_transition["artifact"]
-            if strict_state_transition["artifact"].get("available") and not strict_state_transition["verified"]:
+            if not strict_state_transition["verified"]:
                 for item in strict_state_transition["issues"]:
                     issues.append(f"rct_state_transition_fields_opt_in:{item}")
         if rct_control_posture_issues:
