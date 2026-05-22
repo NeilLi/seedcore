@@ -13,6 +13,27 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-05-22, Agentic Intent Orchestration Lane Proposed)
+
+SeedCore should keep the current Kafka delegated RCT ingress as the
+high-assurance v1 lane and add a separate stateful workflow lane for broader
+agentic intent. The implementation plan is now captured in
+[agentic_intent_orchestration_plan.md](agentic_intent_orchestration_plan.md).
+
+Immediate adoption order:
+
+1. Freeze and regression-protect `seedcore.intent.delegated.v0` as the narrow
+   Restricted Custody Transfer lane.
+2. Add durable workflow/saga persistence for future
+   `seedcore.intent.workflow.v1` envelopes before any new execution behavior.
+3. Add workflow ingress classification so Kafka can persist agentic workflows
+   without blocking on human approval, telemetry, or long-running execution.
+4. Admit broader operations as policy-governed nodes, but graduate them to
+   execution only after planner, token, tool, evidence, replay, and toxic-path
+   contracts exist.
+5. Make `SCAN -> TRANSFER_CUSTODY` the first multi-node workflow milestone,
+   reusing the existing Agent Action Gateway for the custody-transfer node.
+
 ## Status Update (2026-05-21, Bounded Autonomy Acceleration & Self-Regulation Drill Landed)
 
 SeedCore has landed and targeted-test validated the **Gated Action DX MVP** and
