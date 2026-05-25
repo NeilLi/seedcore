@@ -13,6 +13,34 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-05-25, Execution Replay Studio Drafted)
+
+The next "Visualize It" step is now captured in
+[execution_replay_studio_development_plan.md](execution_replay_studio_development_plan.md).
+Execution Replay Studio is a read-only forensic expansion of the existing
+replay/verification surface, not a new authority path.
+
+It should make one governed execution inspectable end to end:
+
+- execution steps from request through verifier outcome;
+- policy snapshots, decision hashes, approval/scope fields, and context hashes;
+- signed telemetry refs, payload hashes, freshness, and replay/nonce status;
+- signer chains, trust-bundle membership, and revocation posture;
+- deterministic reproduction commands for replay bundles and offline verifier
+  checks.
+
+Immediate adoption order:
+
+1. compose a fixture-backed Studio payload from existing `verification-detail`,
+   `replay`, and runtime replay endpoints;
+2. add `/studio?workflow_id=...` as an advanced operator-console route linked
+   from the current replay page;
+3. render the execution step rail, artifact inspector, policy snapshot panel,
+   telemetry hash verifier, signer chain validator, and reproduction panel;
+4. add happy-path, stale-telemetry, signer-violation, and replay-tamper tests;
+5. keep public proof narrow and keep Studio operator/internal unless access
+   control explicitly permits richer forensics.
+
 ## Status Update (2026-05-22, Agentic Intent Orchestration Lane Proposed)
 
 SeedCore should keep the current Kafka delegated RCT ingress as the

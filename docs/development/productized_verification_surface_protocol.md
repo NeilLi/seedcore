@@ -115,6 +115,31 @@ Manual high-assurance addition:
 
 ---
 
+## Phase 4: Execution Replay Studio Inspection
+
+Execution Replay Studio is the advanced read-only forensic expansion of the
+operator replay page. It is specified in
+[execution_replay_studio_development_plan.md](execution_replay_studio_development_plan.md).
+
+Manual high-assurance checks:
+
+- open `/studio?workflow_id=<workflow_id>` for the same workflow inspected in
+  transfer status, asset forensics, replay, and proof surfaces
+- confirm the step rail reconstructs the chain from request through terminal
+  verifier outcome
+- confirm policy snapshot ids, decision hashes, approval/scope fields, and
+  context hashes match the verification-detail and replay payloads
+- confirm telemetry refs expose payload SHA-256, signer key ref, asset binding,
+  workflow binding, freshness, and replay/nonce status
+- confirm signer-chain rows show trust-bundle membership and revocation posture
+  for every signed artifact
+- confirm the reproduction panel names the replay bundle, trust bundle, offline
+  verifier command, and expected report fields when those refs are available
+- confirm public proof views remain narrow and do not expose internal-only
+  telemetry or operator forensic material
+
+---
+
 ## Sign-off Checklist
 
 - Receipts: signed evidence and policy snapshot fields present
@@ -126,6 +151,7 @@ Manual high-assurance addition:
 - Receipt Chain Fields: `policy_receipt_id` and `transition_receipt_ids` render from runtime artifacts
 - Signer Provenance: operator forensic view shows signer provenance for both policy and transition receipts
 - Runtime Custody State: operator forensic view renders `current_custodian_ref`, `current_zone_ref`, `custody_point_ref`, and `authority_source` from runtime custody state
+- Execution Replay Studio: operator/internal forensic view can inspect ordered execution steps, policy snapshots, telemetry hashes, signer chains, and reproduction commands without adding write controls
 
 ## Additional Sign-off Checks For Slice 1
 

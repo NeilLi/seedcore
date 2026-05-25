@@ -1014,6 +1014,12 @@ The Audit-Trail UI is successful in Q2 if:
 5. ~~Implement asset forensic page~~ **Done (Screen 3 contract-driven)**
 6. ~~Implement replay or verification page enhancements and namespace alignment~~ **Done (Screen 4 verification summary + actions; dedicated `/replay` links)**
 7. ~~Add runbooks for lookup and investigation~~ **Done (expanded runbook corpus + preset lookups + `/runbook/lookup`)**
+8. **Add Execution Replay Studio as an advanced follow-on**:
+   read-only `/studio?workflow_id=...` expansion of Screen 4 that lets an
+   operator inspect execution steps, replay controls, policy snapshots,
+   telemetry hashes, signer chains, artifact refs, and reproduction commands.
+   See
+   [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md).
 
 ## 14. Strong recommendation
 

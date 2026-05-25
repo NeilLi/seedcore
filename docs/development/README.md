@@ -93,18 +93,22 @@ Start here for the active spine:
 4. [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) section 4.1 -
    operator legibility layer (queue signals, replay verdict, deterministic +
    optional LLM copilot API).
-5. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
+5. [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md) -
+   "Visualize It" development step for an advanced forensic replay UI that
+   makes execution steps, policy snapshots, telemetry hashes, signer chains,
+   and timeline reproduction inspectable without adding new authority.
+6. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
    collectible rare-shoe transfer as a commercial vertical scene on the same
    RCT contract: authentication registration first, bounded custody authority
    second, replayable proof last.
-6. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
+7. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
    boundary memo for using AP2 as the upstream agent-payment protocol while
    keeping SeedCore focused on custody, evidence, and replay-valid closure.
-7. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
+8. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
    technical memo for turning customer business rules into executable,
    testable Policy Knowledge Graphs that compile into PDP rules, authority
    constraints, evidence requirements, reason codes, and replay fixtures.
-8. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
+9. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
    for declaring governed action boundaries without making developers or coding
    agents manually wire PDP calls, execution tokens, evidence bundles, verifier
    outcomes, and replay proof chains. **MVP implemented and targeted-test
@@ -114,21 +118,21 @@ Start here for the active spine:
    `seedcore.agent_action.check_policy` exposes explicit-authority preflight
    checks; and `src/seedcore/sdk/schema_exporter.py` exports path-qualified
    gated-action manifests for PDP/PKG scaffolding.
-9. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+10. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-10. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+11. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-11. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+12. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-12. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+13. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
@@ -147,7 +151,7 @@ This table is the shortest answer to "what stage are we in?"
 | 5. Trust hardening | Prove signer provenance, TPM/KMS policies, and operational drills | Checkpoint crossed, not fully closed | [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md), [`tpm_fleet_rollout_maturity_decision_memo.md`](tpm_fleet_rollout_maturity_decision_memo.md) |
 | 6. Multi-party governance | Make approval envelopes and dual-control workflows authoritative end to end | Partially implemented | [`archive/historical/next_killer_demo_contract_freeze.md`](archive/historical/next_killer_demo_contract_freeze.md), [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md) |
 | 7. Hot-path operability | Promote `shadow -> canary -> enforce` with parity, latency, and rollback evidence | Contract + observability implemented; **remote Kind topology green** for core gates and drills; full **verification API inside cluster** still the open topology milestone | [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md), [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md), [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md), [`kube_topology_validation_q2_signoff.md`](kube_topology_validation_q2_signoff.md) |
-| 8. Verification product surface | Make operator/replay UX contract-driven and legible without weakening proof | Advanced and active | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) |
+| 8. Verification product surface | Make operator/replay UX contract-driven and legible without weakening proof | Advanced and active; Studio follow-on drafted | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md), [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md) |
 | 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
 | 10. External agent boundary | Expose a stable agent-action gateway and public SDK for developer convenience | **v1 productized + Agent Self-Regulation baseline landed**: `@gated_action` shadow/enforce wrapper, SDK preflight, telemetry checks, thread-local evaluator/executor utilities, explicit-authority MCP `check_policy`, schema exporter scaffolding, reference adapters, and MCP evaluate path | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gated_action_dx_layer.md`](gated_action_dx_layer.md) |
 | 11. Sidecar innovation tracks | Keep robotics/VLA and deep twin research from diluting the commerce RCT story | Sidecar: intake/twin tracks support the wedge as **upstream evidence**, not a second product center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
@@ -263,20 +267,25 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
 4. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-5. Add the rare-shoe RCT fixture path as a commercial vertical scene:
+5. Build the **Execution Replay Studio** follow-on as a read-only forensic
+   expansion of the replay page: inspect every execution step, policy snapshot,
+   telemetry hash, signer chain, and reproduction command without adding new
+   authority-bearing controls
+   ([`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)).
+6. Add the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
    adapter inputs for listing/quote/order/value, signed edge telemetry for
    NFC/scan handoff, hash-bound forensic video proof, and proof-surface checks
    that keep public proof narrow.
-6. Advance edge telemetry closure and signed forensic-block linkage without
+7. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-7. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
+8. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
    drills in shadow/simulation only:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
-8. Define the first AI-led self-healing target around a degraded-edge or
+9. Define the first AI-led self-healing target around a degraded-edge or
    telemetry/outbox failure, with the repair loop ending in a reviewable patch
    and gate evidence rather than direct production mutation.
-9. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
+10. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
 
 Primary planning docs:
 
@@ -298,6 +307,7 @@ Primary planning docs:
 - [`current_next_steps.md`](current_next_steps.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
+- [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
 - [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
@@ -385,6 +395,8 @@ there is a strong reason. Prefer this ownership split:
 - `current_next_steps.md` = live status and immediate execution order
 - `seedcore_2026_execution_plan.md` = workstreams, stage goals, and sequencing
 - `q2_2026_audit_trail_ui_spec.md` = product surface and operator UX contract
+- `execution_replay_studio_development_plan.md` = advanced read-only forensic
+  replay UI step over the existing verification/replay contracts
 - `north_star_autonomous_trade_environment.md` = final ambition and long-range
   architecture reference
 - `local_kafka_streams_schedule.md` = local Kafka transport rollout (intent,
