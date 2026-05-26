@@ -221,9 +221,15 @@ class RoutingDirectory:
         self.agent_metrics: Dict[str, Dict[str, Any]] = {}
 
         # --- 4. Unified Caching Strategy ---
-        # REMOVED: self._instance_cache, self._last_cache_miss_log (Redundant)
-        # INSTALLED: Dedicated RouteCache with jitter to prevent thundering herd
+        # Route decisions and Ray actor handles have different lifecycles. Keep
+        # them separate so route entries never collide with live actor handles.
         self.route_cache = RouteCache(ttl_s=self.config["cache_ttl"], jitter_s=0.5)
+        self._actor_handle_cache: Dict[str, Tuple[Any, float]] = {}
+        self._actor_cache_ttl = float(self.config["cache_ttl"])
+        self._last_cache_miss_log: Dict[str, float] = {}
+        self._cache_miss_log_interval = float(
+            self._raw_config.get("cache_miss_log_interval", 30.0)
+        )
 
         # --- 5. Rule & Table Initialization ---
         self._initialize_routing_rules()
@@ -307,23 +313,110 @@ class RoutingDirectory:
     async def get_target_handle(self, agent_id: str) -> Any:
         """
         Optimized accessor to get an execution handle (Ray Actor).
-        Checks Cache -> Checks Organism Registry.
+        Checks actor-handle cache -> TunnelManager registry.
         """
-        # 1. Hot Cache Hit
-        cached_handle = self.route_cache.get(agent_id)
-        if cached_handle:
-            return cached_handle
+        now = time.time()
 
-        # 2. Cache Miss - Resolve via Organism (Complex Logic)
-        # Note: In a real Ray cluster, 'getting' the handle is often just
-        # resolving the name, which is fast.
+        # 1. Hot Cache Hit
+        cached = self._actor_handle_cache.get(agent_id)
+        if cached:
+            cached_handle, cached_at = cached
+            if now - cached_at < self._actor_cache_ttl:
+                return cached_handle
+            self._actor_handle_cache.pop(agent_id, None)
+
+        # 2. Cache Miss - Resolve via TunnelManager/Organism registry
         handle = await self.tunnel_manager.get_actor_handle(agent_id)
 
         if handle:
-            # 3. Write back to cache
-            self.route_cache.set(agent_id, handle)
+            self._actor_handle_cache[agent_id] = (handle, now)
 
         return handle
+
+    async def _validate_actor_handle(
+        self,
+        *,
+        logical_id: str,
+        handle: Any,
+        cached_at: float,
+        cache_hit: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Return live actor metadata if the cached/resolved handle responds."""
+        cache_age = time.time() - cached_at
+        try:
+            ping = getattr(handle, "ping", None)
+            if ping is not None and hasattr(ping, "remote"):
+                await asyncio.to_thread(lambda: ray.get(ping.remote(), timeout=1.0))
+            return {
+                "logical_id": logical_id,
+                "handle": handle,
+                "cache_hit": cache_hit,
+                "cache_age_ms": cache_age * 1000,
+                "status": "alive",
+            }
+        except Exception:
+            self._actor_handle_cache.pop(logical_id, None)
+            return None
+
+    async def _resolve_actor_handle(self, logical_id: str) -> Any:
+        """Resolve a Ray actor handle using the configured namespace."""
+        try:
+            return ray.get_actor(logical_id, namespace=RAY_NAMESPACE)
+        except Exception:
+            return await self.tunnel_manager.get_actor_handle(logical_id)
+
+    async def _get_active_instance(self, logical_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Ray-native instance resolver with TTL-based handle caching and liveness
+        validation. This cache is intentionally separate from route_cache.
+        """
+        now = time.time()
+
+        cached = self._actor_handle_cache.get(logical_id)
+        if cached:
+            handle, cached_at = cached
+            if now - cached_at < self._actor_cache_ttl:
+                live = await self._validate_actor_handle(
+                    logical_id=logical_id,
+                    handle=handle,
+                    cached_at=cached_at,
+                    cache_hit=True,
+                )
+                if live:
+                    return live
+            else:
+                self._actor_handle_cache.pop(logical_id, None)
+
+        async with self._lock:
+            cached = self._actor_handle_cache.get(logical_id)
+            if cached:
+                handle, cached_at = cached
+                if now - cached_at < self._actor_cache_ttl:
+                    live = await self._validate_actor_handle(
+                        logical_id=logical_id,
+                        handle=handle,
+                        cached_at=cached_at,
+                        cache_hit=True,
+                    )
+                    if live:
+                        return live
+
+            try:
+                handle = await self._resolve_actor_handle(logical_id)
+                if not handle:
+                    return None
+                self._actor_handle_cache[logical_id] = (handle, now)
+                return await self._validate_actor_handle(
+                    logical_id=logical_id,
+                    handle=handle,
+                    cached_at=now,
+                    cache_hit=False,
+                )
+            except Exception as e:
+                self._rate_limited_log(
+                    logical_id, f"Failed resolving Ray actor '{logical_id}': {e}"
+                )
+                return None
 
     @staticmethod
     def _normalize(x: Optional[str]) -> Optional[str]:
@@ -566,99 +659,6 @@ class RoutingDirectory:
         if now - last >= self._cache_miss_log_interval:
             logger.warning(msg)
             self._last_cache_miss_log[key] = now
-
-    async def _get_active_instance(self, logical_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Ray-native instance resolver with:
-            - TTL-based handle caching
-            - Single-flight protection
-            - Actor liveness validation via .ping()
-            - Dead-instance eviction
-            - Lazy refresh strategy
-        """
-        now = time.time()
-        cache_key = logical_id
-
-        # -------------------------------
-        # 1. Fast-path cache lookup
-        # -------------------------------
-        entry = self._instance_cache.get(cache_key)
-        if entry:
-            handle, cached_at = entry
-            cache_age = now - cached_at
-
-            if cache_age < self._cache_ttl:
-                # -------------------------------
-                # 1A. Validate Ray actor is alive
-                # -------------------------------
-                try:
-                    await asyncio.to_thread(
-                        lambda: ray.get(handle.ping.remote(), timeout=1.0)
-                    )
-                    return {
-                        "logical_id": logical_id,
-                        "handle": handle,
-                        "cache_hit": True,
-                        "cache_age_ms": cache_age * 1000,
-                        "status": "alive",
-                    }
-                except Exception:
-                    # Dead actor → evict and fall through to refresh
-                    self._instance_cache.pop(cache_key, None)
-
-        # -------------------------------
-        # 2. Single-flight slow path
-        # -------------------------------
-        async with self._lock:
-            # Double-check after acquiring lock
-            entry = self._instance_cache.get(cache_key)
-            if entry:
-                handle, cached_at = entry
-                cache_age = now - cached_at
-
-                if cache_age < self._cache_ttl:
-                    try:
-                        await asyncio.to_thread(
-                            lambda: ray.get(handle.ping.remote(), timeout=1.0)
-                        )
-                        return {
-                            "logical_id": logical_id,
-                            "handle": handle,
-                            "cache_hit": True,
-                            "cache_age_ms": cache_age * 1000,
-                            "status": "alive",
-                        }
-                    except Exception:
-                        self._instance_cache.pop(cache_key, None)
-
-            # -------------------------------
-            # 3. Resolve new Ray actor handle
-            # -------------------------------
-            try:
-                # Use Ray's built-in actor lookup by name (with namespace)
-                handle = ray.get_actor(logical_id, namespace=RAY_NAMESPACE)
-
-                # Validate actor responds
-                await asyncio.to_thread(
-                    lambda: ray.get(handle.ping.remote(), timeout=1.0)
-                )
-
-                # Cache it
-                self._instance_cache[cache_key] = (handle, now)
-
-                return {
-                    "logical_id": logical_id,
-                    "handle": handle,
-                    "cache_hit": False,
-                    "cache_age_ms": 0.0,
-                    "status": "alive",
-                }
-
-            except Exception as e:
-                self._rate_limited_log(
-                    logical_id, f"Failed resolving Ray actor '{logical_id}': {e}"
-                )
-                return None
 
     # --- TaskPayload Decomposition ---
     def extract_router_inputs(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1603,9 +1603,9 @@ class RoutingDirectory:
             }
 
     def clear_cache(self):
-        """Clear the instance cache and LRU cache."""
-        self._instance_cache.clear()
-        # Clear LRU cache
+        """Clear route, actor-handle, and normalization caches."""
+        self.route_cache.clear()
+        self._actor_handle_cache.clear()
         self._cached_route_key.cache_clear()
 
     def get_routing_stats(self) -> Dict[str, Any]:
@@ -1614,6 +1614,7 @@ class RoutingDirectory:
             "rules_by_task_count": len(self.rules_by_task),
             "rules_by_domain_count": len(self.rules_by_domain),
             "agent_metrics_count": len(self.agent_metrics),
-            "instance_cache_size": len(self._instance_cache),
+            "route_cache": self.route_cache.stats(),
+            "actor_handle_cache_size": len(self._actor_handle_cache),
             "lru_cache_info": self._cached_route_key.cache_info()._asdict(),
         }

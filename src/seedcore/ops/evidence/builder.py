@@ -251,6 +251,7 @@ def build_evidence_bundle(
         ),
         governed_receipt=governed_receipt,
     )
+    signed_telemetry_refs = _extract_signed_telemetry_refs(task_dict)
     payload = {
         "evidence_bundle_id": str(uuid.uuid4()),
         "task_id": str(task_dict.get("task_id") or task_dict.get("id") or "unknown_task"),
@@ -341,7 +342,7 @@ def build_evidence_bundle(
                 else None
             ),
         },
-        "telemetry_refs": [
+        "telemetry_refs": signed_telemetry_refs + [
             {
                 "kind": "telemetry_snapshot",
                 "captured_at": executed_at,
@@ -431,6 +432,40 @@ def _extract_trust_gap_codes(
                 codes.append(str(item.get("code")))
         return codes
     return []
+
+
+def _extract_signed_telemetry_refs(task_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
+    params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
+    governance = params.get("governance", {}) if isinstance(params.get("governance"), dict) else {}
+    action_intent = governance.get("action_intent") if isinstance(governance.get("action_intent"), dict) else {}
+
+    candidates = [
+        params.get("telemetry_refs"),
+        governance.get("telemetry_refs"),
+        action_intent.get("telemetry_refs") if isinstance(action_intent, dict) else None,
+    ]
+    closure_payload = (
+        governance.get("closure_payload")
+        if isinstance(governance.get("closure_payload"), dict)
+        else {}
+    )
+    candidates.append(closure_payload.get("telemetry_refs"))
+
+    refs: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, list):
+            continue
+        for item in candidate:
+            if not isinstance(item, dict):
+                continue
+            ref = dict(item)
+            key = _canonical_json(ref)
+            if key in seen:
+                continue
+            seen.add(key)
+            refs.append(ref)
+    return refs
 
 
 def _extract_causal_parent_refs(

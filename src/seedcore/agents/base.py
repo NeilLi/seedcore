@@ -1705,8 +1705,9 @@ class BaseAgent:
                 exc_info=True,
             )
 
-        # Coerce to V2 TaskView (use original_task, which may have been modified by behaviors)
-        tv = self._coerce_task_view(original_task)
+        # Coerce to V2 TaskView from the behavior-mutated task dictionary so
+        # pre-hook changes drive the actual execution path for all task shapes.
+        tv = self._coerce_task_view(task_dict)
         self._inject_general_query_tool_if_needed(task_dict, tv)
         logger.debug(
             f"[{self.agent_id}] TaskView coerced: task_id={tv.task_id}, type={tv.task_type}, "
@@ -1781,6 +1782,15 @@ class BaseAgent:
                     started_ts=started_ts,
                     started_monotonic=started_monotonic,
                 )
+
+        governed_twin_reject = self._guard_governed_twin_state(
+            task_dict,
+            tv,
+            started_ts=started_ts,
+            started_monotonic=started_monotonic,
+        )
+        if governed_twin_reject is not None:
+            return governed_twin_reject
 
         logger.debug(
             f"[{self.agent_id}] ✅ Guardrails passed: capability={curr_cap:.2f}, mem_util={curr_mem:.2f}, load={self.load:.2f}"
@@ -2135,7 +2145,7 @@ class BaseAgent:
             for behavior in self._behaviors:
                 if behavior.is_enabled():
                     try:
-                        modified = await behavior.execute_task_post(task, task_dict, result)
+                        modified = await behavior.execute_task_post(task_dict, task_dict, result)
                         if modified:
                             result = modified
                     except Exception as e:
@@ -2150,41 +2160,6 @@ class BaseAgent:
                 exc_info=True,
             )
         result = await self._close_governed_custody_loop(task_dict, result)
-        return result
-
-        # Build result envelope
-        result = make_envelope(
-            task_id=tv.task_id,
-            success=success,
-            payload=payload_data,
-            error=None if success else (tool_errors[0].get("error") if tool_errors else "execution_failed"),
-            error_type=None if success else "tool_execution_error",
-            retry=True,
-            decision_kind=None,  # Agent doesn't make routing decisions
-            meta=meta_data,
-            path="agent",
-        )
-        
-        # --- Behavior Plugin System: Post-execution hooks ---
-        try:
-            for behavior in self._behaviors:
-                if behavior.is_enabled():
-                    try:
-                        modified = await behavior.execute_task_post(task, task_dict, result)
-                        if modified:
-                            result = modified
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self.agent_id}] Behavior {behavior.__class__.__name__} "
-                            f"execute_task_post hook failed: {e}",
-                            exc_info=True,
-                        )
-        except Exception as e:
-            logger.error(
-                f"[{self.agent_id}] Error in behavior post-execution hooks: {e}",
-                exc_info=True,
-            )
-        
         return result
 
     def emit_signal(self, **signals: Any) -> Dict[str, Any]:
@@ -2511,6 +2486,181 @@ class BaseAgent:
     def _is_governed_task(self, task_dict: Dict[str, Any]) -> bool:
         governance = self._extract_governance_context(task_dict)
         return bool(governance.get("action_intent"))
+
+    def _guard_governed_twin_state(
+        self,
+        task_dict: Dict[str, Any],
+        tv: "_TaskView",
+        *,
+        started_ts: str,
+        started_monotonic: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Fail closed locally when governed execution carries blocked twin state."""
+        if not self._is_governed_task(task_dict):
+            return None
+
+        governance = self._extract_governance_context(task_dict)
+        twins = self._extract_relevant_twin_snapshot(governance)
+        if not twins:
+            return None
+
+        for twin_key, twin in twins.items():
+            if self._twin_has_fail_closed_lockout(twin):
+                reason = f"twin_quarantined:{twin_key}"
+                logger.warning(
+                    "[%s] ❌ Governed task blocked by twin lockout/quarantine: %s",
+                    self.agent_id,
+                    twin_key,
+                )
+                return self._reject_result(
+                    tv,
+                    reason=reason,
+                    started_ts=started_ts,
+                    started_monotonic=started_monotonic,
+                )
+
+        expected_versions = self._extract_expected_twin_versions(task_dict, governance)
+        for twin_key, expected_version in expected_versions.items():
+            twin = twins.get(twin_key)
+            if not isinstance(twin, dict):
+                continue
+            actual_version = self._extract_twin_state_version(twin)
+            if actual_version is None:
+                continue
+            if actual_version != expected_version:
+                reason = (
+                    f"twin_state_version_mismatch:{twin_key}:"
+                    f"expected={expected_version}:actual={actual_version}"
+                )
+                logger.warning("[%s] ❌ %s", self.agent_id, reason)
+                return self._reject_result(
+                    tv,
+                    reason=reason,
+                    started_ts=started_ts,
+                    started_monotonic=started_monotonic,
+                )
+
+        return None
+
+    def _extract_relevant_twin_snapshot(
+        self, governance: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        policy_case = (
+            governance.get("policy_case")
+            if isinstance(governance.get("policy_case"), dict)
+            else {}
+        )
+        candidates = [
+            policy_case.get("relevant_twin_snapshot"),
+            governance.get("relevant_twin_snapshot"),
+        ]
+        policy_decision = (
+            governance.get("policy_decision")
+            if isinstance(governance.get("policy_decision"), dict)
+            else {}
+        )
+        authz_graph = (
+            policy_decision.get("authz_graph")
+            if isinstance(policy_decision.get("authz_graph"), dict)
+            else {}
+        )
+        candidates.append(authz_graph.get("relevant_twin_snapshot"))
+
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                return {
+                    str(key): dict(value)
+                    for key, value in candidate.items()
+                    if isinstance(value, dict)
+                }
+        return {}
+
+    def _extract_expected_twin_versions(
+        self, task_dict: Dict[str, Any], governance: Dict[str, Any]
+    ) -> Dict[str, int]:
+        params = task_dict.get("params", {}) if isinstance(task_dict.get("params"), dict) else {}
+        policy_case = (
+            governance.get("policy_case")
+            if isinstance(governance.get("policy_case"), dict)
+            else {}
+        )
+        containers = [
+            params.get("state_contract") if isinstance(params.get("state_contract"), dict) else {},
+            governance,
+            policy_case,
+        ]
+        for container in containers:
+            raw = container.get("expected_twin_versions") if isinstance(container, dict) else None
+            if isinstance(raw, dict):
+                out: Dict[str, int] = {}
+                for key, value in raw.items():
+                    try:
+                        out[str(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                if out:
+                    return out
+
+        action_intent = (
+            governance.get("action_intent")
+            if isinstance(governance.get("action_intent"), dict)
+            else {}
+        )
+        resource = (
+            action_intent.get("resource")
+            if isinstance(action_intent.get("resource"), dict)
+            else {}
+        )
+        expected_asset_version = resource.get("expected_state_version")
+        try:
+            return {"asset": int(expected_asset_version)} if expected_asset_version is not None else {}
+        except (TypeError, ValueError):
+            return {}
+
+    def _twin_has_fail_closed_lockout(self, twin: Dict[str, Any]) -> bool:
+        if bool(twin.get("is_quarantined")) or bool(twin.get("quarantined")):
+            return True
+        if str(twin.get("lifecycle_state") or "").strip().upper() in {
+            "QUARANTINED",
+            "VERIFICATION_FAILED",
+        }:
+            return True
+
+        custody = twin.get("custody") if isinstance(twin.get("custody"), dict) else {}
+        if bool(custody.get("quarantined")) or bool(custody.get("is_quarantined")):
+            return True
+
+        governance = twin.get("governance") if isinstance(twin.get("governance"), dict) else {}
+        governance_state = (
+            twin.get("governance_state")
+            if isinstance(twin.get("governance_state"), dict)
+            else {}
+        )
+        for source in (twin, governance, governance_state):
+            lockouts = source.get("lockouts") if isinstance(source, dict) else None
+            if isinstance(lockouts, list) and any(
+                str(item).strip() == "result_verifier_lockout" for item in lockouts
+            ):
+                return True
+            if isinstance(source, dict) and isinstance(source.get("result_verifier_lockout"), dict):
+                return True
+        return False
+
+    def _extract_twin_state_version(self, twin: Dict[str, Any]) -> Optional[int]:
+        for key in ("state_version", "version"):
+            if twin.get(key) is not None:
+                try:
+                    return int(twin[key])
+                except (TypeError, ValueError):
+                    return None
+        for key in ("state_binding", "prior_state_binding", "result_state_binding"):
+            value = twin.get(key)
+            if isinstance(value, dict) and value.get("state_version") is not None:
+                try:
+                    return int(value["state_version"])
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     def _extract_evidence_bundle(self, result: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(result, dict):

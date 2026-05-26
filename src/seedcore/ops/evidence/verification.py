@@ -10,6 +10,10 @@ from seedcore.models.evidence_bundle import (
     SignerMetadata,
     TrustProof,
 )
+from seedcore.models.edge_telemetry import (
+    EDGE_TELEMETRY_ENVELOPE_VERSION,
+    SignedEdgeTelemetryRefV0,
+)
 from seedcore.ops.evidence.policy import (
     canonical_json,
     resolve_public_key_from_registry,
@@ -283,6 +287,13 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
         result["error"] = str(fingerprint_result.get("error"))
         return result
 
+    telemetry_result = _verify_required_signed_edge_telemetry(model)
+    result["signed_edge_telemetry"] = telemetry_result
+    if telemetry_result.get("error") is not None:
+        result["verified"] = False
+        result["error"] = str(telemetry_result.get("error"))
+        return result
+
     co_signature_result = _verify_evidence_bundle_co_signatures(model)
     result.update(
         {
@@ -303,6 +314,105 @@ def verify_evidence_bundle_result(bundle: Mapping[str, Any] | EvidenceBundle) ->
         result["verified"] = False
         result["error"] = str(co_signature_result.get("error"))
     return result
+
+
+def _verify_required_signed_edge_telemetry(model: EvidenceBundle) -> dict[str, Any]:
+    required = _signed_edge_telemetry_required(model)
+    signed_refs = [
+        ref
+        for ref in model.telemetry_refs
+        if isinstance(ref, dict)
+        and ref.get("contract_version") == EDGE_TELEMETRY_ENVELOPE_VERSION
+    ]
+    result = {
+        "required": required,
+        "signed_ref_count": len(signed_refs),
+        "verified": True,
+        "error": None,
+    }
+    if not required:
+        return result
+    if not signed_refs:
+        result.update({"verified": False, "error": "missing_signed_edge_telemetry"})
+        return result
+
+    expected_asset = _expected_evidence_asset_ref(model)
+    for ref in signed_refs:
+        try:
+            parsed = SignedEdgeTelemetryRefV0(**dict(ref))
+        except Exception:
+            result.update({"verified": False, "error": "invalid_signed_edge_telemetry_ref"})
+            return result
+        if expected_asset and _normalize_asset_ref(parsed.asset_ref) != _normalize_asset_ref(expected_asset):
+            result.update({"verified": False, "error": "signed_edge_telemetry_asset_mismatch"})
+            return result
+    return result
+
+
+def _signed_edge_telemetry_required(model: EvidenceBundle) -> bool:
+    inputs = model.evidence_inputs if isinstance(model.evidence_inputs, dict) else {}
+    request_schema = (
+        inputs.get("request_schema_bundle")
+        if isinstance(inputs.get("request_schema_bundle"), dict)
+        else {}
+    )
+    policy_receipt = (
+        inputs.get("policy_receipt")
+        if isinstance(inputs.get("policy_receipt"), dict)
+        else {}
+    )
+    containers = [
+        inputs,
+        request_schema,
+        request_schema.get("security_contract")
+        if isinstance(request_schema.get("security_contract"), dict)
+        else {},
+        policy_receipt.get("decision")
+        if isinstance(policy_receipt.get("decision"), dict)
+        else {},
+    ]
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in (
+            "require_signed_edge_telemetry",
+            "signed_edge_telemetry_required",
+            "hardware_anchored_telemetry_required",
+        ):
+            if bool(container.get(key)):
+                return True
+        required_evidence = container.get("required_evidence")
+        if isinstance(required_evidence, list) and any(
+            str(item).strip() == "signed_edge_telemetry" for item in required_evidence
+        ):
+            return True
+    return False
+
+
+def _expected_evidence_asset_ref(model: EvidenceBundle) -> Optional[str]:
+    inputs = model.evidence_inputs if isinstance(model.evidence_inputs, dict) else {}
+    policy_receipt = (
+        inputs.get("policy_receipt")
+        if isinstance(inputs.get("policy_receipt"), dict)
+        else {}
+    )
+    for candidate in (
+        policy_receipt.get("asset_ref"),
+        model.asset_fingerprint.capture_context.get("asset_id")
+        if model.asset_fingerprint is not None
+        and isinstance(model.asset_fingerprint.capture_context, dict)
+        else None,
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _normalize_asset_ref(value: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized.startswith("asset:"):
+        return normalized.split(":", 1)[1]
+    return normalized
 
 
 def verify_hal_capture_envelope(envelope: Mapping[str, Any] | HALCaptureEnvelope) -> Optional[str]:

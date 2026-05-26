@@ -39,6 +39,21 @@ class _StubOrganism:
         )
 
 
+class _CapabilityStubOrganism(_StubOrganism):
+    def __init__(self):
+        super().__init__()
+        self.organs = {
+            "orchestration_organ": object(),
+            "user_experience_organ": object(),
+            "utility_organ": object(),
+        }
+        self.organ_specs = {
+            Specialization.DEVICE_ORCHESTRATOR.value: "orchestration_organ",
+            Specialization.USER_LIAISON.value: "user_experience_organ",
+            Specialization.GENERALIST.value: "utility_organ",
+        }
+
+
 @pytest.mark.asyncio
 async def test_router_raises_on_missing_required_specialization():
     router = RoutingDirectory(organism=_StubOrganism())
@@ -92,6 +107,65 @@ def test_router_allows_general_query_for_generalist_soft_routing():
     )
 
     assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_soft_specialization_with_disallowed_tools_retargets_to_capable_liaison():
+    router = RoutingDirectory(organism=_CapabilityStubOrganism())
+
+    async def _select_agent_from_organ(organ_id, routing_in):
+        if organ_id == "user_experience_organ":
+            assert routing_in["required_specialization"] == Specialization.USER_LIAISON.value
+            return "agent-user-liaison"
+        return "agent-other"
+
+    router._select_agent_from_organ = _select_agent_from_organ
+    payload = {
+        "task_id": "task-soft-tool-fallback",
+        "type": "action",
+        "params": {
+            "routing": {
+                "specialization": Specialization.DEVICE_ORCHESTRATOR.value,
+                "tools": ["chat.reply"],
+            }
+        },
+    }
+
+    decision = await router.route_only(payload)
+
+    assert decision.organ_id == "user_experience_organ"
+    assert decision.agent_id == "agent-user-liaison"
+    assert decision.reason == "rbac_soft_fallback_user_liaison"
+    assert payload["params"]["_router"]["organ_id"] == "user_experience_organ"
+    assert payload["params"]["routing"]["required_specialization"] == Specialization.USER_LIAISON.value
+
+
+@pytest.mark.asyncio
+async def test_required_specialization_is_not_retargeted_by_tool_fallback():
+    router = RoutingDirectory(organism=_CapabilityStubOrganism())
+
+    async def _select_agent_from_organ(organ_id, routing_in):
+        assert organ_id == "orchestration_organ"
+        assert routing_in["required_specialization"] == Specialization.DEVICE_ORCHESTRATOR.value
+        return "agent-device-orchestrator"
+
+    router._select_agent_from_organ = _select_agent_from_organ
+    payload = {
+        "task_id": "task-hard-spec-wins",
+        "type": "action",
+        "params": {
+            "routing": {
+                "required_specialization": Specialization.DEVICE_ORCHESTRATOR.value,
+                "tools": ["chat.reply"],
+            }
+        },
+    }
+
+    decision = await router.route_only(payload)
+
+    assert decision.organ_id == "orchestration_organ"
+    assert decision.agent_id == "agent-device-orchestrator"
+    assert decision.reason == "coordinator_required_specialization"
 
 
 @pytest.mark.asyncio

@@ -395,6 +395,70 @@ async def test_base_agent_behavior_hooks():
 
 
 @pytest.mark.asyncio
+async def test_base_agent_rejects_governed_task_with_quarantined_twin_snapshot():
+    agent = BaseAgent(agent_id="agent-twin-guard")
+
+    result = await agent.execute_task(
+        {
+            "task_id": "task-quarantined-twin",
+            "type": "action",
+            "params": {
+                "governance": {
+                    "action_intent": {
+                        "intent_id": "intent-quarantined",
+                        "resource": {"asset_id": "asset-1"},
+                    },
+                    "policy_case": {
+                        "relevant_twin_snapshot": {
+                            "asset": {
+                                "state_version": 4,
+                                "custody": {"quarantined": True},
+                            }
+                        }
+                    },
+                }
+            },
+        }
+    )
+
+    assert result["success"] is False
+    assert result["error_type"] == "rejection"
+    assert result["error"] == "twin_quarantined:asset"
+    assert result["retry"] is False
+
+
+@pytest.mark.asyncio
+async def test_base_agent_rejects_governed_task_with_stale_twin_version():
+    agent = BaseAgent(agent_id="agent-twin-version-guard")
+
+    result = await agent.execute_task(
+        {
+            "task_id": "task-stale-twin",
+            "type": "action",
+            "params": {
+                "governance": {
+                    "action_intent": {
+                        "intent_id": "intent-stale",
+                        "resource": {"asset_id": "asset-1"},
+                    },
+                    "expected_twin_versions": {"asset": 8},
+                    "policy_case": {
+                        "relevant_twin_snapshot": {
+                            "asset": {"state_version": 7, "custody": {}}
+                        }
+                    },
+                }
+            },
+        }
+    )
+
+    assert result["success"] is False
+    assert result["error_type"] == "rejection"
+    assert result["error"] == "twin_state_version_mismatch:asset:expected=8:actual=7"
+    assert result["retry"] is False
+
+
+@pytest.mark.asyncio
 async def test_base_agent_shutdown_behaviors():
     """
     Test that behaviors are properly shut down when agent shuts down.

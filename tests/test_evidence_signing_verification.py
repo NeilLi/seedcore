@@ -20,6 +20,7 @@ from seedcore.hal.custody.transition_receipts import (
     build_transition_receipt,
     verify_transition_receipt_result,
 )
+from seedcore.models.edge_telemetry import EDGE_TELEMETRY_ENVELOPE_VERSION
 from seedcore.ops.evidence.builder import attach_evidence_bundle
 from seedcore.ops.evidence.verification import (
     build_signed_artifact,
@@ -100,6 +101,69 @@ def test_evidence_completeness_includes_required_artifacts() -> None:
     assert bundle["evidence_inputs"]["transition_receipts"][0]["transition_receipt_id"] == transition_receipt["transition_receipt_id"]
     assert bundle["telemetry_refs"]
     assert bundle["asset_fingerprint"]["fingerprint_hash"]
+
+
+def test_required_signed_edge_telemetry_fails_closed_when_missing() -> None:
+    task_dict = _build_task_dict()
+    task_dict["params"]["governance"]["request_schema_bundle"] = {
+        "security_contract": {
+            "require_signed_edge_telemetry": True,
+        }
+    }
+    envelope = {
+        "payload": {"results": []},
+        "meta": {"exec": {"finished_at": "2026-03-24T10:10:10+00:00"}},
+    }
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="physical_actuation_organ",
+        agent_id="actuator_agent_1",
+    )["meta"]["evidence_bundle"]
+
+    verification = verify_evidence_bundle_result(bundle)
+
+    assert verification["verified"] is False
+    assert verification["error"] == "missing_signed_edge_telemetry"
+    assert verification["signed_edge_telemetry"]["required"] is True
+
+
+def test_required_signed_edge_telemetry_accepts_closure_grade_ref() -> None:
+    task_dict = _build_task_dict()
+    task_dict["params"]["governance"]["request_schema_bundle"] = {
+        "security_contract": {
+            "required_evidence": ["signed_edge_telemetry"],
+        }
+    }
+    signed_ref = {
+        "contract_version": EDGE_TELEMETRY_ENVELOPE_VERSION,
+        "telemetry_id": "telemetry-signing-1",
+        "asset_ref": "asset-signing-1",
+        "edge_node_ref": "node:robot-1",
+        "observed_at": "2026-03-24T10:10:09+00:00",
+        "sensor_kind": "motor_torque",
+        "payload_sha256": "sha256:telemetry-payload-1",
+        "signer_key_ref": "kms:edge:robot-1",
+    }
+    task_dict["params"]["governance"]["telemetry_refs"] = [signed_ref]
+    envelope = {
+        "payload": {"results": []},
+        "meta": {"exec": {"finished_at": "2026-03-24T10:10:10+00:00"}},
+    }
+
+    bundle = attach_evidence_bundle(
+        task_dict=task_dict,
+        envelope=envelope,
+        organ_id="physical_actuation_organ",
+        agent_id="actuator_agent_1",
+    )["meta"]["evidence_bundle"]
+    verification = verify_evidence_bundle_result(bundle)
+
+    assert bundle["telemetry_refs"][0] == signed_ref
+    assert verification["verified"] is True
+    assert verification["signed_edge_telemetry"]["required"] is True
+    assert verification["signed_edge_telemetry"]["signed_ref_count"] == 1
 
 
 def test_signer_abstraction_supports_hmac_and_ed25519(monkeypatch) -> None:
