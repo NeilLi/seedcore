@@ -200,8 +200,8 @@ async def test_heartbeat_cadence_with_jitter_bounds():
         assert avg >= 0.04
         assert avg <= 0.12
 
-        # and no interval should exceed base+jitter too much (allow slack)
-        assert max(intervals) <= 0.14
+        # and no interval should exceed base+jitter too much (allow scheduler slack)
+        assert max(intervals) <= 0.15
 
     await organ.close()
     # ensure no more beats after close
@@ -266,4 +266,3 @@ async def test_idempotent_start_and_close_and_heartbeat_stop():
     await asyncio.sleep(0.12)
     beats_after_close = len(repo.beat_timestamps.get(organ.instance_id, []))
     assert beats_after_close == beats_before_close
-

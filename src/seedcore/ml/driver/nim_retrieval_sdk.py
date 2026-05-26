@@ -6,7 +6,12 @@ NIM Retrieval (embeddings) driver using the OpenAI SDK.
 from __future__ import annotations
 import os
 from typing import List, Optional, Union, Dict, Any
-from openai import OpenAI
+from types import SimpleNamespace
+
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - exercised in environments without openai
+    OpenAI = None  # type: ignore[assignment]
 
 
 class NimRetrievalSDK:
@@ -21,12 +26,28 @@ class NimRetrievalSDK:
         model: str = "nvidia/nv-embedqa-e5-v5",
         timeout: int = 60,
     ):
-        self.client = OpenAI(
-            base_url=base_url.rstrip("/"),
-            api_key=api_key or os.getenv("NIM_LLM_API_KEY", "none"),
-            timeout=timeout,
-        )
+        if OpenAI is None:
+            self.client = SimpleNamespace()
+        else:
+            self.client = OpenAI(
+                base_url=base_url.rstrip("/"),
+                api_key=api_key or os.getenv("NIM_LLM_API_KEY", "none"),
+                timeout=timeout,
+            )
+        self._ensure_embeddings_interface()
         self.model = model
+
+    def _ensure_embeddings_interface(self) -> None:
+        """Provide a patchable embeddings surface for minimal OpenAI stubs."""
+        embeddings = getattr(self.client, "embeddings", None)
+        create = getattr(embeddings, "create", None) if embeddings is not None else None
+        if callable(create):
+            return
+
+        def _missing_create(*_args, **_kwargs):
+            raise RuntimeError("OpenAI client does not expose embeddings.create")
+
+        self.client.embeddings = SimpleNamespace(create=_missing_create)  # type: ignore[attr-defined]
 
     def embed(
         self,
@@ -63,4 +84,3 @@ class NimRetrievalSDK:
         na = math.sqrt(sum(x * x for x in a))
         nb = math.sqrt(sum(y * y for y in b))
         return dot / (na * nb) if na and nb else 0.0
-

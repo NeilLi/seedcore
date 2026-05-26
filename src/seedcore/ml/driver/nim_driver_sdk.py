@@ -3,8 +3,13 @@ seedcore/ml/driver/nim_driver_sdk.py
 OpenAI SDK–based implementation of the NIM mode driver.
 """
 
-from openai import OpenAI
 from typing import List, Dict, Optional
+from types import SimpleNamespace
+
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - exercised in environments without openai
+    OpenAI = None  # type: ignore[assignment]
 
 
 class NimDriverSDK:
@@ -20,12 +25,31 @@ class NimDriverSDK:
         model: str = "meta/llama-3.1-8b-base",
         timeout: int = 60,
     ):
-        self.client = OpenAI(
-            base_url=base_url.rstrip("/"),
-            api_key=api_key or "none",
-            timeout=timeout,
-        )
+        if OpenAI is None:
+            self.client = SimpleNamespace()
+        else:
+            self.client = OpenAI(
+                base_url=base_url.rstrip("/"),
+                api_key=api_key or "none",
+                timeout=timeout,
+            )
+        self._ensure_chat_completions_interface()
         self.model = model
+
+    def _ensure_chat_completions_interface(self) -> None:
+        """Provide a patchable chat-completions surface for minimal OpenAI stubs."""
+        chat = getattr(self.client, "chat", None)
+        completions = getattr(chat, "completions", None) if chat is not None else None
+        create = getattr(completions, "create", None) if completions is not None else None
+        if callable(create):
+            return
+
+        def _missing_create(*_args, **_kwargs):
+            raise RuntimeError("OpenAI client does not expose chat.completions.create")
+
+        self.client.chat = SimpleNamespace(  # type: ignore[attr-defined]
+            completions=SimpleNamespace(create=_missing_create)
+        )
 
     def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """
@@ -64,4 +88,3 @@ if __name__ == "__main__":
     messages = [{"role": "user", "content": "Hello from NIM Llama (SDK)!"}]
     response = client.chat(messages)
     print(response)
-

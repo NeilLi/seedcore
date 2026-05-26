@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from seedcore.ml.driver import (
     NimDriverSDK,
     NimClient,
+    NimRetrievalSDK,
     get_driver,
     create_fallback_driver,
 )
@@ -88,6 +89,23 @@ def test_nimdriver_sdk():
         assert run_driver(driver, "NimDriverSDK (OpenAI SDK)") is True
 
 
+def test_nimdriver_sdk_exposes_patchable_chat_surface_for_minimal_openai_stub():
+    """Regression: other tests may install a minimal OpenAI stub without .chat."""
+    driver = NimDriverSDK(base_url=BASE_URL, api_key=API_KEY, model=MODEL)
+
+    assert hasattr(driver.client, "chat")
+    assert hasattr(driver.client.chat, "completions")
+    assert callable(driver.client.chat.completions.create)
+
+
+def test_nimretrieval_sdk_exposes_patchable_embeddings_surface_without_openai():
+    """Regression: importing seedcore.ml.driver must not require openai to be installed."""
+    driver = NimRetrievalSDK(base_url=BASE_URL, api_key=API_KEY)
+
+    assert hasattr(driver.client, "embeddings")
+    assert callable(driver.client.embeddings.create)
+
+
 def test_get_driver_auto_detection():
     """Test get_driver() environment auto-detection."""
     os.environ["SEEDCORE_USE_SDK"] = "true"
@@ -147,4 +165,3 @@ if __name__ == "__main__":
     print("\n=== Summary ===")
     print(json.dumps(results, indent=2))
     print("\nAll tests completed.")
-
