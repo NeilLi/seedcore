@@ -425,7 +425,6 @@ Product meaning:
   shipment, container, or other real-world item under governed transfer
 - `product_ref` is the external commerce-facing identity when the workflow
   includes a commerce system such as Shopify Sandbox
-- this contract does not imply a digital-asset-only scope
 
 ## Request Contract
 

@@ -2,6 +2,12 @@
 
 This note maps the next Persistent Twin and Settlement Track extensions onto the current SeedCore implementation.
 
+Companion reference:
+[`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md)
+distills the broader research into SeedCore's intended scope: AI-governed
+real-world state settlement, cryptographic integrity for evidence, and
+append-only remediation.
+
 The referenced research artifact (`persistent_twin_and_settlement_research_analysis.md`) was not present in this workspace at review time, so this plan is based on the report dimensions supplied in the task request plus the current code in:
 
 - `src/seedcore/models/digital_twin.py`

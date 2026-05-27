@@ -136,6 +136,11 @@ Start here for the active spine:
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
+14. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
+   distilled reference for persistent twin settlement as a real-world AI
+   reliability pattern: pluggable settlement protocols, proof-vector
+   accumulation, append-only compensation, and cryptographic integrity for
+   evidence.
 
 ## 3. Stage Goals And Status Map
 
