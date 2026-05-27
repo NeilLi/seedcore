@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Lunar Horizon: Speculative Moon Base Scenario</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Chosen Palette: Lunar Minimalist (Warm Neutrals & Slate with Gold Accents - Slate-50 background, Slate-800 text, Yellow-600 accents) -->
+    <!-- Application Structure Plan: The SPA uses a vertical narrative flow (scrollytelling) divided into four core thematic sections: The Catalyst (Earth's AI shift), The Economy (Resources), The Experience (Tourism), and The Evolution (Cultural shift). This structure was chosen because it chronologically guides the user from the "Why" (Earth's automation) to the "What" (Business/Resources) and finally the "Who" (Humanity's evolution into a 3D species). Interactive tabs and charts allow users to drill into specific data points without leaving the narrative flow. -->
+    <!-- Visualization & Content Choices: 
+         1. AI Job Shift -> Goal: Show the push factor. Viz: Line Chart (Chart.js). Justification: Best for showing trends over time (Earth job loss vs Space job gain).
+         2. Lunar Economy -> Goal: Break down business opportunities. Viz: Doughnut Chart (Chart.js). Justification: Easily conveys proportions of the new economic sectors.
+         3. Lunar Life/Tourism -> Goal: Explore qualitative experiences. Viz: Interactive Tabbed Content (HTML/JS). Justification: Allows users to self-select areas of interest (Tourism, Living, Arts) without cluttering the screen.
+         Library/Method: Chart.js and Vanilla JS DOM manipulation. 
+         CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+            scroll-behavior: smooth;
+        }
+        
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 350px;
+            max-height: 400px;
+            padding: 1rem;
+            background: #ffffff;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 400px;
+            }
+        }
+
+        .tab-btn.active {
+            border-bottom: 2px solid #ca8a04;
+            color: #ca8a04;
+            font-weight: 600;
+        }
+        
+        .nav-link:hover {
+            color: #ca8a04;
+            transition: color 0.3s ease;
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-yellow-200 selection:text-slate-900">
+
+    <nav class="fixed w-full bg-white/90 backdrop-blur-md z-50 border-b border-slate-200 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex-shrink-0 flex items-center font-bold text-xl tracking-tight text-slate-800">
+                    <span class="text-2xl mr-2">🌕</span> Project Artemis & Beyond
+                </div>
+                <div class="hidden md:flex space-x-8">
+                    <a href="#catalyst" class="nav-link text-sm font-medium text-slate-600">The Catalyst</a>
+                    <a href="#economy" class="nav-link text-sm font-medium text-slate-600">New Economy</a>
+                    <a href="#experience" class="nav-link text-sm font-medium text-slate-600">Lunar Life</a>
+                    <a href="#evolution" class="nav-link text-sm font-medium text-slate-600">3D Evolution</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <header class="pt-32 pb-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
+        <h1 class="text-5xl md:text-6xl font-extrabold text-slate-900 tracking-tight mb-6">
+            The Singularity of a <br>
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-yellow-600 to-amber-500">3D Universe Species</span>
+        </h1>
+        <p class="mt-4 text-xl text-slate-600 max-w-3xl mx-auto leading-relaxed">
+            A speculative sidecar scenario exploring how AI, robotics, lunar resources, and long-duration habitats could reshape humanity's off-world future. It is written as a narrative thought experiment, not a sourced forecast.
+        </p>
+        <div class="mt-8 max-w-3xl mx-auto rounded-lg border border-yellow-200 bg-yellow-50 px-5 py-4 text-left text-sm leading-6 text-slate-700">
+            <strong class="text-slate-900">Scenario note:</strong> Numbers and timelines below are illustrative. Treat them as prompts for strategic imagination, not as predictions or engineering sign-off data.
+        </div>
+        <div class="mt-10">
+            <a href="#catalyst" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-full shadow-sm text-white bg-slate-900 hover:bg-slate-800 transition-colors">
+                Explore the Report ⬇
+            </a>
+        </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-24 space-y-32">
+
+        <section id="catalyst" class="scroll-mt-24">
+            <div class="text-center mb-12">
+                <span class="text-3xl mb-4 block">🤖</span>
+                <h2 class="text-3xl font-bold text-slate-900">The Catalyst: Earth's Automated Future</h2>
+                <div class="w-16 h-1 bg-yellow-500 mx-auto mt-4 rounded"></div>
+            </div>
+            
+            <p class="text-lg text-slate-600 max-w-4xl mx-auto mb-12 text-center leading-relaxed">
+                This section frames one possible driver for rapid space colonization. If advanced artificial intelligence and robotics reduce demand for some forms of terrestrial labor, more human attention, capital, and ambition may shift toward orbital and deep-space work. The chart below compares two illustrative scenarios rather than settled labor-market projections.
+            </p>
+
+            <div class="bg-slate-100 p-6 md:p-8 rounded-2xl">
+                <div class="flex flex-col md:flex-row justify-between items-center mb-6">
+                    <div>
+                        <h3 class="text-xl font-bold text-slate-800">Employment Shift Projection (2025 - 2060)</h3>
+                        <p class="text-sm text-slate-500 mt-1">Illustrative AI-era labor pressure vs. off-world opportunity</p>
+                    </div>
+                    <div class="mt-4 md:mt-0 flex space-x-2">
+                        <button type="button" data-scenario="optimistic" onclick="updateLineChart('optimistic')" class="scenario-btn px-4 py-2 text-sm font-medium rounded bg-slate-800 text-white hover:bg-slate-700 transition">Optimistic Timeline</button>
+                        <button type="button" data-scenario="aggressive" onclick="updateLineChart('aggressive')" class="scenario-btn px-4 py-2 text-sm font-medium rounded bg-white border border-slate-300 hover:bg-slate-50 transition">Aggressive Timeline</button>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="employmentChart"></canvas>
+                </div>
+                <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
+                    <div class="p-4 bg-white rounded-lg shadow-sm">
+                        <div class="text-2xl font-bold text-slate-800" id="stat-earth">-62%</div>
+                        <div class="text-sm text-slate-500">Traditional Labor Pressure by 2050</div>
+                    </div>
+                    <div class="p-4 bg-white rounded-lg shadow-sm">
+                        <div class="text-2xl font-bold text-yellow-600" id="stat-space">+360%</div>
+                        <div class="text-sm text-slate-500">Off-World Sector Growth Index</div>
+                    </div>
+                    <div class="p-4 bg-white rounded-lg shadow-sm">
+                        <div class="text-2xl font-bold text-slate-800">2038</div>
+                        <div class="text-sm text-slate-500">Scenario Tipping Point</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="economy" class="scroll-mt-24">
+            <div class="text-center mb-12">
+                <span class="text-3xl mb-4 block">⛏️</span>
+                <h2 class="text-3xl font-bold text-slate-900">The New Economy: Rare Materials & Services</h2>
+                <div class="w-16 h-1 bg-yellow-500 mx-auto mt-4 rounded"></div>
+            </div>
+            
+            <p class="text-lg text-slate-600 max-w-4xl mx-auto mb-12 text-center leading-relaxed">
+                Here we explore possible economic foundations for early lunar settlement. The Moon may offer useful local resources, manufacturing advantages, and volatile deposits that reduce dependence on Earth launches. New service industries, from habitat maintenance to low-gravity logistics, could become part of a larger interplanetary economy if transport, power, safety, and governance constraints are solved.
+            </p>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                <div class="chart-container h-80">
+                    <canvas id="economyChart"></canvas>
+                </div>
+                <div>
+                    <h3 class="text-2xl font-bold text-slate-800 mb-6">Key Economic Drivers</h3>
+                    <ul class="space-y-6">
+                        <li class="flex items-start">
+                            <span class="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-yellow-100 text-yellow-600 text-xl font-bold mr-4">1</span>
+                            <div>
+                                <h4 class="text-lg font-semibold text-slate-900">Helium-3 Mining</h4>
+                                <p class="text-slate-600 mt-1">A speculative long-horizon resource case: lunar regolith contains implanted solar-wind volatiles, but commercial fusion fuel use remains unproven.</p>
+                            </div>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-yellow-100 text-yellow-600 text-xl font-bold mr-4">2</span>
+                            <div>
+                                <h4 class="text-lg font-semibold text-slate-900">Rare Earth Elements (REE)</h4>
+                                <p class="text-slate-600 mt-1">A possible manufacturing input, though extraction economics, processing energy, and environmental tradeoffs would need hard evidence.</p>
+                            </div>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-yellow-100 text-yellow-600 text-xl font-bold mr-4">3</span>
+                            <div>
+                                <h4 class="text-lg font-semibold text-slate-900">Infrastructure & Logistics</h4>
+                                <p class="text-slate-600 mt-1">Construction of automated habitats, zero-gravity manufacturing plants, and a localized "Lunar Internet" communications array.</p>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="experience" class="scroll-mt-24">
+            <div class="text-center mb-12">
+                <span class="text-3xl mb-4 block">🎫</span>
+                <h2 class="text-3xl font-bold text-slate-900">The Lunar Experience: Tourism & Lifestyle</h2>
+                <div class="w-16 h-1 bg-yellow-500 mx-auto mt-4 rounded"></div>
+            </div>
+
+            <p class="text-lg text-slate-600 max-w-4xl mx-auto mb-12 text-center leading-relaxed">
+                Beyond industry, the Moon will become a destination. This section details the human experience on the lunar surface. Interact with the tabs below to explore how low gravity and isolated environments will completely redefine tourism, sports, and daily living.
+            </p>
+
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                <div class="flex border-b border-slate-200 overflow-x-auto">
+                    <button class="tab-btn active flex-1 py-4 px-6 text-center text-sm font-medium text-slate-500 hover:text-slate-800 whitespace-nowrap focus:outline-none" onclick="switchTab('tourism', this)">
+                        Incredible Tours
+                    </button>
+                    <button class="tab-btn flex-1 py-4 px-6 text-center text-sm font-medium text-slate-500 hover:text-slate-800 whitespace-nowrap focus:outline-none" onclick="switchTab('habitat', this)">
+                        Living Conditions
+                    </button>
+                    <button class="tab-btn flex-1 py-4 px-6 text-center text-sm font-medium text-slate-500 hover:text-slate-800 whitespace-nowrap focus:outline-none" onclick="switchTab('recreation', this)">
+                        Low-G Recreation
+                    </button>
+                </div>
+                
+                <div class="p-8 md:p-12 min-h-[300px]" id="tab-content">
+                    <div id="content-tourism" class="tab-pane block animation-fade">
+                        <h3 class="text-2xl font-bold text-slate-800 mb-4">A New Paradigm of Travel</h3>
+                        <p class="text-slate-600 mb-6 leading-relaxed">
+                            Lunar tourism will offer experiences impossible on Earth. Initial offerings will include high-altitude surface rovers across the Sea of Tranquility and crater-rim resorts offering Earth-rise views. The service industry here will focus heavily on extreme-environment hospitality, guided EVA (Extravehicular Activity) tours, and historic site preservation (e.g., Apollo landing zones).
+                        </p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                <div class="font-bold text-slate-800">Earth-Rise Viewing</div>
+                                <div class="text-sm text-slate-500 mt-1">Premium resort suites built into crater walls.</div>
+                            </div>
+                            <div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                <div class="font-bold text-slate-800">Historic Apollo Treks</div>
+                                <div class="text-sm text-slate-500 mt-1">Hover-tours over preserved 20th-century landing sites.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="content-habitat" class="tab-pane hidden animation-fade">
+                        <h3 class="text-2xl font-bold text-slate-800 mb-4">Sub-Surface Arcologies</h3>
+                        <p class="text-slate-600 mb-6 leading-relaxed">
+                            To protect against radiation and micrometeorites, some future bases may investigate subterranean lava tubes or excavated shelters. In this scenario, protected caverns eventually become multi-level settlement spaces with controlled lighting, shared life-support infrastructure, and dense communal architecture.
+                        </p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                <div class="font-bold text-slate-800">Protected Subsurface Habitats</div>
+                                <div class="text-sm text-slate-500 mt-1">Natural shielding concepts for long-duration crews and later settlement growth.</div>
+                            </div>
+                            <div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                <div class="font-bold text-slate-800">Aeroponic Gardens</div>
+                                <div class="text-sm text-slate-500 mt-1">Self-sustaining food and oxygen generation loops.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="content-recreation" class="tab-pane hidden animation-fade">
+                        <h3 class="text-2xl font-bold text-slate-800 mb-4">The Joy of 1/6th Gravity</h3>
+                        <p class="text-slate-600 mb-6 leading-relaxed">
+                            The physical limitations of the human body will be completely rewritten. We will see the invention of entirely new sports utilizing three-dimensional movement in massive domed arenas. Dance, acrobatics, and physical theater will evolve to incorporate sustained flight and slow-motion descents.
+                        </p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                <div class="font-bold text-slate-800">Lunar Aviation</div>
+                                <div class="text-sm text-slate-500 mt-1">Human-powered flight inside pressurized mega-domes.</div>
+                            </div>
+                            <div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                                <div class="font-bold text-slate-800">3D Court Sports</div>
+                                <div class="text-sm text-slate-500 mt-1">Games played on the walls and ceiling as well as the floor.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="evolution" class="scroll-mt-24 pb-20">
+            <div class="text-center mb-12">
+                <span class="text-3xl mb-4 block">🧬</span>
+                <h2 class="text-3xl font-bold text-slate-900">The Singularity of a 3D Species</h2>
+                <div class="w-16 h-1 bg-yellow-500 mx-auto mt-4 rounded"></div>
+            </div>
+
+            <p class="text-lg text-slate-600 max-w-4xl mx-auto mb-12 text-center leading-relaxed">
+                The most provocative claim in this scenario is cognitive rather than economic. By learning to live across multiple gravity environments, habitats, and orbital systems, humanity may develop new habits of imagination, design, and coordination.
+            </p>
+
+            <div class="relative max-w-3xl mx-auto">
+                <div class="absolute inset-0 flex items-center justify-center w-8 left-0 md:left-1/2 md:-ml-4 h-full">
+                    <div class="h-full w-1 bg-slate-200"></div>
+                </div>
+
+                <div class="relative z-10 space-y-12">
+                    <div class="flex flex-col md:flex-row items-center md:justify-between w-full">
+                        <div class="md:w-5/12 pl-12 md:pl-0 md:text-right mb-4 md:mb-0">
+                            <h4 class="text-xl font-bold text-slate-900">Cognitive Liberation</h4>
+                            <p class="text-slate-600 text-sm mt-2">As AI absorbs more routine work, some human effort may be redirected toward abstract thought, philosophy, and extreme engineering challenges.</p>
+                        </div>
+                        <div class="absolute left-0 md:left-1/2 -ml-3 w-6 h-6 rounded-full bg-yellow-500 border-4 border-white shadow"></div>
+                        <div class="md:w-5/12 pl-12 md:pl-8 hidden md:block text-slate-400 font-bold">Phase I</div>
+                    </div>
+
+                    <div class="flex flex-col md:flex-row items-center md:justify-between w-full">
+                        <div class="md:w-5/12 pl-12 md:pr-8 hidden md:block text-right text-slate-400 font-bold">Phase II</div>
+                        <div class="absolute left-0 md:left-1/2 -ml-3 w-6 h-6 rounded-full bg-slate-800 border-4 border-white shadow"></div>
+                        <div class="md:w-5/12 pl-12 md:pl-0 mb-4 md:mb-0">
+                            <h4 class="text-xl font-bold text-slate-900">Spatial Creativity</h4>
+                            <p class="text-slate-600 text-sm mt-2">Art, architecture, and design are no longer constrained by gravity. Sculptures float, buildings are built downward, and music acoustics adapt to different atmospheric mixes.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col md:flex-row items-center md:justify-between w-full">
+                        <div class="md:w-5/12 pl-12 md:pl-0 md:text-right mb-4 md:mb-0">
+                            <h4 class="text-xl font-bold text-slate-900 text-yellow-600">The 3D Universe Species</h4>
+                            <p class="text-slate-600 text-sm mt-2">The psychological threshold where humanity no longer views itself as "Earthlings" but as citizens of the cosmos, instinctively thinking in 3D orbital mechanics and multi-planetary logistics.</p>
+                        </div>
+                        <div class="absolute left-0 md:left-1/2 -ml-4 w-8 h-8 rounded-full bg-gradient-to-tr from-yellow-600 to-yellow-400 border-4 border-white shadow flex items-center justify-center text-white text-xs">✦</div>
+                        <div class="md:w-5/12 pl-12 md:pl-8 hidden md:block text-slate-400 font-bold">The Singularity</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-slate-900 text-slate-400 py-12 text-center text-sm border-t border-slate-800">
+        <p>© 2026 Lunar Horizon Initiative. Speculative Interactive Scenario.</p>
+    </footer>
+
+    <script>
+        const earthJobsOpt = [100, 85, 70, 55, 45, 40, 38];
+        const spaceJobsOpt = [5, 12, 25, 45, 75, 120, 180];
+        
+        const earthJobsAgg = [100, 70, 45, 30, 22, 18, 15];
+        const spaceJobsAgg = [5, 20, 50, 90, 150, 250, 400];
+        
+        const labels = ['2025', '2030', '2035', '2040', '2045', '2050', '2060'];
+
+        const chartAvailable = typeof Chart !== 'undefined';
+        const employmentCanvas = document.getElementById('employmentChart');
+        let employmentChart = null;
+
+        function renderEmploymentFallback(scenario) {
+            const earthData = scenario === 'optimistic' ? earthJobsOpt : earthJobsAgg;
+            const spaceData = scenario === 'optimistic' ? spaceJobsOpt : spaceJobsAgg;
+            employmentCanvas.classList.add('hidden');
+            employmentCanvas.parentElement.querySelector('#employmentFallback')?.remove();
+            employmentCanvas.insertAdjacentHTML('afterend', `
+                <div id="employmentFallback" class="space-y-4 text-sm">
+                    ${labels.map((year, index) => `
+                        <div class="grid grid-cols-[3rem_1fr] gap-3 items-center">
+                            <div class="font-semibold text-slate-500">${year}</div>
+                            <div class="space-y-2">
+                                <div>
+                                    <div class="mb-1 flex justify-between text-xs text-slate-500">
+                                        <span>Traditional labor</span><span>${earthData[index]}%</span>
+                                    </div>
+                                    <div class="h-2 rounded bg-slate-100"><div class="h-2 rounded bg-slate-400" style="width: ${earthData[index]}%"></div></div>
+                                </div>
+                                <div>
+                                    <div class="mb-1 flex justify-between text-xs text-yellow-700">
+                                        <span>Off-world index</span><span>${spaceData[index]}</span>
+                                    </div>
+                                    <div class="h-2 rounded bg-yellow-100"><div class="h-2 rounded bg-yellow-600" style="width: ${Math.min(spaceData[index] / 4, 100)}%"></div></div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `);
+        }
+
+        if (chartAvailable) {
+            const employmentCtx = employmentCanvas.getContext('2d');
+            employmentChart = new Chart(employmentCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Earth Traditional Labor (%)',
+                            data: earthJobsOpt,
+                            borderColor: '#94a3b8',
+                            backgroundColor: 'rgba(148, 163, 184, 0.1)',
+                            borderWidth: 2,
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: 'Off-World / Automation Sectors (Index)',
+                            data: spaceJobsOpt,
+                            borderColor: '#ca8a04',
+                            backgroundColor: 'rgba(202, 138, 4, 0.1)',
+                            borderWidth: 3,
+                            tension: 0.4,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top', labels: { usePointStyle: true, padding: 20 } },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleFont: { size: 14 },
+                            bodyFont: { size: 13 },
+                            padding: 12,
+                            cornerRadius: 8
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { borderDash: [4, 4], color: '#f1f5f9' }
+                        },
+                        x: {
+                            grid: { display: false }
+                        }
+                    },
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false }
+                }
+            });
+        } else {
+            renderEmploymentFallback('optimistic');
+        }
+
+        function updateLineChart(scenario) {
+            const earthData = scenario === 'optimistic' ? earthJobsOpt : earthJobsAgg;
+            const spaceData = scenario === 'optimistic' ? spaceJobsOpt : spaceJobsAgg;
+            if(scenario === 'optimistic') {
+                document.getElementById('stat-earth').innerText = '-62%';
+                document.getElementById('stat-space').innerText = '+360%';
+            } else {
+                document.getElementById('stat-earth').innerText = '-85%';
+                document.getElementById('stat-space').innerText = '+800%';
+            }
+            document.querySelectorAll('.scenario-btn').forEach(btn => {
+                const isActive = btn.dataset.scenario === scenario;
+                btn.classList.toggle('bg-slate-800', isActive);
+                btn.classList.toggle('text-white', isActive);
+                btn.classList.toggle('hover:bg-slate-700', isActive);
+                btn.classList.toggle('bg-white', !isActive);
+                btn.classList.toggle('border', !isActive);
+                btn.classList.toggle('border-slate-300', !isActive);
+                btn.classList.toggle('hover:bg-slate-50', !isActive);
+            });
+            if (employmentChart) {
+                employmentChart.data.datasets[0].data = earthData;
+                employmentChart.data.datasets[1].data = spaceData;
+                employmentChart.update();
+            } else {
+                renderEmploymentFallback(scenario);
+            }
+        }
+
+        const economyCanvas = document.getElementById('economyChart');
+        const economyLabels = ['Resource Extraction (He-3, REE)', 'Space Tourism', 'Infrastructure/Logistics', 'R&D / Science'];
+        const economyData = [45, 25, 20, 10];
+        const economyColors = ['#0f172a', '#ca8a04', '#64748b', '#cbd5e1'];
+
+        if (chartAvailable) {
+            const economyCtx = economyCanvas.getContext('2d');
+            new Chart(economyCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: economyLabels,
+                    datasets: [{
+                        data: economyData,
+                        backgroundColor: economyColors,
+                        borderWidth: 0,
+                        hoverOffset: 10
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 20,
+                                font: { family: "'Segoe UI', sans-serif", size: 12 }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            padding: 12,
+                            cornerRadius: 8,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) label += ': ';
+                                    if (context.parsed !== null) label += context.parsed + '%';
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+            economyCanvas.classList.add('hidden');
+            economyCanvas.insertAdjacentHTML('afterend', `
+                <div class="space-y-5 text-sm">
+                    ${economyLabels.map((label, index) => `
+                        <div>
+                            <div class="mb-2 flex justify-between gap-4 text-slate-600">
+                                <span class="font-medium">${label}</span><span>${economyData[index]}%</span>
+                            </div>
+                            <div class="h-3 rounded-full bg-slate-100">
+                                <div class="h-3 rounded-full" style="width: ${economyData[index]}%; background-color: ${economyColors[index]}"></div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `);
+        }
+
+        function switchTab(tabId, btnElement) {
+            const panes = document.querySelectorAll('.tab-pane');
+            panes.forEach(pane => {
+                pane.classList.add('hidden');
+                pane.classList.remove('block');
+            });
+
+            const btns = document.querySelectorAll('.tab-btn');
+            btns.forEach(btn => btn.classList.remove('active'));
+
+            document.getElementById('content-' + tabId).classList.remove('hidden');
+            document.getElementById('content-' + tabId).classList.add('block');
+            btnElement.classList.add('active');
+        }
+    </script>
+</body>
+</html>
