@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import mock_ray_dependencies  # noqa: F401
 
 from seedcore.services.digital_twin_service import DigitalTwinService
+from seedcore.services.settlement import SettlementRegistry, SettlementVerification
 from test_replay_service import _build_audit_record
 
 
@@ -233,6 +234,12 @@ async def test_settle_from_evidence_bundle_promotes_to_authoritative():
     assert result["updated"] == 1
     assert captured[0]["revision_stage"] == "AUTHORITATIVE"
     assert captured[0]["custody"]["authoritative_node_id"] == "robot_sim://unit-1"
+    payload = event_dao.append_event.await_args.kwargs["payload"]
+    assert payload["settlement_type"] == "delivery"
+    assert payload["verification"]["verified"] is True
+    assert payload["verification"]["reason"] == "ok"
+    assert payload["proof_package"]["proof_version"] == "settlement.delivery.v1"
+    assert payload["proof_package"]["resolved_node_id"] == "robot_sim://unit-1"
 
 
 @pytest.mark.asyncio
@@ -272,6 +279,76 @@ async def test_transition_recorded_stays_pending_authority_until_settlement():
     assert captured[0]["revision_stage"] == "EXECUTED"
     assert captured[0]["custody"]["pending_authority"] is True
     assert captured[0]["custody"]["transition_event_id"] == "transition-1"
+
+
+@pytest.mark.asyncio
+async def test_custom_settlement_protocol_can_be_registered_without_core_flow_changes():
+    session = MagicMock()
+    session.begin = MagicMock(return_value=_BeginCtx())
+    captured = []
+
+    class CustomSettlement:
+        settlement_type = "custom"
+
+        async def verify(self, context):
+            return SettlementVerification(
+                verified=True,
+                reason="ok",
+                resolved_node_id="custom-node",
+                details={"custom_check": True},
+            )
+
+        def apply(self, snapshot, verification):
+            snapshot.custody["custom_protocol_applied"] = True
+            return snapshot
+
+        def proof_package(self, context, verification):
+            return {
+                "proof_version": "settlement.custom.v1",
+                "settlement_type": self.settlement_type,
+                "verified": verification.verified,
+                "reason": verification.reason,
+                "intent_id": context.intent_id,
+            }
+
+    async def _capture_upsert(*_args, **kwargs):
+        captured.append(kwargs["twin_snapshot"])
+        return {"changed": True}
+
+    registry = SettlementRegistry({"custom": CustomSettlement()})
+    event_dao = SimpleNamespace(append_event=AsyncMock(return_value={"id": "evt-1"}))
+    service = DigitalTwinService(
+        session_factory=MagicMock(return_value=_SessionCtx(session)),
+        dao=SimpleNamespace(upsert_snapshot=AsyncMock(side_effect=_capture_upsert)),
+        event_dao=event_dao,
+        settlement_registry=registry,
+    )
+
+    result = await service.persist_relevant_twins(
+        relevant_twin_snapshot={
+            "asset": {
+                "twin_kind": "asset",
+                "twin_id": "asset:asset-1",
+                "lifecycle_state": "IN_TRANSIT",
+                "revision_stage": "EXECUTED",
+            }
+        },
+        task_id="123e4567-e89b-12d3-a456-426614174000",
+        intent_id="intent-123",
+        transition_context={
+            "phase": "settlement",
+            "event_type": "evidence_settled",
+            "settlement_type": "custom",
+        },
+    )
+
+    assert result["updated"] == 1
+    assert captured[0]["revision_stage"] == "AUTHORITATIVE"
+    assert captured[0]["custody"]["custom_protocol_applied"] is True
+    payload = event_dao.append_event.await_args.kwargs["payload"]
+    assert payload["settlement_type"] == "custom"
+    assert payload["verification"]["details"]["custom_check"] is True
+    assert payload["proof_package"]["proof_version"] == "settlement.custom.v1"
 
 
 @pytest.mark.asyncio

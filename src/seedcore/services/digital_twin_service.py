@@ -10,7 +10,11 @@ from seedcore.coordinator.core.governance import build_twin_snapshot, merge_auth
 from seedcore.coordinator.dao import DigitalTwinDAO, DigitalTwinEventJournalDAO
 from seedcore.models.action_intent import TwinRevisionStage, TwinSnapshot
 from seedcore.ops.evidence.state_binding import build_twin_state_binding
-from seedcore.ops.evidence.verification import verify_evidence_bundle_result
+from seedcore.services.settlement import (
+    SettlementContext,
+    SettlementRegistry,
+    default_settlement_registry,
+)
 
 if TYPE_CHECKING:
     from seedcore.models.result_verifier_outcome import ResultVerifierOutcome
@@ -80,11 +84,13 @@ class DigitalTwinService:
         dao: Optional[DigitalTwinDAO] = None,
         event_dao: Optional[DigitalTwinEventJournalDAO] = None,
         incident_memory: Any = None,
+        settlement_registry: Optional[SettlementRegistry] = None,
     ) -> None:
         self._session_factory = session_factory
         self._dao = dao or DigitalTwinDAO()
         self._event_dao = event_dao or DigitalTwinEventJournalDAO()
         self._incident_memory = incident_memory
+        self._settlement_registry = settlement_registry or default_settlement_registry()
 
     async def resolve_relevant_twins(
         self,
@@ -168,6 +174,7 @@ class DigitalTwinService:
             return {"updated": 0, "version_bumped": 0}
         context = dict(transition_context or {})
         event_type = self._resolve_event_type(context)
+        settlement_verification: Optional[Dict[str, Any]] = None
         if event_type == "evidence_settled":
             settlement_verification = await self._verify_settlement(
                 context=context,
@@ -187,6 +194,14 @@ class DigitalTwinService:
         version_bumped = 0
         for key, value in dict(relevant_twin_snapshot).items():
             snapshot = self._coerce_twin_snapshot(key, value)
+            if (
+                settlement_verification is not None
+                and settlement_verification.get("_protocol") is not None
+            ):
+                snapshot = settlement_verification["_protocol"].apply(
+                    snapshot,
+                    settlement_verification["_verification_result"],
+                )
             snapshot = self._apply_update_policy(snapshot=snapshot, context=context)
             outcome = await self._dao.upsert_snapshot(
                 session,
@@ -204,6 +219,20 @@ class DigitalTwinService:
                 fallback_twin_kind=snapshot.twin_kind,
                 fallback_twin_id=snapshot.twin_id,
             )
+            event_payload = {
+                "snapshot": snapshot.model_dump(mode="json"),
+                "context": context,
+                "prior_state_binding": prior_state_binding,
+                "result_state_binding": result_state_binding,
+            }
+            if settlement_verification is not None:
+                event_payload.update(
+                    {
+                        "settlement_type": settlement_verification.get("settlement_type"),
+                        "verification": settlement_verification.get("verification"),
+                        "proof_package": settlement_verification.get("proof_package"),
+                    }
+                )
             try:
                 await self._event_dao.append_event(
                     session,
@@ -214,12 +243,7 @@ class DigitalTwinService:
                     lifecycle_state=snapshot.lifecycle_state,
                     task_id=task_id,
                     intent_id=intent_id,
-                    payload={
-                        "snapshot": snapshot.model_dump(mode="json"),
-                        "context": context,
-                        "prior_state_binding": prior_state_binding,
-                        "result_state_binding": result_state_binding,
-                    },
+                    payload=event_payload,
                 )
             except Exception:
                 logger.debug("Twin event journal append skipped", exc_info=True)
@@ -475,6 +499,7 @@ class DigitalTwinService:
             transition_context={
                 "phase": "settlement",
                 "event_type": "evidence_settled",
+                "settlement_type": "delivery",
                 "policy_receipt": dict(policy_receipt or {}),
                 "execution_token": dict(execution_token or {}),
                 "evidence_summary": dict(evidence_summary or {}),
@@ -871,46 +896,87 @@ class DigitalTwinService:
         intent_id: Optional[str],
         relevant_twin_snapshot: Mapping[str, Any],
     ) -> Dict[str, Any]:
-        evidence_bundle = context.get("evidence_bundle") if isinstance(context.get("evidence_bundle"), Mapping) else {}
-        bundle_verification = verify_evidence_bundle_result(evidence_bundle)
-        if bundle_verification.get("verified") is not True:
-            reason = str(bundle_verification.get("error") or "evidence_bundle_verification_failed")
+        settlement_type = self._resolve_settlement_type(context)
+        try:
+            protocol = self._settlement_registry.resolve(settlement_type)
+        except KeyError:
+            reason = f"unknown_settlement_type:{settlement_type}"
+            verification = {
+                "verified": False,
+                "reason": reason,
+                "bundle_verification": {},
+                "resolved_node_id": None,
+                "details": {"settlement_type": settlement_type},
+            }
+            proof_package = {
+                "proof_version": "settlement.unknown.v1",
+                "settlement_type": settlement_type,
+                "verified": False,
+                "reason": reason,
+                "task_id": task_id,
+                "intent_id": intent_id,
+            }
             await self._record_settlement_rejection_incident(
                 reason=reason,
                 context=context,
                 task_id=task_id,
                 intent_id=intent_id,
                 relevant_twin_snapshot=relevant_twin_snapshot,
-                bundle_verification=bundle_verification,
+                bundle_verification={},
             )
             return {
                 "verified": False,
                 "reason": reason,
-                "bundle_verification": bundle_verification,
+                "settlement_type": settlement_type,
+                "verification": verification,
+                "proof_package": proof_package,
+                "bundle_verification": {},
             }
 
-        verified, reason = self._verify_settlement_node(context=context)
-        if not verified:
+        settlement_context = SettlementContext(
+            context=context,
+            task_id=task_id,
+            intent_id=intent_id,
+            relevant_twin_snapshot=relevant_twin_snapshot,
+        )
+        verification_result = await protocol.verify(settlement_context)
+        verification = verification_result.to_dict()
+        proof_package = protocol.proof_package(settlement_context, verification_result)
+        if not verification_result.verified:
             await self._record_settlement_rejection_incident(
-                reason=reason,
+                reason=verification_result.reason,
                 context=context,
                 task_id=task_id,
                 intent_id=intent_id,
                 relevant_twin_snapshot=relevant_twin_snapshot,
-                bundle_verification=bundle_verification,
+                bundle_verification=verification.get("bundle_verification", {}),
             )
             return {
                 "verified": False,
-                "reason": reason,
-                "bundle_verification": bundle_verification,
+                "reason": verification_result.reason,
+                "settlement_type": protocol.settlement_type,
+                "verification": verification,
+                "proof_package": proof_package,
+                "bundle_verification": verification.get("bundle_verification", {}),
             }
 
         return {
             "verified": True,
             "reason": "ok",
-            "bundle_verification": bundle_verification,
-            "resolved_node_id": self._resolve_settlement_node_id(context=context),
+            "settlement_type": protocol.settlement_type,
+            "verification": verification,
+            "proof_package": proof_package,
+            "bundle_verification": verification.get("bundle_verification", {}),
+            "resolved_node_id": verification_result.resolved_node_id,
+            "_protocol": protocol,
+            "_verification_result": verification_result,
         }
+
+    def _resolve_settlement_type(self, context: Mapping[str, Any]) -> str:
+        explicit = context.get("settlement_type")
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip().lower()
+        return "delivery"
 
     def _verify_settlement_node(self, *, context: Mapping[str, Any]) -> tuple[bool, str]:
         execution_token = context.get("execution_token") if isinstance(context.get("execution_token"), Mapping) else {}
