@@ -52,3 +52,25 @@ Implementation anchors:
 - `src/seedcore/coordinator/core/governance.py::_delegation_scope_allows`
 - `src/seedcore/api/routers/agent_actions_router.py::_resolve_owner_twin_snapshot_for_payload`
 - `docs/development/verifying_delegation_frontier_ai_architectures.md`
+
+## Recursive Agent Delegation Gates
+
+The workflow v1 lane extends owner delegation into recursive agent handoffs.
+These gates are architecture targets for the agentic delegation control plane;
+they should be introduced behind workflow and capability-chain rollout flags
+before becoming enforce-mode requirements.
+
+| Scenario | Input Condition | Expected Decision | Explicit Deny Code / Reason |
+| :--- | :--- | :--- | :--- |
+| **Missing Delegation Lineage** | Child agent claims delegated authority without parent token, root context, or chain head | `DENY` | `delegation_lineage_missing` |
+| **Scope Widened At Child Hop** | Child token or node adds asset, zone, endpoint, operation tier, tool, or TTL beyond the parent | `DENY` | `delegation_scope_widened` |
+| **Delegate Identity Unverified** | Target child agent lacks valid identity/capability credential for the node operation | `DENY` | `delegate_identity_unverified` |
+| **Delegation Depth Exceeded** | Node handoff exceeds policy-defined maximum recursive depth | `DENY` | `delegation_depth_exceeded` |
+| **Context Anchor Mismatch** | Node action, asset, zone, endpoint, or goal class does not match the root context anchor | `DENY` / `ESCALATE` | `context_anchor_mismatch` |
+| **Sensitive Action Missing OOB Approval** | Sensitive node relies on same-agent or chat-channel approval instead of an approval envelope | `ESCALATE` | `sensitive_action_missing_oob_approval` |
+| **Hidden Mutating Tool Call** | Mutating tool call lacks visible policy receipt, execution token id, or replay event | `DENY` | `hidden_tool_call` |
+| **Child Closure Timeout** | Delegated child run does not close before child TTL or parent workflow timeout | `QUARANTINE` / `ESCALATE` | `child_closure_timeout` |
+
+Architecture anchor:
+
+- `docs/development/agentic_delegation_control_plane.md`

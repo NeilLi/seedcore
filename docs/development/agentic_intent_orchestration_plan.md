@@ -23,6 +23,15 @@ Agents may propose multi-step work.
 SeedCore admits, pauses, narrows, executes, and verifies each governed step.
 ```
 
+Recursive delegation rule:
+
+```text
+Workflow autonomy may add decomposition.
+It may not add authority.
+Every delegated child node must carry narrower scope, lineage, root context,
+visible tool activity, and closure proof.
+```
+
 ## Design Stance
 
 Do not loosen the existing RCT ingress in place.
@@ -85,6 +94,9 @@ Minimum fields:
 - `producer`
 - `owner_id`
 - `assistant_namespace`
+- `root_context_hash`
+- `root_intent_id`
+- `max_delegation_depth`
 - `status`
 - `current_node_id`
 - `created_at`
@@ -93,6 +105,7 @@ Minimum fields:
 - `idempotency_key`
 - `raw_envelope_hash`
 - `admission_summary`
+- `delegation_chain_head`
 
 Suggested statuses:
 
@@ -118,15 +131,25 @@ Minimum fields:
 
 - `node_id`
 - `workflow_run_id`
+- `parent_node_id`
+- `delegation_depth`
 - `node_type`
 - `operation`
 - `action_intent`
 - `depends_on`
 - `status`
+- `root_context_hash`
+- `agent_identity_ref`
+- `agent_capability_ref`
+- `delegation_chain_head`
+- `capability_chain_head`
 - `policy_decision`
 - `planner_type`
 - `execution_plan_hash`
 - `execution_token_id`
+- `visible_tool_call_refs`
+- `context_drift_status`
+- `requires_out_of_band_confirmation`
 - `evidence_requirements`
 - `evidence_refs`
 - `result_ref`
@@ -232,8 +255,17 @@ Rules:
 - Every node has its own policy decision.
 - Every mutating node has its own execution token.
 - Dependencies must form a DAG.
+- Every delegated child node must reference its parent node and root context.
+- Child node constraints must be equal to or narrower than parent constraints.
+- Sensitive mutations require out-of-band approval, not same-agent chat
+  confirmation.
+- Mutating tool calls must produce visible policy receipt, token, and replay
+  event refs.
 - The workflow hash must cover node order, dependencies, owner context, and
   action intent payloads.
+
+For the recursive-delegation control-plane requirements behind these fields,
+see [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md).
 
 ## Implementation Phases
 
@@ -486,4 +518,3 @@ The first useful milestone is deliberately small:
 
 This gives SeedCore a real agentic orchestration foundation without expanding
 physical execution authority prematurely.
-

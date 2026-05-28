@@ -58,6 +58,8 @@ That means the active docs should be read through one question:
   [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
 - Strategic delegation thesis and frontier alignment:
   [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
+- Recursive delegation control-plane architecture:
+  [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md)
 - Execution-token lifecycle and capability hardening:
   [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
 - Legible local advisory memory:
@@ -127,16 +129,21 @@ Start here for the active spine:
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-12. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+12. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
+   control-plane memo for recursive agent delegation: root context anchoring,
+   signed agent identity/capability credentials, per-hop attenuation, visible
+   tool calls, out-of-band approval, child-run closure, and replayable
+   delegation lineage.
+13. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-13. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+14. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
-14. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
+15. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
    distilled reference for persistent twin settlement as a real-world AI
    reliability pattern: pluggable settlement protocols, proof-vector
    accumulation, append-only compensation, and cryptographic integrity for

@@ -108,6 +108,7 @@ Key architecture references:
 
 - [Architecture overview](docs/architecture/overview/architecture.md)
 - [Agent Action Gateway contract](docs/development/agent_action_gateway_contract.md)
+- [Agentic delegation control plane](docs/development/agentic_delegation_control_plane.md)
 - [ExecutionToken lifecycle management](docs/development/execution_token_lifecycle_management.md)
 - [Policy gate matrix](docs/development/policy_gate_matrix.md)
 - [Hardware-anchored telemetry MVP contract](docs/development/hardware_anchored_telemetry_mvp_contract.md)

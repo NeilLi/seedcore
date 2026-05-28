@@ -280,20 +280,25 @@ Near-term enhancement:
    This memo should be the strategic explanation and roadmap, not the schema
    authority.
 
-2. Extend `policy_gate_matrix.md` with owner-delegation gates:
+2. Use `agentic_delegation_control_plane.md` as the recursive-delegation
+   architecture layer for root context anchoring, signed agent capability
+   credentials, per-hop attenuation, visible tool activity, out-of-band
+   approval, and child-run closure.
+
+3. Extend `policy_gate_matrix.md` with owner-delegation gates:
    missing delegation, revoked delegation, scope mismatch, observer-only,
    contributor custody transition, zone mismatch, modality missing, value cap,
    and step-up required.
 
-3. Add a `delegation_proof` section to replay artifacts:
+4. Add a `delegation_proof` section to replay artifacts:
    authority path, owner context hash, delegation id, binding request hash,
    hardware fingerprint id, and execution token id.
 
-4. Add a partner-facing "frontier alignment" appendix:
+5. Add a partner-facing "frontier alignment" appendix:
    WIMSE identity, AIP capability chain, ReBAC graph path, SCITT Permit,
    hardware attestation, and future formal verification.
 
-5. Add a shadow-mode capability-chain experiment:
+6. Add a shadow-mode capability-chain experiment:
    generate a chained proof artifact in parallel with today's
    `ExecutionToken`, verify it offline, and compare denial behavior before
    any runtime dependency is introduced.
@@ -302,6 +307,9 @@ Near-term enhancement:
 
 Primary external references used for this memo:
 
+- CSA / Okta, "Control the Chain, Secure the System: Fixing AI Agent
+  Delegation"
+  https://cloudsecurityalliance.org/blog/2026/03/25/control-the-chain-secure-the-system-fixing-ai-agent-delegation
 - IETF `draft-klrc-aiagent-auth`: AI Agent Authentication and Authorization  
   https://datatracker.ietf.org/doc/draft-klrc-aiagent-auth/
 - IETF `draft-munoz-wimse-authorization-evidence`: Signed
@@ -319,4 +327,3 @@ Primary external references used for this memo:
   https://docs.aws.amazon.com/prescriptive-guidance/latest/saas-multitenant-api-access-authorization/cedar.html
 - IETF SCITT architecture  
   https://datatracker.ietf.org/doc/draft-ietf-scitt-architecture/
-
