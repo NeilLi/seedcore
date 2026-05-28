@@ -297,12 +297,31 @@ Validation completed for this implementation slice:
     `SEEDCORE_ENFORCE_FULL_VERIFICATION_GATE=1` fails as intended when
     verification-surface protocol is not green
 
-Remaining operational closure:
+Local host-mode closure (2026-05-28):
 
-- Scenario A full protocol pass is still blocked by missing runtime audit IDs
-  in the current topology (`public.governed_execution_audit` empty), so
-  `verification_surface_protocol_passed` remains `false` until runtime traffic
-  populates an audit-backed replay path.
+- Scenario A is now green in host-mode local runtime.
+- `scripts/host/generate_runtime_rct_audit.py` generates a real RCT audit row
+  by seeding a local approved transfer envelope, calling
+  `/api/v1/agent-actions/evaluate`, closing the action through
+  `/api/v1/agent-actions/{request_id}/closures`, and returning the resulting
+  `governed_audit_entry`.
+- `scripts/host/verify_runtime_rct_audit_surface.sh` then verifies runtime
+  replay, verification API runtime queue/detail/replay/runbook reads, and the
+  full productized verification surface protocol.
+- Latest local evidence:
+  - generated audit id:
+    `212f2843-5a85-4439-bdd5-bd120e743230`
+  - audit path: `api_closure`
+  - settlement status: `applied`
+  - productized surface result: `Checks passed: 13`, `Checks failed: 0`
+  - local protocol status: `verification_surface_protocol_passed=true`
+
+Remaining remote-topology closure:
+
+- The prior remote Kind/GCP topology still needs its own runtime audit capture
+  before claiming full external-agent verification-surface signoff there.
+  The local host-mode wedge proves the end-to-end software-only path and gives
+  the kube lane a repeatable pattern to generate audit-backed replay rows.
 
 ## Prior Execution Update (2026-04-02)
 

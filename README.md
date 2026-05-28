@@ -33,7 +33,8 @@ Important boundaries:
 
 - The rare-shoe scene is an active verticalization of the existing RCT runtime, not a sneaker marketplace.
 - SeedCore proves governed custody movement and evidence integrity; it does not assert legal ownership transfer in v0.
-- Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff depends on deploying the verification API and capturing runtime audit rows in that topology.
+- Host-mode local runtime verification is green end-to-end for the RCT wedge: the Agent Action Gateway can generate a replayable runtime audit row, the verification API can read queue/detail/replay/runbook views from it, and the productized verification surface protocol passes locally.
+- Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff in that topology still depends on capturing runtime audit rows there.
 
 Read the current execution docs:
 

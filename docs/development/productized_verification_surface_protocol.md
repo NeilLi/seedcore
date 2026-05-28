@@ -17,11 +17,26 @@ The checks are split into:
 
 - Local runtime running (`8002`) and verification API running (`7071`)
 - `curl` and `jq` installed
-- Optional for runtime checks:
-  - local Postgres with `seedcore` DB and `governed_execution_audit` rows, or
-  - set `SEEDCORE_AUDIT_ID=<uuid>`
+- Local Postgres with the `seedcore` DB initialized by `deploy/local/`
+- For runtime checks, either:
+  - run `scripts/host/verify_runtime_rct_audit_surface.sh` to generate a fresh
+    RCT audit row, or
+  - set `SEEDCORE_AUDIT_ID=<uuid>` for an existing replayable audit row
 
 ## Fast Run (Automated)
+
+Recommended full local host-mode run:
+
+```bash
+bash scripts/host/verify_runtime_rct_audit_surface.sh
+```
+
+This generates a runtime RCT audit row through the Agent Action Gateway,
+verifies runtime replay, verifies the verification API runtime read surface,
+and then invokes the productized surface protocol with the generated
+`SEEDCORE_AUDIT_ID`.
+
+Direct protocol run against an existing runtime audit row:
 
 ```bash
 bash scripts/host/verify_productized_surface.sh
@@ -36,6 +51,13 @@ SEEDCORE_DB_NAME=seedcore \
 SEEDCORE_AUDIT_ID=<audit-uuid> \
 bash scripts/host/verify_productized_surface.sh
 ```
+
+Latest local evidence (2026-05-28):
+
+- audit id: `212f2843-5a85-4439-bdd5-bd120e743230`
+- generation path: `api_closure`
+- settlement status: `applied`
+- productized protocol: `Checks passed: 13`, `Checks failed: 0`
 
 ---
 
