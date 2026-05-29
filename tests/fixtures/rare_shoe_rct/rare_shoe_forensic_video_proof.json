@@ -1,0 +1,12 @@
+{
+  "asset_id": "asset:shoe:player-exclusive-001",
+  "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+  "authorized_device_ref": "device:vault-scan-001",
+  "observed_at": "2026-05-15T10:02:00Z",
+  "zone_ref": "zone:vault-a",
+  "source_video_hash": "sha256:cc064ab1623a04d3d82d13d9bdf906465240faebc50f2c810366e4f47d125185",
+  "clip_hash": "sha256:93443bb0ffe8e8baad05748c72da2dc06f98f809173867d1699b68fa45059e24",
+  "forensic_video_proof_ref": "video-proof:rare-shoe-001:origin-handoff",
+  "redaction_status": "public_safe",
+  "replay_bundle_ref": "replay-bundle:rare-shoe-happy-path"
+}

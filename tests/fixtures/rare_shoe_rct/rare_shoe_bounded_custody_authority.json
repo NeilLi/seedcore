@@ -1,0 +1,19 @@
+{
+  "authority_id": "authority:rare-shoe-transfer-0001",
+  "asset_id": "asset:shoe:player-exclusive-001",
+  "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+  "product_ref": "rare-shoe-market:product:pe-jordan-001",
+  "quote_ref": "rare-shoe-market:quote:2026-05-15-0001",
+  "order_ref": "rare-shoe-market:order:2026-05-15-0001",
+  "policy_snapshot_ref": "pkg:rct-rare-shoe-demo@2026-05-15",
+  "authorized_actor_ref": "principal:courier-rare-vault-42",
+  "authorized_device_refs": [
+    "device:vault-scan-001",
+    "device:buyer-receiver-001"
+  ],
+  "valid_from": "2026-05-15T10:00:00Z",
+  "valid_until": "2026-05-15T10:15:00Z",
+  "from_zone": "zone:vault-a",
+  "to_zone": "zone:buyer-receiving",
+  "max_delayed_submission_seconds": 300
+}

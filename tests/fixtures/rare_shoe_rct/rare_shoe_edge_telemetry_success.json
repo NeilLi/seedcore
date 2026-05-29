@@ -1,0 +1,52 @@
+{
+  "edge_telemetry": [
+    {
+      "telemetry_id": "telemetry:rare-shoe-origin-0001",
+      "asset_id": "asset:shoe:player-exclusive-001",
+      "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+      "authorized_device_ref": "device:vault-scan-001",
+      "edge_node_ref": "edge:vault-a",
+      "observed_at": "2026-05-15T10:02:00Z",
+      "submitted_at": "2026-05-15T10:02:03Z",
+      "nonce": "nonce:origin:0001",
+      "scan_kind": "origin_scan",
+      "zone_ref": "zone:vault-a",
+      "nfc_uid_hash": "sha256:44fe6139761a4b87f6a8e3890fd23513ed9495c3405ddf4b21afc3a91cbb6d12",
+      "scan_counter": 41,
+      "challenge_nonce": "challenge:origin:0001",
+      "challenge_response_hash": "sha256:origin-response-0001",
+      "expected_challenge_response_hash": "sha256:origin-response-0001",
+      "cmac_ref": "cmac:origin:0001",
+      "expected_cmac_ref": "cmac:origin:0001",
+      "tamper_state": "clear",
+      "anchor_profile_ref": "anchor:dynamic-nfc:shoe-001",
+      "payload_sha256": "sha256:9f2fd7e42f24ae4b0c31279990781e963f933e02e63faed726cc991dbbb13e4a",
+      "signer_key_ref": "kms:fixture:vault-scan-001",
+      "signature_b64": "Zml4dHVyZS1vcmlnaW4tc2lnbmF0dXJl"
+    },
+    {
+      "telemetry_id": "telemetry:rare-shoe-delivery-0001",
+      "asset_id": "asset:shoe:player-exclusive-001",
+      "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+      "authorized_device_ref": "device:buyer-receiver-001",
+      "edge_node_ref": "edge:buyer-receiving",
+      "observed_at": "2026-05-15T10:12:30Z",
+      "submitted_at": "2026-05-15T10:12:35Z",
+      "nonce": "nonce:delivery:0001",
+      "scan_kind": "delivery_scan",
+      "zone_ref": "zone:buyer-receiving",
+      "nfc_uid_hash": "sha256:44fe6139761a4b87f6a8e3890fd23513ed9495c3405ddf4b21afc3a91cbb6d12",
+      "scan_counter": 42,
+      "challenge_nonce": "challenge:delivery:0001",
+      "challenge_response_hash": "sha256:delivery-response-0001",
+      "expected_challenge_response_hash": "sha256:delivery-response-0001",
+      "cmac_ref": "cmac:delivery:0001",
+      "expected_cmac_ref": "cmac:delivery:0001",
+      "tamper_state": "clear",
+      "anchor_profile_ref": "anchor:dynamic-nfc:shoe-001",
+      "payload_sha256": "sha256:58f44e4702a898a723ccbe34b8a72635ef33f69975064238aef46017914b3caf",
+      "signer_key_ref": "kms:fixture:buyer-receiver-001",
+      "signature_b64": "Zml4dHVyZS1kZWxpdmVyeS1zaWduYXR1cmU="
+    }
+  ]
+}

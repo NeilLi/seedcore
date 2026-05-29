@@ -116,6 +116,16 @@ from .edge_telemetry import (
     SignedEdgeTelemetryRefV0,
     signed_telemetry_ref_from_envelope_v0,
 )
+from .rare_shoe_rct import (
+    CollectibleShoeRegistration,
+    RareShoeBoundedCustodyAuthority,
+    RareShoeConditionGrade,
+    RareShoeEdgeTelemetry,
+    RareShoeHardwareAnchorProfile,
+    build_rare_shoe_workflow_join_key,
+    evaluate_rare_shoe_replay_bundle,
+    validate_rare_shoe_public_proof_projection,
+)
 from .governed_mutation import (
     GovernedMutationContract,
     MutationEffectClass,
@@ -188,6 +198,14 @@ __all__ = [
     "EdgeTelemetrySignerV0",
     "SignedEdgeTelemetryRefV0",
     "signed_telemetry_ref_from_envelope_v0",
+    "CollectibleShoeRegistration",
+    "RareShoeBoundedCustodyAuthority",
+    "RareShoeConditionGrade",
+    "RareShoeEdgeTelemetry",
+    "RareShoeHardwareAnchorProfile",
+    "build_rare_shoe_workflow_join_key",
+    "evaluate_rare_shoe_replay_bundle",
+    "validate_rare_shoe_public_proof_projection",
     "GovernedMutationContract",
     "MutationEffectClass",
     "MutationReplayMode",

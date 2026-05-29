@@ -1,0 +1,69 @@
+{
+  "request_id": "req:rare-shoe-transfer-0001",
+  "idempotency_key": "idem:rare-shoe-transfer-0001",
+  "requested_at": "2026-05-15T09:58:30Z",
+  "lot_id": "lot:rare-shoe-001",
+  "from_custodian_ref": "principal:vault-operator-001",
+  "to_custodian_ref": "principal:buyer-vault-009",
+  "from_zone": "zone:vault-a",
+  "to_zone": "zone:buyer-receiving",
+  "provenance_hash": "sha256:91b8898b5a2ad4d609d33f0fef5dcf340b9e78f53f64f8c1f9885f796152a441",
+  "principal": {
+    "agent_id": "agent:collector-buyer-001",
+    "role_profile": "TRANSFER_COORDINATOR",
+    "session_token": "session:buyer-agent:0001",
+    "owner_id": "did:seedcore:buyer:009",
+    "delegation_ref": "delegation:buyer-009:rare-shoe-transfer",
+    "organization_ref": "org:rare-shoe-market",
+    "hardware_fingerprint": {
+      "fingerprint_id": "fp:buyer-agent-runtime-001",
+      "node_id": "node:buyer-agent-runtime-001",
+      "public_key_fingerprint": "sha256:buyer-agent-key",
+      "attestation_type": "fixture",
+      "key_ref": "kms:fixture:buyer-agent-001"
+    }
+  },
+  "workflow": {
+    "valid_until": "2026-05-15T10:15:00Z"
+  },
+  "commerce": {
+    "product_ref": "rare-shoe-market:product:pe-jordan-001",
+    "quote_ref": "rare-shoe-market:quote:2026-05-15-0001",
+    "order_ref": "rare-shoe-market:order:2026-05-15-0001",
+    "declared_value_usd": 18500,
+    "economic_hash": "sha256:economic-rare-shoe-order-0001"
+  },
+  "approval": {
+    "approval_envelope_id": "approval:buyer-009:rare-shoe-transfer",
+    "expected_envelope_version": "1"
+  },
+  "authority_scope": {
+    "scope_id": "scope:rare-shoe-transfer-0001",
+    "asset_ref": "asset:shoe:player-exclusive-001",
+    "product_ref": "rare-shoe-market:product:pe-jordan-001",
+    "facility_ref": "facility:rare-vault-a",
+    "expected_from_zone": "zone:vault-a",
+    "expected_to_zone": "zone:buyer-receiving",
+    "expected_coordinate_ref": "fixture://rare-vault-a/case/pe-jd-001"
+  },
+  "telemetry": {
+    "observed_at": "2026-05-15T09:58:25Z",
+    "freshness_seconds": 5,
+    "max_allowed_age_seconds": 300,
+    "current_zone": "zone:vault-a",
+    "current_coordinate_ref": "fixture://rare-vault-a/case/pe-jd-001",
+    "evidence_refs": [
+      "origin_scan",
+      "delivery_scan",
+      "signed_edge_telemetry",
+      "forensic_video:shoe-001"
+    ]
+  },
+  "security_contract": {
+    "hash": "sha256:rare-shoe-rct-contract-v0",
+    "version": "rare-shoe-rct@0.1.0"
+  },
+  "options": {
+    "debug": false
+  }
+}

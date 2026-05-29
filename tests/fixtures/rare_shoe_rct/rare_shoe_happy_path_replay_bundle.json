@@ -1,0 +1,165 @@
+{
+  "bundle_id": "replay-bundle:rare-shoe-happy-path",
+  "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+  "registration": {
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "asset_did": "did:seedcore:shoe:player-exclusive-001",
+    "product_ref": "rare-shoe-market:product:pe-jordan-001",
+    "seller_ref": "seller:consignor-77",
+    "brand_identifier": "brand:jumpman-fixture",
+    "style_code": "PE-JD-001",
+    "sku_serial_hash": "sha256:91b8898b5a2ad4d609d33f0fef5dcf340b9e78f53f64f8c1f9885f796152a441",
+    "nfc_uid_hash": "sha256:44fe6139761a4b87f6a8e3890fd23513ed9495c3405ddf4b21afc3a91cbb6d12",
+    "hardware_anchor_profile": {
+      "anchor_profile_ref": "anchor:dynamic-nfc:shoe-001",
+      "anchor_kind": "fixture_dynamic_nfc",
+      "tamper_state": "clear",
+      "puf_attestation_ref": "puf:fixture:shoe-001"
+    },
+    "physical_fingerprint_refs": [
+      "artifact:shoe-001:microscopy:v1",
+      "artifact:shoe-001:stitch-map:v1"
+    ],
+    "provenance_class": "PLAYER_EXCLUSIVE",
+    "athlete_provenance_refs": [
+      "provenance:team-letter:2026-05-01",
+      "provenance:photo-match:game-7"
+    ],
+    "condition_grade": {
+      "grade": 9.2,
+      "grader_ref": "authenticator:rare-shoe-lab",
+      "graded_at": "2026-05-15T08:30:00Z",
+      "restoration_flags": []
+    },
+    "authentication_status": "approved",
+    "authentication_payload_ref": "auth-payload:shoe-001:2026-05-15",
+    "custody_state": "VAULTED_SECURE",
+    "risk_state": "CLEAR",
+    "policy_snapshot_ref": "pkg:rct-rare-shoe-demo@2026-05-15",
+    "registration_decision_ref": "registration-decision:shoe-001:approved",
+    "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31"
+  },
+  "gateway_decision": {
+    "disposition": "allow",
+    "reason_code": "restricted_custody_transfer_allowed",
+    "request_id": "req:rare-shoe-transfer-0001"
+  },
+  "bounded_custody_authority": {
+    "authority_id": "authority:rare-shoe-transfer-0001",
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+    "product_ref": "rare-shoe-market:product:pe-jordan-001",
+    "quote_ref": "rare-shoe-market:quote:2026-05-15-0001",
+    "order_ref": "rare-shoe-market:order:2026-05-15-0001",
+    "policy_snapshot_ref": "pkg:rct-rare-shoe-demo@2026-05-15",
+    "authorized_actor_ref": "principal:courier-rare-vault-42",
+    "authorized_device_refs": [
+      "device:vault-scan-001",
+      "device:buyer-receiver-001"
+    ],
+    "valid_from": "2026-05-15T10:00:00Z",
+    "valid_until": "2026-05-15T10:15:00Z",
+    "from_zone": "zone:vault-a",
+    "to_zone": "zone:buyer-receiving",
+    "max_delayed_submission_seconds": 300
+  },
+  "edge_telemetry": [
+    {
+      "telemetry_id": "telemetry:rare-shoe-origin-0001",
+      "asset_id": "asset:shoe:player-exclusive-001",
+      "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+      "authorized_device_ref": "device:vault-scan-001",
+      "edge_node_ref": "edge:vault-a",
+      "observed_at": "2026-05-15T10:02:00Z",
+      "submitted_at": "2026-05-15T10:02:03Z",
+      "nonce": "nonce:origin:0001",
+      "scan_kind": "origin_scan",
+      "zone_ref": "zone:vault-a",
+      "nfc_uid_hash": "sha256:44fe6139761a4b87f6a8e3890fd23513ed9495c3405ddf4b21afc3a91cbb6d12",
+      "scan_counter": 41,
+      "challenge_nonce": "challenge:origin:0001",
+      "challenge_response_hash": "sha256:origin-response-0001",
+      "expected_challenge_response_hash": "sha256:origin-response-0001",
+      "cmac_ref": "cmac:origin:0001",
+      "expected_cmac_ref": "cmac:origin:0001",
+      "tamper_state": "clear",
+      "anchor_profile_ref": "anchor:dynamic-nfc:shoe-001",
+      "payload_sha256": "sha256:9f2fd7e42f24ae4b0c31279990781e963f933e02e63faed726cc991dbbb13e4a",
+      "signer_key_ref": "kms:fixture:vault-scan-001",
+      "signature_b64": "Zml4dHVyZS1vcmlnaW4tc2lnbmF0dXJl"
+    },
+    {
+      "telemetry_id": "telemetry:rare-shoe-delivery-0001",
+      "asset_id": "asset:shoe:player-exclusive-001",
+      "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+      "authorized_device_ref": "device:buyer-receiver-001",
+      "edge_node_ref": "edge:buyer-receiving",
+      "observed_at": "2026-05-15T10:12:30Z",
+      "submitted_at": "2026-05-15T10:12:35Z",
+      "nonce": "nonce:delivery:0001",
+      "scan_kind": "delivery_scan",
+      "zone_ref": "zone:buyer-receiving",
+      "nfc_uid_hash": "sha256:44fe6139761a4b87f6a8e3890fd23513ed9495c3405ddf4b21afc3a91cbb6d12",
+      "scan_counter": 42,
+      "challenge_nonce": "challenge:delivery:0001",
+      "challenge_response_hash": "sha256:delivery-response-0001",
+      "expected_challenge_response_hash": "sha256:delivery-response-0001",
+      "cmac_ref": "cmac:delivery:0001",
+      "expected_cmac_ref": "cmac:delivery:0001",
+      "tamper_state": "clear",
+      "anchor_profile_ref": "anchor:dynamic-nfc:shoe-001",
+      "payload_sha256": "sha256:58f44e4702a898a723ccbe34b8a72635ef33f69975064238aef46017914b3caf",
+      "signer_key_ref": "kms:fixture:buyer-receiver-001",
+      "signature_b64": "Zml4dHVyZS1kZWxpdmVyeS1zaWduYXR1cmU="
+    }
+  ],
+  "verifier_outcome": {
+    "disposition": "allow",
+    "reason_code": "rare_shoe_replay_verified"
+  },
+  "public_proof_projection": {
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "product_ref": "rare-shoe-market:product:pe-jordan-001",
+    "provenance_class": "PLAYER_EXCLUSIVE",
+    "authentication_verdict": "authentic",
+    "condition_grade_summary": "9.2 / 10, no restoration flags",
+    "current_custody_state": "DELIVERED_OPERATOR_CUSTODY",
+    "current_risk_state": "CLEAR",
+    "public_proof_hash": "sha256:93443bb0ffe8e8baad05748c72da2dc06f98f809173867d1699b68fa45059e24",
+    "forensic_video_proof_ref": "video-proof:rare-shoe-001:origin-handoff",
+    "forensic_video_hash": "sha256:cc064ab1623a04d3d82d13d9bdf906465240faebc50f2c810366e4f47d125185",
+    "replay_reference": "replay-bundle:rare-shoe-happy-path",
+    "verification_url": "https://example.invalid/seedcore/rare-shoe/replay/0001"
+  },
+  "forensic_video_proof": {
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31",
+    "authorized_device_ref": "device:vault-scan-001",
+    "observed_at": "2026-05-15T10:02:00Z",
+    "zone_ref": "zone:vault-a",
+    "source_video_hash": "sha256:cc064ab1623a04d3d82d13d9bdf906465240faebc50f2c810366e4f47d125185",
+    "clip_hash": "sha256:93443bb0ffe8e8baad05748c72da2dc06f98f809173867d1699b68fa45059e24",
+    "forensic_video_proof_ref": "video-proof:rare-shoe-001:origin-handoff",
+    "redaction_status": "public_safe",
+    "replay_bundle_ref": "replay-bundle:rare-shoe-happy-path"
+  },
+  "operator_forensic_projection": {
+    "custody_chain": [
+      "zone:vault-a",
+      "zone:buyer-receiving"
+    ],
+    "policy_decisions": [
+      "restricted_custody_transfer_allowed"
+    ],
+    "approval_envelope": "approval:buyer-009:rare-shoe-transfer",
+    "raw_telemetry_refs": [
+      "telemetry:rare-shoe-origin-0001",
+      "telemetry:rare-shoe-delivery-0001"
+    ],
+    "signer_key_refs": [
+      "kms:fixture:vault-scan-001",
+      "kms:fixture:buyer-receiver-001"
+    ],
+    "operator_reason_trace": "reason-trace:rare-shoe-happy-path"
+  }
+}

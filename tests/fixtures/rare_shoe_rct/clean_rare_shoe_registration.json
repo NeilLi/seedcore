@@ -1,0 +1,38 @@
+{
+  "asset_id": "asset:shoe:player-exclusive-001",
+  "asset_did": "did:seedcore:shoe:player-exclusive-001",
+  "product_ref": "rare-shoe-market:product:pe-jordan-001",
+  "seller_ref": "seller:consignor-77",
+  "brand_identifier": "brand:jumpman-fixture",
+  "style_code": "PE-JD-001",
+  "sku_serial_hash": "sha256:91b8898b5a2ad4d609d33f0fef5dcf340b9e78f53f64f8c1f9885f796152a441",
+  "nfc_uid_hash": "sha256:44fe6139761a4b87f6a8e3890fd23513ed9495c3405ddf4b21afc3a91cbb6d12",
+  "hardware_anchor_profile": {
+    "anchor_profile_ref": "anchor:dynamic-nfc:shoe-001",
+    "anchor_kind": "fixture_dynamic_nfc",
+    "tamper_state": "clear",
+    "puf_attestation_ref": "puf:fixture:shoe-001"
+  },
+  "physical_fingerprint_refs": [
+    "artifact:shoe-001:microscopy:v1",
+    "artifact:shoe-001:stitch-map:v1"
+  ],
+  "provenance_class": "PLAYER_EXCLUSIVE",
+  "athlete_provenance_refs": [
+    "provenance:team-letter:2026-05-01",
+    "provenance:photo-match:game-7"
+  ],
+  "condition_grade": {
+    "grade": 9.2,
+    "grader_ref": "authenticator:rare-shoe-lab",
+    "graded_at": "2026-05-15T08:30:00Z",
+    "restoration_flags": []
+  },
+  "authentication_status": "approved",
+  "authentication_payload_ref": "auth-payload:shoe-001:2026-05-15",
+  "custody_state": "VAULTED_SECURE",
+  "risk_state": "CLEAR",
+  "policy_snapshot_ref": "pkg:rct-rare-shoe-demo@2026-05-15",
+  "registration_decision_ref": "registration-decision:shoe-001:approved",
+  "workflow_join_key": "wf:0a8290b30996a3f27dfd9c22584d2adc71a8a2ed32bfe0bbfc2024c954ab7b31"
+}
