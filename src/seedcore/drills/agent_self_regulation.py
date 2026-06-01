@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -155,6 +156,7 @@ def _mock_mcp_context(runtime: _DrillRuntime) -> SimpleNamespace:
 def _sdk_evaluator_response(
     *,
     payload: dict[str, Any],
+    disposition: str = "allow",
     reason_code: str,
     replay_suffix: str,
     include_execution_token: bool,
@@ -164,7 +166,11 @@ def _sdk_evaluator_response(
         "request_id": payload["request_id"],
         "decided_at": "2026-05-21T10:00:02Z",
         "latency_ms": 1,
-        "decision": {"allowed": True, "disposition": "allow", "reason_code": reason_code},
+        "decision": {
+            "allowed": disposition == "allow",
+            "disposition": disposition,
+            "reason_code": reason_code,
+        },
         "governed_receipt": {
             "audit_id": f"audit:{replay_suffix}",
             "forensic_block_id": f"fb:{replay_suffix}",
@@ -175,9 +181,55 @@ def _sdk_evaluator_response(
             "forensic_block_id": f"fb:{replay_suffix}",
         },
     }
-    if include_execution_token:
+    if include_execution_token and disposition == "allow":
         response["execution_token"] = {"token_id": f"token:{replay_suffix}"}
     return response
+
+
+def _capture_result_evidence(
+    result: Any,
+    *,
+    payloads: list[dict[str, Any]],
+    closure_payloads: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    evidence = {
+        **asdict(result),
+        "upstream_evaluator_called": bool(payloads),
+        "payload_no_execute": payloads[0]["options"]["no_execute"] if payloads else None,
+        "payload_request_id": payloads[0]["request_id"] if payloads else None,
+        "business_logic_executed": result.execution_result is not None,
+    }
+    if closure_payloads is not None:
+        evidence["closure_called"] = bool(closure_payloads)
+        evidence["closure_request_id"] = closure_payloads[0]["request_id"] if closure_payloads else None
+    return evidence
+
+
+def _stale_telemetry_intent(base_intent: dict[str, Any]) -> dict[str, Any]:
+    intent = deepcopy(base_intent)
+    intent["request_id"] = "req-agent-self-regulation-stale-telemetry-001"
+    intent["idempotency_key"] = "idem-agent-self-regulation-stale-telemetry-001"
+    intent["telemetry"]["observed_at"] = "2026-05-21T09:45:00Z"
+    intent["telemetry"]["freshness_seconds"] = 900
+    intent["telemetry"]["max_allowed_age_seconds"] = 300
+    return intent
+
+
+def _out_of_bounds_intent(base_intent: dict[str, Any]) -> dict[str, Any]:
+    intent = deepcopy(base_intent)
+    intent["request_id"] = "req-agent-self-regulation-out-of-bounds-001"
+    intent["idempotency_key"] = "idem-agent-self-regulation-out-of-bounds-001"
+    intent["telemetry"]["current_zone"] = "loading_dock_unapproved"
+    intent["telemetry"]["current_coordinate_ref"] = "gazebo://warehouse/loading-dock/Z9"
+    return intent
+
+
+def _missing_evidence_intent(base_intent: dict[str, Any]) -> dict[str, Any]:
+    intent = deepcopy(base_intent)
+    intent["request_id"] = "req-agent-self-regulation-missing-evidence-001"
+    intent["idempotency_key"] = "idem-agent-self-regulation-missing-evidence-001"
+    intent["telemetry"]["evidence_refs"] = ["origin_scan", "delivery_scan"]
+    return intent
 
 
 async def run_agent_self_regulation_drill(
@@ -213,6 +265,17 @@ async def run_agent_self_regulation_drill(
     shadow_payloads: list[dict[str, Any]] = []
     enforce_payloads: list[dict[str, Any]] = []
     closure_payloads: list[dict[str, Any]] = []
+    negative_payloads: dict[str, list[dict[str, Any]]] = {
+        "pdp_deny": [],
+        "pdp_quarantine": [],
+        "stale_telemetry_preflight": [],
+        "out_of_bounds_preflight": [],
+        "missing_evidence": [],
+    }
+    negative_closure_payloads: dict[str, list[dict[str, Any]]] = {
+        "pdp_deny": [],
+        "pdp_quarantine": [],
+    }
 
     def shadow_evaluator(payload: dict[str, Any]) -> dict[str, Any]:
         shadow_payloads.append(payload)
@@ -235,12 +298,72 @@ async def run_agent_self_regulation_drill(
     def close_execution(payload: dict[str, Any]) -> None:
         closure_payloads.append(payload)
 
+    def negative_evaluator(
+        case_name: str,
+        *,
+        disposition: str,
+        reason_code: str,
+    ):
+        def evaluator(payload: dict[str, Any]) -> dict[str, Any]:
+            negative_payloads[case_name].append(payload)
+            return _sdk_evaluator_response(
+                payload=payload,
+                disposition=disposition,
+                reason_code=reason_code,
+                replay_suffix=case_name.replace("_", "-"),
+                include_execution_token=False,
+            )
+
+        return evaluator
+
     reset_evaluator()
     try:
         with using_evaluator(shadow_evaluator):
             shadow_result = shadow_transfer_custody(intent)
         with using_evaluator(enforce_evaluator, close_execution):
             enforce_result = enforce_transfer_custody(intent)
+        with using_evaluator(
+            negative_evaluator(
+                "pdp_deny",
+                disposition="deny",
+                reason_code="self_regulation_policy_denied",
+            ),
+            lambda payload: negative_closure_payloads["pdp_deny"].append(payload),
+        ):
+            deny_result = enforce_transfer_custody(intent)
+        with using_evaluator(
+            negative_evaluator(
+                "pdp_quarantine",
+                disposition="quarantine",
+                reason_code="self_regulation_trust_gap_quarantine",
+            ),
+            lambda payload: negative_closure_payloads["pdp_quarantine"].append(payload),
+        ):
+            quarantine_result = enforce_transfer_custody(intent)
+        with using_evaluator(
+            negative_evaluator(
+                "stale_telemetry_preflight",
+                disposition="quarantine",
+                reason_code="stale_context",
+            )
+        ):
+            stale_result = shadow_transfer_custody(_stale_telemetry_intent(intent))
+        with using_evaluator(
+            negative_evaluator(
+                "out_of_bounds_preflight",
+                disposition="deny",
+                reason_code="out_of_bounds_scope",
+            )
+        ):
+            out_of_bounds_result = shadow_transfer_custody(_out_of_bounds_intent(intent))
+        with using_evaluator(
+            negative_evaluator(
+                "missing_evidence",
+                disposition="allow",
+                reason_code="unexpected_missing_evidence_evaluator_call",
+            )
+        ):
+            missing_evidence_result = shadow_transfer_custody(_missing_evidence_intent(intent))
     finally:
         reset_evaluator()
 
@@ -260,15 +383,38 @@ async def run_agent_self_regulation_drill(
             "session_token": mcp_call["payload"]["principal"]["session_token"],
         },
         "sdk_shadow": {
-            **asdict(shadow_result),
-            "payload_no_execute": shadow_payloads[0]["options"]["no_execute"],
-            "business_logic_executed": shadow_result.execution_result is not None,
+            **_capture_result_evidence(shadow_result, payloads=shadow_payloads),
         },
         "sdk_enforce": {
-            **asdict(enforce_result),
-            "payload_no_execute": enforce_payloads[0]["options"]["no_execute"],
-            "closure_called": len(closure_payloads) == 1,
-            "closure_request_id": closure_payloads[0]["request_id"] if closure_payloads else None,
+            **_capture_result_evidence(
+                enforce_result,
+                payloads=enforce_payloads,
+                closure_payloads=closure_payloads,
+            ),
+        },
+        "negative_drills": {
+            "pdp_deny": _capture_result_evidence(
+                deny_result,
+                payloads=negative_payloads["pdp_deny"],
+                closure_payloads=negative_closure_payloads["pdp_deny"],
+            ),
+            "pdp_quarantine": _capture_result_evidence(
+                quarantine_result,
+                payloads=negative_payloads["pdp_quarantine"],
+                closure_payloads=negative_closure_payloads["pdp_quarantine"],
+            ),
+            "stale_telemetry_preflight": _capture_result_evidence(
+                stale_result,
+                payloads=negative_payloads["stale_telemetry_preflight"],
+            ),
+            "out_of_bounds_preflight": _capture_result_evidence(
+                out_of_bounds_result,
+                payloads=negative_payloads["out_of_bounds_preflight"],
+            ),
+            "missing_evidence": _capture_result_evidence(
+                missing_evidence_result,
+                payloads=negative_payloads["missing_evidence"],
+            ),
         },
     }
 

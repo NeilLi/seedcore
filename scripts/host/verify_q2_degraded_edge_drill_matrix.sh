@@ -5,6 +5,7 @@
 # - intermittent connectivity (synthetic flaky transport benchmark)
 # - coordinate tamper (agent action gateway coordinate mismatch)
 # - replay injection / authority mismatch (replay router tamper surfaces)
+# - agent self-regulation allow / deny / quarantine / local fail-closed matrix
 # - repeatable forensic/evidence export checks for quarantine / rollback investigations
 # - commerce-slice drill matrix: stale-graph / dependency outage, including
 #   Redis bus and commerce HTTP timeout / coordinate tamper / cross-product
@@ -27,6 +28,9 @@ python -m pytest -q tests/test_replay_router.py::test_materialized_custody_event
 python -m pytest -q tests/test_replay_router.py::test_governance_search_filters_quarantine_and_trust_gap_records
 python -m pytest -q tests/test_forensic_block_contract.py
 python -m pytest -q tests/test_end_to_end_product_verification.py
+
+echo "== Agent self-regulation drill matrix =="
+bash scripts/host/verify_agent_self_regulation_drill.sh
 
 echo "== Q2 commerce-slice drill matrix =="
 # Commerce-shaped drills that bind drill evidence to product_ref / workflow

@@ -79,6 +79,14 @@ def test_verify_q2_verification_contracts_is_canonical_local_ci_gate() -> None:
     assert "verify_result_verifier_postgres_integration.sh" in script
 
 
+def test_q2_degraded_edge_matrix_wires_agent_self_regulation_drill() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_q2_degraded_edge_drill_matrix.sh").read_text()
+
+    assert "verify_agent_self_regulation_drill.sh" in script
+    assert "tests/test_rct_degraded_edge_drill_matrix.py" in script
+    assert "tests/test_rct_commerce_drill_matrix.py" in script
+
+
 def test_result_verifier_postgres_integration_script_is_opt_in_but_hard_fails_when_enabled_without_dsn() -> None:
     script = (ROOT / "scripts" / "host" / "verify_result_verifier_postgres_integration.sh").read_text()
 
