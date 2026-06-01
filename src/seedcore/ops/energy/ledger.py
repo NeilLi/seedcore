@@ -168,11 +168,28 @@ class EnergyLedger:
     def get_recent_energy(self, window: int = 100) -> Dict[str, List[float]]:
         """Get recent history for plotting/analysis."""
         w = min(window, len(self.total_history))
+        if w <= 0:
+            return {
+                "total": [],
+                "pair": [],
+                "hyper": [],
+                "entropy": [],
+                "reg": [],
+                "mem": [],
+                "drift": [],
+                "anomaly": [],
+                "scaling": [],
+            }
         return {
             "total": list(self.total_history)[-w:],
+            "pair": list(self.pair_history)[-w:],
+            "hyper": list(self.hyper_history)[-w:],
             "entropy": list(self.entropy_history)[-w:],
+            "reg": list(self.reg_history)[-w:],
             "mem": list(self.mem_history)[-w:],
             "drift": list(self.drift_history)[-w:],
+            "anomaly": list(self.anomaly_history)[-w:],
+            "scaling": list(self.scaling_history)[-w:],
         }
 
     # --- Legacy / Helper Updates ---
