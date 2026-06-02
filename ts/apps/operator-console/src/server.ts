@@ -10,6 +10,7 @@ import {
   renderQueuePage,
   renderReplayPage,
   renderRunbooksPage,
+  renderStudioPage,
   renderTransferPage,
 } from "./ui.js";
 import { resolveOperatorShellExperiment } from "./experiments.js";
@@ -192,6 +193,23 @@ const server = http.createServer(async (req, res) => {
       const hotPath = await fetchHotPathBanner();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(renderReplayPage(detail, qs, wf, operatorShell("verification", qs, hotPath, experiment)));
+      return;
+    }
+
+    if (url.pathname === "/studio") {
+      const wf = url.searchParams.get("workflow_id")?.trim();
+      if (!wf) {
+        res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+        res.end(page("Execution Replay Studio", "<h1>Execution Replay Studio</h1><p>Missing <code>workflow_id</code> query parameter.</p>"));
+        return;
+      }
+      const qs = queryString(url, "replay");
+      const studio = await fetchJson(
+        `/api/v1/verification/workflows/${encodeURIComponent(wf)}/studio?${qs}`,
+      );
+      const hotPath = await fetchHotPathBanner();
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderStudioPage(studio, qs, wf, operatorShell("verification", qs, hotPath, experiment)));
       return;
     }
 

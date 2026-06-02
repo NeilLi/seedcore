@@ -115,12 +115,19 @@ Immediate priority order:
    Self-Regulation drill over one RCT path (`src/seedcore/sdk/`,
    `src/seedcore/drills/agent_self_regulation.py`,
    `scripts/host/verify_agent_self_regulation_drill.sh`);
-2. **Active next step:** promote the self-regulation drill into the standard
-   host/CI acceptance bundle and add deny/quarantine variants so agents prove
-   they can stop before execution, not only confirm a happy path;
-3. Expose Scenario Generator + Governance Reward Scorer scaffolds for RCT drills in shadow/simulation only;
-4. Define the AI-led self-healing milestone ladder and first degraded-edge target;
-5. Continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion.
+2. **Completed:** the self-regulation drill is wired into the standard
+   host/CI-aligned degraded-edge matrix, including deny, quarantine, stale
+   telemetry, out-of-bounds, and missing-evidence stop-before-execution cases;
+3. **Initial Studio slice landed:** the fixture-backed
+   `seedcore.execution_replay_studio.v0` payload and
+   `/studio?workflow_id=...` operator route are now implemented as a read-only
+   forensic expansion of the replay surface. Next Studio work is to deepen the
+   artifact inspector, policy snapshot fields, telemetry hash checks, signer
+   chain validation, and toxic-path fixture coverage;
+4. Close deployment-realistic proof topology by running the verification API in
+   the same cluster as the already-green hot-path gates;
+5. Continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion as
+   the commercial scene feeding Studio and public proof.
 
 ## Status Update (2026-05-15, Commercial RCT Vertical Scene)
 

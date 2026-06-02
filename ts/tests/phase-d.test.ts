@@ -12,6 +12,7 @@ import {
 import {
   buildRuntimeScenarioFromReplay,
   buildAssetScenario,
+  buildExecutionReplayStudioFromScenario,
   buildTransferScenario,
   buildVerificationDetailFromScenario,
   buildVerificationReplayFromScenario,
@@ -26,6 +27,7 @@ import {
   renderQueuePage,
   renderReplayPage,
   renderRunbooksPage,
+  renderStudioPage,
   renderTransferPage,
 } from "../apps/operator-console/src/ui.ts";
 
@@ -85,6 +87,41 @@ test("Q2 verification detail and replay contracts include runbook links", async 
   assert.ok(replay.links.verification_detail.includes("/verification-detail"));
   assert.ok(replay.links.transfer_audit_trail.includes("/audit-trail"));
   assert.ok(replay.failure_panel.runbook_links.length >= 1);
+});
+
+test("Execution Replay Studio payload composes ordered read-only forensic source links", async () => {
+  const scenario = await buildTransferScenario({
+    source: "fixture",
+    dir: "rust/fixtures/transfers/allow_case",
+  });
+  const studio = buildExecutionReplayStudioFromScenario(scenario, {
+    source: "fixture",
+    dir: "rust/fixtures/transfers/allow_case",
+  });
+
+  assert.equal(studio.contract_version, "seedcore.execution_replay_studio.v0");
+  assert.equal(studio.workflow_id, scenario.workflow_id);
+  assert.equal(studio.replay_verdict, "incomplete");
+  assert.deepEqual(
+    studio.steps.map((step) => step.type),
+    [
+      "intent_received",
+      "authority_resolved",
+      "policy_evaluated",
+      "token_minted",
+      "action_dispatched",
+      "telemetry_attached",
+      "receipt_sealed",
+      "replay_verified",
+      "result_verified",
+      "state_published",
+    ],
+  );
+  assert.ok(studio.steps.every((step) => step.source_link.length > 0));
+  assert.ok(studio.source_links.verification_detail.includes("/verification-detail"));
+  assert.ok(studio.source_links.replay.includes("/replay"));
+  assert.ok(studio.source_links.studio.includes("/studio"));
+  assert.ok(studio.reproduction.offline_verifier_command.includes("seedcore-verify verify-chain"));
 });
 
 test("transfer queue rows expose dedicated verification replay URL", async () => {
@@ -438,6 +475,31 @@ test("replay page renders replay verdict from full verification-detail payload",
   assert.match(html, /Replay verdict/);
   assert.match(html, /consistent|inconsistent|incomplete/);
   assert.match(html, /Copilot \(read-only, MVP\)/);
+  assert.match(html, /Execution Replay Studio/);
+  assert.match(html, /GET …\/studio/);
+});
+
+test("operator console renders Execution Replay Studio as read-only forensic expansion", async () => {
+  const scenario = await buildTransferScenario({ source: "fixture", dir: "rust/fixtures/transfers/allow_case" });
+  const studio = buildExecutionReplayStudioFromScenario(scenario, {
+    source: "fixture",
+    dir: "rust/fixtures/transfers/allow_case",
+  });
+  const html = renderStudioPage(
+    studio,
+    "source=fixture&dir=rust/fixtures/transfers/allow_case",
+    scenario.workflow_id,
+  );
+
+  assert.match(html, /Execution Replay Studio/);
+  assert.match(html, /Execution step rail/);
+  assert.match(html, /Policy snapshot inspector/);
+  assert.match(html, /Telemetry hash verifier/);
+  assert.match(html, /Signer chain validator/);
+  assert.match(html, /Reproduction/);
+  assert.match(html, /seedcore.execution_replay_studio.v0/);
+  assert.doesNotMatch(html, /Approve/);
+  assert.doesNotMatch(html, /Clear quarantine/);
 });
 
 test("validateOperatorCopilotBriefForLlm requires citations and uncertainty", () => {

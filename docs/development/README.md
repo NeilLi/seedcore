@@ -270,12 +270,21 @@ tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
 Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Landed and targeted-test validated: Gated Action DX + Agent Self-Regulation drill** over one RCT path. The SDK now supports shadow and guarded enforce modes; MCP `check_policy` exposes explicit-authority preflight; the schema exporter creates path-qualified gated-action manifests; and `scripts/host/verify_agent_self_regulation_drill.sh` captures reviewable replay/evidence refs without live mutation.
-2. **Next highest-priority implementation:** promote the self-regulation drill
-   into the standard host/CI acceptance bundle and add deny/quarantine variants
-   so agents prove they can stop before execution, not only confirm a happy
-   path. Assistants (like Antigravity and Codex) can check policy admissibility
-   without minting authority or bypassing PDP/verifier closure.
+1. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
+   over one RCT path. The SDK supports shadow and guarded enforce modes; MCP
+   `check_policy` exposes explicit-authority preflight; the schema exporter
+   creates path-qualified gated-action manifests; and
+   `scripts/host/verify_agent_self_regulation_drill.sh` captures reviewable
+   replay/evidence refs without live mutation. The deny/quarantine/stale
+   telemetry/out-of-bounds/missing-evidence variants are now enforced through
+   `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
+2. **Initial Execution Replay Studio slice landed:** the verification API now
+   composes a read-only `seedcore.execution_replay_studio.v0` payload and the
+   operator console exposes `/studio?workflow_id=...` from the replay page.
+   Next Studio work is artifact-depth hardening: richer policy snapshot fields,
+   telemetry hash verification, signer trust-bundle/revocation checks, and
+   toxic-path fixture coverage
+   ([`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)).
 3. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per
@@ -283,11 +292,8 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
 4. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-5. Build the **Execution Replay Studio** follow-on as a read-only forensic
-   expansion of the replay page: inspect every execution step, policy snapshot,
-   telemetry hash, signer chain, and reproduction command without adding new
-   authority-bearing controls
-   ([`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)).
+5. Extend Studio across the rare-shoe commercial scene once the fixture-backed
+   generic RCT Studio payload and operator route are stable.
 6. Add the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
    adapter inputs for listing/quote/order/value, signed edge telemetry for

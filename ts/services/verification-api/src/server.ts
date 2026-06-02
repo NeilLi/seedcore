@@ -2,6 +2,7 @@ import http from "node:http";
 import process from "node:process";
 
 import {
+  buildExecutionReplayStudioForWorkflow,
   buildAssetScenario,
   buildTransferScenario,
   buildTransferScenarioByWorkflowId,
@@ -212,6 +213,18 @@ export const server = http.createServer(async (req, res) => {
       );
       const detail = await buildVerificationDetailForWorkflow(workflowId, query);
       jsonResponse(res, 200, detail);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/v1/verification/workflows/") && url.pathname.endsWith("/studio")) {
+      const workflowId = decodeURIComponent(
+        url.pathname
+          .replace("/api/v1/verification/workflows/", "")
+          .replace("/studio", "")
+          .replace(/\/+$/, ""),
+      );
+      const studio = await buildExecutionReplayStudioForWorkflow(workflowId, query);
+      jsonResponse(res, 200, studio);
       return;
     }
 

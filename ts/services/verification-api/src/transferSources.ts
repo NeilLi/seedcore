@@ -156,6 +156,116 @@ export interface VerificationReplayResponse {
   };
 }
 
+export type StudioReplayVerdict = "consistent" | "inconsistent" | "incomplete";
+export type StudioStepStatus = "passed" | "failed" | "missing" | "not_applicable" | "not_checked";
+
+export interface ExecutionReplayStudioStep {
+  id: string;
+  type:
+    | "intent_received"
+    | "authority_resolved"
+    | "policy_evaluated"
+    | "token_minted"
+    | "action_dispatched"
+    | "telemetry_attached"
+    | "receipt_sealed"
+    | "replay_verified"
+    | "result_verified"
+    | "state_published";
+  label: string;
+  timestamp: string | null;
+  source_contract: string;
+  source_link: string;
+  artifact_refs: string[];
+  signer_or_producer: string | null;
+  hash_inputs: string[];
+  computed_hash: string | null;
+  status: StudioStepStatus;
+  detail: string;
+}
+
+export interface PolicySnapshotInspection {
+  policy_snapshot_ref: string;
+  policy_receipt_id: string | null;
+  decision_id: string | null;
+  decision_hash: string | null;
+  reason_codes: string[];
+  context_hashes: {
+    approval_binding_hash: string | null;
+    economic_hash: string | null;
+    physical_presence_hash: string | null;
+    reasoning_hash: string | null;
+    actuator_hash: string | null;
+  };
+  scope: {
+    requested_asset_ref: string;
+    authorized_asset_ref: string;
+    requested_from_zone: string | null;
+    requested_to_zone: string | null;
+    current_zone: string | null;
+    scope_verdict: string;
+    mismatch_keys: string[];
+  };
+  status: StudioStepStatus;
+}
+
+export interface TelemetryHashCheck {
+  telemetry_ref: string;
+  payload_sha256: string | null;
+  asset_ref: string;
+  workflow_id: string;
+  signer_key_ref: string | null;
+  freshness_window: string | null;
+  replay_or_nonce_status: "ready" | "pending" | "not_checked";
+  physical_presence_hash: string | null;
+  status: StudioStepStatus;
+  issue_codes: string[];
+}
+
+export interface SignerChainCheck {
+  artifact_type: string;
+  signer_id: string;
+  signer_type: string;
+  key_ref: string;
+  attestation_level: string;
+  trust_bundle_status: "trusted" | "unknown" | "not_checked";
+  revocation_status: "clear" | "unknown" | "not_checked";
+  status: StudioStepStatus;
+}
+
+export interface ReproductionInstructions {
+  runtime_lookup_url: string;
+  verification_detail_url: string;
+  replay_url: string;
+  workflow_projection_url: string;
+  offline_verifier_command: string;
+  expected_report_fields: string[];
+}
+
+export interface ExecutionReplayStudioResponse {
+  contract_version: "seedcore.execution_replay_studio.v0";
+  workflow_id: string;
+  audit_id: string | null;
+  asset_ref: string;
+  status: BusinessState;
+  replay_verdict: StudioReplayVerdict;
+  steps: ExecutionReplayStudioStep[];
+  policy_snapshots: PolicySnapshotInspection[];
+  telemetry_checks: TelemetryHashCheck[];
+  signer_chains: SignerChainCheck[];
+  artifacts: {
+    decision_id: string | null;
+    policy_receipt_id: string | null;
+    transition_receipt_ids: string[];
+    execution_token_id: string | null;
+    forensic_block_id: string | null;
+    minted_artifacts: string[];
+    obligations: unknown[];
+  };
+  reproduction: ReproductionInstructions;
+  source_links: Record<string, string>;
+}
+
 export type { RunbookRef } from "./runbooks.js";
 
 export interface TransferCatalogItem {
@@ -1886,6 +1996,403 @@ function buildReceiptChain(scenario: TransferScenario): VerificationDetailRespon
     terminal_disposition: t.decision.disposition,
     replay_verifiable: t.physical_evidence.replay_status === "ready",
   };
+}
+
+function compactRefs(values: Array<string | null | undefined>): string[] {
+  return values.filter((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+function studioReplayVerdict(
+  scenario: TransferScenario,
+  receiptChain: VerificationDetailResponse["receipt_chain"],
+  failurePanel: VerificationDetailResponse["failure_panel"],
+): StudioReplayVerdict {
+  const stepsOk = receiptChain.steps.length > 0 && receiptChain.steps.every((step) => step.ok);
+  const projection = scenario.verification_projection;
+  if (
+    projection.status === "verified"
+    && projection.verification.signature_valid
+    && projection.verification.tamper_status === "clear"
+    && receiptChain.replay_verifiable
+    && stepsOk
+    && !failurePanel.active
+  ) {
+    return "consistent";
+  }
+  if (failurePanel.active || projection.verification.tamper_status === "suspect") {
+    return "inconsistent";
+  }
+  return "incomplete";
+}
+
+function statusForTelemetry(
+  scenario: TransferScenario,
+  failurePanel: VerificationDetailResponse["failure_panel"],
+): StudioStepStatus {
+  const audit = scenario.transfer_audit_trail;
+  if (audit.physical_evidence.telemetry_refs.length === 0) {
+    return "missing";
+  }
+  const issueCodes = [
+    ...scenario.asset_forensic_projection.trust_gaps,
+    ...scenario.asset_forensic_projection.missing_prerequisites,
+    failurePanel.reason_code,
+  ].join(" ").toLowerCase();
+  if (issueCodes.includes("telemetry") || issueCodes.includes("replay") || issueCodes.includes("tamper")) {
+    return "failed";
+  }
+  return audit.physical_evidence.replay_status === "ready" ? "passed" : "not_checked";
+}
+
+function buildStudioSourceLinks(workflowId: string, query: TransferSourceQuery): Record<string, string> {
+  const qs = buildQueryString(query);
+  const wf = encodeURIComponent(workflowId);
+  return {
+    verification_detail: `/api/v1/verification/workflows/${wf}/verification-detail?${qs}`,
+    replay: `/api/v1/verification/workflows/${wf}/replay?${qs}`,
+    studio: `/api/v1/verification/workflows/${wf}/studio?${qs}`,
+    workflow_projection: `/api/v1/verification/workflows/${wf}/projection?${qs}`,
+    transfer_audit_trail: `/api/v1/verification/transfers/audit-trail?${qs}`,
+    asset_forensics: `/api/v1/verification/assets/forensics?${qs}`,
+    runbook_lookup: `/api/v1/verification/runbook/lookup`,
+  };
+}
+
+function buildStudioSteps(
+  scenario: TransferScenario,
+  sourceLinks: Record<string, string>,
+  replayVerdict: StudioReplayVerdict,
+  failurePanel: VerificationDetailResponse["failure_panel"],
+): ExecutionReplayStudioStep[] {
+  const audit = scenario.transfer_audit_trail;
+  const forensics = scenario.asset_forensic_projection;
+  const policyStatus: StudioStepStatus = audit.artifacts.policy_receipt_id ? "passed" : "missing";
+  const tokenStatus: StudioStepStatus = audit.decision.disposition === "allow"
+    ? audit.artifacts.execution_token_id
+      ? "passed"
+      : "missing"
+    : "not_applicable";
+  const actionStatus: StudioStepStatus = audit.decision.disposition === "allow"
+    ? audit.artifacts.transition_receipt_ids.length > 0
+      ? "passed"
+      : "not_checked"
+    : "not_applicable";
+  const telemetryStatus = statusForTelemetry(scenario, failurePanel);
+  const receiptStatus: StudioStepStatus =
+    audit.artifacts.policy_receipt_id && audit.artifacts.transition_receipt_ids.length > 0
+      ? "passed"
+      : audit.artifacts.policy_receipt_id
+        ? "not_checked"
+        : "missing";
+  const replayStatus: StudioStepStatus =
+    replayVerdict === "consistent" ? "passed" : replayVerdict === "inconsistent" ? "failed" : "not_checked";
+  const resultStatus: StudioStepStatus =
+    scenario.summary.business_state === "verified"
+      ? "passed"
+      : scenario.summary.business_state === "quarantined" || scenario.summary.business_state === "rejected"
+        ? "failed"
+        : "not_checked";
+
+  return [
+    {
+      id: "intent_received",
+      type: "intent_received",
+      label: "Intent received",
+      timestamp: audit.request.requested_at,
+      source_contract: audit.contract_version,
+      source_link: sourceLinks.transfer_audit_trail,
+      artifact_refs: compactRefs([audit.request.request_id, audit.request.idempotency_key]),
+      signer_or_producer: audit.principal.agent_id,
+      hash_inputs: compactRefs([audit.request.request_id, audit.authority_scope.asset_ref]),
+      computed_hash: null,
+      status: audit.request.request_id ? "passed" : "missing",
+      detail: audit.request.request_summary,
+    },
+    {
+      id: "authority_resolved",
+      type: "authority_resolved",
+      label: "Authority resolved",
+      timestamp: audit.request.requested_at,
+      source_contract: audit.contract_version,
+      source_link: sourceLinks.transfer_audit_trail,
+      artifact_refs: compactRefs([
+        audit.principal.owner_id,
+        audit.principal.delegation_ref,
+        audit.approvals.approval_envelope_id,
+        audit.authority_scope.scope_id,
+      ]),
+      signer_or_producer: audit.principal.agent_id,
+      hash_inputs: compactRefs([audit.approvals.approval_binding_hash, audit.authority_scope.asset_ref]),
+      computed_hash: audit.approvals.approval_binding_hash,
+      status: audit.authority_scope.authority_scope_verdict === "mismatch" ? "failed" : "passed",
+      detail: `scope ${audit.authority_scope.authority_scope_verdict}; approvals ${
+        audit.approvals.completed_by.length
+      }/${audit.approvals.required.length}`,
+    },
+    {
+      id: "policy_evaluated",
+      type: "policy_evaluated",
+      label: "Policy evaluated",
+      timestamp: audit.request.requested_at,
+      source_contract: audit.contract_version,
+      source_link: sourceLinks.transfer_audit_trail,
+      artifact_refs: compactRefs([audit.artifacts.decision_id, audit.decision.policy_snapshot_ref, audit.artifacts.policy_receipt_id]),
+      signer_or_producer: "PDP",
+      hash_inputs: compactRefs([audit.decision.policy_snapshot_ref, audit.authority_scope.asset_ref, audit.decision.reason_code]),
+      computed_hash: null,
+      status: policyStatus,
+      detail: `${audit.decision.disposition}: ${audit.decision.reason_code}`,
+    },
+    {
+      id: "token_minted",
+      type: "token_minted",
+      label: "Execution token minted or withheld",
+      timestamp: audit.request.requested_at,
+      source_contract: audit.contract_version,
+      source_link: sourceLinks.transfer_audit_trail,
+      artifact_refs: compactRefs([audit.artifacts.execution_token_id]),
+      signer_or_producer: "PDP",
+      hash_inputs: compactRefs([audit.artifacts.decision_id, audit.decision.policy_snapshot_ref]),
+      computed_hash: null,
+      status: tokenStatus,
+      detail: audit.artifacts.execution_token_id
+        ? "Scoped execution token present"
+        : `No token emitted for ${audit.decision.disposition} disposition`,
+    },
+    {
+      id: "action_dispatched",
+      type: "action_dispatched",
+      label: "Action dispatched",
+      timestamp: forensics.timeline.find((entry) => entry.event_type.includes("dispatch"))?.timestamp ?? null,
+      source_contract: forensics.contract_version,
+      source_link: sourceLinks.asset_forensics,
+      artifact_refs: audit.artifacts.transition_receipt_ids,
+      signer_or_producer: forensics.principal_identity.next_custodian_ref,
+      hash_inputs: compactRefs([audit.artifacts.execution_token_id, audit.authority_scope.expected_to_zone]),
+      computed_hash: null,
+      status: actionStatus,
+      detail: `${audit.request.action_type} toward ${audit.authority_scope.expected_to_zone ?? "unknown zone"}`,
+    },
+    {
+      id: "telemetry_attached",
+      type: "telemetry_attached",
+      label: "Telemetry attached",
+      timestamp: forensics.timeline.find((entry) => entry.event_type.includes("telemetry"))?.timestamp ?? null,
+      source_contract: forensics.contract_version,
+      source_link: sourceLinks.asset_forensics,
+      artifact_refs: audit.physical_evidence.telemetry_refs,
+      signer_or_producer: forensics.signer_provenance[0]?.signer_id ?? null,
+      hash_inputs: compactRefs([
+        audit.physical_evidence.fingerprint_components.economic_hash,
+        audit.physical_evidence.fingerprint_components.physical_presence_hash,
+      ]),
+      computed_hash: audit.physical_evidence.fingerprint_components.physical_presence_hash,
+      status: telemetryStatus,
+      detail: `${audit.physical_evidence.telemetry_refs.length} telemetry refs; replay ${audit.physical_evidence.replay_status}`,
+    },
+    {
+      id: "receipt_sealed",
+      type: "receipt_sealed",
+      label: "Receipt sealed",
+      timestamp: forensics.timeline.find((entry) => entry.event_type.includes("receipt"))?.timestamp ?? null,
+      source_contract: forensics.contract_version,
+      source_link: sourceLinks.asset_forensics,
+      artifact_refs: compactRefs([
+        audit.artifacts.policy_receipt_id,
+        audit.artifacts.forensic_block_id,
+        ...audit.artifacts.transition_receipt_ids,
+      ]),
+      signer_or_producer: forensics.signer_provenance[0]?.signer_id ?? null,
+      hash_inputs: compactRefs([audit.artifacts.policy_receipt_id, audit.artifacts.forensic_block_id]),
+      computed_hash: audit.artifacts.forensic_block_id,
+      status: receiptStatus,
+      detail: `${audit.artifacts.transition_receipt_ids.length} transition receipts`,
+    },
+    {
+      id: "replay_verified",
+      type: "replay_verified",
+      label: "Replay verified",
+      timestamp: forensics.timeline.find((entry) => entry.event_type.includes("verified"))?.timestamp ?? null,
+      source_contract: "seedcore.verification_replay.v1",
+      source_link: sourceLinks.replay,
+      artifact_refs: compactRefs([audit.links.replay_artifacts_ref, scenario.verification_projection.links.replay_ref]),
+      signer_or_producer: "seedcore-verify",
+      hash_inputs: compactRefs([audit.artifacts.policy_receipt_id, audit.artifacts.forensic_block_id]),
+      computed_hash: null,
+      status: replayStatus,
+      detail: `Replay verdict ${replayVerdict}`,
+    },
+    {
+      id: "result_verified",
+      type: "result_verified",
+      label: "Result verified",
+      timestamp: forensics.timeline.at(-1)?.timestamp ?? null,
+      source_contract: scenario.verification_projection.contract_version,
+      source_link: sourceLinks.workflow_projection,
+      artifact_refs: compactRefs([scenario.verification_projection.links.trust_ref]),
+      signer_or_producer: "RESULT_VERIFIER",
+      hash_inputs: compactRefs([scenario.workflow_id, scenario.summary.business_state, audit.decision.reason_code]),
+      computed_hash: null,
+      status: resultStatus,
+      detail: `Business state ${scenario.summary.business_state}`,
+    },
+    {
+      id: "state_published",
+      type: "state_published",
+      label: "State published",
+      timestamp: forensics.timeline.at(-1)?.timestamp ?? null,
+      source_contract: scenario.verification_projection.contract_version,
+      source_link: sourceLinks.workflow_projection,
+      artifact_refs: compactRefs([
+        scenario.verification_projection.links.audit_trail_ref,
+        scenario.verification_projection.links.forensics_ref,
+        scenario.verification_projection.links.trust_ref,
+      ]),
+      signer_or_producer: "verification-api",
+      hash_inputs: compactRefs([scenario.workflow_id, scenario.asset_forensic_projection.asset_ref]),
+      computed_hash: null,
+      status: "passed",
+      detail: "Read-only verification projection available",
+    },
+  ];
+}
+
+function buildPolicySnapshotInspections(scenario: TransferScenario): PolicySnapshotInspection[] {
+  const audit = scenario.transfer_audit_trail;
+  const forensics = scenario.asset_forensic_projection;
+  return [
+    {
+      policy_snapshot_ref: audit.decision.policy_snapshot_ref,
+      policy_receipt_id: audit.artifacts.policy_receipt_id || null,
+      decision_id: audit.artifacts.decision_id || null,
+      decision_hash: null,
+      reason_codes: compactRefs([audit.decision.reason_code]),
+      context_hashes: {
+        approval_binding_hash: audit.approvals.approval_binding_hash,
+        economic_hash: audit.physical_evidence.fingerprint_components.economic_hash,
+        physical_presence_hash: audit.physical_evidence.fingerprint_components.physical_presence_hash,
+        reasoning_hash: audit.physical_evidence.fingerprint_components.reasoning_hash,
+        actuator_hash: audit.physical_evidence.fingerprint_components.actuator_hash,
+      },
+      scope: {
+        requested_asset_ref: audit.authority_scope.asset_ref,
+        authorized_asset_ref: forensics.asset_ref,
+        requested_from_zone: audit.authority_scope.expected_from_zone,
+        requested_to_zone: audit.authority_scope.expected_to_zone,
+        current_zone: audit.physical_evidence.current_zone,
+        scope_verdict: audit.authority_scope.authority_scope_verdict,
+        mismatch_keys: audit.authority_scope.mismatch_keys,
+      },
+      status: audit.decision.policy_snapshot_ref && audit.artifacts.policy_receipt_id ? "passed" : "missing",
+    },
+  ];
+}
+
+function buildTelemetryHashChecks(
+  scenario: TransferScenario,
+  failurePanel: VerificationDetailResponse["failure_panel"],
+): TelemetryHashCheck[] {
+  const audit = scenario.transfer_audit_trail;
+  const forensics = scenario.asset_forensic_projection;
+  const issueCodes = [
+    ...forensics.trust_gaps,
+    ...forensics.missing_prerequisites,
+    failurePanel.reason_code,
+  ].filter((code) => code && code !== "none");
+  return audit.physical_evidence.telemetry_refs.map((telemetryRef) => ({
+    telemetry_ref: telemetryRef,
+    payload_sha256: null,
+    asset_ref: forensics.asset_ref,
+    workflow_id: scenario.workflow_id,
+    signer_key_ref: forensics.signer_provenance[0]?.key_ref ?? null,
+    freshness_window: audit.physical_evidence.replay_status === "ready" ? "source replay-ready" : null,
+    replay_or_nonce_status: audit.physical_evidence.replay_status === "ready" ? "ready" : "pending",
+    physical_presence_hash: audit.physical_evidence.fingerprint_components.physical_presence_hash,
+    status: statusForTelemetry(scenario, failurePanel),
+    issue_codes: issueCodes,
+  }));
+}
+
+function buildSignerChainChecks(scenario: TransferScenario): SignerChainCheck[] {
+  return scenario.asset_forensic_projection.signer_provenance.map((signer) => ({
+    artifact_type: signer.artifact_type,
+    signer_id: signer.signer_id,
+    signer_type: signer.signer_type,
+    key_ref: signer.key_ref,
+    attestation_level: signer.attestation_level,
+    trust_bundle_status: "not_checked",
+    revocation_status: "not_checked",
+    status: signer.key_ref ? "not_checked" : "missing",
+  }));
+}
+
+function buildReproductionInstructions(
+  workflowId: string,
+  sourceLinks: Record<string, string>,
+): ReproductionInstructions {
+  return {
+    runtime_lookup_url: sourceLinks.studio,
+    verification_detail_url: sourceLinks.verification_detail,
+    replay_url: sourceLinks.replay,
+    workflow_projection_url: sourceLinks.workflow_projection,
+    offline_verifier_command:
+      "seedcore-verify verify-chain --bundle ./replay_bundle.json --trust-bundle ./trust_bundle.json",
+    expected_report_fields: [
+      `workflow_id=${workflowId}`,
+      "contract_version=seedcore.verification_replay.v1",
+      "receipt_chain.steps",
+      "failure_panel.reason_code",
+    ],
+  };
+}
+
+export function buildExecutionReplayStudioFromScenario(
+  scenario: TransferScenario,
+  linkQuery: TransferSourceQuery,
+): ExecutionReplayStudioResponse {
+  const receiptChain = buildReceiptChain(scenario);
+  const failurePanel = buildFailurePanel(scenario);
+  const replayVerdict = studioReplayVerdict(scenario, receiptChain, failurePanel);
+  const sourceLinks = buildStudioSourceLinks(scenario.workflow_id, linkQuery);
+  return {
+    contract_version: "seedcore.execution_replay_studio.v0",
+    workflow_id: scenario.workflow_id,
+    audit_id: scenario.transfer_audit_trail.artifacts.audit_id || null,
+    asset_ref: scenario.asset_forensic_projection.asset_ref,
+    status: scenario.summary.business_state,
+    replay_verdict: replayVerdict,
+    steps: buildStudioSteps(scenario, sourceLinks, replayVerdict, failurePanel),
+    policy_snapshots: buildPolicySnapshotInspections(scenario),
+    telemetry_checks: buildTelemetryHashChecks(scenario, failurePanel),
+    signer_chains: buildSignerChainChecks(scenario),
+    artifacts: {
+      decision_id: scenario.transfer_audit_trail.artifacts.decision_id || null,
+      policy_receipt_id: scenario.transfer_audit_trail.artifacts.policy_receipt_id || null,
+      transition_receipt_ids: scenario.transfer_audit_trail.artifacts.transition_receipt_ids,
+      execution_token_id: scenario.transfer_audit_trail.artifacts.execution_token_id,
+      forensic_block_id: scenario.transfer_audit_trail.artifacts.forensic_block_id,
+      minted_artifacts: scenario.transfer_audit_trail.artifacts.minted_artifacts,
+      obligations: scenario.transfer_audit_trail.artifacts.obligations,
+    },
+    reproduction: buildReproductionInstructions(scenario.workflow_id, sourceLinks),
+    source_links: sourceLinks,
+  };
+}
+
+export async function buildExecutionReplayStudioForWorkflow(
+  workflowId: string,
+  query: TransferSourceQuery,
+): Promise<ExecutionReplayStudioResponse> {
+  const scenario = await buildTransferScenarioByWorkflowId(workflowId, query);
+  const linkQuery: TransferSourceQuery =
+    query.source === "fixture"
+      ? (() => {
+          const root = resolveTransferRoot(query.root);
+          const dir = path.join(root, workflowId.trim());
+          return { ...query, source: "fixture", dir };
+        })()
+      : { ...query };
+  return buildExecutionReplayStudioFromScenario(scenario, linkQuery);
 }
 
 export function buildVerificationDetailFromScenario(scenario: TransferScenario): VerificationDetailResponse {

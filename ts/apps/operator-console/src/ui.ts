@@ -248,6 +248,8 @@ export function page(title: string, body: string, shell?: OperatorShellOptions):
       font-weight: 700;
     }
     .table-scroll { overflow-x: auto; }
+    .table-scroll .data-table { min-width: 760px; }
+    .data-table code { white-space: nowrap; word-break: normal; overflow-wrap: normal; }
     .card > h2 { font-size: 1.05rem; font-weight: 700; color: var(--ink); }
     .card > h3 { font-size: 0.95rem; font-weight: 700; margin-top: 12px; color: var(--ink); }
     .verdict-strip { border-left: 4px solid var(--accent); }
@@ -871,6 +873,14 @@ export function renderReplayPage(
         <p class="sub">Open JSON contracts on the verification service (same host/port as API base in deployments).</p>
         <ul>
           <li>
+            <a href="/studio?workflow_id=${encodeURIComponent(workflowId)}&${escapeHtml(detailQuery)}">Execution Replay Studio</a>
+            — read-only forensic expansion
+          </li>
+          <li>
+            <a href="/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/studio?${query}"><code>GET …/studio</code></a>
+            — derived Studio payload (<code>seedcore.execution_replay_studio.v0</code>)
+          </li>
+          <li>
             <a href="/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/replay?${query}"><code>GET …/replay</code></a>
             — dedicated replay bundle (<code>seedcore.verification_replay.v1</code>)
           </li>
@@ -923,6 +933,194 @@ export function renderReplayPage(
         ${renderApiLinks([
           ["Verification detail (JSON)", `/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/verification-detail?${query}`],
           ["Workflow projection", `/api/v1/verification/workflows/${encodeURIComponent(workflowId)}/projection?${query}`],
+        ])}
+      </section>
+    `,
+    shell,
+  );
+}
+
+function studioStatusClass(status: string): "ok" | "warn" | "bad" {
+  if (status === "passed" || status === "consistent") {
+    return "ok";
+  }
+  if (status === "failed" || status === "missing" || status === "inconsistent") {
+    return "bad";
+  }
+  return "warn";
+}
+
+function renderKeyValueRows(entries: Array<[string, unknown]>): string {
+  return entries
+    .map(([label, value]) => {
+      const text = Array.isArray(value) ? value.join(", ") || "none" : String(value ?? "none");
+      return `<div class="row">${escapeHtml(label)}: <code>${escapeHtml(text)}</code></div>`;
+    })
+    .join("");
+}
+
+export function renderStudioPage(
+  studio: any,
+  query: string,
+  workflowId: string,
+  shell?: OperatorShellOptions,
+): string {
+  const replayHref = `/replay?workflow_id=${encodeURIComponent(workflowId)}&${query}`;
+  const steps = Array.isArray(studio?.steps) ? studio.steps : [];
+  const policies = Array.isArray(studio?.policy_snapshots) ? studio.policy_snapshots : [];
+  const telemetryChecks = Array.isArray(studio?.telemetry_checks) ? studio.telemetry_checks : [];
+  const signerChains = Array.isArray(studio?.signer_chains) ? studio.signer_chains : [];
+  const artifacts = studio?.artifacts ?? {};
+  const reproduction = studio?.reproduction ?? {};
+  const sourceLinks = isRecord(studio?.source_links) ? studio.source_links : {};
+  const stepRows = steps
+    .map(
+      (step: any) => `
+        <tr>
+          <td><code>${escapeHtml(String(step.id ?? ""))}</code></td>
+          <td>${escapeHtml(String(step.label ?? ""))}</td>
+          <td><span class="status ${studioStatusClass(String(step.status ?? ""))}">${escapeHtml(String(step.status ?? ""))}</span></td>
+          <td><code>${escapeHtml(String(step.source_contract ?? ""))}</code></td>
+          <td><code>${escapeHtml(Array.isArray(step.artifact_refs) ? step.artifact_refs.join(", ") || "none" : "none")}</code></td>
+          <td>${escapeHtml(String(step.detail ?? ""))}</td>
+        </tr>`,
+    )
+    .join("");
+  const policyRows = policies
+    .map(
+      (policy: any) => `
+        <tr>
+          <td><code>${escapeHtml(String(policy.policy_snapshot_ref ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(policy.policy_receipt_id ?? "none"))}</code></td>
+          <td><code>${escapeHtml(Array.isArray(policy.reason_codes) ? policy.reason_codes.join(", ") : "")}</code></td>
+          <td><code>${escapeHtml(String(policy.scope?.scope_verdict ?? ""))}</code></td>
+          <td><code>${escapeHtml(Array.isArray(policy.scope?.mismatch_keys) ? policy.scope.mismatch_keys.join(", ") || "none" : "none")}</code></td>
+          <td><span class="status ${studioStatusClass(String(policy.status ?? ""))}">${escapeHtml(String(policy.status ?? ""))}</span></td>
+        </tr>`,
+    )
+    .join("");
+  const telemetryRows = telemetryChecks
+    .map(
+      (check: any) => `
+        <tr>
+          <td><code>${escapeHtml(String(check.telemetry_ref ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(check.payload_sha256 ?? "not_checked"))}</code></td>
+          <td><code>${escapeHtml(String(check.signer_key_ref ?? "none"))}</code></td>
+          <td><code>${escapeHtml(String(check.replay_or_nonce_status ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(check.physical_presence_hash ?? "none"))}</code></td>
+          <td><code>${escapeHtml(Array.isArray(check.issue_codes) ? check.issue_codes.join(", ") || "none" : "none")}</code></td>
+          <td><span class="status ${studioStatusClass(String(check.status ?? ""))}">${escapeHtml(String(check.status ?? ""))}</span></td>
+        </tr>`,
+    )
+    .join("");
+  const signerRows = signerChains
+    .map(
+      (signer: any) => `
+        <tr>
+          <td><code>${escapeHtml(String(signer.artifact_type ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(signer.signer_id ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(signer.key_ref ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(signer.attestation_level ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(signer.trust_bundle_status ?? ""))}</code></td>
+          <td><code>${escapeHtml(String(signer.revocation_status ?? ""))}</code></td>
+          <td><span class="status ${studioStatusClass(String(signer.status ?? ""))}">${escapeHtml(String(signer.status ?? ""))}</span></td>
+        </tr>`,
+    )
+    .join("");
+  const verdictCls = studioStatusClass(String(studio?.replay_verdict ?? "incomplete"));
+  return page(
+    "Execution Replay Studio",
+    `
+      <h1>Execution Replay Studio</h1>
+      <p class="sub">Read-only forensic expansion of the replay surface for one governed execution chain.</p>
+      ${renderSurfaceCrumbs(query, replayHref)}
+
+      <section class="card">
+        <h2>Case header</h2>
+        <div class="row">
+          <span class="status ${statusClass(String(studio?.status ?? ""))}">${escapeHtml(String(studio?.status ?? ""))}</span>
+          <span class="status ${verdictCls}">${escapeHtml(String(studio?.replay_verdict ?? "incomplete"))}</span>
+        </div>
+        ${renderKeyValueRows([
+          ["workflow id", workflowId],
+          ["audit id", studio?.audit_id],
+          ["asset", studio?.asset_ref],
+          ["contract", studio?.contract_version],
+        ])}
+      </section>
+
+      <section class="card table-scroll">
+        <h2>Execution step rail</h2>
+        <table class="data-table">
+          <thead>
+            <tr><th align="left">ID</th><th align="left">Step</th><th align="left">Status</th><th align="left">Source</th><th align="left">Artifacts</th><th align="left">Detail</th></tr>
+          </thead>
+          <tbody>${stepRows || `<tr><td colspan="6"><p class="empty">No Studio steps.</p></td></tr>`}</tbody>
+        </table>
+      </section>
+
+      <section class="card table-scroll">
+        <h2>Policy snapshot inspector</h2>
+        <table class="data-table">
+          <thead>
+            <tr><th align="left">Snapshot</th><th align="left">Receipt</th><th align="left">Reason codes</th><th align="left">Scope</th><th align="left">Mismatch keys</th><th align="left">Status</th></tr>
+          </thead>
+          <tbody>${policyRows || `<tr><td colspan="6"><p class="empty">No policy snapshots.</p></td></tr>`}</tbody>
+        </table>
+      </section>
+
+      <section class="card table-scroll">
+        <h2>Telemetry hash verifier</h2>
+        <table class="data-table">
+          <thead>
+            <tr><th align="left">Telemetry ref</th><th align="left">Payload SHA-256</th><th align="left">Signer key</th><th align="left">Replay/nonce</th><th align="left">Presence hash</th><th align="left">Issues</th><th align="left">Status</th></tr>
+          </thead>
+          <tbody>${telemetryRows || `<tr><td colspan="7"><p class="empty">No telemetry refs.</p></td></tr>`}</tbody>
+        </table>
+      </section>
+
+      <section class="card table-scroll">
+        <h2>Signer chain validator</h2>
+        <table class="data-table">
+          <thead>
+            <tr><th align="left">Artifact</th><th align="left">Signer</th><th align="left">Key ref</th><th align="left">Attestation</th><th align="left">Trust bundle</th><th align="left">Revocation</th><th align="left">Status</th></tr>
+          </thead>
+          <tbody>${signerRows || `<tr><td colspan="7"><p class="empty">No signer chain rows.</p></td></tr>`}</tbody>
+        </table>
+      </section>
+
+      <section class="split">
+        <article class="card">
+          <h2>Artifacts</h2>
+          ${renderKeyValueRows([
+            ["decision id", artifacts.decision_id],
+            ["policy receipt", artifacts.policy_receipt_id],
+            ["transition receipts", artifacts.transition_receipt_ids],
+            ["execution token", artifacts.execution_token_id],
+            ["forensic block", artifacts.forensic_block_id],
+            ["minted artifacts", artifacts.minted_artifacts],
+          ])}
+        </article>
+        <article class="card">
+          <h2>Reproduction</h2>
+          ${renderKeyValueRows([
+            ["runtime lookup", reproduction.runtime_lookup_url],
+            ["verification detail", reproduction.verification_detail_url],
+            ["replay", reproduction.replay_url],
+            ["workflow projection", reproduction.workflow_projection_url],
+            ["offline verifier", reproduction.offline_verifier_command],
+            ["expected fields", reproduction.expected_report_fields],
+          ])}
+        </article>
+      </section>
+
+      <section class="card">
+        <h2>API</h2>
+        ${renderApiLinks([
+          ["Studio JSON", typeof sourceLinks.studio === "string" ? sourceLinks.studio : undefined],
+          ["Verification detail", typeof sourceLinks.verification_detail === "string" ? sourceLinks.verification_detail : undefined],
+          ["Replay", typeof sourceLinks.replay === "string" ? sourceLinks.replay : undefined],
+          ["Workflow projection", typeof sourceLinks.workflow_projection === "string" ? sourceLinks.workflow_projection : undefined],
         ])}
       </section>
     `,
