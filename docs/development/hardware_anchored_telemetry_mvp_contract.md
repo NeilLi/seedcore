@@ -20,6 +20,24 @@ ExecutionToken lifecycle
 
 The first milestone is not a full hardware platform. The first milestone is a contract and fixture lane proving that a high-consequence physical action cannot be accepted on software authority alone.
 
+## Spark-Era Note
+
+RTX Spark / DGX Spark-class machines should be modeled as local agent
+workstations or simulation substrates unless they are explicitly enrolled as
+evidence-producing devices. They may sign proposal, simulation, diagnostic, or
+workload provenance, but that provenance is not physical closure by itself.
+
+For Restricted Custody Transfer:
+
+```text
+agent workstation provenance explains who proposed or diagnosed
+edge/robot telemetry proves what happened physically
+PDP + ExecutionToken + verifier outcome decide whether closure is admissible
+```
+
+This keeps Spark-era local autonomy useful without letting local compute become
+execution authority.
+
 ## Existing Baseline
 
 SeedCore already has several pieces this MVP should reuse:

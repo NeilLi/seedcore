@@ -13,6 +13,32 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Status Update (2026-06-08, Spark-Era Autonomy Signal)
+
+The RTX Spark / DGX Spark investigation is now captured in
+[rtx_spark_autonomous_era_investigation.md](rtx_spark_autonomous_era_investigation.md).
+The planning signal is urgent but narrow: local agent hardware is becoming
+powerful enough for always-on, concurrent, local agents to propose, simulate,
+diagnose, and repair faster than traditional human-reviewed loops can absorb.
+
+Immediate priority adjustment:
+
+1. Treat Agent Self-Regulation as Q3-critical infrastructure, not a sidecar.
+2. Make local-agent provenance visible in Execution Replay Studio.
+3. Keep hardware roles separate: Spark-class workstations can sign proposal or
+   simulation provenance; edge/robot devices produce physical closure evidence.
+4. Use AI-led self-healing to accelerate diagnosis, fixtures, patches, and gate
+   runs, but stop at reviewable promotion.
+5. Keep Restricted Custody Transfer as the proving ground.
+
+Authority remains unchanged:
+
+```text
+Local compute can accelerate autonomy.
+Only PDP allow + scoped ExecutionToken + evidence closure + verifier acceptance
+can admit high-consequence execution.
+```
+
 ## Status Update (2026-05-25, Execution Replay Studio Drafted)
 
 The next "Visualize It" step is now captured in

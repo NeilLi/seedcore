@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-05-21
+Date: 2026-06-08
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -24,6 +24,10 @@ Canonical north-star references:
 
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
   (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
+- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
+  - market-signal memo for why RTX Spark / DGX Spark-class local agent compute
+    accelerates the need for governed execution without becoming an authority
+    source
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
@@ -224,9 +228,14 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-05-21**, the project is in **Q2 operational closure -> Q3 bounded
+As of **2026-06-08**, the project is in **Q2 operational closure -> Q3 bounded
 agent integration**, still on one wedge:
 
+- The **RTX Spark / DGX Spark market signal is now explicit**:
+  Spark-class local agent hardware makes always-on, concurrent, local agents
+  more practical in 2026. This strengthens urgency for SeedCore's trust-runtime
+  wedge, but it does not change the authority rule: local agent capability is
+  proposal/simulation/diagnosis substrate, not execution permission.
 - **Commerce RCT** remains the only must-win workflow; docs and code should
   default to "order/quote/value + physical scope + token + evidence" language.
 - **Collectible rare-shoe transfer** is now the recommended commercial-grade
@@ -270,7 +279,12 @@ tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
 Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
+1. **Use the Spark-era investigation to sharpen Q3 urgency without expanding
+   scope.** Keep [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
+   tied to Agent Self-Regulation, hardware-anchored telemetry, Replay Studio,
+   and AI-led self-healing. Do not turn this into a second roadmap or a generic
+   agent-desktop story.
+2. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
    over one RCT path. The SDK supports shadow and guarded enforce modes; MCP
    `check_policy` exposes explicit-authority preflight; the schema exporter
    creates path-qualified gated-action manifests; and
@@ -278,40 +292,41 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
    replay/evidence refs without live mutation. The deny/quarantine/stale
    telemetry/out-of-bounds/missing-evidence variants are now enforced through
    `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
-2. **Initial Execution Replay Studio slice landed:** the verification API now
+3. **Initial Execution Replay Studio slice landed:** the verification API now
    composes a read-only `seedcore.execution_replay_studio.v0` payload and the
    operator console exposes `/studio?workflow_id=...` from the replay page.
    Next Studio work is artifact-depth hardening: richer policy snapshot fields,
    telemetry hash verification, signer trust-bundle/revocation checks, and
    toxic-path fixture coverage
    ([`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)).
-3. **Close deployment-realistic proof topology**: same cluster runs that already
+4. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per
    [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md).
-4. Keep the four-screen verification surface contract-stable while hardening
+5. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-5. Extend Studio across the rare-shoe commercial scene once the fixture-backed
+6. Extend Studio across the rare-shoe commercial scene once the fixture-backed
    generic RCT Studio payload and operator route are stable.
-6. Add the rare-shoe RCT fixture path as a commercial vertical scene:
+7. Add the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
    adapter inputs for listing/quote/order/value, signed edge telemetry for
    NFC/scan handoff, hash-bound forensic video proof, and proof-surface checks
    that keep public proof narrow.
-7. Advance edge telemetry closure and signed forensic-block linkage without
+8. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-8. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
+9. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
    drills in shadow/simulation only:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
-9. Define the first AI-led self-healing target around a degraded-edge or
+10. Define the first AI-led self-healing target around a degraded-edge or
    telemetry/outbox failure, with the repair loop ending in a reviewable patch
    and gate evidence rather than direct production mutation.
-10. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
+11. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
 
 Primary planning docs:
 
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
+- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
@@ -328,6 +343,9 @@ Primary planning docs:
   — long-range **autonomous trade** architecture (keep RCT as the shipped slice)
 - [`current_next_steps.md`](current_next_steps.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
+- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
+  - 2026 market-signal memo for RTX Spark / DGX Spark, local agents, and why
+  SeedCore should accelerate governed execution while rejecting hardware-as-authority
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
