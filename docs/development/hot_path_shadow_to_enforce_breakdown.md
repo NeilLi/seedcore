@@ -77,6 +77,39 @@ What is still true today:
   (`alert_level`, structured alerts, gauges, optional deployment role) for
   K8s/Ray-ready scraping and operator triage
 
+## Final Goal Feasibility Boundary
+
+SeedCore can achieve the intended final shape, but only if the docs continue to
+separate the layers correctly.
+
+Achievable target:
+
+- a stateless final PDP decision over pinned policy, context, and compiled authz
+  inputs;
+- Biscuit/Macaroon-style attenuation through signed context and execution
+  envelopes;
+- Zanzibar/SpiceDB-style revision freshness through causality tokens and local
+  view bounds;
+- CDC-driven local projections so approval, custody, delegation, resource, and
+  edge state are available without live fan-out during authorization;
+- replayable forensic artifacts that prove the authority path, freshness
+  posture, signer posture, decision, execution token, and verifier outcome.
+
+Performance wording:
+
+- "microsecond-latency PDP" is a valid target for the in-process compiled/Rust
+  decision core once benchmark evidence exists;
+- the served API and gateway path should continue to use the promotion contract
+  thresholds (`p50 < 25ms`, `p95 < 50ms`, `p99 < 100ms`) until end-to-end
+  benchmarks prove a tighter claim;
+- any investor or roadmap language should say "microsecond-class decision core"
+  and "bounded-latency served hot path" unless the benchmark artifact proves
+  otherwise.
+
+This preserves the real moat: SeedCore removes distributed-system latency from
+the final authorization boundary without making cached context or advisory
+reasoning authoritative by itself.
+
 ## Main Gap Categories
 
 The requirement breaks into five separate problems:

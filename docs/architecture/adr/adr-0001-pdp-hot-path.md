@@ -108,6 +108,36 @@ Why this remains competitive:
 - the moat is the combination of compiled policy, pinned snapshots, strict context typing, freshness and causality guarantees, evidence binding, and operator-visible parity/rollback control
 - SeedCore can make the final decision faster and more auditable than systems that rely on live graph rebuilding or loosely coupled policy calls
 
+### Strategic Confirmation
+
+SeedCore's long-term technical moat is the orchestration around the stateless
+decision boundary:
+
+- Biscuit/Macaroon-style attenuation keeps authority scoped and portable
+  through signed context and execution envelopes.
+- Zanzibar/SpiceDB-style revision freshness gives callers a way to demand
+  context at least as recent as a causally relevant mutation.
+- CDC-driven local projections let the PDP read pinned, near-local state
+  instead of turning the final authorization call into a distributed graph
+  lookup.
+- Governed receipts, replay bundles, signer provenance, and verifier outcomes
+  make the decision reconstructable after execution.
+
+The desired end state is a high-performance control plane where the final PDP
+evaluation is a deterministic, stateless, bounded-latency function over pinned
+inputs, while the surrounding runtime supplies fresh context, attenuation,
+rollback control, and forensic evidence.
+
+This should be described carefully:
+
+- the **compiled decision core** may target microsecond-class evaluation as the
+  Rust/compiled-authz path matures;
+- the **served hot-path endpoint** remains governed by explicit promotion SLOs
+  and must not claim microsecond end-to-end latency until benchmark evidence
+  proves it under production-equivalent load;
+- the security boundary must never depend on live multi-hop lookups, LLM
+  reasoning, or best-effort caches during the final allow/deny decision.
+
 ### Why the Context Supply Chain Must Be Stronger
 
 Mature authorization systems do not solve freshness by making the final check

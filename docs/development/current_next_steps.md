@@ -521,6 +521,32 @@ The guiding discipline for this stage is:
 - one design lens: SeedCore as a verifiable agentic ledger, not only a
   controller
 
+## Control-Plane Moat Confirmation
+
+The final technical value proposition is achievable if SeedCore keeps the
+current ADR direction and does not dilute the authority boundary.
+
+The moat is the orchestration, not any single borrowed pattern:
+
+- Biscuit/Macaroon-style attenuation for scoped, portable authority envelopes;
+- Zanzibar/SpiceDB-style revision freshness for "at least as fresh as this
+  mutation" context checks;
+- CDC-driven local projections for custody, approval, delegation, resource, and
+  edge state;
+- a compiled, stateless PDP decision core over pinned inputs;
+- replayable forensic evidence that proves why authority was granted, denied,
+  quarantined, or revoked.
+
+This lets SeedCore aim for a control plane that is fast without making the
+security boundary a distributed-system bottleneck. The important distinction is:
+
+- the Rust/compiled decision core can pursue microsecond-class evaluation;
+- the served gateway and `/pdp/hot-path/evaluate` surface must continue to be
+  promoted by measured millisecond SLOs, parity evidence, freshness gates, and
+  rollback readiness;
+- no cache, LLM, memory lookup, or advisory enrichment becomes authority unless
+  it is converted into typed, freshness-aware, policy-admitted context.
+
 ## Updated Design Lens: Verifiable Agentic Ledger
 
 The strongest way to describe the next-stage architecture is:
