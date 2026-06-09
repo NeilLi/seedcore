@@ -7,7 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .action_intent import ExecutionPreconditions, ExecutionToken
 from .edge_telemetry import SignedEdgeTelemetryRefV0
-from .pdp_hot_path import HotPathDecisionView
+from .pdp_hot_path import (
+    HotPathContextFreshness,
+    HotPathDecisionView,
+    HotPathSignedContextEnvelope,
+)
 
 
 GATEWAY_CONTRACT_VERSION = "seedcore.agent_action_gateway.v1"
@@ -379,6 +383,8 @@ class AgentActionEvaluateRequest(BaseModel):
     approval: AgentActionApproval
     authority_scope: AgentActionAuthorityScope
     telemetry: AgentActionTelemetry
+    context_freshness: Optional[HotPathContextFreshness] = None
+    signed_context_envelopes: List[HotPathSignedContextEnvelope] = Field(default_factory=list)
     forensic_context: Optional[AgentActionForensicContext] = None
     security_contract: AgentActionSecurityContract
     options: AgentActionOptions = Field(default_factory=AgentActionOptions)

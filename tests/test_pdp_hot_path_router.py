@@ -200,6 +200,98 @@ def test_pdp_hot_path_terminal_quarantine_updates_shadow_stats(monkeypatch):
     assert body["recent_results"][-1]["parity_ok"] is True
 
 
+def test_pdp_hot_path_quarantines_context_freshness_below_required_bound(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    client = _make_client()
+
+    payload = _base_payload()
+    payload["context_freshness"] = {
+        "causality_token": "ctx:approval-transfer-001:000042",
+        "minimum_observed_at": "2026-04-02T08:00:12Z",
+        "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
+    }
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "quarantine"
+    assert body["decision"]["reason_code"] == "context_freshness_below_required_bound"
+    assert "stale_context" in body["trust_gaps"]
+    checks = {item["check_id"]: item["result"] for item in body["checks"]}
+    assert checks["context_freshness_bound"] == "fail"
+
+
+def test_pdp_hot_path_quarantines_invalid_signed_context_envelope(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    client = _make_client()
+
+    payload = _base_payload()
+    payload["signed_context_envelopes"] = [
+        {
+            "envelope_id": "sce-edge-telemetry-001",
+            "issuer": "device:edge-node-7",
+            "issued_at": "2026-04-02T08:00:10Z",
+            "claims_hash": "edge-context-claims-001",
+            "caveats": ["asset_id=asset:lot-8841"],
+            "signature_ref": "sig:edge-context-001",
+        }
+    ]
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "quarantine"
+    assert body["decision"]["reason_code"] == "signed_context_envelope_invalid"
+    assert "signed_context_envelope_invalid" in body["trust_gaps"]
+    checks = {item["check_id"]: item["result"] for item in body["checks"]}
+    assert checks["signed_context_envelope_structural"] == "fail"
+
+
+def test_pdp_hot_path_accepts_structural_agent_projection_fields(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    fake_decision = PolicyDecision(
+        allowed=True,
+        reason="restricted_custody_transfer_allowed",
+        disposition="allow",
+        policy_snapshot="snapshot:pkg-prod-2026-04-02",
+        governed_receipt={"snapshot_hash": "sha256:snapshot-hash-transfer-001"},
+    )
+    monkeypatch.setattr(pdp_hot_path, "evaluate_intent", lambda *args, **kwargs: fake_decision)
+    client = _make_client()
+
+    payload = _base_payload()
+    payload["context_freshness"] = {
+        "causality_token": "ctx:approval-transfer-001:000042",
+        "minimum_observed_at": "2026-04-02T08:00:10Z",
+        "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
+    }
+    payload["signed_context_envelopes"] = [
+        {
+            "envelope_id": "sce-edge-telemetry-001",
+            "issuer": "device:edge-node-7",
+            "issued_at": "2026-04-02T08:00:10Z",
+            "claims_hash": "sha256:edge-context-claims-001",
+            "caveats": [
+                "asset_id=asset:lot-8841",
+                "target_zone=handoff_bay_3",
+                "max_age_seconds=60",
+            ],
+            "signature_ref": "sig:edge-context-001",
+        }
+    ]
+    response = client.post("/api/v1/pdp/hot-path/evaluate", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"]["disposition"] == "allow"
+    checks = {item["check_id"]: item["result"] for item in body["checks"]}
+    assert checks["context_freshness_bound"] == "pass"
+    assert checks["signed_context_envelope_structural"] == "pass"
+
+
 def test_baseline_parity_recording_backfills_missing_snapshot_hash_from_candidate() -> None:
     baseline = PolicyDecision(
         allowed=True,
@@ -702,3 +794,37 @@ def test_pdp_hot_path_enforce_ready_requires_promotion_window_when_gate_enabled(
     assert body["enforce_ready"] is False
     assert body["promotion"]["promotion_eligible"] is False
     assert body["promotion"]["window_events"] == 0
+
+
+def test_hot_path_enforce_authority_falls_back_without_promotion_evidence(monkeypatch):
+    compiled_at = datetime.now(timezone.utc).isoformat()
+    manager = _manager(compiled_at=compiled_at)
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", pdp_hot_path.HotPathShadowStats())
+    monkeypatch.setenv("SEEDCORE_RCT_HOT_PATH_MODE", "enforce")
+    monkeypatch.delenv("SEEDCORE_HOT_PATH_PROMOTION_GATE_DISABLED", raising=False)
+
+    assert pdp_hot_path.hot_path_authority_uses_candidate("custody-transfer-req-001") is False
+
+
+def test_hot_path_enforce_authority_uses_candidate_when_strict_promotion_ready(monkeypatch):
+    compiled_at = datetime.now(timezone.utc).isoformat()
+    manager = _manager(compiled_at=compiled_at)
+    stats = pdp_hot_path.HotPathShadowStats()
+    stats.record(
+        latency_ms=1,
+        parity={
+            "request_id": "shadow-run-001",
+            "asset_ref": "asset:lot-8841",
+            "parity_ok": True,
+            "mismatches": [],
+            "baseline": {"disposition": "allow"},
+            "candidate": {"disposition": "allow"},
+        },
+    )
+    monkeypatch.setattr(pdp_hot_path, "get_global_pkg_manager", lambda: manager)
+    monkeypatch.setattr(pdp_hot_path, "_HOT_PATH_SHADOW_STATS", stats)
+    monkeypatch.setenv("SEEDCORE_RCT_HOT_PATH_MODE", "enforce")
+    monkeypatch.setenv("SEEDCORE_HOT_PATH_PROMOTION_GATE_DISABLED", "1")
+
+    assert pdp_hot_path.hot_path_authority_uses_candidate("custody-transfer-req-001") is True

@@ -214,6 +214,30 @@ def _latency_slo_met(latency: Mapping[str, Any]) -> bool:
         return False
 
 
+def _hot_path_runtime_ready(runtime_status: Mapping[str, Any]) -> bool:
+    return bool(
+        runtime_status.get("authz_graph_ready")
+        and runtime_status.get("graph_freshness_ok")
+        and runtime_status.get("restricted_transfer_ready")
+    )
+
+
+def _strict_promotion_eligible(
+    *,
+    status_snapshot: Mapping[str, Any],
+    runtime_status: Mapping[str, Any],
+    promotion: Mapping[str, Any],
+) -> bool:
+    latency = status_snapshot.get("latency_ms")
+    latency_slo_met = _latency_slo_met(latency if isinstance(latency, Mapping) else {})
+    return bool(
+        _hot_path_runtime_ready(runtime_status)
+        and latency_slo_met
+        and (promotion.get("promotion_gate_disabled") or promotion.get("promotion_eligible"))
+        and int(status_snapshot.get("false_positive_allow_count") or 0) == 0
+    )
+
+
 def _rollback_reasons(
     *,
     status_snapshot: Mapping[str, Any],
@@ -222,12 +246,7 @@ def _rollback_reasons(
     reasons: list[str] = []
     if int(status_snapshot.get("false_positive_allow_count") or 0) > 0:
         reasons.append("false_positive_allow")
-    runtime_ready = bool(
-        runtime_status.get("authz_graph_ready")
-        and runtime_status.get("graph_freshness_ok")
-        and runtime_status.get("restricted_transfer_ready")
-    )
-    if not runtime_ready:
+    if not _hot_path_runtime_ready(runtime_status):
         reasons.append("dependency_unhealthy")
     latency = status_snapshot.get("latency_ms")
     p99 = latency.get("p99") if isinstance(latency, Mapping) else None
@@ -318,6 +337,17 @@ def _auto_rollback_reasons() -> list[str]:
     return _rollback_reasons(status_snapshot=status_snapshot, runtime_status=runtime_status)
 
 
+def _is_promotion_eligible() -> bool:
+    status = _HOT_PATH_SHADOW_STATS.snapshot()
+    runtime_status = _resolve_hot_path_runtime_status()
+    promotion = compute_hot_path_promotion_status()
+    return _strict_promotion_eligible(
+        status_snapshot=status,
+        runtime_status=runtime_status,
+        promotion=promotion,
+    )
+
+
 def hot_path_authority_uses_candidate(request_id: str) -> bool:
     """
     PDP authority selection for Restricted Custody Transfer on the coordinator path.
@@ -335,6 +365,15 @@ def hot_path_authority_uses_candidate(request_id: str) -> bool:
             ",".join(rollback_reasons),
         )
         return False
+
+    if mode in {"enforce", "canary"}:
+        if not _is_promotion_eligible():
+            logger.warning(
+                "RCT hot-path promotion eligibility not met; forcing baseline-authoritative path (mode=%s)",
+                mode,
+            )
+            return False
+
     if mode == "enforce":
         return True
     if mode == "shadow":
@@ -429,6 +468,149 @@ def _parity_persist_event(*, parity: Mapping[str, Any], latency_ms: int) -> None
         **dict(parity),
     }
     logger_inst.append(event)
+
+
+def _parse_hot_path_datetime(value: Any) -> datetime | None:
+    try:
+        return _coerce_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _non_empty(value: Any) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _validate_context_freshness_bound(
+    request: HotPathEvaluateRequest,
+    *,
+    checks: list[HotPathCheckResult],
+    started: float,
+) -> HotPathEvaluateResponse | None:
+    freshness = request.context_freshness
+    if freshness is None:
+        return None
+
+    if not _non_empty(freshness.local_view_ref):
+        checks.append(
+            _check(
+                "context_freshness_bound",
+                False,
+                "context_freshness.local_view_ref is required when context_freshness is provided",
+            )
+        )
+        return _build_terminal_response(
+            request=request,
+            started=started,
+            checks=checks,
+            disposition="quarantine",
+            reason_code="context_freshness_unavailable",
+            reason="Context freshness was provided without a required local view reference.",
+            policy_snapshot_ref=request.policy_snapshot_ref,
+            trust_gaps=["context_freshness_unavailable"],
+        )
+
+    minimum_observed_at = str(freshness.minimum_observed_at or "").strip()
+    if not minimum_observed_at:
+        checks.append(_check("context_freshness_bound", True))
+        return None
+
+    minimum_dt = _parse_hot_path_datetime(minimum_observed_at)
+    observed_dt = _parse_hot_path_datetime(request.telemetry_context.observed_at)
+    if minimum_dt is None or observed_dt is None:
+        checks.append(
+            _check(
+                "context_freshness_bound",
+                False,
+                "context freshness or telemetry observed_at timestamp is invalid",
+            )
+        )
+        return _build_terminal_response(
+            request=request,
+            started=started,
+            checks=checks,
+            disposition="quarantine",
+            reason_code="context_freshness_invalid_timestamp",
+            reason="Context freshness timestamps could not be parsed safely.",
+            policy_snapshot_ref=request.policy_snapshot_ref,
+            trust_gaps=["stale_context"],
+        )
+
+    freshness_ok = observed_dt >= minimum_dt
+    checks.append(
+        _check(
+            "context_freshness_bound",
+            freshness_ok,
+            "telemetry observed_at is older than context_freshness.minimum_observed_at",
+        )
+    )
+    if freshness_ok:
+        return None
+    return _build_terminal_response(
+        request=request,
+        started=started,
+        checks=checks,
+        disposition="quarantine",
+        reason_code="context_freshness_below_required_bound",
+        reason="Telemetry context is older than the required local-view freshness bound.",
+        policy_snapshot_ref=request.policy_snapshot_ref,
+        trust_gaps=["stale_context"],
+    )
+
+
+def _signed_context_envelope_failure_detail(request: HotPathEvaluateRequest) -> str | None:
+    for envelope in request.signed_context_envelopes:
+        for field_name in ("envelope_id", "issuer", "issued_at", "claims_hash", "signature_ref"):
+            if not _non_empty(getattr(envelope, field_name, None)):
+                return f"signed_context_envelopes.{field_name} must not be empty"
+        claims_hash = str(envelope.claims_hash).strip()
+        if not claims_hash.startswith("sha256:") or not claims_hash.removeprefix("sha256:").strip():
+            return "signed_context_envelopes.claims_hash must be a sha256: reference"
+        if _parse_hot_path_datetime(envelope.issued_at) is None:
+            return "signed_context_envelopes.issued_at must be a valid timestamp"
+        for caveat in envelope.caveats:
+            caveat_text = str(caveat or "").strip()
+            if not caveat_text:
+                return "signed_context_envelopes.caveats must not contain empty entries"
+            if "=" not in caveat_text:
+                continue
+            key, value = (part.strip() for part in caveat_text.split("=", 1))
+            if key == "asset_id" and value != request.asset_context.asset_ref:
+                return "signed_context_envelopes asset_id caveat does not match asset_context.asset_ref"
+            if key == "target_zone" and value != str(request.action_intent.resource.target_zone or "").strip():
+                return "signed_context_envelopes target_zone caveat does not match action_intent.resource.target_zone"
+    return None
+
+
+def _validate_signed_context_envelopes(
+    request: HotPathEvaluateRequest,
+    *,
+    checks: list[HotPathCheckResult],
+    started: float,
+) -> HotPathEvaluateResponse | None:
+    if not request.signed_context_envelopes:
+        return None
+
+    failure_detail = _signed_context_envelope_failure_detail(request)
+    checks.append(
+        _check(
+            "signed_context_envelope_structural",
+            failure_detail is None,
+            failure_detail,
+        )
+    )
+    if failure_detail is None:
+        return None
+    return _build_terminal_response(
+        request=request,
+        started=started,
+        checks=checks,
+        disposition="quarantine",
+        reason_code="signed_context_envelope_invalid",
+        reason="Signed context envelope failed deterministic structural or scope validation.",
+        policy_snapshot_ref=request.policy_snapshot_ref,
+        trust_gaps=["signed_context_envelope_invalid"],
+    )
 
 
 def compute_hot_path_promotion_status() -> dict[str, Any]:
@@ -751,6 +933,26 @@ def evaluate_pdp_hot_path(
         publish_pdp_hot_path_policy_outcome_best_effort(request, response)
         return response
 
+    context_freshness_response = _validate_context_freshness_bound(
+        request,
+        checks=checks,
+        started=started,
+    )
+    if context_freshness_response is not None:
+        _record_terminal_shadow_result(request=request, response=context_freshness_response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, context_freshness_response)
+        return context_freshness_response
+
+    signed_context_response = _validate_signed_context_envelopes(
+        request,
+        checks=checks,
+        started=started,
+    )
+    if signed_context_response is not None:
+        _record_terminal_shadow_result(request=request, response=signed_context_response)
+        publish_pdp_hot_path_policy_outcome_best_effort(request, signed_context_response)
+        return signed_context_response
+
     runtime_status = _resolve_hot_path_runtime_status()
     compiled_authz_index = runtime_status.get("compiled_authz_index")
     if compiled_authz_index is None:
@@ -909,17 +1111,12 @@ def hot_path_shadow_status() -> dict[str, Any]:
     status = _HOT_PATH_SHADOW_STATS.snapshot()
     runtime_status = _resolve_hot_path_runtime_status()
     promotion = compute_hot_path_promotion_status()
-    runtime_ready = bool(
-        runtime_status.get("authz_graph_ready")
-        and runtime_status.get("graph_freshness_ok")
-        and runtime_status.get("restricted_transfer_ready")
-    )
+    runtime_ready = _hot_path_runtime_ready(runtime_status)
     latency_slo_met = _latency_slo_met(status.get("latency_ms") if isinstance(status.get("latency_ms"), Mapping) else {})
-    strict_promotion_eligible = bool(
-        runtime_ready
-        and latency_slo_met
-        and (promotion.get("promotion_gate_disabled") or promotion.get("promotion_eligible"))
-        and int(status.get("false_positive_allow_count") or 0) == 0
+    strict_promotion_eligible = _strict_promotion_eligible(
+        status_snapshot=status,
+        runtime_status=runtime_status,
+        promotion=promotion,
     )
     rollback_reasons = _rollback_reasons(
         status_snapshot=status,

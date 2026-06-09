@@ -655,6 +655,21 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
 
     payload = _base_payload()
     payload["asset"]["declared_value_usd"] = 1500
+    payload["context_freshness"] = {
+        "causality_token": "ctx:approval-transfer-001:000042",
+        "minimum_observed_at": "2026-03-31T09:59:58Z",
+        "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
+    }
+    payload["signed_context_envelopes"] = [
+        {
+            "envelope_id": "sce-edge-telemetry-001",
+            "issuer": "device:edge-node-7",
+            "issued_at": "2026-03-31T09:59:58Z",
+            "claims_hash": "sha256:edge-context-claims-001",
+            "caveats": ["asset_id=asset:lot-8841", "target_zone=handoff_bay_3"],
+            "signature_ref": "sig:edge-context-001",
+        }
+    ]
     payload.pop("policy_snapshot_ref")
     response = client.post("/api/v1/agent-actions/evaluate", json=payload)
     assert response.status_code == 200
@@ -678,6 +693,10 @@ def test_agent_actions_evaluate_maps_gateway_payload_to_hot_path_request(monkeyp
     assert mapped_request.action_intent.resource.lot_id == "lot-8841"
     assert mapped_request.action_intent.resource.target_zone == "handoff_bay_3"
     assert mapped_request.action_intent.action.parameters["value_usd"] == 1500.0
+    assert mapped_request.context_freshness is not None
+    assert mapped_request.context_freshness.local_view_ref == "view:rct-edge-handoff-bay-3:000042"
+    assert len(mapped_request.signed_context_envelopes) == 1
+    assert mapped_request.signed_context_envelopes[0].claims_hash == "sha256:edge-context-claims-001"
     assert mapped_request.request_schema_bundle["artifact_type"] == "request_schema_bundle"
     assert mapped_request.taxonomy_bundle["artifact_type"] == "taxonomy_bundle"
 

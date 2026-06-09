@@ -577,7 +577,9 @@ def _map_to_hot_path_request(
         request_id=payload.request_id,
         requested_at=payload.requested_at,
         policy_snapshot_ref=policy_snapshot_ref,
+        context_freshness=payload.context_freshness,
         action_intent=action_intent,
+        signed_context_envelopes=list(payload.signed_context_envelopes),
         asset_context=HotPathAssetContext(
             asset_ref=payload.asset.asset_id,
             current_custodian_ref=payload.asset.from_custodian_ref,

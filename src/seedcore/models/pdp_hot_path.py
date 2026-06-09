@@ -33,6 +33,25 @@ class HotPathTelemetryContext(BaseModel):
     evidence_refs: List[str] = Field(default_factory=list)
 
 
+class HotPathContextFreshness(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    causality_token: Optional[str] = None
+    minimum_observed_at: Optional[str] = None
+    local_view_ref: Optional[str] = None
+
+
+class HotPathSignedContextEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    envelope_id: str
+    issuer: str
+    issued_at: str
+    claims_hash: str
+    caveats: List[str] = Field(default_factory=list)
+    signature_ref: str
+
+
 class HotPathEvaluateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -40,7 +59,9 @@ class HotPathEvaluateRequest(BaseModel):
     request_id: str
     requested_at: datetime
     policy_snapshot_ref: str
+    context_freshness: Optional[HotPathContextFreshness] = None
     action_intent: ActionIntent
+    signed_context_envelopes: List[HotPathSignedContextEnvelope] = Field(default_factory=list)
     asset_context: HotPathAssetContext
     telemetry_context: HotPathTelemetryContext
     request_schema_bundle: Optional[Dict[str, Any]] = None

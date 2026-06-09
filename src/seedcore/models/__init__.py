@@ -102,9 +102,11 @@ from .mutation_receipt import MutationReceipt
 from .pdp_hot_path import (
     HotPathAssetContext,
     HotPathCheckResult,
+    HotPathContextFreshness,
     HotPathDecisionView,
     HotPathEvaluateRequest,
     HotPathEvaluateResponse,
+    HotPathSignedContextEnvelope,
     HotPathSignerProvenance,
     HotPathTelemetryContext,
 )
@@ -187,9 +189,11 @@ __all__ = [
     "TransitionReceipt",
     "HotPathAssetContext",
     "HotPathCheckResult",
+    "HotPathContextFreshness",
     "HotPathDecisionView",
     "HotPathEvaluateRequest",
     "HotPathEvaluateResponse",
+    "HotPathSignedContextEnvelope",
     "HotPathSignerProvenance",
     "HotPathTelemetryContext",
     "EDGE_TELEMETRY_ENVELOPE_VERSION",
