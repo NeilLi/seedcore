@@ -87,6 +87,47 @@ def test_trust_surface_success_schema_contract() -> None:
     }.issubset(verify_body.keys())
 
 
+def test_replay_jsonld_exposes_agent_execution_replay_case_contract() -> None:
+    record = _build_audit_record(task_id="task-contract-jsonld-1", intent_id="intent-contract-jsonld-1", asset_id="asset-contract-jsonld-1")
+    client = _make_client(record)
+
+    response = client.get("/replay/jsonld", params={"audit_id": record["id"]})
+    assert response.status_code == 200
+    proof = response.json().get("proof", {})
+    execution_case = proof.get("execution_replay_case")
+
+    assert execution_case["@type"] == "seedcore:ExecutionReplayCase"
+    assert execution_case["contract_version"] == "seedcore.execution_replay_case.v1"
+    assert execution_case["projection"] == "internal"
+    assert execution_case["workflow_id"] == record["id"]
+    assert execution_case["replay_verdict"] in {"consistent", "inconsistent", "incomplete"}
+    assert {
+        "intent_received",
+        "authority_resolved",
+        "policy_evaluated",
+        "token_minted",
+        "action_dispatched",
+        "telemetry_attached",
+        "receipt_sealed",
+        "replay_verified",
+        "result_verified",
+        "state_published",
+    } == {item["step_type"] for item in execution_case["steps"]}
+    assert execution_case["policy_snapshots"][0]["policy_receipt_id"] == record["policy_receipt"]["policy_receipt_id"]
+    assert execution_case["telemetry_checks"][0]["checks"]["asset_binding"] == "not_checked"
+    assert execution_case["signer_chain_checks"][0]["validation_mode"] == "q2_signature_presence_and_metadata"
+    assert execution_case["copilot_brief_scope"] == {
+        "mode": "registered_runbook_ids_only",
+        "dynamic_mitigation_text_allowed": False,
+        "authority": "read_only_non_authority_bearing",
+    }
+    assert "seedcore-verify verify-chain" in execution_case["reproduction"]["offline_verifier_command"]
+
+    public_response = client.get("/replay/jsonld", params={"audit_id": record["id"], "projection": "public"})
+    assert public_response.status_code == 200
+    assert "execution_replay_case" not in public_response.json().get("proof", {})
+
+
 def test_trust_publish_mismatch_schema_contract() -> None:
     record = _apply_transition_metadata(
         _build_audit_record(task_id="task-contract-mismatch-1", intent_id="intent-contract-mismatch-1", asset_id="asset-contract-mismatch-1")

@@ -422,6 +422,11 @@ class ReplayService:
                 authority_consistency.get("issues") or []
             ),
         }
+        if kind in {ReplayProjectionKind.INTERNAL, ReplayProjectionKind.AUDITOR}:
+            proof_payload["execution_replay_case"] = self._build_execution_replay_case_projection(
+                replay,
+                projection=kind,
+            )
         if owner_context:
             proof_payload["owner_context"] = owner_context
         approval_context = self._approval_context(replay)
@@ -461,6 +466,312 @@ class ReplayService:
             if isinstance(signer_metadata, dict):
                 signer_metadata.pop("key_ref", None)
         return payload
+
+    def _build_execution_replay_case_projection(
+        self,
+        replay: ReplayRecord,
+        *,
+        projection: ReplayProjectionKind,
+    ) -> Dict[str, Any]:
+        policy_summary = self._build_policy_summary(replay)
+        authority_consistency = self._authority_consistency_summary(replay)
+        trust_gap_codes = list(policy_summary.get("trust_gap_codes") or [])
+        return {
+            "@type": "seedcore:ExecutionReplayCase",
+            "contract_version": "seedcore.execution_replay_case.v1",
+            "projection": projection.value,
+            "case_id": replay.replay_id,
+            "workflow_id": self._workflow_join_key(replay),
+            "audit_id": replay.audit_record_id,
+            "task_id": replay.task_id,
+            "intent_id": replay.intent_id,
+            "subject": {
+                "type": replay.subject_type,
+                "id": replay.subject_id,
+            },
+            "replay_verdict": self._execution_replay_verdict(replay),
+            "verification_status": replay.verification_status.model_dump(mode="json"),
+            "authority_consistency": authority_consistency,
+            "trust_gap_codes": trust_gap_codes,
+            "steps": self._execution_replay_case_steps(replay),
+            "policy_snapshots": self._execution_replay_policy_snapshots(replay, policy_summary=policy_summary),
+            "telemetry_checks": self._execution_replay_telemetry_checks(replay),
+            "signer_chain_checks": self._execution_replay_signer_chain_checks(replay),
+            "copilot_brief_scope": {
+                "mode": "registered_runbook_ids_only",
+                "dynamic_mitigation_text_allowed": False,
+                "authority": "read_only_non_authority_bearing",
+            },
+            "reproduction": {
+                "offline_verifier_command": "seedcore-verify verify-chain --bundle ./replay_bundle.json --trust-bundle ./trust_bundle.json",
+                "expected_report_fields": [
+                    "verified",
+                    "tamper_status",
+                    "artifact_reports",
+                    "signer_chain",
+                    "trust_bundle",
+                ],
+                "source_refs": {
+                    "replay_id": replay.replay_id,
+                    "audit_id": replay.audit_record_id,
+                    "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
+                    "evidence_bundle_id": replay.evidence_bundle.get("evidence_bundle_id"),
+                },
+            },
+        }
+
+    def _execution_replay_verdict(self, replay: ReplayRecord) -> str:
+        status = replay.verification_status
+        if status.tamper_status in {"incomplete", "unknown"} or not (
+            status.policy_trace_available and status.evidence_trace_available
+        ):
+            return "incomplete"
+        if status.verified and status.tamper_status == "clear" and not status.issues:
+            return "consistent"
+        return "inconsistent"
+
+    def _execution_replay_case_steps(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
+        decision = replay.policy_receipt.get("decision") if isinstance(replay.policy_receipt.get("decision"), Mapping) else {}
+        disposition = str(
+            decision.get("disposition")
+            or replay.policy_receipt.get("authz_disposition")
+            or replay.governed_receipt.get("disposition")
+            or replay.authz_graph.get("disposition")
+            or ""
+        ).strip().lower()
+        allow_path = disposition == "allow"
+        action_intent = replay.audit_record.get("action_intent") if isinstance(replay.audit_record.get("action_intent"), Mapping) else {}
+        token_id = (
+            replay.audit_record.get("token_id")
+            or replay.evidence_bundle.get("execution_token_id")
+            or (
+                replay.audit_record.get("policy_decision", {}).get("execution_token", {}).get("token_id")
+                if isinstance(replay.audit_record.get("policy_decision"), Mapping)
+                and isinstance(replay.audit_record.get("policy_decision", {}).get("execution_token"), Mapping)
+                else None
+            )
+        )
+        telemetry_refs = replay.evidence_bundle.get("telemetry_refs")
+        telemetry_available = isinstance(telemetry_refs, list) and bool(telemetry_refs)
+        artifact_results = replay.verification_status.artifact_results
+        rust_replay_chain = artifact_results.get("rust_replay_chain") if isinstance(artifact_results.get("rust_replay_chain"), Mapping) else {}
+
+        steps = [
+            self._execution_replay_step(
+                "intent_received",
+                "action_intent",
+                bool(action_intent),
+                artifact_refs={"intent_id": replay.intent_id},
+                details={"idempotency_key": action_intent.get("idempotency_key")},
+            ),
+            self._execution_replay_step(
+                "authority_resolved",
+                "authz_graph",
+                bool(replay.authz_graph or replay.governed_receipt),
+                artifact_refs={"governed_receipt_hash": replay.governed_receipt.get("decision_hash")},
+            ),
+            self._execution_replay_step(
+                "policy_evaluated",
+                "policy_receipt",
+                bool(replay.policy_receipt),
+                artifact_refs={"policy_receipt_id": replay.policy_receipt.get("policy_receipt_id")},
+                details={"disposition": disposition or None},
+            ),
+            self._execution_replay_step(
+                "token_minted",
+                "execution_token",
+                bool(token_id),
+                artifact_refs={"execution_token_id": token_id},
+                not_applicable=not allow_path,
+                failed_when_missing=allow_path,
+            ),
+            self._execution_replay_step(
+                "action_dispatched",
+                "transition_receipt",
+                bool(replay.transition_receipts),
+                artifact_refs={
+                    "transition_receipt_ids": [
+                        item.get("transition_receipt_id")
+                        for item in replay.transition_receipts
+                        if isinstance(item, Mapping) and item.get("transition_receipt_id")
+                    ]
+                },
+                not_applicable=not allow_path,
+                failed_when_missing=allow_path,
+            ),
+            self._execution_replay_step(
+                "telemetry_attached",
+                "evidence_bundle.telemetry_refs",
+                telemetry_available,
+                artifact_refs={"evidence_bundle_id": replay.evidence_bundle.get("evidence_bundle_id")},
+                failed_when_missing=True,
+            ),
+            self._execution_replay_step(
+                "receipt_sealed",
+                "evidence_bundle",
+                bool(replay.evidence_bundle),
+                artifact_refs={"evidence_bundle_id": replay.evidence_bundle.get("evidence_bundle_id")},
+                failed_when_missing=True,
+            ),
+            {
+                "step_type": "replay_verified",
+                "source_contract": "seedcore.verification_replay.v1",
+                "status": (
+                    "passed"
+                    if replay.verification_status.verified
+                    else "failed"
+                    if replay.verification_status.tamper_status not in {"incomplete", "unknown"}
+                    else "not_checked"
+                ),
+                "artifact_refs": {
+                    "replay_id": replay.replay_id,
+                    "rust_replay_artifact_count": rust_replay_chain.get("artifact_count"),
+                },
+                "details": {
+                    "tamper_status": replay.verification_status.tamper_status,
+                    "issues": list(replay.verification_status.issues),
+                },
+            },
+            {
+                "step_type": "result_verified",
+                "source_contract": "RESULT_VERIFIER",
+                "status": "not_checked",
+                "artifact_refs": {},
+                "details": {"reason": "terminal RESULT_VERIFIER projection is not present in this replay record"},
+            },
+            {
+                "step_type": "state_published",
+                "source_contract": "trust_projection",
+                "status": "not_checked",
+                "artifact_refs": {"workflow_join_key": self._workflow_join_key(replay)},
+                "details": {"reason": "publication is represented by separate trust reference endpoints"},
+            },
+        ]
+        return steps
+
+    def _execution_replay_step(
+        self,
+        step_type: str,
+        source_contract: str,
+        available: bool,
+        *,
+        artifact_refs: Optional[Mapping[str, Any]] = None,
+        details: Optional[Mapping[str, Any]] = None,
+        not_applicable: bool = False,
+        failed_when_missing: bool = False,
+    ) -> Dict[str, Any]:
+        if available:
+            status = "passed"
+        elif not_applicable:
+            status = "not_applicable"
+        elif failed_when_missing:
+            status = "failed"
+        else:
+            status = "missing"
+        return {
+            "step_type": step_type,
+            "source_contract": source_contract,
+            "status": status,
+            "artifact_refs": dict(artifact_refs or {}),
+            "details": dict(details or {}),
+        }
+
+    def _execution_replay_policy_snapshots(
+        self,
+        replay: ReplayRecord,
+        *,
+        policy_summary: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if not replay.policy_receipt and not replay.authz_graph and not replay.governed_receipt:
+            return []
+        return [
+            {
+                "policy_snapshot_ref": replay.policy_receipt.get("policy_version") or replay.audit_record.get("policy_snapshot"),
+                "policy_receipt_id": replay.policy_receipt.get("policy_receipt_id"),
+                "policy_decision_id": replay.policy_receipt.get("policy_decision_id"),
+                "decision_hash": replay.governed_receipt.get("decision_hash"),
+                "decision_graph_snapshot_hash": policy_summary.get("decision_graph_snapshot_hash"),
+                "decision_graph_snapshot_version": policy_summary.get("decision_graph_snapshot_version"),
+                "state_binding_hash": policy_summary.get("state_binding_hash"),
+                "reason_codes": [
+                    item.get("reason_code")
+                    for item in policy_summary.get("trust_gap_details") or []
+                    if isinstance(item, Mapping) and item.get("reason_code")
+                ],
+                "trust_gap_codes": list(policy_summary.get("trust_gap_codes") or []),
+                "status": "passed" if replay.policy_receipt else "missing",
+            }
+        ]
+
+    def _execution_replay_telemetry_checks(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
+        refs = replay.evidence_bundle.get("telemetry_refs")
+        if not isinstance(refs, list):
+            return []
+        checks: List[Dict[str, Any]] = []
+        for index, item in enumerate(refs):
+            if not isinstance(item, Mapping):
+                continue
+            telemetry_id = str(
+                item.get("telemetry_id")
+                or item.get("id")
+                or item.get("kind")
+                or f"telemetry:{index}"
+            )
+            hash_value = item.get("payload_sha256") or item.get("sha256") or item.get("hash")
+            checks.append(
+                {
+                    "telemetry_id": telemetry_id,
+                    "payload_hash": self._artifact_hash_object(
+                        hash_value,
+                        fallback_seed=f"telemetry:{replay.replay_id}:{index}",
+                    )
+                    if hash_value is not None
+                    else None,
+                    "asset_ref": item.get("asset_ref") or item.get("asset_id"),
+                    "workflow_ref": item.get("workflow_ref") or item.get("workflow_id") or item.get("intent_id"),
+                    "signer_key_ref": item.get("signer_key_ref") or item.get("key_ref"),
+                    "status": "not_checked",
+                    "checks": {
+                        "payload_hash": "available" if hash_value is not None else "missing",
+                        "asset_binding": "not_checked",
+                        "workflow_binding": "not_checked",
+                        "freshness": "not_checked",
+                        "replay_nonce": "not_checked",
+                    },
+                }
+            )
+        return checks
+
+    def _execution_replay_signer_chain_checks(self, replay: ReplayRecord) -> List[Dict[str, Any]]:
+        checks: List[Dict[str, Any]] = []
+        for item in replay.signer_chain:
+            if not isinstance(item, Mapping):
+                continue
+            metadata = item.get("signer_metadata") if isinstance(item.get("signer_metadata"), Mapping) else {}
+            signature = item.get("signature")
+            key_ref = self._optional_str(metadata.get("key_ref"))
+            attestation_level = self._optional_str(metadata.get("attestation_level")) or "baseline"
+            checks.append(
+                {
+                    "artifact_type": item.get("artifact_type"),
+                    "artifact_id": item.get("artifact_id"),
+                    "key_ref": key_ref,
+                    "signing_scheme": metadata.get("signing_scheme"),
+                    "attestation_level": attestation_level,
+                    "status": "passed" if signature else "failed",
+                    "checks": {
+                        "signature_presence": "passed" if signature else "failed",
+                        "key_ref_presence": "passed" if key_ref else "not_checked",
+                        "trust_bundle_membership": "not_checked",
+                        "revocation_status": "not_checked",
+                        "attestation_metadata": "passed" if attestation_level else "not_checked",
+                        "tpm_ek_certificate_chain": "not_checked",
+                        "rats_boot_claims": "not_checked",
+                    },
+                    "validation_mode": "q2_signature_presence_and_metadata",
+                }
+            )
+        return checks
 
     async def publish_trust_bundle(
         self,
