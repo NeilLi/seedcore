@@ -330,5 +330,6 @@ A compromised cloud agent should not be able to fake real-world execution becaus
 - [ADR 0003: IGX Thor Trusted Edge Profile](../architecture/adr/adr-0003-igx-thor-trusted-edge-profile.md)
 - [Agent Action Gateway Contract](agent_action_gateway_contract.md)
 - [Edge Telemetry Evidence Closure Draft](edge_telemetry_evidence_closure_draft.md)
+- [Virtual NFC Simulation Plan](virtual_nfc_simulation_plan.md)
 - [TPM Fleet Rollout Runbook](tpm_fleet_rollout_runbook.md)
 - [Rare-Shoe RCT Demo Spec](rare_shoes_collecting_transfer_demo_spec.md)
