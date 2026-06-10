@@ -25,6 +25,10 @@ This contract is intentionally narrow: one workflow, one evidence model, one dec
 8. Zanzibar-style external graph checks are not part of the default RCT hot
    path; graph inputs must be compiled into bounded local decision artifacts
    before evaluation.
+9. Context sufficiency must be decided before policy allow: required fields,
+   context-envelope signatures, causality freshness, and freshness SLAs must all
+   pass or the request returns `deny`, `quarantine`, or `escalate` with an
+   explicit trust gap.
 
 ## Context Infrastructure Pattern
 
@@ -58,7 +62,17 @@ Optional debug:
   "context_freshness": {
     "causality_token": "ctx:approval-transfer-001:000042",
     "minimum_observed_at": "2026-04-02T08:00:12Z",
-    "local_view_ref": "view:rct-edge-handoff-bay-3:000042"
+    "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
+    "local_view_version": "000042",
+    "freshness_sla_profile": "rct.fixture.v1"
+  },
+  "context_sufficiency": {
+    "schema_profile": "rct.hot_path.context.v1",
+    "required_fields_present": true,
+    "causality_satisfied": true,
+    "freshness_sla_satisfied": true,
+    "signed_envelopes_verified": true,
+    "state_binding_hash": "sha256:state-binding-transfer-001"
   },
   "action_intent": {
     "intent_id": "intent-transfer-001",
@@ -136,6 +150,10 @@ Optional debug:
 
 - `policy_snapshot_ref`
 - `context_freshness.local_view_ref`
+- `context_freshness.local_view_version`
+- `context_freshness.freshness_sla_profile`
+- `context_sufficiency.schema_profile`
+- `context_sufficiency.state_binding_hash`
 - `action_intent` (existing SeedCore model shape)
 - `asset_context.asset_ref`
 - `telemetry_context.observed_at`
@@ -149,6 +167,10 @@ Optional debug:
 5. Telemetry staleness breach -> `quarantine`.
 6. Required local view freshness below `context_freshness.causality_token` -> `quarantine`.
 7. Invalid signed context envelope signature, caveat, or scope -> `deny` or `quarantine` based on policy.
+8. Missing context-sufficiency required fields -> `deny` or `quarantine`
+   based on the failed context class.
+9. Missing or unverifiable `state_binding_hash` input for a high-consequence
+   RCT path -> `quarantine`.
 
 ## Response Contract
 
@@ -207,6 +229,13 @@ Optional debug:
     "decision_hash": "receipt-transfer-001",
     "disposition": "allow",
     "snapshot_ref": "snapshot:pkg-prod-2026-04-02",
+    "context_freshness": {
+      "causality_token": "ctx:approval-transfer-001:000042",
+      "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
+      "local_view_version": "000042",
+      "freshness_sla_profile": "rct.fixture.v1"
+    },
+    "state_binding_hash": "sha256:state-binding-transfer-001",
     "asset_ref": "asset:lot-8841",
     "resource_ref": "seedcore://zones/vault_a/assets/asset:lot-8841",
     "reason": "restricted_custody_transfer_allowed",
@@ -246,6 +275,9 @@ Optional debug:
 
 - `stale_telemetry`
 - `snapshot_not_ready`
+- `insufficient_context`
+- `context_freshness_breach`
+- `state_binding_hash_missing`
 - `hot_path_dependency_unavailable`
 - `trust_gap_quarantine`
 
@@ -294,4 +326,9 @@ Optional debug:
 - Decision parity >= 99.9% against baseline for frozen fixtures.
 - Zero fail-open events.
 - 100% decisions produce replay-verifiable artifacts.
+- All allow-path decisions include replay-visible context sufficiency,
+  causality/freshness, signed-envelope, and `state_binding_hash` evidence.
+- Missing, stale, invalid, or partial context fixtures resolve to deterministic
+  `deny`, `quarantine`, or `escalate`; no insufficient-context fixture may mint
+  an `ExecutionToken`.
 - Verification surfaces render business-readable states without raw stack traces.

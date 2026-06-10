@@ -53,6 +53,31 @@ For high-consequence actions, stale context should be treated as a policy
 failure, not as a soft operational inconvenience. In practice, stale custody,
 approval, or device state is often equivalent to an authorization bypass.
 
+### Sufficient Context Definition
+
+For SeedCore, **sufficient context** is not a confidence score and not a
+RAG-style "probably enough information" judgment. It is a deterministic
+precondition for minting execution authority.
+
+Before the PDP can return `allow` or issue an `ExecutionToken`, the request
+assembler / PEP must present a bounded context package with all of these
+properties:
+
+- **schema completeness**: every mandatory field for the policy class is
+  populated, typed, and versioned; missing optional-looking values on
+  high-consequence paths are treated as insufficient
+- **cryptographic validity**: edge, sensor, approval, signer, or custody claims
+  arrive in verifiable envelopes where policy requires them
+- **causality and freshness**: local views can prove they are at least as fresh
+  as the request's causality token or the check fails closed
+- **attribute-level SLA compliance**: each context class satisfies its explicit
+  freshness bound, owner, source-of-truth, and failure disposition
+
+If any property is absent, stale, unverifiable, or out of bounds, the PDP must
+not improvise with live lookups, cached memory, LLM reasoning, or partial
+context. The outcome is `deny`, `quarantine`, or `escalate` according to policy,
+with an explicit reason code and replay-visible trust gap.
+
 ## Decision Boundaries
 
 This ADR establishes the shape of the final authorization boundary. It does not require:
@@ -278,6 +303,27 @@ trajectory and should grow toward:
 - edge-envelope signature provenance
 - explicit mismatch or timeout reasons when quarantine occurs
 
+### 6. Separate Runtime Sufficiency Verification From Forensic Verification
+
+Context sufficiency is verified at two layers.
+
+At runtime, the request assembler / PEP and the compiled runtime verification
+core are responsible for:
+
+- validating strict request schemas before PDP evaluation
+- checking signed context envelopes and caveats
+- proving local-view freshness against the incoming causality token
+- enforcing per-attribute freshness SLAs
+- withholding `ExecutionToken` issuance when any hard precondition fails
+
+Afterward, the forensic verifier and replay system are responsible for proving
+that the runtime decision can be reconstructed from preserved artifacts. Replay
+evidence should bind the policy snapshot, context version, causality token,
+freshness outcomes, envelope provenance, and explicit trust gaps into the
+decision receipt. This is the natural role of `state_binding_hash`: it should
+identify the exact state and context boundary the PDP accepted, not merely the
+policy revision.
+
 ## Follow-On Work
 
 The items below are important strengthening work implied by this ADR, but they
@@ -296,6 +342,9 @@ following:
 - Add request fields and replay evidence fields for context version/freshness
   proofs where the workflow is sensitive enough to require them.
 - Add stricter schema/type validation for policy inputs and request context.
+- Add explicit "insufficient context" negative fixtures for missing required
+  fields, invalid context envelopes, stale local views, SLA breaches, and
+  missing `state_binding_hash` inputs.
 - Define attribute-level freshness SLAs and fail-closed behavior by context
   class, especially for custody, telemetry, and hardware state.
 - Prefer signed edge-state envelopes over request-time remote polling for

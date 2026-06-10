@@ -53,6 +53,28 @@ Implementation anchors:
 - `src/seedcore/api/routers/agent_actions_router.py::_resolve_owner_twin_snapshot_for_payload`
 - `docs/development/verifying_delegation_frontier_ai_architectures.md`
 
+## Context Sufficiency Gates
+
+ADR 0001 defines sufficient context as a deterministic precondition for
+authorization. These gates happen before any `ExecutionToken` can be minted.
+They are not advisory retrieval checks and should not trigger request-time
+remote fan-out, LLM reasoning, or best-effort fallback.
+
+| Scenario | Input Condition | Expected Decision | Explicit Deny Code / Reason |
+| :--- | :--- | :--- | :--- |
+| **Missing Required Context Field** | Policy class requires an approval, custody, telemetry, or signer field that is absent or untyped | `DENY` / `QUARANTINE` | `insufficient_context` |
+| **Local View Behind Causality Token** | `context_freshness.local_view_version` cannot prove freshness at or beyond the request causality token | `QUARANTINE` | `context_freshness_breach` |
+| **Freshness SLA Breach** | Telemetry, custody, approval, delegation, or device context exceeds its explicit freshness SLA | `QUARANTINE` | `stale_context` / `stale_telemetry` |
+| **Invalid Signed Context Envelope** | Required context envelope has invalid signature, caveat, issuer, scope, or expiry | `DENY` / `QUARANTINE` | `invalid_context_envelope` |
+| **Missing State Binding** | High-consequence path lacks replay-visible `state_binding_hash` inputs for accepted policy/context state | `QUARANTINE` | `state_binding_hash_missing` |
+| **Context Package Complete And Fresh** | Schema complete, envelopes verified, causality satisfied, and SLA checks pass | Continue PDP evaluation | *(None)* |
+
+Implementation anchors:
+
+- `docs/architecture/adr/adr-0001-pdp-hot-path.md`
+- `docs/development/asset_centric_pdp_hot_path_contract.md`
+- `docs/development/freshness_sla_edge_stress_schedule.md`
+
 ## Recursive Agent Delegation Gates
 
 The workflow v1 lane extends owner delegation into recursive agent handoffs.

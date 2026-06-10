@@ -22,6 +22,8 @@ The hot-path (candidate) must match the baseline (governance core) results acros
 - `trust_gaps` (Exactly matching codes)
 - `required_approvals` (Exactly matching principals)
 - `minted_artifacts` (Presence of ExecutionToken)
+- `context_sufficiency` (Schema, envelope, causality, freshness, and
+  `state_binding_hash` outcomes)
 
 ---
 
@@ -41,8 +43,15 @@ The hot-path must demonstrate deterministic, low-latency performance to justify 
 Before promotion, the following telemetry and safety mechanisms must be active:
 
 *   **Heartbeat Monitor:** Active monitoring of the compiled authz graph age. If the graph is > 10 minutes stale, the system must automatically fallback to `quarantine`.
+*   **Context Sufficiency Monitor:** Active counters for missing required
+    context, stale local views, freshness-SLA breaches, invalid signed context
+    envelopes, and missing `state_binding_hash` inputs. Any insufficiency on an
+    allow-path candidate blocks token minting and emits an explicit trust gap.
 *   **Parity Alerting:** Automated alerts triggered immediately on any shadow parity mismatch.
 *   **Audit Trail Consistency:** Verified that the `audit_id` from the hot-path matches the audit chain in the persistent audit ledger.
+*   **Replay Sufficiency Consistency:** Verified that governed receipts bind
+    the policy snapshot, causality token, local-view version, freshness outcome,
+    signer/envelope provenance, and `state_binding_hash` used at decision time.
 *   **Rollback Mechanism:** The ability to toggle `SEEDCORE_RCT_HOT_PATH_MODE` back to `shadow` via environment variable or feature flag without a service restart.
 
 ---
@@ -53,6 +62,8 @@ If any of these conditions occur in `enforce` mode, the system should be immedia
 1.  **Any False-Positive (Allow when Baseline says Deny):** Immediate rollback.
 2.  **P99 Latency > 250ms:** Sustained for more than 5 minutes.
 3.  **Hot-Path Dependency Failure:** Loss of Redis or PKG Manager connectivity.
+4.  **Sufficiency Fail-Open:** Any missing, stale, invalid, or replay-unbound
+    context package that still mints an `ExecutionToken`.
 
 ---
 
@@ -61,6 +72,10 @@ The transition to `enforce` mode requires a sign-off report containing:
 1.  **Parity Evidence:** Export of the `HotPathShadowStats` showing 1,000+ successful parity checks.
 2.  **Latency Profile:** A P50/P95/P99 chart from the observation period.
 3.  **Signer Verification:** Confirmation that hardware-rooted `ecdsa_p256` signatures are correctly minted by the hot-path engine.
+4.  **Context Sufficiency Evidence:** Negative-path fixture results showing
+    missing fields, stale causality, SLA breaches, invalid envelopes, and
+    missing `state_binding_hash` inputs resolve to deterministic
+    deny/quarantine/escalate outcomes with no execution token.
 
 ---
 **Current Status:** `SHADOW`  

@@ -72,8 +72,13 @@ That means the active docs should be read through one question:
 **Architecture posture for the supporting ecosystem:**
 
 The PDP remains internal, synchronous, deterministic, and stateless at decision
-time. The infrastructure around it should evolve in four specific directions:
+time. The infrastructure around it should evolve in these specific directions:
 
+- Sufficient context is a hard precondition for execution authority, not a
+  retrieval-confidence score. Before `allow`, the request package must be
+  schema-complete, cryptographically verifiable where policy requires it,
+  causally fresh, SLA-compliant, and replay-bound through evidence such as
+  `state_binding_hash`.
 - Signed Context Envelopes and caveat-style attenuation, informed by Biscuit and
   Macaroons, push cryptographically verifiable context into requests instead of
   making the PDP perform hot-path user-attribute lookups.
@@ -137,6 +142,10 @@ Start here for the active spine:
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical
    closure authority.
+   - Read with ADR 0001's sufficient-context rule: stale local views, missing
+     signed envelopes, missing required fields, and missing `state_binding_hash`
+     inputs are fail-closed authorization conditions, not retriable LLM context
+     gaps.
 13. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
