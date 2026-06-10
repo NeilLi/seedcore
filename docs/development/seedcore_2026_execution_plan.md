@@ -100,6 +100,20 @@ whether strict causality-token freshness is operationally usable. If local PDP
 views lag the incoming token, the correct result is a visible quarantine or
 deny, not a best-effort allow.
 
+Agent-system eval schedule:
+
+- [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) turns the
+  OpenAI Evals-style discipline into SeedCore-native regression windows for
+  decision, policy, forensic, and agent-governance behavior.
+- The schedule is intentionally product-neutral: hosted eval tools, trace
+  graders, local harnesses, and CI scripts may measure behavior, but the
+  authoritative result remains the PDP, `ExecutionToken`, evidence closure, and
+  verifier outcome.
+- The eval track supplies promotion evidence for advisory/scaffold components
+  and governance-aware learning samples. It does not authorize execution,
+  clear quarantine, reinterpret `RESULT_VERIFIER`, or promote `shadow` to
+  `enforce`.
+
 ## Execution Update (2026-05-21, Autonomy-Ready Trust Runtime)
 
 The 2026 plan should now explicitly support the coming wave of coding and

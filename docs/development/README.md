@@ -133,11 +133,15 @@ Start here for the active spine:
    harness guardrail for the energy flywheel: deterministic gates, circuit
    breaker posture, legible cycle artifacts, and the rule that adaptive tuning
    never becomes execution authority.
-11. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+11. [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) -
+   staged schedule for turning AI-system eval discipline into SeedCore-native
+   regression fixtures across decision, policy, forensic, and agent-governance
+   behavior without making eval tooling an authority source.
+12. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-12. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
+13. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical
@@ -146,26 +150,26 @@ Start here for the active spine:
      signed envelopes, missing required fields, and missing `state_binding_hash`
      inputs are fail-closed authorization conditions, not retriable LLM context
      gaps.
-13. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+14. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-14. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
+15. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
    control-plane memo for recursive agent delegation: root context anchoring,
    signed agent identity/capability credentials, per-hop attenuation, visible
    tool calls, out-of-band approval, child-run closure, and replayable
    delegation lineage.
-15. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+16. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-16. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+17. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
-17. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
+18. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
    distilled reference for persistent twin settlement as a real-world AI
    reliability pattern: pluggable settlement protocols, proof-vector
    accumulation, append-only compensation, and cryptographic integrity for

@@ -150,6 +150,21 @@ Freshness-SLA schedule:
   devices; they are not substitutes for deterministic physical closure
   evidence.
 
+Agent-system eval schedule:
+
+- The system-level eval track is now captured in
+  [agent_system_eval_schedule.md](agent_system_eval_schedule.md): decision
+  evals, policy evals, forensic evals, and agent-governance evals over the
+  same gateway, PDP, replay, verifier, and typed-verdict contracts that govern
+  the runtime.
+- Treat OpenAI-style eval tooling as measurement infrastructure only. The
+  durable SeedCore requirement is a portable regression harness that survives
+  prompt, model, memory, tool, and agent-workflow changes without becoming an
+  authority source.
+- The eval outputs can support advisory/scaffold promotion evidence, but they
+  cannot issue `ExecutionToken`s, clear quarantine, override
+  `RESULT_VERIFIER`, or promote `shadow` to `enforce`.
+
 Immediate priority order:
 
 1. **Landed and targeted-test verified:** Gated Action DX + Agent
