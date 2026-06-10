@@ -135,6 +135,21 @@ This creates an accelerated, higher-priority overlay across the existing RCT pla
    commerce fulfillment scene. The autonomy work makes this workflow faster to
    build, test, verify, and repair under automated agent assistance.
 
+Freshness-SLA schedule:
+
+- The staged test order is now captured in
+  [freshness_sla_edge_stress_schedule.md](freshness_sla_edge_stress_schedule.md):
+  RCT fixture/simulator first, Jetson Orin prototype edge second, IGX Thor /
+  T5000 trusted edge third, and robotics handoff environments after the
+  telemetry contract is stable.
+- The control metric across those lanes is Convergence P99 Latency: if the
+  local PDP view cannot prove it is at least as fresh as the incoming causality
+  token, the action must fail closed rather than silently downgrade freshness.
+- RTX Spark / DGX Spark-class machines stay in the proposal, simulation,
+  diagnosis, and repair lane unless explicitly enrolled as evidence-producing
+  devices; they are not substitutes for deterministic physical closure
+  evidence.
+
 Immediate priority order:
 
 1. **Landed and targeted-test verified:** Gated Action DX + Agent

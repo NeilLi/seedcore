@@ -78,6 +78,27 @@ Immediate development consequences:
 Reference memo:
 
 - [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
+- [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md)
+
+Freshness-SLA execution schedule:
+
+1. **RCT fixture / simulator lane:** prove replay parity, stale-context
+   fail-closed behavior, and synthetic partition handling before physical
+   hardware variability enters the loop.
+2. **Jetson Orin prototype edge lane:** benchmark signed context envelopes,
+   signature verification, lightweight attenuation checks, and bus-read jitter
+   against a 5 ms to 20 ms prototype freshness target.
+3. **IGX Thor / T5000 trusted-edge lane:** add hardware-rooted signer posture,
+   node health, firmware/software-lane metadata, and strict fail-closed
+   behavior for missing hardware provenance.
+4. **Robotics handoff lane:** only after the first three lanes stabilize, apply
+   dynamic kinematic freshness windows to Unitree B2 / Reachy Mini-class
+   physical handoff loops.
+
+Across all lanes, Convergence P99 Latency is the metric that determines
+whether strict causality-token freshness is operationally usable. If local PDP
+views lag the incoming token, the correct result is a visible quarantine or
+deny, not a best-effort allow.
 
 ## Execution Update (2026-05-21, Autonomy-Ready Trust Runtime)
 

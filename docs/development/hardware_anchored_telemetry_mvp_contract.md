@@ -295,6 +295,10 @@ The first implementation should stay narrow:
 
 Do not start by building a full hardware enrollment service, remote attestation platform, or vendor-specific trusted-edge stack.
 
+For the staged freshness-SLA rollout across simulator, Jetson prototype edge,
+IGX/T5000 trusted edge, and robotics handoff environments, see
+[Freshness SLA Edge Stress Schedule](freshness_sla_edge_stress_schedule.md).
+
 ## Acceptance Criteria
 
 The MVP is accepted when:
