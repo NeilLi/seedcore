@@ -247,6 +247,7 @@ class RareShoeEdgeTelemetry(BaseModel):
     payload_sha256: str
     signer_key_ref: str
     signature_b64: str
+    observed_condition_grade: Optional[float] = Field(default=None, ge=0, le=10)
 
     @field_validator(
         "telemetry_id",
@@ -297,8 +298,10 @@ def evaluate_rare_shoe_edge_telemetry(
     authority: RareShoeBoundedCustodyAuthority,
     registration: CollectibleShoeRegistration,
     previous_scan_counter: int | None = None,
+    revoked_signer_keys: Any = None,
 ) -> Dict[str, Any]:
     issues: List[str] = []
+    revoked_key_set = _normalize_revoked_signer_keys(revoked_signer_keys)
     asset_mismatch = telemetry.asset_id != authority.asset_id or telemetry.asset_id != registration.asset_id
     if asset_mismatch:
         issues.append("CROSS_ASSET_REPLAY")
@@ -306,6 +309,13 @@ def evaluate_rare_shoe_edge_telemetry(
         issues.append("UNAUTHORIZED_EDGE_DEVICE")
     if telemetry.cmac_ref != telemetry.expected_cmac_ref:
         issues.append("DYNAMIC_NFC_PROOF_INVALID")
+    if telemetry.signer_key_ref in revoked_key_set:
+        issues.append("SIGNER_CHAIN_VIOLATION")
+    if _condition_drift_detected(
+        registered_grade=registration.condition_grade.grade,
+        observed_grade=telemetry.observed_condition_grade,
+    ):
+        issues.append("CONDITION_DRIFT_DETECTED")
 
     nfc_result = verify_dynamic_nfc_evidence(
         {
@@ -372,6 +382,34 @@ def _legacy_rare_shoe_nfc_issue(reason_code: str) -> Optional[str]:
     return "DYNAMIC_NFC_PROOF_INVALID"
 
 
+def _normalize_revoked_signer_keys(raw: Any) -> set[str]:
+    if raw is None:
+        return set()
+    if isinstance(raw, str):
+        normalized = raw.strip()
+        return {normalized} if normalized else set()
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return set()
+    return {
+        normalized
+        for item in raw
+        for normalized in [str(item).strip()]
+        if normalized
+    }
+
+
+def _condition_drift_detected(*, registered_grade: float, observed_grade: Any) -> bool:
+    if observed_grade is None:
+        return False
+    try:
+        observed = float(observed_grade)
+    except (TypeError, ValueError):
+        return True
+    if not 0 <= observed <= 10:
+        return True
+    return abs(float(registered_grade) - observed) > 1.0
+
+
 def evaluate_rare_shoe_replay_bundle(bundle: Mapping[str, Any]) -> Dict[str, Any]:
     registration = CollectibleShoeRegistration.model_validate(bundle.get("registration"))
     authority = RareShoeBoundedCustodyAuthority.model_validate(bundle.get("bounded_custody_authority"))
@@ -394,6 +432,15 @@ def evaluate_rare_shoe_replay_bundle(bundle: Mapping[str, Any]) -> Dict[str, Any
     if len(telemetry_items) < 2:
         issues.append("CUSTODY_TELEMETRY_INCOMPLETE")
 
+    observed_grade = bundle.get("observed_condition_grade")
+    if _condition_drift_detected(
+        registered_grade=registration.condition_grade.grade,
+        observed_grade=observed_grade,
+    ):
+        issues.append("CONDITION_DRIFT_DETECTED")
+
+    revoked_keys = _normalize_revoked_signer_keys(bundle.get("revoked_signer_keys"))
+
     previous_counter: int | None = None
     for telemetry in telemetry_items:
         result = evaluate_rare_shoe_edge_telemetry(
@@ -401,6 +448,7 @@ def evaluate_rare_shoe_replay_bundle(bundle: Mapping[str, Any]) -> Dict[str, Any
             authority=authority,
             registration=registration,
             previous_scan_counter=previous_counter,
+            revoked_signer_keys=revoked_keys,
         )
         issues.extend(result["issues"])
         previous_counter = telemetry.scan_counter

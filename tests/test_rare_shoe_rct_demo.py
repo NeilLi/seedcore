@@ -144,3 +144,86 @@ def test_delayed_telemetry_policy_accepts_observed_inside_window_only_within_sub
     assert accepted["verified"] is True
     assert rejected["verified"] is False
     assert rejected["reason_code"] == "DELAYED_TELEMETRY_SUBMISSION_EXPIRED"
+
+
+def test_authentication_mismatch_fails_verification() -> None:
+    bundle = _load("rare_shoe_happy_path_replay_bundle.json")
+    bundle["registration"]["custody_state"] = "REGISTRATION_PENDING"
+    bundle["registration"]["authentication_status"] = "rejected"
+    result = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert result["verified"] is False
+    assert result["reason_code"] == "AUTHENTICATION_NOT_APPROVED"
+    assert "AUTHENTICATION_NOT_APPROVED" in result["issues"]
+
+
+def test_signer_chain_violation_revoked_key_fails_verification() -> None:
+    bundle = _load("rare_shoe_happy_path_replay_bundle.json")
+    bundle["revoked_signer_keys"] = ["kms:fixture:buyer-receiver-001"]
+    result = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert result["verified"] is False
+    assert result["reason_code"] == "SIGNER_CHAIN_VIOLATION"
+    assert "SIGNER_CHAIN_VIOLATION" in result["issues"]
+
+
+def test_revoked_signer_key_matching_is_exact_when_bundle_field_is_scalar() -> None:
+    bundle = _load("rare_shoe_happy_path_replay_bundle.json")
+    bundle["revoked_signer_keys"] = "kms:fixture"
+
+    partial = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert partial["verified"] is True
+    assert "SIGNER_CHAIN_VIOLATION" not in partial["issues"]
+
+    bundle["revoked_signer_keys"] = "kms:fixture:buyer-receiver-001"
+    exact = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert exact["verified"] is False
+    assert exact["reason_code"] == "SIGNER_CHAIN_VIOLATION"
+    assert "SIGNER_CHAIN_VIOLATION" in exact["issues"]
+
+
+def test_condition_drift_detected_fails_verification() -> None:
+    # Test via bundle level observed grade
+    bundle = _load("rare_shoe_happy_path_replay_bundle.json")
+    bundle["observed_condition_grade"] = 7.5  # Registered is 9.2 (delta = 1.7 > 1.0)
+    result = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert result["verified"] is False
+    assert result["reason_code"] == "CONDITION_DRIFT_DETECTED"
+    assert "CONDITION_DRIFT_DETECTED" in result["issues"]
+
+    # Test via telemetry level observed grade
+    registration = CollectibleShoeRegistration.model_validate(_load("clean_rare_shoe_registration.json"))
+    authority = RareShoeBoundedCustodyAuthority.model_validate(_load("rare_shoe_bounded_custody_authority.json"))
+    telemetry_raw = _load("rare_shoe_edge_telemetry_success.json")["edge_telemetry"][0]
+    telemetry_raw["observed_condition_grade"] = 8.0  # Registered is 9.2 (delta = 1.2 > 1.0)
+    telemetry = RareShoeEdgeTelemetry.model_validate(telemetry_raw)
+
+    result_telemetry = evaluate_rare_shoe_edge_telemetry(
+        telemetry=telemetry,
+        authority=authority,
+        registration=registration,
+        previous_scan_counter=None,
+    )
+    assert result_telemetry["verified"] is False
+    assert result_telemetry["reason_code"] == "CONDITION_DRIFT_DETECTED"
+    assert "CONDITION_DRIFT_DETECTED" in result_telemetry["issues"]
+
+
+def test_bundle_condition_grade_string_is_normalized_or_quarantined() -> None:
+    bundle = _load("rare_shoe_happy_path_replay_bundle.json")
+    bundle["observed_condition_grade"] = "9.0"
+
+    numeric_string = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert numeric_string["verified"] is True
+    assert "CONDITION_DRIFT_DETECTED" not in numeric_string["issues"]
+
+    bundle["observed_condition_grade"] = "not-a-grade"
+    invalid = evaluate_rare_shoe_replay_bundle(bundle)
+
+    assert invalid["verified"] is False
+    assert invalid["reason_code"] == "CONDITION_DRIFT_DETECTED"
+    assert "CONDITION_DRIFT_DETECTED" in invalid["issues"]
