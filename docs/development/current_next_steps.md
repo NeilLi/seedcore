@@ -287,6 +287,13 @@ Agent-system eval schedule:
 - The eval outputs can support advisory/scaffold promotion evidence, but they
   cannot issue `ExecutionToken`s, clear quarantine, override
   `RESULT_VERIFIER`, or promote `shadow` to `enforce`.
+- Statistical model audits are now scoped in
+  [statistical_model_audit_shadow_contract.md](statistical_model_audit_shadow_contract.md):
+  Regularized f-Divergence Kernel Tests may support model promotion, privacy /
+  unlearning review, and advisory drift detection, but their
+  `StatisticalModelAuditV1` outputs are shadow-only evidence. They can block a
+  candidate promotion or trigger engineering review; they cannot verify a
+  specific governed execution or mutate trust state.
 
 Immediate priority order:
 
@@ -309,6 +316,12 @@ Immediate priority order:
    commercial scene feeding Studio and public proof. The virtual NFC simulation
    lane is now implemented and verified, so remaining rare-shoe work should
    build on that evidence contract rather than re-defining dynamic NFC.
+6. When model-promotion, privacy/unlearning, or advisory-drift audits enter the
+   eval lane, use
+   [statistical_model_audit_shadow_contract.md](statistical_model_audit_shadow_contract.md)
+   as the boundary: statistical audit outputs may block promotion or trigger
+   review, but never enter PDP, token, custody, or `RESULT_VERIFIER`
+   authority.
 
 ## Status Update (2026-05-15, Commercial RCT Vertical Scene)
 
