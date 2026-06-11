@@ -276,10 +276,13 @@ integrations later.
 | Material science marker | `physical_fingerprint_refs` | optional high-value marker such as diamond-dust or molecular tracer evidence |
 | Hash-bound forensic video | `forensic_video_proof_ref` | human-legible evidence tied to the same workflow and device signature chain |
 
-For Slice 3, use a dynamic NFC architecture as the default fixture shape. A
-commercial implementation can map this to products such as AES-backed dynamic
-NFC tags that emit one-time scan messages. Vendor-specific details should stay
-behind the fixture or adapter boundary.
+For Slice 3, dynamic NFC is now the default implemented fixture shape. The
+generic helper in `src/seedcore/ops/evidence/nfc_verification.py` verifies the
+fixture evidence for asset binding, workflow binding, freshness, UID binding,
+nonce causality, monotonic counter progression, deterministic mock CMAC, and
+tamper state. A commercial implementation can map this to products such as
+AES-backed dynamic NFC tags that emit one-time scan messages. Vendor-specific
+details should stay behind the fixture or adapter boundary.
 
 Required dynamic NFC fields in edge telemetry:
 
@@ -295,7 +298,8 @@ Policy rules:
 
 - static UID equality is never sufficient for custody closure
 - challenge-response freshness must be verified for every handoff scan
-- scan counters must be monotonic within the fixture evidence stream
+- scan counters must be monotonic per registered physical anchor, scoped by
+  `nfc_uid_hash + anchor_profile_ref`
 - `tamper_state != clear` forces quarantine or isolation
 - optical or material fingerprints may strengthen registration, but they do
   not replace scoped custody authority
@@ -780,13 +784,17 @@ Demo success metrics:
 
 ### Slice 3: Edge telemetry closure
 
-- add signed dynamic NFC / scan telemetry fixtures using the existing edge
-  telemetry envelope shape
-- enforce same-asset binding during closure
-- simulate vault-to-courier and courier-to-buyer handoffs with deterministic
-  signed scan fixtures rather than real NFC hardware
-- add dynamic NFC proof invalid, hardware-anchor tamper, spatial-fingerprint
-  mismatch, delayed-telemetry, and delayed-submission-window cases
+- implemented virtual NFC / scan verifier fixtures under `tests/fixtures/nfc/`
+  and rare-shoe RCT fixtures for deterministic mock challenge-response checks
+- rare-shoe edge telemetry now delegates dynamic NFC checks to the generic
+  verifier while preserving existing uppercase rare-shoe reason codes
+- same-asset and same-workflow binding are enforced before accepting a scan as
+  evidence
+- deterministic scan fixtures prove happy path, replay / clone, stale scan,
+  wrong asset, tamper state, missing field, delayed telemetry, and delayed
+  submission-window behavior without requiring real NFC hardware
+- remaining Slice 3 extensions should focus on spatial-fingerprint mismatch,
+  signer-chain depth, and adapter parity with future hardware/KMS NFC sources
 
 ### Slice 4: Replay verifier and proof surfaces
 

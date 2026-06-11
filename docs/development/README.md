@@ -142,9 +142,9 @@ Start here for the active spine:
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
 13. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
-   simulation-first plan for dynamic NFC challenge-response fixtures in the
-   rare-shoe RCT lane, including fail-closed replay, stale-scan, wrong-asset,
-   and tamper-state outcomes without treating mock NFC evidence as authority.
+   implemented simulation-first dynamic NFC challenge-response fixture lane for
+   rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
+   tamper-state outcomes without treating mock NFC evidence as authority.
 14. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
@@ -241,6 +241,12 @@ Treat these as real repo capabilities, not aspirational roadmap items:
   prompts + strict LLM validation with citations / `uncertainty_notes`; see
   section 4.1 of [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) and
   `docs/schemas/operator_copilot_brief_v0.schema.json`)
+- **Virtual NFC simulation lane**: `src/seedcore/ops/evidence/nfc_verification.py`
+  now provides a pure deterministic dynamic NFC verifier for fixture evidence;
+  `tests/fixtures/nfc/` covers happy path, replay / clone, stale scan, tamper,
+  wrong asset, and incomplete payload cases; rare-shoe RCT delegates to the
+  helper while preserving compatibility reason codes; and replay materialization
+  exposes redacted NFC verifier metadata without challenge or key material.
 
 Primary proof docs:
 
@@ -250,7 +256,7 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-06-08**, the project is in **Q2 operational closure -> Q3 bounded
+As of **2026-06-11**, the project is in **Q2 operational closure -> Q3 bounded
 agent integration**, still on one wedge:
 
 - The **RTX Spark / DGX Spark market signal is now explicit**:
@@ -285,6 +291,10 @@ agent integration**, still on one wedge:
   MCP `check_policy` requires explicit authority and identity, and the gated
   action schema exporter preserves duplicate function names with path-qualified
   action IDs.
+- The virtual NFC simulation lane for the rare-shoe RCT scene is implemented
+  and workspace-verified. It strengthens physical-presence evidence with
+  deterministic fixture CMAC checks, monotonic counters, freshness, tamper, and
+  wrong-asset coverage while remaining evidence-only and non-authority-bearing.
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 
@@ -330,11 +340,11 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
    commerce adapters)—no parallel "second demo."
 6. Extend Studio across the rare-shoe commercial scene once the fixture-backed
    generic RCT Studio payload and operator route are stable.
-7. Add the rare-shoe RCT fixture path as a commercial vertical scene:
+7. Continue the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
-   adapter inputs for listing/quote/order/value, signed edge telemetry for
-   NFC/scan handoff, hash-bound forensic video proof, and proof-surface checks
-   that keep public proof narrow.
+   adapter inputs for listing/quote/order/value, the now-implemented virtual
+   NFC/scan evidence lane, hash-bound forensic video proof, and proof-surface
+   checks that keep public proof narrow.
 8. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
 9. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT

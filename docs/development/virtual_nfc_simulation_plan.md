@@ -1,7 +1,7 @@
 # Virtual NFC Simulation Plan
 
 Date: 2026-06-10
-Status: Development plan for simulation-first NFC proof lane
+Status: Implemented and verified simulation-first NFC proof lane
 
 ## Purpose
 
@@ -22,12 +22,42 @@ Virtual NFC fixtures are evidence inputs. They do not mint authority, clear
 quarantine, settle custody, or replace the PDP, `ExecutionToken`, signed
 telemetry, or verifier replay paths.
 
+## Implementation Status
+
+As of 2026-06-11, the first simulation lane is implemented and verified:
+
+- `src/seedcore/ops/evidence/nfc_verification.py` contains the pure
+  Pydantic-backed verifier helper:
+  `verify_dynamic_nfc_evidence(evidence, context, *, clock=None)`.
+- `tests/fixtures/nfc/` contains deterministic fixtures for happy path,
+  replay / clone, stale scan, tamper state, wrong asset, and missing required
+  field cases.
+- `tests/test_nfc_verification.py` proves stable `allow`, `deny`, and
+  `quarantine` outcomes and verifies that challenge nonce, challenge response,
+  CMAC ref, raw UID, and root-key material stay out of the result projection.
+- `src/seedcore/models/rare_shoe_rct.py` delegates the rare-shoe dynamic NFC
+  check to the generic helper while preserving the existing uppercase
+  rare-shoe reason-code behavior for compatibility.
+- `src/seedcore/ops/evidence/materializer.py` exposes replay-visible NFC
+  metadata under `policy_verification.nfc_verification` and redacts
+  authority-tier challenge and key material.
+
+Workspace verification was completed after implementation:
+
+- focused NFC / RCT / edge telemetry pytest slice: passed;
+- evidence contracts / materializer / replay service pytest slice: passed;
+- full Python test suite: 1329 tests passed;
+- `scripts/host/verify_q2_verification_contracts.sh`: passed;
+- `scripts/host/verify_authz_graph_rfc_phases.sh`: passed;
+- TypeScript workspace typechecks and tests: passed;
+- `git diff --check`: passed.
+
 ## Scope
 
-The first implementation should model dynamic NFC as a deterministic fixture
-lane for rare-shoe Restricted Custody Transfer and hardware-anchored telemetry.
+The first implementation models dynamic NFC as a deterministic fixture lane for
+rare-shoe Restricted Custody Transfer and hardware-anchored telemetry.
 
-Build now:
+Implemented:
 
 - JSON fixtures for fresh scan, replay / clone attempt, stale scan, and tamper
   state;
@@ -36,7 +66,7 @@ Build now:
 - pytest coverage that proves allow, deny, and quarantine outcomes are stable;
 - replay-visible reason codes and evidence references.
 
-Do not build now:
+Still out of scope for this simulation lane:
 
 - a production NFC key-management service;
 - a vendor-specific NTAG integration;
@@ -108,7 +138,7 @@ scan.
 
 ## Fixture Matrix
 
-Create the first fixtures under `tests/fixtures/nfc/`.
+The first fixtures live under `tests/fixtures/nfc/`.
 
 | Fixture | File | Simulated state | Expected disposition | Reason code |
 | --- | --- | --- | --- | --- |
@@ -119,8 +149,9 @@ Create the first fixtures under `tests/fixtures/nfc/`.
 | Wrong asset scan | `nfc_wrong_asset.json` | UID hash binds to a different registered asset | `deny` | `nfc_asset_anchor_mismatch` |
 | Missing required field | `nfc_missing_required_field.json` | Required NFC field absent | `quarantine` | `nfc_payload_incomplete` |
 
-Reason-code spelling can be aligned with the gateway and verifier taxonomy when
-implementation lands. The disposition contract is the important part.
+The generic verifier exposes the lowercase reason-code taxonomy shown here.
+The rare-shoe adapter preserves the older uppercase rare-shoe reason codes
+while also returning the generic NFC reason code for newer callers.
 
 ## Resolved Design Decisions
 
@@ -168,22 +199,22 @@ The mock root key must live in test configuration or fixtures only. Production
 work should replace this helper with a hardware / KMS / vendor adapter and must
 not infer production key posture from the fixture KDF.
 
-## Implementation Order
+## Implemented Order
 
-1. Define the fixture payloads and a tiny fixture registry for expected asset
+1. Defined the fixture payloads and a tiny fixture registry for expected asset
    anchors, issued nonces, and highest observed counters.
-2. Implement a pure verifier helper under
+2. Implemented a pure verifier helper under
    `src/seedcore/ops/evidence/nfc_verification.py`.
-3. Add unit tests for every fixture in this document.
-4. Bind NFC verification into the relevant RCT / gated-action evidence check
-   only after the helper has stable dispositions and reason codes.
-5. Ensure closure evidence bundles and replay materialization expose the NFC
+3. Added unit tests for every fixture in this document.
+4. Bound NFC verification into the rare-shoe RCT evidence check after the helper
+   had stable dispositions and reason codes.
+5. Ensured replay materialization can expose the NFC
    evidence refs, freshness values, UID hash, anchor profile, reason code, and
    verifier disposition.
 
 ## Acceptance Criteria
 
-The simulation lane is acceptable when:
+The simulation lane is accepted because:
 
 1. happy-path fixture NFC evidence can be verified deterministically;
 2. replay / clone fixtures deny without minting authority;

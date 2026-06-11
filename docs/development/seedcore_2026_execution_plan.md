@@ -434,6 +434,10 @@ the codebase for the RCT slice:
 - runbook lookup is available as a contract-shaped read surface for
   verification failures.
 - edge telemetry now has a checked-in JSON Schema export path.
+- virtual NFC simulation lane is now implemented and verified for rare-shoe
+  RCT: deterministic fixture evidence covers happy path, replay / clone, stale
+  scan, wrong asset, tamper state, incomplete payload, redacted replay metadata,
+  and compatibility with existing rare-shoe reason codes.
 - Window A host-first closure is now implemented and verified:
   - host and CI gate components are aligned on the same acceptance slices
   - `scripts/host/verify_q2_verification_contracts.sh` now executes fixture
@@ -702,6 +706,9 @@ For 2026, that package should be grounded in one concrete physical story:
   sandbox integration such as Shopify Sandbox
 - the physical custody boundary is represented through Gazebo simulation in Q3
   and hardware-in-the-loop in Q4
+- the rare-shoe dynamic NFC fixture lane provides the first simulation-grade
+  physical-presence evidence contract before real NFC hardware or KMS-backed
+  tag adapters are introduced
 - the digital twin mutation is tied to the exact transfer event, not only the
   policy decision
 

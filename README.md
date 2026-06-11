@@ -35,6 +35,7 @@ Important boundaries:
 - SeedCore proves governed custody movement and evidence integrity; it does not assert legal ownership transfer in v0.
 - Host-mode local runtime verification is green end-to-end for the RCT wedge: the Agent Action Gateway can generate a replayable runtime audit row, the verification API can read queue/detail/replay/runbook views from it, and the productized verification surface protocol passes locally.
 - Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff in that topology still depends on capturing runtime audit rows there.
+- The rare-shoe RCT dynamic NFC simulation lane is implemented and workspace-verified: deterministic fixture evidence covers happy path, replay / clone, stale scan, wrong asset, tamper, and incomplete payload cases without making mock NFC an authority source.
 
 Read the current execution docs:
 
@@ -102,6 +103,7 @@ SeedCore's current baseline includes the technical primitives needed for governe
 - **Coordinator-embedded `RESULT_VERIFIER`**: a background runtime that polls `digital_twin_event_journal`, persists verifier jobs and outcomes, reuses the replay path, calls the Rust proof kernel, and fail-closes RCT state on terminal mismatch.
 - **Replayable evidence bundles**: policy receipts, execution tokens, transition receipts, telemetry refs, and source-preserving replay bundles for independent verification.
 - **Hardware-anchored telemetry path**: signed transition receipts and telemetry envelopes, with TPM/KMS-backed signing posture for attested deployments and software-backed signing for local development.
+- **Virtual NFC simulation verifier**: deterministic dynamic NFC challenge-response fixtures for the rare-shoe RCT lane, bridged into replay-visible evidence metadata while redacting raw UID, challenge, CMAC, and key material from public projections.
 - **Operator-readable verification surface**: versioned `/api/v1/verification/*` endpoints plus TypeScript UI surfaces for queue, audit trail, asset forensics, replay, and runbook lookup.
 
 Key architecture references:

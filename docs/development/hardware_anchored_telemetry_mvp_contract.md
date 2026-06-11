@@ -281,6 +281,16 @@ Create fixtures for:
 8. `simulator_evidence_in_trusted_profile`
    - simulator/dev signer used where trusted-edge profile requires hardware trust, result escalates.
 
+Implemented simulation fixture lane:
+
+- `tests/fixtures/nfc/` now covers dynamic NFC happy path, replay / clone,
+  stale scan, tamper, wrong asset, and incomplete payload cases.
+- `src/seedcore/ops/evidence/nfc_verification.py` verifies deterministic
+  fixture CMAC, nonce causality, monotonic counter progression, freshness,
+  asset/workflow binding, UID/anchor binding, and tamper state.
+- The NFC lane remains simulator evidence. It strengthens the RCT evidence
+  contract but does not satisfy production hardware/KMS enrollment by itself.
+
 ## 30-Day Implementation Target
 
 The first implementation should stay narrow:
@@ -312,6 +322,11 @@ The MVP is accepted when:
 7. evidence bundles carry the signed telemetry refs used for closure;
 8. replay output can explain which device, signer, asset, zone, and telemetry payload were used;
 9. simulator evidence is distinguishable from production hardware-anchored evidence.
+
+The virtual NFC subset of this MVP is accepted as of 2026-06-11. It is
+workspace-verified by focused NFC/RCT/edge tests, evidence/materializer/replay
+tests, the full Python suite, Q2 verification contract checks, authz graph RFC
+phase checks, TypeScript workspace checks, and `git diff --check`.
 
 ## Positioning
 

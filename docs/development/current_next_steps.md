@@ -182,8 +182,10 @@ Immediate priority order:
    chain validation, and toxic-path fixture coverage;
 4. Close deployment-realistic proof topology by running the verification API in
    the same cluster as the already-green hot-path gates;
-5. Continue rare-shoe RCT fixtures, proof bundle, and toxic-path expansion as
-   the commercial scene feeding Studio and public proof.
+5. Continue rare-shoe RCT proof-bundle and toxic-path expansion as the
+   commercial scene feeding Studio and public proof. The virtual NFC simulation
+   lane is now implemented and verified, so remaining rare-shoe work should
+   build on that evidence contract rather than re-defining dynamic NFC.
 
 ## Status Update (2026-05-15, Commercial RCT Vertical Scene)
 
@@ -208,10 +210,11 @@ Immediate implementation order:
    buyer delegation, and destination scope into
    `seedcore.agent_action_gateway.v1`, including stable rare-shoe reason
    codes and `workflow_join_key` expectations.
-3. Add signed edge telemetry closure fixtures for origin scan, delivery scan,
-   dynamic NFC challenge-response failure, tamper-state failure, delayed
-   telemetry, and delayed-submission-window expiry. Use deterministic simulated
-   scan fixtures first; real NFC hardware is an extension interface.
+3. Completed virtual NFC simulation lane: deterministic fixture-backed origin /
+   delivery scan evidence now covers happy path, replay / clone, stale scan,
+   wrong asset, tamper state, missing required field, and replay-visible
+   redacted verifier metadata. Real NFC hardware remains an extension
+   interface, not a prerequisite for the proof chain.
 4. Add the golden replay/proof bundle
    `rare_shoe_happy_path_replay_bundle.json` so the demo can be inspected
    through public proof, operator forensics, forensic video proof, and replay
@@ -222,6 +225,13 @@ Immediate implementation order:
 6. Keep public proof narrow while operator forensics shows the richer
    authentication and telemetry chain; publish hash-bound forensic video proof
    linked to replayable receipts for human inspection.
+
+Verification note (2026-06-11): workspace validation for the virtual NFC lane
+passed the focused NFC/RCT/edge pytest slice, evidence/materializer/replay
+pytest slice, full Python test suite (`1329` tests),
+`scripts/host/verify_q2_verification_contracts.sh`,
+`scripts/host/verify_authz_graph_rfc_phases.sh`, TypeScript workspace
+typechecks/tests, and `git diff --check`.
 
 ## Status Update (2026-04-10, Remote Kube Topology)
 
