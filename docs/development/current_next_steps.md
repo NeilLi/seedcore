@@ -13,6 +13,129 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Zero-Trust RCT Expansion Roadmap
+
+SeedCore is building a trust runtime for AI actions in high-consequence
+environments. The next RCT platform expansion should increase autonomous reach
+by making the execution boundary narrower, more typed, and more replayable, not
+by letting advisory AI inherit authority. The structural rule stays:
+
+```text
+AI proposal -> Agent accountability -> PDP admission -> ExecutionToken attempt
+-> HAL / actuator action -> receipt -> verifier / replay closure
+```
+
+Read the six steps below as the bridge from the four-plane model
+(`Intelligence -> Control -> Execution -> Infrastructure`) into the current
+workspace. Each step names the existing anchor and the next hardening target.
+
+### Step 1: Formalize `ActionIntent` For Governed RCT Nodes
+
+The expansion boundary begins where untrusted planning is transformed into a
+deterministic authorization request.
+
+- **Current anchors:** [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md),
+  [`src/seedcore/api/routers/agent_actions_router.py`](../../src/seedcore/api/routers/agent_actions_router.py),
+  and [`src/seedcore/models/action_intent.py`](../../src/seedcore/models/action_intent.py).
+- **Safety target:** require every governed RCT execution node to carry a typed
+  `ActionIntent` with principal/delegation, asset or resource, operation,
+  bounded scope, TTL, freshness requirements, and stable request hash.
+- **Precision target:** keep provenance adjudication, source registration, and
+  advisory planning outside the authority surface until they are converted into
+  explicit execution intents or admitted context refs. Do not let a broad
+  workflow object become an implicit `ActionIntent`.
+
+### Step 2: Keep The PDP Synchronous, Stateless, And Fail-Closed
+
+The PDP is the safety boundary. It admits or rejects a bounded request against a
+pinned policy and context snapshot; it does not perform open-ended agent
+reasoning at decision time.
+
+- **Current anchors:** [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md),
+  [`policy_gate_matrix.md`](policy_gate_matrix.md), and
+  [`src/seedcore/ops/pdp_hot_path.py`](../../src/seedcore/ops/pdp_hot_path.py).
+- **Safety target:** fail closed on stale context, missing signed context,
+  missing policy snapshot, ambiguous asset state, unknown delegation, or
+  unverifiable telemetry preconditions.
+- **Precision target:** pass only typed, freshness-aware, policy-admitted fields
+  into the authority path. Memory, LLM advice, eval scores, and flywheel feedback
+  remain advisory unless transformed into explicit policy inputs.
+
+### Step 3: Tokenize The Handoff Before Any Mutation
+
+An allow decision permits only a scoped attempt. It is not settlement, custody
+closure, or blanket execution authority.
+
+- **Current anchors:** [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md),
+  [`gated_action_dx_layer.md`](gated_action_dx_layer.md), and
+  [`src/seedcore/sdk/gated_action.py`](../../src/seedcore/sdk/gated_action.py).
+- **Safety target:** mint short-lived `ExecutionToken`s only on admitted allow
+  paths; withhold tokens for deny, expired, stale, quarantine, and preflight-only
+  paths.
+- **Precision target:** bind each token to the exact request hash, policy
+  snapshot, execution constraints, endpoint, and payload hash expected by the
+  downstream actuator or platform mutation.
+- **Operational target:** route RCT mutations through a unified governed
+  entrypoint so actuator calls, custody-state writes, NFC scan transitions, and
+  settlement updates all reject missing, expired, replayed, or scope-mismatched
+  tokens.
+
+### Step 4: Make Evidence And Replay The Accountability Plane
+
+Evidence closes the loop. The RCT platform should be able to reconstruct the
+governed path without trusting ambient runtime state or operator memory.
+
+- **Current anchors:** [`replay_bundle_transparency_anchoring_design.md`](replay_bundle_transparency_anchoring_design.md),
+  [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md),
+  and [`src/seedcore/ops/evidence/materializer.py`](../../src/seedcore/ops/evidence/materializer.py).
+- **Safety target:** every mutation attempt emits receipt-bound evidence with
+  policy receipt refs, token refs, payload hashes, telemetry refs, signer chain,
+  verifier outcome, and quarantine or rejection reason when closure fails.
+- **Precision target:** isolate ambient time and ID generation behind explicit
+  providers at replay-critical boundaries. Existing Python paths that still call
+  `datetime.now(...)` or `uuid.uuid4()` directly should be treated as hardening
+  targets for deterministic audit reproduction.
+- **Accountability target:** custody graph and replay projections may be
+  asynchronous, but they must remain receipt-derived, append-only, and
+  verifier-readable; async projection lag must not weaken the PDP decision.
+
+### Step 5: Admit Physical Telemetry Without Making It Authority
+
+Rare-shoe RCT makes the platform concrete: physical proof matters, but hardware
+signals are evidence inputs. They do not settle custody or bypass the PDP.
+
+- **Current anchors:** [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md),
+  [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md),
+  and [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md).
+- **Safety target:** require signed hardware or simulated-HAL telemetry refs
+  where policy demands them, including asset binding, challenge freshness,
+  signer identity, zone evidence, and tamper/quarantine semantics.
+- **Precision target:** redact raw UID, challenge, key, geolocation, and private
+  operator data from public proof while preserving hash-bound verifier metadata
+  for operator forensics and replay.
+- **Expansion target:** graduate from fixture-backed NFC simulation to enrolled
+  hardware only after key management, signer identity, freshness windows,
+  revocation, and quarantine behavior are explicit and tested.
+
+### Step 6: Gate Admission With Contract Tests And Negative Drills
+
+Autonomous expansion should be admitted by tests that prove bad paths stop
+before execution, not by demos that only show happy paths.
+
+- **Current anchors:** [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md),
+  [`gated_action_dx_layer.md`](gated_action_dx_layer.md),
+  `scripts/host/verify_q2_verification_contracts.sh`, and
+  `scripts/host/verify_authz_graph_rfc_phases.sh`.
+- **Required admissions:** deterministic replay validation; missing or expired
+  token rejection; stale telemetry failure; signer-chain violation; replay /
+  clone detection; policy snapshot mismatch; scope mismatch; and receipt
+  linkage back to the original `ActionIntent`.
+- **Runbook rule:** when deterministic gates fail repeatedly, stop autonomous
+  iteration and surface the verifier/runbook evidence for human review. The
+  platform can self-diagnose and propose patches, but promotion, custody
+  clearance, production deploys, and quarantine release remain policy-admitted
+  or human-reviewed actions.
+
 ## Status Update (2026-06-08, Spark-Era Autonomy Signal)
 
 The RTX Spark / DGX Spark investigation is now captured in
