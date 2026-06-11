@@ -91,6 +91,7 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
     owner_context = _owner_context(governed_receipt)
     authority_consistency = _authority_consistency_summary(audit_record=audit_record, governed_receipt=governed_receipt)
     forensic_block = _resolve_forensic_block(audit_record=audit_record, evidence_bundle=evidence_bundle)
+    nfc_verification = _resolve_nfc_verification_metadata(evidence_bundle=evidence_bundle, evidence_inputs=evidence_inputs)
 
     return {
         "@context": {
@@ -153,6 +154,7 @@ def materialize_seedcore_custody_event(*, audit_record: Dict[str, Any]) -> Dict[
             "custody_proof_count": len(governed_receipt.get("custody_proof") or []),
             "provenance_sources": list(governed_receipt.get("provenance_sources") or []),
             "owner_context": owner_context,
+            "nfc_verification": nfc_verification,
         },
         "custody_transition": {
             "from": transition_receipt.get("from_zone") or zone_checks.get("current_zone") or "unknown_zone",
@@ -298,6 +300,48 @@ def _ordered_signed_telemetry_payload_chain(evidence_bundle: Dict[str, Any]) -> 
     if not rows:
         return None
     return "|".join(str(row.get("payload_sha256") or "").strip() for row in rows)
+
+
+def _resolve_nfc_verification_metadata(
+    *,
+    evidence_bundle: Dict[str, Any],
+    evidence_inputs: Dict[str, Any],
+) -> Dict[str, Any]:
+    candidates = [
+        evidence_inputs.get("nfc_verification"),
+        evidence_bundle.get("nfc_verification"),
+    ]
+    allowed_keys = {
+        "disposition",
+        "reason_code",
+        "evidence_refs",
+        "freshness_seconds",
+        "max_allowed_age_seconds",
+        "observed_at",
+        "nfc_uid_hash",
+        "anchor_profile_ref",
+        "scan_counter",
+        "anchor_counter_key",
+        "current_highest_scan_counter",
+        "observed_counter_for_persistence",
+    }
+    forbidden_keys = {
+        "raw_nfc_uid",
+        "challenge_nonce",
+        "challenge_response_hash",
+        "cmac_ref",
+        "mock_root_key",
+        "production_key_material",
+    }
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if forbidden_keys & set(candidate.keys()):
+            candidate = {key: value for key, value in candidate.items() if key not in forbidden_keys}
+        metadata = {key: candidate.get(key) for key in allowed_keys if key in candidate}
+        if metadata:
+            return metadata
+    return {}
 
 
 def _resolve_trust_gap_codes(*, authz_graph: Dict[str, Any], governed_receipt: Dict[str, Any]) -> list[str]:

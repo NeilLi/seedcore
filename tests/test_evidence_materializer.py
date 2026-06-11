@@ -49,6 +49,21 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
                 "modality_map": {"provenance": "prov-hash-1", "visual_hash": "vision-hash-1"}
             },
             "evidence_inputs": {
+                "nfc_verification": {
+                    "disposition": "allow",
+                    "reason_code": "rct_nfc_scan_verified",
+                    "evidence_refs": ["evidence:nfc-scan-001"],
+                    "freshness_seconds": 2,
+                    "max_allowed_age_seconds": 60,
+                    "observed_at": "2026-06-10T12:00:00Z",
+                    "nfc_uid_hash": "sha256:nfc-public-hash",
+                    "anchor_profile_ref": "profile:nxp-ntag424-dna-fixture-v1",
+                    "scan_counter": 42,
+                    "anchor_counter_key": "sha256:nfc-public-hash|profile:nxp-ntag424-dna-fixture-v1",
+                    "challenge_nonce": "must-not-project",
+                    "challenge_response_hash": "must-not-project",
+                    "cmac_ref": "must-not-project",
+                },
                 "taxonomy_bundle": {
                     "trust_gap_codes": [
                         {
@@ -78,5 +93,13 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
     assert payload["policy_verification"]["decision_graph_snapshot_hash"] == "snapshot-hash-1"
     assert payload["policy_verification"]["state_binding_hash"] == "sha256:state-binding-hash-1"
     assert payload["policy_verification"]["trust_gap_details"][0]["message"] == "Telemetry freshness exceeded policy threshold."
+    nfc = payload["policy_verification"]["nfc_verification"]
+    assert nfc["disposition"] == "allow"
+    assert nfc["reason_code"] == "rct_nfc_scan_verified"
+    assert nfc["evidence_refs"] == ["evidence:nfc-scan-001"]
+    assert nfc["nfc_uid_hash"] == "sha256:nfc-public-hash"
+    assert "challenge_nonce" not in nfc
+    assert "challenge_response_hash" not in nfc
+    assert "cmac_ref" not in nfc
     assert payload["custody_transition"]["to"] == "vault-a"
     assert payload["custody_transition"]["from"] == "staging-a"

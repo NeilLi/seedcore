@@ -1,0 +1,16 @@
+{
+  "observed_at": "2026-06-10T12:00:00Z",
+  "freshness_seconds": 2,
+  "max_allowed_age_seconds": 60,
+  "evidence_refs": ["evidence:nfc-missing-001"],
+  "nfc_payload": {
+    "asset_ref": "asset:rare-shoe:001",
+    "workflow_join_key": "sha256:workflow-fixture-001",
+    "nfc_uid_hash": "sha256:d8a9f3b1fixtureasset001",
+    "scan_counter": 42,
+    "challenge_response_hash": "sha256:df0ede748dda15e5964b21d89872cc9694bb58bd8476657ab6e3953b896dccd5",
+    "cmac_ref": "mock-key:ntag424:asset-001:v1",
+    "tamper_state": "clear",
+    "anchor_profile_ref": "profile:nxp-ntag424-dna-fixture-v1"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "expected_asset_ref": "asset:rare-shoe:001",
+  "workflow_join_key": "sha256:workflow-fixture-001",
+  "issued_challenge_nonce": "nonce-2026-06-10-abcd",
+  "registered_nfc_uid_hash": "sha256:d8a9f3b1fixtureasset001",
+  "expected_anchor_profile_ref": "profile:nxp-ntag424-dna-fixture-v1",
+  "highest_observed_scan_counter": 41,
+  "mock_root_key": "seedcore-fixture-nfc-root-v1"
+}

@@ -104,6 +104,7 @@ def test_dynamic_nfc_clone_fixture_fails_closed() -> None:
     assert result["verified"] is False
     assert result["disposition"] == "quarantine"
     assert result["reason_code"] == "DYNAMIC_NFC_PROOF_INVALID"
+    assert result["nfc_reason_code"] == "dynamic_nfc_proof_invalid"
     assert "DYNAMIC_NFC_PROOF_INVALID" in result["issues"]
 
 

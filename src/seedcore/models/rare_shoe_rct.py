@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from seedcore.ops.evidence.nfc_verification import verify_dynamic_nfc_evidence
+
 
 PROVENANCE_CLASSES = Literal[
     "PLAYER_EXCLUSIVE",
@@ -32,6 +34,8 @@ RISK_STATE = Literal[
     "LEGAL_LOCK",
     "DISPUTED",
 ]
+
+RARE_SHOE_FIXTURE_NFC_ROOT_KEY = "seedcore-rare-shoe-fixture-nfc-root-v1"
 
 
 RARE_SHOE_ALLOWED_PUBLIC_PROOF_KEYS = frozenset(
@@ -295,22 +299,46 @@ def evaluate_rare_shoe_edge_telemetry(
     previous_scan_counter: int | None = None,
 ) -> Dict[str, Any]:
     issues: List[str] = []
-    if telemetry.asset_id != authority.asset_id or telemetry.asset_id != registration.asset_id:
+    asset_mismatch = telemetry.asset_id != authority.asset_id or telemetry.asset_id != registration.asset_id
+    if asset_mismatch:
         issues.append("CROSS_ASSET_REPLAY")
-    if telemetry.workflow_join_key != authority.workflow_join_key:
-        issues.append("WORKFLOW_JOIN_KEY_MISMATCH")
     if telemetry.authorized_device_ref not in authority.authorized_device_refs:
         issues.append("UNAUTHORIZED_EDGE_DEVICE")
-    if telemetry.nfc_uid_hash != registration.nfc_uid_hash:
-        issues.append("HARDWARE_ANCHOR_MISMATCH")
-    if telemetry.tamper_state != "clear":
-        issues.append("HARDWARE_ANCHOR_TAMPER")
-    if telemetry.challenge_response_hash != telemetry.expected_challenge_response_hash:
-        issues.append("DYNAMIC_NFC_PROOF_INVALID")
     if telemetry.cmac_ref != telemetry.expected_cmac_ref:
         issues.append("DYNAMIC_NFC_PROOF_INVALID")
-    if previous_scan_counter is not None and telemetry.scan_counter <= previous_scan_counter:
-        issues.append("DYNAMIC_NFC_SCAN_COUNTER_REPLAY")
+
+    nfc_result = verify_dynamic_nfc_evidence(
+        {
+            "observed_at": telemetry.observed_at,
+            "freshness_seconds": max(0, int(telemetry.submitted_at.timestamp() - telemetry.observed_at.timestamp())),
+            "max_allowed_age_seconds": authority.max_delayed_submission_seconds,
+            "evidence_refs": [telemetry.telemetry_id],
+            "nfc_payload": {
+                "asset_ref": telemetry.asset_id,
+                "workflow_join_key": telemetry.workflow_join_key,
+                "nfc_uid_hash": telemetry.nfc_uid_hash,
+                "scan_counter": telemetry.scan_counter,
+                "challenge_nonce": telemetry.challenge_nonce,
+                "challenge_response_hash": telemetry.challenge_response_hash,
+                "cmac_ref": telemetry.cmac_ref,
+                "tamper_state": telemetry.tamper_state,
+                "anchor_profile_ref": telemetry.anchor_profile_ref,
+            },
+        },
+        {
+            "expected_asset_ref": registration.asset_id,
+            "workflow_join_key": authority.workflow_join_key,
+            "issued_challenge_nonce": telemetry.challenge_nonce,
+            "registered_nfc_uid_hash": registration.nfc_uid_hash,
+            "expected_anchor_profile_ref": registration.hardware_anchor_profile.anchor_profile_ref,
+            "highest_observed_scan_counter": previous_scan_counter if previous_scan_counter is not None else -1,
+            "mock_root_key": RARE_SHOE_FIXTURE_NFC_ROOT_KEY,
+        },
+    )
+    nfc_issue = _legacy_rare_shoe_nfc_issue(nfc_result.reason_code)
+    if nfc_issue is not None and not (asset_mismatch and nfc_issue == "HARDWARE_ANCHOR_MISMATCH"):
+        issues.append(nfc_issue)
+
     if not (authority.valid_from <= telemetry.observed_at <= authority.valid_until):
         issues.append("TELEMETRY_OBSERVED_OUTSIDE_AUTHORITY_WINDOW")
     max_submitted_at = telemetry.observed_at.timestamp() + authority.max_delayed_submission_seconds
@@ -323,7 +351,25 @@ def evaluate_rare_shoe_edge_telemetry(
         "disposition": "allow" if verified else "quarantine",
         "reason_code": "rare_shoe_edge_telemetry_verified" if verified else issues[0],
         "issues": issues,
+        "nfc_verification": nfc_result.model_dump(mode="json"),
+        "nfc_reason_code": nfc_result.reason_code,
     }
+
+
+def _legacy_rare_shoe_nfc_issue(reason_code: str) -> Optional[str]:
+    if reason_code == "rct_nfc_scan_verified":
+        return None
+    if reason_code == "nfc_asset_anchor_mismatch":
+        return "HARDWARE_ANCHOR_MISMATCH"
+    if reason_code == "nfc_workflow_binding_mismatch":
+        return "WORKFLOW_JOIN_KEY_MISMATCH"
+    if reason_code == "nfc_scan_too_stale":
+        return "DELAYED_TELEMETRY_SUBMISSION_EXPIRED"
+    if reason_code == "hardware_tamper_detected":
+        return "HARDWARE_ANCHOR_TAMPER"
+    if reason_code == "nfc_payload_incomplete":
+        return "DYNAMIC_NFC_PROOF_INVALID"
+    return "DYNAMIC_NFC_PROOF_INVALID"
 
 
 def evaluate_rare_shoe_replay_bundle(bundle: Mapping[str, Any]) -> Dict[str, Any]:
