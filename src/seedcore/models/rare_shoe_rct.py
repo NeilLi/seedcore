@@ -6,7 +6,10 @@ from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from seedcore.ops.evidence.nfc_verification import verify_dynamic_nfc_evidence
+from seedcore.ops.evidence.nfc_verification import (
+    verify_dynamic_nfc_evidence,
+    verify_dynamic_nfc_evidence_with_counter_ledger,
+)
 
 
 PROVENANCE_CLASSES = Literal[
@@ -298,6 +301,7 @@ def evaluate_rare_shoe_edge_telemetry(
     authority: RareShoeBoundedCustodyAuthority,
     registration: CollectibleShoeRegistration,
     previous_scan_counter: int | None = None,
+    counter_ledger: Any = None,
     revoked_signer_keys: Any = None,
 ) -> Dict[str, Any]:
     issues: List[str] = []
@@ -317,33 +321,41 @@ def evaluate_rare_shoe_edge_telemetry(
     ):
         issues.append("CONDITION_DRIFT_DETECTED")
 
-    nfc_result = verify_dynamic_nfc_evidence(
-        {
-            "observed_at": telemetry.observed_at,
-            "freshness_seconds": max(0, int(telemetry.submitted_at.timestamp() - telemetry.observed_at.timestamp())),
-            "max_allowed_age_seconds": authority.max_delayed_submission_seconds,
-            "evidence_refs": [telemetry.telemetry_id],
-            "nfc_payload": {
-                "asset_ref": telemetry.asset_id,
-                "workflow_join_key": telemetry.workflow_join_key,
-                "nfc_uid_hash": telemetry.nfc_uid_hash,
-                "scan_counter": telemetry.scan_counter,
-                "challenge_nonce": telemetry.challenge_nonce,
-                "challenge_response_hash": telemetry.challenge_response_hash,
-                "cmac_ref": telemetry.cmac_ref,
-                "tamper_state": telemetry.tamper_state,
-                "anchor_profile_ref": telemetry.anchor_profile_ref,
-            },
+    nfc_evidence = {
+        "observed_at": telemetry.observed_at,
+        "freshness_seconds": max(0, int(telemetry.submitted_at.timestamp() - telemetry.observed_at.timestamp())),
+        "max_allowed_age_seconds": authority.max_delayed_submission_seconds,
+        "evidence_refs": [telemetry.telemetry_id],
+        "nfc_payload": {
+            "asset_ref": telemetry.asset_id,
+            "workflow_join_key": telemetry.workflow_join_key,
+            "nfc_uid_hash": telemetry.nfc_uid_hash,
+            "scan_counter": telemetry.scan_counter,
+            "challenge_nonce": telemetry.challenge_nonce,
+            "challenge_response_hash": telemetry.challenge_response_hash,
+            "cmac_ref": telemetry.cmac_ref,
+            "tamper_state": telemetry.tamper_state,
+            "anchor_profile_ref": telemetry.anchor_profile_ref,
         },
-        {
-            "expected_asset_ref": registration.asset_id,
-            "workflow_join_key": authority.workflow_join_key,
-            "issued_challenge_nonce": telemetry.challenge_nonce,
-            "registered_nfc_uid_hash": registration.nfc_uid_hash,
-            "expected_anchor_profile_ref": registration.hardware_anchor_profile.anchor_profile_ref,
-            "highest_observed_scan_counter": previous_scan_counter if previous_scan_counter is not None else -1,
-            "mock_root_key": RARE_SHOE_FIXTURE_NFC_ROOT_KEY,
-        },
+    }
+    nfc_context = {
+        "expected_asset_ref": registration.asset_id,
+        "workflow_join_key": authority.workflow_join_key,
+        "issued_challenge_nonce": telemetry.challenge_nonce,
+        "registered_nfc_uid_hash": registration.nfc_uid_hash,
+        "expected_anchor_profile_ref": registration.hardware_anchor_profile.anchor_profile_ref,
+        "highest_observed_scan_counter": previous_scan_counter if previous_scan_counter is not None else -1,
+        "mock_root_key": RARE_SHOE_FIXTURE_NFC_ROOT_KEY,
+    }
+    verifier = verify_dynamic_nfc_evidence_with_counter_ledger if counter_ledger is not None else verify_dynamic_nfc_evidence
+    nfc_result = (
+        verifier(
+            nfc_evidence,
+            nfc_context,
+            counter_ledger=counter_ledger,
+        )
+        if counter_ledger is not None
+        else verifier(nfc_evidence, nfc_context)
     )
     nfc_issue = _legacy_rare_shoe_nfc_issue(nfc_result.reason_code)
     if nfc_issue is not None and not (asset_mismatch and nfc_issue == "HARDWARE_ANCHOR_MISMATCH"):

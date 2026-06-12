@@ -222,6 +222,67 @@ def verify_dynamic_nfc_evidence(
     )
 
 
+def verify_dynamic_nfc_evidence_with_counter_ledger(
+    evidence: Mapping[str, Any] | DynamicNfcEvidence,
+    context: Mapping[str, Any] | NfcVerificationContext,
+    *,
+    counter_ledger: Any,
+    clock: Callable[[], datetime] | None = None,
+) -> NfcVerificationResult:
+    from seedcore.ops.evidence.nfc_counter_ledger import CounterStoreError
+
+    try:
+        model = evidence if isinstance(evidence, DynamicNfcEvidence) else DynamicNfcEvidence.model_validate(dict(evidence))
+        ctx = context if isinstance(context, NfcVerificationContext) else NfcVerificationContext.model_validate(dict(context))
+    except Exception:
+        return _result(
+            verified=False,
+            disposition="quarantine",
+            reason_code="nfc_payload_incomplete",
+            issues=["nfc_payload_incomplete"],
+        )
+
+    payload = model.nfc_payload
+    try:
+        highest_observed = counter_ledger.get_highest_counter(
+            nfc_uid_hash=payload.nfc_uid_hash,
+            anchor_profile_ref=payload.anchor_profile_ref,
+        )
+    except CounterStoreError as exc:
+        return _counter_store_unavailable_result(exc)
+
+    result = verify_dynamic_nfc_evidence(
+        model,
+        ctx.model_copy(update={"highest_observed_scan_counter": highest_observed}),
+        clock=clock,
+    )
+    if result.disposition != "allow":
+        return result
+
+    try:
+        admission = counter_ledger.admit_counter(
+            nfc_uid_hash=payload.nfc_uid_hash,
+            anchor_profile_ref=payload.anchor_profile_ref,
+            scan_counter=payload.scan_counter,
+            workflow_join_key=payload.workflow_join_key,
+            observed_at=model.observed_at,
+        )
+    except CounterStoreError as exc:
+        return _counter_store_unavailable_result(exc, base=result)
+
+    if not admission.admitted:
+        return result.model_copy(
+            update={
+                "verified": False,
+                "disposition": "deny",
+                "reason_code": "dynamic_nfc_proof_invalid",
+                "issues": ["dynamic_nfc_proof_invalid"],
+                "current_highest_scan_counter": admission.current_highest,
+            }
+        )
+    return result.model_copy(update={"current_highest_scan_counter": highest_observed})
+
+
 def anchor_counter_key(*, nfc_uid_hash: str, anchor_profile_ref: str) -> str:
     return f"{str(nfc_uid_hash).strip()}|{str(anchor_profile_ref).strip()}"
 
@@ -285,4 +346,25 @@ def _result(
         reason_code=reason_code,
         issues=issues,
         **kwargs,
+    )
+
+
+def _counter_store_unavailable_result(
+    exc: Exception,
+    *,
+    base: NfcVerificationResult | None = None,
+) -> NfcVerificationResult:
+    update = {
+        "verified": False,
+        "disposition": "quarantine",
+        "reason_code": "counter_store_unavailable",
+        "issues": [f"counter_store_unavailable: {exc}"],
+    }
+    if base is not None:
+        return base.model_copy(update=update)
+    return _result(
+        verified=False,
+        disposition="quarantine",
+        reason_code="counter_store_unavailable",
+        issues=update["issues"],
     )

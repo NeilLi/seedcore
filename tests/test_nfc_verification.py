@@ -4,10 +4,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from seedcore.ops.evidence.nfc_counter_ledger import CounterStoreError, InMemoryNfcCounterLedger
 from seedcore.ops.evidence.nfc_verification import (
     anchor_counter_key,
     expected_fixture_challenge_response_hash,
     verify_dynamic_nfc_evidence,
+    verify_dynamic_nfc_evidence_with_counter_ledger,
 )
 
 
@@ -110,3 +112,91 @@ def test_fixture_response_hash_helper_is_deterministic_and_anchor_scoped() -> No
         nfc_uid_hash=payload["nfc_uid_hash"],
         anchor_profile_ref=payload["anchor_profile_ref"],
     ) == "sha256:d8a9f3b1fixtureasset001|profile:nxp-ntag424-dna-fixture-v1"
+
+
+def test_nfc_persistent_counter_successive_scans() -> None:
+    context = _load("nfc_registry_context.json")
+    evidence = _load("nfc_happy_path.json")
+    ledger = InMemoryNfcCounterLedger()
+
+    # Initial scan verifies successfully and updates the store to 42
+    result = verify_dynamic_nfc_evidence_with_counter_ledger(
+        evidence,
+        context,
+        counter_ledger=ledger,
+        clock=_clock,
+    )
+    assert result.verified is True
+    assert result.disposition == "allow"
+    assert result.observed_counter_for_persistence == 42
+
+    # A subsequent scan with a lower counter is denied
+    evidence_retry = _load("nfc_happy_path.json")
+    evidence_retry["nfc_payload"]["scan_counter"] = 41
+    result_retry = verify_dynamic_nfc_evidence_with_counter_ledger(
+        evidence_retry,
+        context,
+        counter_ledger=ledger,
+        clock=_clock,
+    )
+    assert result_retry.verified is False
+    assert result_retry.disposition == "deny"
+    assert result_retry.reason_code == "dynamic_nfc_proof_invalid"
+
+    # A subsequent scan with an equal counter is denied
+    evidence_retry_equal = _load("nfc_happy_path.json")
+    evidence_retry_equal["nfc_payload"]["scan_counter"] = 42
+    result_retry_equal = verify_dynamic_nfc_evidence_with_counter_ledger(
+        evidence_retry_equal,
+        context,
+        counter_ledger=ledger,
+        clock=_clock,
+    )
+    assert result_retry_equal.verified is False
+    assert result_retry_equal.disposition == "deny"
+    assert result_retry_equal.reason_code == "dynamic_nfc_proof_invalid"
+
+    # A subsequent scan with a higher counter is allowed (and updates the store to 43)
+    evidence_higher = _load("nfc_happy_path.json")
+    evidence_higher["nfc_payload"]["scan_counter"] = 43
+    # Update expected hash in fixture for counter 43 to match new CMAC signature
+    payload = evidence_higher["nfc_payload"]
+    payload["challenge_response_hash"] = expected_fixture_challenge_response_hash(
+        mock_root_key=context["mock_root_key"],
+        nfc_uid_hash=payload["nfc_uid_hash"],
+        anchor_profile_ref=payload["anchor_profile_ref"],
+        cmac_ref=payload["cmac_ref"],
+        asset_ref=payload["asset_ref"],
+        workflow_join_key=payload["workflow_join_key"],
+        challenge_nonce=payload["challenge_nonce"],
+        scan_counter=43,
+    )
+    result_higher = verify_dynamic_nfc_evidence_with_counter_ledger(
+        evidence_higher,
+        context,
+        counter_ledger=ledger,
+        clock=_clock,
+    )
+    assert result_higher.verified is True
+    assert result_higher.disposition == "allow"
+    assert result_higher.observed_counter_for_persistence == 43
+
+
+def test_nfc_stateful_verifier_quarantines_on_counter_store_error() -> None:
+    class BrokenLedger:
+        def get_highest_counter(self, **kwargs):
+            raise CounterStoreError("Simulated DB connection failure")
+
+    context = _load("nfc_registry_context.json")
+    evidence = _load("nfc_happy_path.json")
+
+    result = verify_dynamic_nfc_evidence_with_counter_ledger(
+        evidence,
+        context,
+        counter_ledger=BrokenLedger(),
+        clock=_clock,
+    )
+    assert result.verified is False
+    assert result.disposition == "quarantine"
+    assert result.reason_code == "counter_store_unavailable"
+    assert "Simulated DB connection failure" in result.issues[0]

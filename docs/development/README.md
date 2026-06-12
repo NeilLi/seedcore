@@ -150,7 +150,14 @@ Start here for the active spine:
    implemented simulation-first dynamic NFC challenge-response fixture lane for
    rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
    tamper-state outcomes without treating mock NFC evidence as authority.
-15. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
+15. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
+   implementation track for the explicit, anchor-scoped monotonic NFC counter
+   ledger that prevents replay across workflows without making the pure NFC
+   verifier instantiate storage.
+16. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
+   staged transition plan for KMS-backed NTAG 424 DNA verification as a
+   profile-specific shadow adapter before any production hardware enforcement.
+17. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical
@@ -159,22 +166,22 @@ Start here for the active spine:
      signed envelopes, missing required fields, and missing `state_binding_hash`
      inputs are fail-closed authorization conditions, not retriable LLM context
      gaps.
-16. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+18. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-17. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
+19. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
    control-plane memo for recursive agent delegation: root context anchoring,
    signed agent identity/capability credentials, per-hop attenuation, visible
    tool calls, out-of-band approval, child-run closure, and replayable
    delegation lineage.
-18. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+20. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-19. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+21. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.

@@ -50,6 +50,8 @@ MIGRATIONS=(
   132_pkg_rct_contract_phase1.sql
   133_result_verifier.sql
   134_result_verifier_runtime_state.sql
+  135_transfer_approval_uuid_defaults_backfill.sql
+  136_nfc_monotonic_counters.sql
 )
 
 for migration in "${MIGRATIONS[@]}"; do

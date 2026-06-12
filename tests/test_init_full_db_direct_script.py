@@ -12,5 +12,7 @@ def test_init_full_db_direct_includes_transfer_and_rct_migrations() -> None:
         "130_transfer_approval_runtime.sql",
         "131_source_registration_settlement_statuses.sql",
         "132_pkg_rct_contract_phase1.sql",
+        "135_transfer_approval_uuid_defaults_backfill.sql",
+        "136_nfc_monotonic_counters.sql",
     ):
         assert migration in text
