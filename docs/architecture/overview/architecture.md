@@ -43,6 +43,49 @@ supporting context infrastructure borrows from proven systems:
 The diagram’s components map to these responsibilities:
 `PDP` (policy decision point) enforces authorization and admission, `Evidence Integrator` normalizes/joins evidence into verification bundles, `Forensic State Store` keeps the replay/verifiability substrate, and `RESULT_VERIFIER` performs machine-native post-decision replay verification plus authoritative fail-closed mutation. The `Verification API` offers deterministic read projections for UI and agent tooling. `Hot-path Observability` closes the loop with deployment-role labeled metrics and a JSON status endpoint designed to match Prometheus text output.
 
+## Gated Action DX & Developer Interface
+
+To reduce hand-wired policy-gate drift, the **Gated Action DX Layer** gives
+developers a narrow way to declare governed action boundaries without making the
+SDK an authority source:
+
+- **`@gated_action` wrapper:** wraps declared high-consequence functions in
+  shadow or guarded enforce mode. Enforce mode requires a configured evaluator,
+  an allow decision with a scoped `ExecutionToken`, and a configured executor
+  before business logic can run.
+- **Fail-closed wrapper behavior:** missing evaluator/executor bindings, deny /
+  quarantine decisions, missing tokens, and post-execution closure failures
+  stop the wrapper from silently treating the action as successful. The PDP,
+  token lifecycle, evidence closure, and verifier outcome remain the authority
+  path.
+- **Manifest scaffolding:** `schema_exporter.py` scans `@gated_action`
+  declarations and emits path-qualified action manifests, reducing duplicate
+  function-name collisions when PDP/PKG scaffolding is generated.
+
+## Hardware-Anchored Telemetry & KMS/NTAG Security
+
+Physical asset handoff and custody operations depend on cryptographically
+verifiable telemetry rather than plain text inputs or raw PII:
+
+- **NXP NTAG 424 DNA Secure Unique NFC (SUN):** SeedCore has a
+  profile-specific `Ntag424SunCmacVerifier` path for AES-128 CMAC checks over
+  mirrored tag data such as UID-derived identity and scan counter material. The
+  deterministic fixture verifier remains the simulator and replay baseline.
+- **Tag-key derivation:** `NfcKmsClient` derives tag-specific key material from
+  configured master key material and revocation inputs without logging or
+  exposing raw keys. Production KMS/HSM integration remains a deployment
+  profile requirement, not a reason to expose master key material to the
+  application runtime.
+- **Monotonic counter ledger:** `nfc_counter_ledger.py` provides an explicit
+  ledger interface and persistent backend support for anchor-scoped scan
+  counters. Authority-path orchestration queries and admits counters through
+  that ledger; the pure NFC verifier does not instantiate storage directly.
+- **Staged rollout posture:** the `ntag424_sun_shadow` profile records
+  `shadow_nfc_verification` metadata for operator/debug legibility without
+  affecting the primary authorization verdict. Production enforcement should be
+  promoted only after hardware enrollment, revocation, freshness, signer
+  posture, official-vector coverage, and monotonic-ledger behavior are tested.
+
 ## Supporting memory (non-authoritative)
 Working memory, semantic (Holon) memory, and optional incident memory are **bounded supporting services** around the trust runtime. They supply short-lived cache, scoped retrieval, and salience logging for cognition and tools. Reads are advisory unless explicitly promoted into typed, freshness-aware context elsewhere. The PDP and other governed hot paths must not treat general-purpose memory lookups as authority sources. Prefer `seedcore.memory.MemoryRuntime` and the protocols in `seedcore.memory.contracts` over direct use of raw `PgVectorStore` / `Neo4jGraph` adapters in callers outside `seedcore.memory`.
 
