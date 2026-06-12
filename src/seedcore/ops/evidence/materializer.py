@@ -324,6 +324,7 @@ def _resolve_nfc_verification_metadata(
         "anchor_counter_key",
         "current_highest_scan_counter",
         "observed_counter_for_persistence",
+        "shadow_nfc_verification",
     }
     forbidden_keys = {
         "raw_nfc_uid",
@@ -339,9 +340,23 @@ def _resolve_nfc_verification_metadata(
         if forbidden_keys & set(candidate.keys()):
             candidate = {key: value for key, value in candidate.items() if key not in forbidden_keys}
         metadata = {key: candidate.get(key) for key in allowed_keys if key in candidate}
+        if isinstance(metadata.get("shadow_nfc_verification"), dict):
+            metadata["shadow_nfc_verification"] = _safe_shadow_nfc_verification(
+                metadata["shadow_nfc_verification"]
+            )
         if metadata:
             return metadata
     return {}
+
+
+def _safe_shadow_nfc_verification(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_keys = {
+        "verified",
+        "disposition",
+        "reason_code",
+        "issues",
+    }
+    return {key: candidate.get(key) for key in allowed_keys if key in candidate}
 
 
 def _resolve_trust_gap_codes(*, authz_graph: Dict[str, Any], governed_receipt: Dict[str, Any]) -> list[str]:

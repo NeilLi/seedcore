@@ -63,6 +63,16 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
                     "challenge_nonce": "must-not-project",
                     "challenge_response_hash": "must-not-project",
                     "cmac_ref": "must-not-project",
+                    "shadow_nfc_verification": {
+                        "verified": True,
+                        "disposition": "allow",
+                        "reason_code": "rct_nfc_scan_verified",
+                        "issues": [],
+                        "challenge_nonce": "must-not-project",
+                        "challenge_response_hash": "must-not-project",
+                        "cmac_ref": "must-not-project",
+                        "production_key_material": "must-not-project",
+                    },
                 },
                 "taxonomy_bundle": {
                     "trust_gap_codes": [
@@ -101,5 +111,15 @@ def test_materialize_seedcore_custody_event_payload_from_audit_record():
     assert "challenge_nonce" not in nfc
     assert "challenge_response_hash" not in nfc
     assert "cmac_ref" not in nfc
+    assert nfc["shadow_nfc_verification"] == {
+        "verified": True,
+        "disposition": "allow",
+        "reason_code": "rct_nfc_scan_verified",
+        "issues": [],
+    }
+    assert "challenge_nonce" not in nfc["shadow_nfc_verification"]
+    assert "challenge_response_hash" not in nfc["shadow_nfc_verification"]
+    assert "cmac_ref" not in nfc["shadow_nfc_verification"]
+    assert "production_key_material" not in nfc["shadow_nfc_verification"]
     assert payload["custody_transition"]["to"] == "vault-a"
     assert payload["custody_transition"]["from"] == "staging-a"

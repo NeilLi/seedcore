@@ -70,6 +70,9 @@ class NfcVerificationContext(BaseModel):
     expected_anchor_profile_ref: str
     highest_observed_scan_counter: int = Field(default=-1)
     mock_root_key: str
+    kms_master_key_hex: str = Field(default="")
+    revoked_keys: list[str] = Field(default_factory=list)
+    simulate_kms_unavailable: bool = Field(default=False)
 
     @field_validator(
         "expected_asset_ref",
@@ -104,6 +107,7 @@ class NfcVerificationResult(BaseModel):
     anchor_counter_key: str | None = None
     current_highest_scan_counter: int | None = None
     observed_counter_for_persistence: int | None = None
+    shadow_nfc_verification: dict[str, Any] | None = None
 
 
 def verify_dynamic_nfc_evidence(
@@ -140,6 +144,11 @@ def verify_dynamic_nfc_evidence(
         "observed_counter_for_persistence": payload.scan_counter,
     }
 
+    payload_is_simulator = "fixture" in payload.anchor_profile_ref or payload.anchor_profile_ref == "profile:nxp-ntag424-dna-fixture-v1"
+    expected_is_trusted = "trusted" in ctx.expected_anchor_profile_ref or ctx.expected_anchor_profile_ref.startswith("profile:ntag424-prod")
+    expected_is_shadow = ctx.expected_anchor_profile_ref == "ntag424_sun_shadow"
+    expected_is_ntag = "ntag424" in ctx.expected_anchor_profile_ref and "fixture" not in ctx.expected_anchor_profile_ref
+
     if payload.asset_ref != ctx.expected_asset_ref:
         return _result(
             verified=False,
@@ -164,7 +173,23 @@ def verify_dynamic_nfc_evidence(
             issues=["nfc_scan_too_stale"],
             **common,
         )
-    if payload.nfc_uid_hash != ctx.registered_nfc_uid_hash or payload.anchor_profile_ref != ctx.expected_anchor_profile_ref:
+
+    # 1. Simulator evidence in trusted profile -> fail-closed/quarantine
+    if expected_is_trusted and payload_is_simulator:
+        return _result(
+            verified=False,
+            disposition="quarantine",
+            reason_code="simulator_in_trusted_profile",
+            issues=["simulator_in_trusted_profile"],
+            **common,
+        )
+
+    # 2. Match nfc_uid_hash and anchor_profile_ref (skip profile ref check if shadow)
+    profile_mismatch = (
+        payload.anchor_profile_ref != ctx.expected_anchor_profile_ref
+        and not expected_is_shadow
+    )
+    if payload.nfc_uid_hash != ctx.registered_nfc_uid_hash or profile_mismatch:
         return _result(
             verified=False,
             disposition="deny",
@@ -188,23 +213,105 @@ def verify_dynamic_nfc_evidence(
             issues=["dynamic_nfc_proof_invalid"],
             **common,
         )
-    if payload.challenge_response_hash != expected_fixture_challenge_response_hash(
-        mock_root_key=ctx.mock_root_key,
-        nfc_uid_hash=payload.nfc_uid_hash,
-        anchor_profile_ref=payload.anchor_profile_ref,
-        cmac_ref=payload.cmac_ref,
-        asset_ref=payload.asset_ref,
-        workflow_join_key=payload.workflow_join_key,
-        challenge_nonce=payload.challenge_nonce,
-        scan_counter=payload.scan_counter,
-    ):
-        return _result(
-            verified=False,
-            disposition="deny",
-            reason_code="dynamic_nfc_proof_invalid",
-            issues=["dynamic_nfc_proof_invalid"],
-            **common,
+
+    # 2. Cryptographic verification
+    shadow_nfc_verification = None
+
+    if expected_is_ntag and not expected_is_shadow:
+        # AUTHORITATIVE Ntag424 SUN CMAC verifier
+        from seedcore.ops.evidence.nfc_kms import NfcKmsClient, NfcKeyRevokedError, NfcKmsUnavailableError
+        from seedcore.ops.evidence.nfc_crypto import Ntag424SunCmacVerifier
+
+        kms_client = NfcKmsClient(
+            master_key_hex=ctx.kms_master_key_hex,
+            revoked_keys=ctx.revoked_keys,
+            simulate_unavailable=ctx.simulate_kms_unavailable,
         )
+        try:
+            derived_key = kms_client.get_tag_derived_key_material(
+                nfc_uid_hash=payload.nfc_uid_hash,
+                cmac_ref=payload.cmac_ref,
+            )
+            verifier = Ntag424SunCmacVerifier()
+            verified_ok = verifier.verify(payload, derived_key)
+            if not verified_ok:
+                return _result(
+                    verified=False,
+                    disposition="deny",
+                    reason_code="dynamic_nfc_proof_invalid",
+                    issues=["dynamic_nfc_proof_invalid"],
+                    **common,
+                )
+        except NfcKeyRevokedError as exc:
+            return _result(
+                verified=False,
+                disposition="deny",
+                reason_code="nfc_key_revoked",
+                issues=[f"nfc_key_revoked: {exc}"],
+                **common,
+            )
+        except NfcKmsUnavailableError as exc:
+            return _result(
+                verified=False,
+                disposition="quarantine",
+                reason_code="nfc_kms_unavailable",
+                issues=[f"nfc_kms_unavailable: {exc}"],
+                **common,
+            )
+    else:
+        # Fixture / simulated HMAC verifier
+        from seedcore.ops.evidence.nfc_crypto import FixtureDynamicNfcVerifier
+        verifier = FixtureDynamicNfcVerifier()
+        verified_ok = verifier.verify(payload, ctx.mock_root_key.encode("utf-8"))
+        if not verified_ok:
+            return _result(
+                verified=False,
+                disposition="deny",
+                reason_code="dynamic_nfc_proof_invalid",
+                issues=["dynamic_nfc_proof_invalid"],
+                **common,
+            )
+
+        # In parallel, perform shadow verification if configured
+        if expected_is_shadow:
+            from seedcore.ops.evidence.nfc_kms import NfcKmsClient, NfcKeyRevokedError, NfcKmsUnavailableError
+            from seedcore.ops.evidence.nfc_crypto import Ntag424SunCmacVerifier
+
+            kms_client = NfcKmsClient(
+                master_key_hex=ctx.kms_master_key_hex,
+                revoked_keys=ctx.revoked_keys,
+                simulate_unavailable=ctx.simulate_kms_unavailable,
+            )
+            try:
+                derived_key = kms_client.get_tag_derived_key_material(
+                    nfc_uid_hash=payload.nfc_uid_hash,
+                    cmac_ref=payload.cmac_ref,
+                )
+                sv_verifier = Ntag424SunCmacVerifier()
+                shadow_ok = sv_verifier.verify(payload, derived_key)
+                shadow_nfc_verification = {
+                    "verified": shadow_ok,
+                    "disposition": "allow" if shadow_ok else "deny",
+                    "reason_code": "rct_nfc_scan_verified" if shadow_ok else "dynamic_nfc_proof_invalid",
+                    "issues": [] if shadow_ok else ["dynamic_nfc_proof_invalid"],
+                }
+            except NfcKeyRevokedError as exc:
+                shadow_nfc_verification = {
+                    "verified": False,
+                    "disposition": "deny",
+                    "reason_code": "nfc_key_revoked",
+                    "issues": [str(exc)],
+                }
+            except NfcKmsUnavailableError as exc:
+                shadow_nfc_verification = {
+                    "verified": False,
+                    "disposition": "quarantine",
+                    "reason_code": "nfc_kms_unavailable",
+                    "issues": [str(exc)],
+                }
+
+    common["shadow_nfc_verification"] = shadow_nfc_verification
+
     if payload.tamper_state != "clear":
         return _result(
             verified=False,
@@ -213,6 +320,7 @@ def verify_dynamic_nfc_evidence(
             issues=["hardware_tamper_detected"],
             **common,
         )
+
     return _result(
         verified=True,
         disposition="allow",
