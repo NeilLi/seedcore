@@ -1,9 +1,12 @@
 # SeedCore Design Notes: Zero-Trust Execution Substrate
 
-Status: Current architectural anchor; refreshed 2026-05-19 against
+Status: Current architectural anchor; refreshed 2026-06-12 against
 `docs/development/`.
 
-This document is the enduring design anchor for SeedCore. It is intentionally architectural rather than procedural: it explains what SeedCore is, what boundaries it must preserve, and what implementation invariants every serious runtime component must satisfy.
+This document is the enduring design anchor for SeedCore. It is intentionally
+architectural rather than procedural: it explains what SeedCore is, what
+boundaries it must preserve, and what implementation invariants every serious
+runtime component must satisfy.
 
 SeedCore is not a chat interface with tools attached. It is a zero-trust execution substrate for custody-aware digital twins, where AI judgment, policy authority, physical execution, and replay evidence are deliberately separated.
 
@@ -21,11 +24,13 @@ This intent is not aspirational. It is the core runtime posture that architectur
 
 Current execution context matters:
 
-- the must-win workflow remains **Restricted Custody Transfer**
+- the must-win workflow remains **Restricted Custody Transfer** (RCT)
 - the active commercial scene is **Collectible Rare-Shoe Restricted Custody
   Transfer**, which verticalizes the same RCT contract with authentication,
   provenance, NFC/scan telemetry, and public/operator proof redaction
 - the first durable product surface is the **proof / verification surface**
+  (the Operator Console Audit Trail and the advanced read-only Forensic Replay
+  Studio)
 - the policy-assistant lane is advisory: it may draft, simulate, explain, and
   recommend, but it is not a direct runtime policy authority
 - the PDP decision boundary is synchronous and stateless at decision time
@@ -34,6 +39,18 @@ Current execution context matters:
   enforcement and strict replay / activation controls are available but remain
   environment-gated, so product copy should not imply full freeze certainty
   unless `requires_signed_bundle` and the strict RCT posture are enforced
+- **Gated Action DX Layer**: the MVP is implemented via
+  `src/seedcore/sdk/gated_action.py`, supporting shadow and guarded enforce
+  modes with fail-closed behavior at the SDK boundary, explicit MCP preflight
+  checks, and path-qualified gated-action manifests to prevent duplicate
+  function-name collisions
+- **Dynamic NFC Verification**: the deterministic fixture verifier remains the
+  simulator/replay baseline. The current implementation adds monotonic counter
+  admission (`nfc_counter_ledger.py`) and profile-specific NTAG 424 SUN support:
+  `Ntag424SunCmacVerifier` performs AES-128 CMAC checks, `NfcKmsClient`
+  derives tag key material, and the `ntag424_sun_shadow` profile preserves
+  shadow verification metadata without making hardware enforcement the default
+  production claim.
 
 ## 2. The Four-Plane Model
 
@@ -69,6 +86,15 @@ For the current custody implementation, one clarification matters:
 - the Postgres custody graph tables are a derived investigation projection over that truth
 - custody reconciliation and reprojection are therefore explicit operational responsibilities rather than implicit fail-closed guarantees on every governed mutation
 - dispute linkage is append-only; historical dispute edges remain in the graph while current dispute meaning comes from dispute-case status and event history
+- **NFC Counter Ledger**: prevents replay attacks by maintaining monotonic scan
+  counters for hardware anchors through an explicit ledger interface, with
+  persistent backend support and fail-closed behavior when the store is
+  unavailable
+- **KMS / NTAG Cryptographic Verifier**: integrates tag key derivation through
+  `NfcKmsClient` and AES-128 CMAC verification through
+  `Ntag424SunCmacVerifier` for profile-specific NTAG paths; shadow output is
+  captured separately from the primary authorization verdict until production
+  hardware enrollment is explicitly promoted
 
 These subsystem names should remain consistent across architecture, development, and product-facing documents.
 
@@ -104,6 +130,11 @@ This is the architectural answer to three recurring risks:
 - direct LLM-to-actuator bypass
 - state mutation without signed proof
 - replay surfaces that depend on ambient runtime behavior
+
+The Gated Action DX Layer turns these requirements into a narrow SDK decorator
+and path-qualified manifests for governed actions. It streamlines development,
+but it does not grant authority by itself; enforce-mode execution still depends
+on PDP allow, a scoped `ExecutionToken`, an executor, and evidence closure.
 
 ### Governed Mutation Flow
 
@@ -142,6 +173,7 @@ Its role is to:
 - preserve proof and replay correlation from the first external request onward
 - validate the declared owner/delegation/agent binding against persisted
   identity facts, currently in shadow mode by default with an `enforce` switch
+- map incoming commerce events (such as Shopify Sandbox events) into `ActionIntent` envelopes
 
 That distinction matters. Public-facing contracts may evolve by workflow. The governed execution substrate must remain internally coherent across workflows.
 
@@ -170,6 +202,10 @@ Required direction:
 - receipts carry stable identifiers and payload hashes
 - receipt chains preserve predecessor linkage where mutation history matters
 - audit and evidence bundles link mutation proof into broader replay surfaces
+- shadow verification metadata (`shadow_nfc_verification`) is preserved in
+  materialized custody outputs to maintain post-execution legibility without
+  leaking raw challenge, CMAC, UID, or production key material, and without
+  affecting primary authorization verdicts
 
 ### Unified Mutation Entrypoints
 
@@ -191,6 +227,10 @@ Required direction:
 - replay-sensitive services inject ID generators rather than relying on ambient UUID creation
 - snapshot and policy references are pinned when workflow semantics depend on them
 - fallback replay identifiers are derived from stable payload data when upstream identifiers are absent
+- pure verifiers remain deterministic and fixture-friendly; stateful dynamic
+  checks such as monotonic counter admission are delegated to explicit
+  orchestration helpers and ledger stores rather than hidden verifier-owned
+  storage
 
 ### Deterministic Trust-Surface Services
 
@@ -240,6 +280,13 @@ Use the linked documents for workflow-specific contracts, execution wedges, depl
 - [Sequence Of Trust: Zero-Trust Physical Custody](architecture/overview/sequence_of_trust_zero_trust_physical_custody.md)
 - [SeedCore 2026 Execution Plan](development/seedcore_2026_execution_plan.md)
 - [Current Next Steps](development/current_next_steps.md)
+- [Gated Action DX Layer](development/gated_action_dx_layer.md)
+- [Virtual NFC Simulation Plan](development/virtual_nfc_simulation_plan.md)
+- [Persistent Counter Ledger Plan](development/persistent_counter_ledger_plan.md)
+- [KMS & NTAG Hardware Transition Plan](development/kms_ntag_transition_plan.md)
+- [Execution Replay Studio Development Plan](development/execution_replay_studio_development_plan.md)
+- [Statistical Model Audit Shadow Contract](development/statistical_model_audit_shadow_contract.md)
+- [Q2 2026 Audit Trail UI Spec](development/q2_2026_audit_trail_ui_spec.md)
 - [Rare-Shoe RCT Demo Spec](development/rare_shoes_collecting_transfer_demo_spec.md)
 - [Agent Action Gateway Contract](development/agent_action_gateway_contract.md)
 - [AI Policy Assistant Decision Memo](development/ai_policy_assistant_decision_memo.md)
