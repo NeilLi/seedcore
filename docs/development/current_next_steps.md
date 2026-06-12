@@ -136,13 +136,15 @@ before execution, not by demos that only show happy paths.
   clearance, production deploys, and quarantine release remain policy-admitted
   or human-reviewed actions.
 
-## Status Update (2026-06-08, Spark-Era Autonomy Signal)
+## Status Update (2026-06-12, Local Autonomous Application Signal)
 
-The RTX Spark / DGX Spark investigation is now captured in
+The local autonomous application investigation is now captured in
 [rtx_spark_autonomous_era_investigation.md](rtx_spark_autonomous_era_investigation.md).
-The planning signal is urgent but narrow: local agent hardware is becoming
-powerful enough for always-on, concurrent, local agents to propose, simulate,
-diagnose, and repair faster than traditional human-reviewed loops can absorb.
+The planning signal is urgent but narrow: RTX Spark / DGX-class workstations,
+Windows local-agent primitives, frontier coding and security agents, and
+agentic creative/scientific application surfaces make asynchronous digital
+workers more plausible in 2026. They can propose, simulate, diagnose, repair,
+and package evidence faster than traditional human-reviewed loops can absorb.
 
 Immediate priority adjustment:
 
@@ -150,14 +152,17 @@ Immediate priority adjustment:
 2. Make local-agent provenance visible in Execution Replay Studio.
 3. Keep hardware roles separate: Spark-class workstations can sign proposal or
    simulation provenance; edge/robot devices produce physical closure evidence.
-4. Use AI-led self-healing to accelerate diagnosis, fixtures, patches, and gate
+4. Treat application-agent output from coding, creative, scientific, or
+   security tools as advisory unless transformed into typed policy inputs,
+   fixtures, evidence refs, or reviewable patches.
+5. Use AI-led self-healing to accelerate diagnosis, fixtures, patches, and gate
    runs, but stop at reviewable promotion.
-5. Keep Restricted Custody Transfer as the proving ground.
+6. Keep Restricted Custody Transfer as the proving ground.
 
 Authority remains unchanged:
 
 ```text
-Local compute can accelerate autonomy.
+Local autonomous applications can accelerate autonomy.
 Only PDP allow + scoped ExecutionToken + evidence closure + verifier acceptance
 can admit high-consequence execution.
 ```

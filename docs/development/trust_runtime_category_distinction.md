@@ -19,17 +19,19 @@ The shortest framing is:
 > Cybersecurity protects the environment. SeedCore governs execution within the
 > environment and produces proof that the action was admissible.
 
-## Spark-Era Category Pressure
+## Autonomous-Application Category Pressure
 
-The RTX Spark / DGX Spark signal strengthens this category distinction.
-Spark-class local agent hardware makes it easier for agents to run persistently,
-locally, and concurrently near the systems they affect. That does not make the
-hardware, model, desktop runtime, or agent harness an authority source.
+The RTX Spark / DGX-class hardware signal, Windows local-agent platform work,
+frontier coding/security agents, and agentic creative/scientific application
+surfaces strengthen this category distinction. It is becoming easier for agents
+to run persistently, locally, asynchronously, and inside the applications that
+already touch valuable work. That does not make the hardware, model, desktop
+runtime, app surface, or agent harness an authority source.
 
 SeedCore's role becomes sharper:
 
 ```text
-Local agent substrate: proposes, simulates, diagnoses, and requests.
+Autonomous application substrate: proposes, simulates, diagnoses, and requests.
 SeedCore trust runtime: evaluates, scopes, revokes, verifies, and proves.
 ```
 

@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
-Date: 2026-06-08
-Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane; verification API kube integration lane implemented; RTX Spark / DGX Spark market signal incorporated)
+Date: 2026-06-12
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane; verification API kube integration lane implemented; local autonomous application market signal incorporated)
 
 ## Purpose
 
@@ -25,21 +25,22 @@ This plan is grounded in the current repo state:
 This is not a speculative "future platform" plan. It is a wedge-first
 execution plan.
 
-## Execution Update (2026-06-08, Spark-Era Local Agents)
+## Execution Update (2026-06-12, Local Autonomous Applications)
 
 The autonomy timeline has compressed. NVIDIA and Microsoft announced RTX Spark
-on 2026-05-31 as a local personal-agent PC platform, while NVIDIA's DGX Spark
-developer material explicitly targets long-running autonomous-agent workloads,
-large-context inference, concurrent subagents, local agent runtimes, and
-multi-node desktop scaling.
+on 2026-05-31 as a local personal-agent PC platform, Microsoft framed Windows
+as a local agent substrate with identity, containment, manageability, and user
+control, Adobe is moving creative tools toward in-application collaborative
+agents, and frontier coding/security model releases point toward longer-horizon
+software diagnosis and repair loops.
 
 Planning interpretation:
 
 ```text
-The autonomous era is no longer only a cloud-platform forecast.
-Local agent workstations and edge AI systems are becoming ordinary execution
-substrates. SeedCore should become the trust runtime they need before their
-actions reach high-consequence systems.
+The autonomous era is no longer only a cloud-platform forecast or a chatbot UI.
+Local workstations, app-embedded agents, cloud agents, and edge AI systems are
+becoming ordinary work substrates. SeedCore should become the trust runtime
+they need before their actions reach high-consequence systems.
 ```
 
 This changes urgency, not authority semantics.
@@ -47,33 +48,41 @@ This changes urgency, not authority semantics.
 New operating rule:
 
 ```text
-Spark-class hardware can make agents faster, more local, and more persistent.
-It still cannot make agent intent authoritative.
+Local autonomous applications can make agents faster, more persistent, and more
+deeply embedded in work. They still cannot make agent intent authoritative.
 ```
 
 Immediate development consequences:
 
-1. **Treat Agent Self-Regulation as Q3-critical.** Spark-era agents need cheap
-   preflight before they request authority: `seedcore.agent_action.evaluate`,
+1. **Treat Agent Self-Regulation as Q3-critical.** Local OS agents, coding
+   agents, creative agents, and scientific/security agents need cheap preflight
+   before they request authority: `seedcore.agent_action.evaluate`,
    explicit-authority MCP `check_policy`, `@gated_action`, schema-exported
    manifests, and shadow/simulation drills.
 2. **Make local-agent provenance replay-visible.** Replay Studio should show
    the root agent, delegated subagents, local hardware or workload identity,
-   policy snapshot, execution-token constraints, telemetry refs, and verifier
-   outcome in one operator-readable trace.
+   application surface, task lineage, policy snapshot, execution-token
+   constraints, telemetry refs, and verifier outcome in one operator-readable
+   trace.
 3. **Split agent workstation identity from physical closure identity.** RTX
    Spark / DGX Spark-class machines may be proposal, simulation, diagnosis, or
    local inference substrates. Jetson / robot / sensor nodes remain the physical
    evidence substrate. Either can sign provenance, but neither bypasses PDP
    evaluation or verifier closure.
-4. **Use AI-led self-healing for speed, not production autonomy.** Local agents
+4. **Treat app-agent output as advisory until admitted.** Creative edits,
+   scientific hypotheses, security findings, code patches, and OS-agent plans
+   can become fixtures, evidence refs, typed policy inputs, or reviewable
+   patches. They do not become PDP decisions, token grants, verifier outcomes,
+   or custody closure.
+5. **Use AI-led self-healing for speed, not production autonomy.** Local agents
    may diagnose, reproduce, patch, run gates, and prepare reviewable promotion.
    They must not clear quarantine, bypass signer/token revocation, or promote
    `shadow` to `enforce`.
-5. **Keep the wedge narrow.** The 2026 deliverable remains Agent-Governed
-   Restricted Custody Transfer with a forensic handshake. Spark makes that
-   wedge more urgent; it does not justify a generic agent desktop, robotics
-   SDK, or marketplace automation platform.
+6. **Keep the wedge narrow.** The 2026 deliverable remains Agent-Governed
+   Restricted Custody Transfer with a forensic handshake. The autonomous-app
+   signal makes that wedge more urgent; it does not justify a generic OS
+   agent, robotics SDK, creative suite, scientific workbench, or marketplace
+   automation platform.
 
 Reference memo:
 

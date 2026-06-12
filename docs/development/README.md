@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-06-08
+Date: 2026-06-12
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -25,9 +25,9 @@ Canonical north-star references:
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
   (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
 - [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
-  - market-signal memo for why RTX Spark / DGX Spark-class local agent compute
-    accelerates the need for governed execution without becoming an authority
-    source
+  - market-signal memo for why local autonomous applications, RTX Spark /
+    DGX-class compute, and frontier agents accelerate the need for governed
+    execution without becoming authority sources
 - [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
@@ -268,14 +268,16 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-06-11**, the project is in **Q2 operational closure -> Q3 bounded
+As of **2026-06-12**, the project is in **Q2 operational closure -> Q3 bounded
 agent integration**, still on one wedge:
 
-- The **RTX Spark / DGX Spark market signal is now explicit**:
-  Spark-class local agent hardware makes always-on, concurrent, local agents
-  more practical in 2026. This strengthens urgency for SeedCore's trust-runtime
-  wedge, but it does not change the authority rule: local agent capability is
-  proposal/simulation/diagnosis substrate, not execution permission.
+- The **local autonomous application market signal is now explicit**:
+  RTX Spark / DGX-class hardware, Windows local-agent primitives, frontier
+  coding/security agents, and agentic creative suites make asynchronous digital
+  workers more practical in 2026. This strengthens urgency for SeedCore's
+  trust-runtime wedge, but it does not change the authority rule: local agent
+  capability, model output, and application-agent output are proposal,
+  simulation, diagnosis, or evidence substrates, not execution permission.
 - **Commerce RCT** remains the only must-win workflow; docs and code should
   default to "order/quote/value + physical scope + token + evidence" language.
 - **Collectible rare-shoe transfer** is now the recommended commercial-grade
@@ -323,11 +325,14 @@ tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
 Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Use the Spark-era investigation to sharpen Q3 urgency without expanding
-   scope.** Keep [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
+1. **Use the autonomous-application investigation to sharpen Q3 urgency
+   without expanding scope.** Keep
+   [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
    tied to Agent Self-Regulation, hardware-anchored telemetry, Replay Studio,
-   and AI-led self-healing. Do not turn this into a second roadmap or a generic
-   agent-desktop story.
+   and AI-led self-healing. The useful read is "applications are becoming
+   autonomous work systems that need governed admission," not "SeedCore should
+   become a general OS agent, creative suite, scientific workbench, or coding
+   department."
 2. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
    over one RCT path. The SDK supports shadow and guarded enforce modes; MCP
    `check_policy` exposes explicit-authority preflight; the schema exporter
@@ -388,8 +393,10 @@ Primary planning docs:
 - [`current_next_steps.md`](current_next_steps.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
-  - 2026 market-signal memo for RTX Spark / DGX Spark, local agents, and why
-  SeedCore should accelerate governed execution while rejecting hardware-as-authority
+  - 2026 market-signal memo for RTX Spark / DGX-class systems, local OS agents,
+    autonomous code/repair agents, creative/scientific application agents, and
+    why SeedCore should accelerate governed execution while rejecting
+    hardware-, model-, or app-output-as-authority
 - [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
 - [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
