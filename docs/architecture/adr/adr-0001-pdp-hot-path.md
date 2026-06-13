@@ -115,6 +115,23 @@ PDP without turning the PDP itself into a stateful service.
 | Subscribed local views | Debezium-style CDC architecture | Stream resource, custody, approval, delegation, and telemetry mutations asynchronously into local or near-local read views so PDP reads stay synchronous and ultra-fast. | Adopt for trust-critical context supply. |
 | External graph PDP | Google Zanzibar-style ReBAC | Useful later if relationship scale dominates. Not the default current wedge because SeedCore must prioritize restricted custody, replayable evidence, and execution-token semantics. | Keep out of the default hot path. |
 
+### Production Stack Disposition For The Ultra-Low-Latency Path
+
+The next technical research lane should turn the hot-path doctrine into a
+profiled production stack, but it must preserve the authority boundary above:
+performance optimizations can reduce latency, not relax sufficiency,
+freshness, revocation, or replay requirements.
+
+| Component | Preferred direction | SeedCore disposition |
+| :--- | :--- | :--- |
+| Wire format and schema | Keep JSON-LD for external replay/export contracts; evaluate Protobuf or FlatBuffers for internal node-to-node hot-path transport once the authority field set is stable. | Adopt as an implementation optimization, with schema generation tied to `schema_exporter.py` or an equivalent manifest pipeline. The compiled schema must remain stricter than the current Pydantic contract, not a looser parallel contract. |
+| Runtime validation | Continue using strict typed contracts, including `extra="forbid"`-style behavior where Python models are the boundary; move trust-critical validation toward compiled/Rust-backed kernels as load requires. | Adopt incrementally. The policy surface remains schema-complete, typed, versioned, and replay-visible before any `ExecutionToken` can be minted. |
+| NTAG 424 DNA crypto | Move production NFC profiles toward hardware-backed key derivation and AES-128 CMAC verification, preferably through a small Rust or C-backed verifier surface with HSM/KMS integration. | Adopt behind profile gates. Cloud KMS HTTP paths are acceptable for shadow, enrollment, and moderate-latency profiles only if measured; true hot-path enforcement should prefer local HSM/CloudHSM, PKCS#11, CNG, or another benchmarked low-latency key boundary. |
+| Tag key derivation | Standardize production derivation per hardware profile and official vectors; evaluate NIST SP 800-108 Counter Mode KDF with AES-128-CMAC where it matches the tag/security profile. | Candidate hardening. Any KDF choice must be profile-specific, vector-tested, rotation-aware, and must never expose master key material to the application runtime. |
+| Monotonic counter ledger | Use an explicit anchor-scoped ledger with atomic admit-if-greater semantics, backed by a durable store and optionally accelerated by Redis/Dragonfly or equivalent near-local cache. | Adopt for authority paths. Counter admission is stateful orchestration around the pure verifier; if the ledger or cache cannot prove the bound safely, the outcome is quarantine/deny and no token is minted. |
+| Shadow verification dispatch | Use in-process or near-process ring buffers / shared-memory queues for non-blocking `ntag424_sun_shadow` work instead of placing network broker I/O on the synchronous decision path. | Adopt only for shadow/canary evidence. Shadow output improves calibration and operator visibility but is not authority-bearing until the promotion contract admits it. |
+| Circuit breakers and timeouts | Implement short, explicit dependency budgets and fail-closed circuit breakers for ledger, compiled graph, signer, crypto, and context-view dependencies. | Required for enforce mode. Timeouts must emit explicit reason codes and replay-visible trust gaps rather than silently falling back to partial context. |
+
 ## Why
 
 This design is the best balance of feasibility and advantage for the next several years because it matches how modern authorization systems are actually built while staying aligned with SeedCore's custody and replay requirements.
@@ -324,6 +341,30 @@ decision receipt. This is the natural role of `state_binding_hash`: it should
 identify the exact state and context boundary the PDP accepted, not merely the
 policy revision.
 
+### 7. Keep Hardware Crypto, Counter Admission, And Shadow Work In Their Lanes
+
+Hardware-rooted proof can strengthen the hot path only when each responsibility
+stays in the correct lane:
+
+- the pure NFC verifier validates the supplied cryptographic material and typed
+  freshness/counter context without instantiating Redis, Postgres, KMS, or any
+  ambient store
+- the authority-path orchestrator performs atomic counter admission through an
+  explicit ledger interface before execution authority can be issued
+- production NTAG profiles use hardware-backed tag-key derivation and
+  AES-128-CMAC verification behind profile gates, vector tests, revocation
+  checks, and measured dependency budgets
+- `ntag424_sun_shadow` and similar canaries may use asynchronous ring-buffer
+  dispatch to collect verifier evidence, but their output remains diagnostic
+  until shadow/canary/enforce promotion criteria admit it
+- KMS/HSM outages, counter-store races, stale local views, and schema gaps are
+  authorization failures, not reasons to downgrade to fixture keys, default
+  counters, best-effort caches, or LLM-assisted interpretation
+
+This keeps the hot path stateless at the PDP decision function while accepting
+that some surrounding infrastructure, especially the counter ledger and key
+boundary, is stateful, measured, and fail-closed.
+
 ## Follow-On Work
 
 The items below are important strengthening work implied by this ADR, but they
@@ -349,6 +390,23 @@ following:
   class, especially for custody, telemetry, and hardware state.
 - Prefer signed edge-state envelopes over request-time remote polling for
   hardware-critical facts.
+- Define a production schema-transport decision point: JSON-LD remains the
+  canonical replay/export surface, while Protobuf or FlatBuffers may become an
+  internal hot-path transport only after field stability, generator ownership,
+  and replay equivalence are proven.
+- Benchmark the production NFC crypto boundary under realistic deployment
+  profiles, including Cloud KMS, CloudHSM/on-prem HSM, PKCS#11/CNG adapters,
+  and Rust/C-backed CMAC verification. Enforce mode must use measured SLOs,
+  not assumed vendor latency.
+- Standardize the NTAG 424 DNA derivation profile with official vectors,
+  rotation/revocation behavior, and explicit treatment of NIST SP 800-108
+  Counter Mode AES-CMAC if that profile is selected.
+- Make the monotonic counter ledger's atomic admit-if-greater operation a
+  first-class contract, including concurrency tests, cache-miss behavior,
+  replay-visible reason codes, and fail-closed outage handling.
+- Keep shadow verification dispatch non-blocking and non-authoritative until
+  parity, latency, revocation, freshness, signer, and counter-ledger evidence
+  satisfies the promotion contract.
 - Keep asynchronous work for enrichment, indexing, and compilation, not for the
   final `allow` / `deny` / `quarantine` / `escalate` decision.
 - Keep the authoritative PDP local or near-local to execution boundaries where
