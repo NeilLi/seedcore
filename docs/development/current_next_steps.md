@@ -230,7 +230,14 @@ without changing SeedCore's authority semantics:
    agent-facing document or memory retrieval must coarse-filter first and then
    run fine-grained PDP or policy checks before chunks reach rerankers, LLMs,
    proof UIs, or operator copilots. Denied candidates should be invisible to
-   downstream model context.
+   downstream model context. The first implementation slice is now the
+   vendor-neutral contract and promotion guardrail in
+   [`src/seedcore/models/rag.py`](../../src/seedcore/models/rag.py) and
+   [`src/seedcore/ops/rag/authorization_boundary.py`](../../src/seedcore/ops/rag/authorization_boundary.py):
+   only explicitly allowed chunk decisions become `RAGEvidenceItem`s, while
+   denied or missing-decision candidates are reduced to aggregate counts before
+   downstream model context is assembled. Qdrant, Milvus, Triton, and
+   cross-encoder adapters remain later integration steps under this boundary.
 
 The following should not become June blockers:
 
@@ -241,7 +248,13 @@ The following should not become June blockers:
 - introducing Debezium/CDC, Kafka, ring buffers, or shared-memory IPC as
   authority-bearing shortcuts;
 - starting NVIDIA cuOpt integration unless it stays a post-validation sidecar
-  with route candidates checked by SeedCore after optimization;
+  with route candidates checked by SeedCore after optimization. The first
+  accepted slice is the route-plan schema and deterministic post-validator in
+  [`src/seedcore/models/optimization.py`](../../src/seedcore/models/optimization.py)
+  and
+  [`src/seedcore/ops/optimization/post_validation.py`](../../src/seedcore/ops/optimization/post_validation.py),
+  which can allow, deny, or quarantine proposals but never mint execution
+  authority;
 - treating Protobuf, FlatBuffers, Pydantic Core, Rust, Redis, or Dragonfly as
   authority sources. They are implementation choices under PDP, token, replay,
   and verifier contracts.
