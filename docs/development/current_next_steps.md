@@ -167,6 +167,78 @@ Only PDP allow + scoped ExecutionToken + evidence closure + verifier acceptance
 can admit high-consequence execution.
 ```
 
+## Status Update (2026-06-15, One-Month Stack Triage)
+
+A deeper stack investigation is useful for June planning, but it should be
+applied as a staged trust-runtime hardening overlay rather than as an
+immediate production mandate. The correct read is:
+
+```text
+Adopt the authority-sharpening pieces now.
+Spike the hot-path performance pieces behind existing contracts.
+Defer vendor-specific production substrate choices until the simulator,
+staging, and replay evidence justify them.
+```
+
+This month should prioritize the parts that strengthen the current RCT wedge
+without changing SeedCore's authority semantics:
+
+1. **Staging authz graph rollout.** Treat
+   `SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=true` as the controlled staging
+   promotion target, following
+   [pdp_authz_graph_staging_rollout.md](pdp_authz_graph_staging_rollout.md).
+   Do not promote production enforce behavior until snapshot alignment,
+   allow/deny fixtures, rollback, and deny-spike checks are green.
+2. **Result-verifier telemetry acceptance.** Keep RESULT_VERIFIER embedded by
+   default and make `result_verifier_job_seconds_total`,
+   `result_verifier_watermark_lag_seconds`, queue outcome counts, and
+   quarantine mutations part of the monthly gate evidence. A dedicated verifier
+   service remains an ADR-triggered deployment shape, not a default refactor.
+3. **Edge Trust Adapter v0.1 via fixtures.** Build only the thin enrollment and
+   signer contract needed for `DeviceIdentity`, `HardwareSignerRef`, telemetry
+   refs, asset anchors, zone evidence, and replay-visible signer posture. Use
+   simulator / Jetson-profile fixtures first; keep IGX Thor as the preferred
+   future trusted-edge profile, not a June prerequisite.
+4. **Evidence state-binding extension.** Pull the lightweight
+   `prior_state_binding`, `result_state_binding`, and `causal_parent_refs`
+   work from ADR 0005 into the replay/evidence plan if it fits the current
+   closure surface. These fields improve replay causality; they do not create
+   a new settlement store.
+5. **Hot-path transport and crypto spike.** Evaluate Protobuf or FlatBuffers as
+   an internal mirror and benchmark Rust/PyO3 CMAC/KDF paths, while keeping
+   JSON-LD as the canonical replay/export surface and the existing PDP/token
+   contract as the authority boundary.
+6. **Counter-ledger acceleration behind the explicit ledger.** Redis,
+   Dragonfly, Lua, WATCH pipelines, or RESP3 client-side caching may be
+   benchmarked as near-local acceleration for monotonic counter admission, but
+   the ledger remains explicit and fail-closed. Cache success cannot replace
+   verifier, token, or evidence closure.
+7. **Ingress and programmatic identity as guarded setup.** If the GKE path is
+   active this month, IAP/Gateway API work should protect operator/admin
+   surfaces and bypass public trust routes deliberately. DPoP, SPIFFE/SPIRE,
+   WIMSE-aligned workload identity, and brokered transaction tokens should be
+   modeled as hardening targets for programmatic callers, not as permission to
+   skip gateway/PDP evaluation.
+8. **Two-stage RAG authorization only where a retrieval surface exists.** Any
+   agent-facing document or memory retrieval must coarse-filter first and then
+   run fine-grained PDP or policy checks before chunks reach rerankers, LLMs,
+   proof UIs, or operator copilots. Denied candidates should be invisible to
+   downstream model context.
+
+The following should not become June blockers:
+
+- replacing Cloud KMS, current KMS/NTAG staging, or fixture crypto with
+  CloudHSM/on-prem HSM by default;
+- requiring IGX Thor, ConnectX/RDMA, or production attestation hardware before
+  simulator and Jetson-profile evidence contracts pass;
+- introducing Debezium/CDC, Kafka, ring buffers, or shared-memory IPC as
+  authority-bearing shortcuts;
+- starting NVIDIA cuOpt integration unless it stays a post-validation sidecar
+  with route candidates checked by SeedCore after optimization;
+- treating Protobuf, FlatBuffers, Pydantic Core, Rust, Redis, or Dragonfly as
+  authority sources. They are implementation choices under PDP, token, replay,
+  and verifier contracts.
+
 ## Status Update (2026-05-25, Execution Replay Studio Drafted)
 
 The next "Visualize It" step is now captured in

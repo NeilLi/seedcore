@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-06-12
+Date: 2026-06-15
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -268,9 +268,15 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-06-12**, the project is in **Q2 operational closure -> Q3 bounded
+As of **2026-06-15**, the project is in **Q2 operational closure -> Q3 bounded
 agent integration**, still on one wedge:
 
+- The **June stack triage is now applied**: staged authz-graph rollout,
+  RESULT_VERIFIER telemetry gates, Edge Trust Adapter fixtures, evidence
+  causality fields, hot-path transport/crypto benchmarks, counter-ledger
+  acceleration, guarded ingress identity, and retrieval authorization are the
+  month-level hardening priorities. None of these substrate choices bypasses
+  PDP allow, scoped `ExecutionToken`, evidence closure, or verifier acceptance.
 - The **local autonomous application market signal is now explicit**:
   RTX Spark / DGX-class hardware, Windows local-agent primitives, frontier
   coding/security agents, and agentic creative suites make asynchronous digital
@@ -325,7 +331,14 @@ tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
 
 Real near-term execution order (commerce-coherent and autonomy-ready):
 
-1. **Use the autonomous-application investigation to sharpen Q3 urgency
+1. **Apply the June one-month stack triage before expanding roadmap scope.**
+   The current priority is staging authz-graph rollout, RESULT_VERIFIER
+   telemetry gates, Edge Trust Adapter fixtures, evidence causality fields,
+   hot-path transport/crypto benchmarks, explicit counter-ledger acceleration,
+   guarded ingress identity, and two-stage retrieval authorization. These are
+   trust-runtime hardening tasks under the existing PDP, `ExecutionToken`,
+   evidence, replay, and verifier contracts.
+2. **Use the autonomous-application investigation to sharpen Q3 urgency
    without expanding scope.** Keep
    [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
    tied to Agent Self-Regulation, hardware-anchored telemetry, Replay Studio,
@@ -333,7 +346,7 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
    autonomous work systems that need governed admission," not "SeedCore should
    become a general OS agent, creative suite, scientific workbench, or coding
    department."
-2. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
+3. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
    over one RCT path. The SDK supports shadow and guarded enforce modes; MCP
    `check_policy` exposes explicit-authority preflight; the schema exporter
    creates path-qualified gated-action manifests; and
@@ -341,36 +354,36 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
    replay/evidence refs without live mutation. The deny/quarantine/stale
    telemetry/out-of-bounds/missing-evidence variants are now enforced through
    `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
-3. **Initial Execution Replay Studio slice landed:** the verification API now
+4. **Initial Execution Replay Studio slice landed:** the verification API now
    composes a read-only `seedcore.execution_replay_studio.v0` payload and the
    operator console exposes `/studio?workflow_id=...` from the replay page.
    Next Studio work is artifact-depth hardening: richer policy snapshot fields,
    telemetry hash verification, signer trust-bundle/revocation checks, and
    toxic-path fixture coverage
    ([`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)).
-4. **Close deployment-realistic proof topology**: same cluster runs that already
+5. **Close deployment-realistic proof topology**: same cluster runs that already
    pass hot-path gates **plus** verification API where operator/replay
    acceptance requires it; treat Kafka as transport follow-on per
    [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md).
-5. Keep the four-screen verification surface contract-stable while hardening
+6. Keep the four-screen verification surface contract-stable while hardening
    **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
    commerce adapters)—no parallel "second demo."
-6. Extend Studio across the rare-shoe commercial scene once the fixture-backed
+7. Extend Studio across the rare-shoe commercial scene once the fixture-backed
    generic RCT Studio payload and operator route are stable.
-7. Continue the rare-shoe RCT fixture path as a commercial vertical scene:
+8. Continue the rare-shoe RCT fixture path as a commercial vertical scene:
    source-registration artifacts for authentication/provenance, gateway
    adapter inputs for listing/quote/order/value, the now-implemented virtual
    NFC/scan evidence lane, hash-bound forensic video proof, and proof-surface
    checks that keep public proof narrow.
-8. Advance edge telemetry closure and signed forensic-block linkage without
+9. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-9. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
+10. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
    drills in shadow/simulation only:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
-10. Define the first AI-led self-healing target around a degraded-edge or
+11. Define the first AI-led self-healing target around a degraded-edge or
    telemetry/outbox failure, with the repair loop ending in a reviewable patch
    and gate evidence rather than direct production mutation.
-11. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
+12. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
 
 Primary planning docs:
 

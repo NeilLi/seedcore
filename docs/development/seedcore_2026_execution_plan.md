@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
-Date: 2026-06-12
-Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane; verification API kube integration lane implemented; local autonomous application market signal incorporated)
+Date: 2026-06-15
+Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane; verification API kube integration lane implemented; local autonomous application market signal incorporated; June stack triage applied)
 
 ## Purpose
 
@@ -122,6 +122,86 @@ Agent-system eval schedule:
   and governance-aware learning samples. It does not authorize execution,
   clear quarantine, reinterpret `RESULT_VERIFIER`, or promote `shadow` to
   `enforce`.
+
+## Execution Update (2026-06-15, June Stack Triage)
+
+A deeper technology-stack investigation changes the June execution order only
+where it strengthens the existing trust-runtime spine. The investigation should
+not be read as a blanket mandate to replace the current stack, require
+production edge hardware, or make any performance substrate authority-bearing.
+
+Planning rule:
+
+```text
+Stack choices may reduce latency and improve assurance.
+Authority still enters only through PDP allow, scoped ExecutionToken issuance,
+evidence closure, and verifier acceptance.
+```
+
+### What Applies This Month
+
+1. **Stage the active authz graph.** Run the
+   `SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH=true` staging rollout with fixed
+   allow/deny fixtures, snapshot-alignment checks, rollback proof, and deny-spike
+   monitoring before any production promotion.
+2. **Promote RESULT_VERIFIER telemetry to gate evidence.** Keep the embedded
+   coordinator runtime as the supported default. Track
+   `result_verifier_job_seconds_total`, `result_verifier_watermark_lag_seconds`,
+   job/outcome counts, terminal failures, and quarantine mutations as the June
+   acceptance evidence for any future split-service discussion.
+3. **Implement the smallest Edge Trust Adapter fixture lane.** Add only the
+   enrollment/signing posture needed to make `DeviceIdentity`,
+   `HardwareSignerRef`, telemetry refs, asset anchors, zone evidence, and replay
+   signer posture visible for one RCT path. Simulator and Jetson-profile
+   fixtures come before IGX Thor production assumptions.
+4. **Pull forward state-binding causality fields if low-risk.** Add or plan
+   `prior_state_binding`, `result_state_binding`, and `causal_parent_refs` where
+   the current evidence bundle and replay assembly can carry them without
+   changing the settlement store.
+5. **Spike internal transport and crypto performance behind stable contracts.**
+   Benchmark Protobuf or FlatBuffers only as an internal hot-path mirror;
+   preserve JSON-LD as the replay/export contract. Benchmark Rust/PyO3 CMAC and
+   KDF paths against the current verifier fixtures before claiming a production
+   crypto migration.
+6. **Benchmark monotonic counter acceleration behind the explicit ledger.**
+   Redis, Dragonfly, Lua, WATCH pipelines, RESP3 client-side caching, or a
+   durable-store-plus-cache shape may be evaluated for p99 freshness lookups,
+   but counter admission remains explicit, anchor-scoped, and fail-closed.
+7. **Guard ingress and programmatic identity without bypassing PDP.** IAP /
+   GKE Gateway work belongs on operator/admin surfaces; public trust routes must
+   stay deliberately exempt or separately authenticated. DPoP, SPIFFE/SPIRE, and
+   WIMSE-aligned workload identity belong in the programmatic-caller hardening
+   lane, not in the authority bypass lane.
+8. **Apply two-stage authorization to retrieval surfaces.** If RAG, memory, docs
+   search, or operator-copilot retrieval is exposed to agents, coarse filters
+   must be followed by fine-grained policy/PDP checks before chunks reach
+   rerankers, LLM context, proof UIs, or operator copilots.
+
+### What Does Not Apply As A June Mandate
+
+- Do not replace current Cloud KMS, KMS/NTAG staging, or fixture crypto with
+  CloudHSM/on-prem HSM as a default requirement. HSM work is a profile-specific
+  hardening lane that needs latency and operating evidence.
+- Do not require IGX Thor, ConnectX/RDMA, secure production attestation, or
+  edge certification before simulator and Jetson-profile fixtures pass.
+- Do not introduce Debezium/CDC, Kafka, shared-memory IPC, or lock-free queues
+  as authority shortcuts. They can improve propagation, isolation, or latency;
+  they do not decide admissibility.
+- Do not start NVIDIA cuOpt integration unless it is explicitly sidecar-only:
+  route candidates may be optimized elsewhere, but SeedCore still validates
+  authority, asset binding, time windows, and evidence after optimization.
+- Do not treat Protobuf, FlatBuffers, Pydantic Core, Rust, Redis, or Dragonfly
+  as trust primitives. They are implementation mechanisms under the existing
+  PDP, token, replay, and verifier contracts.
+
+### June Four-Week Overlay
+
+| Week | Main work | Gate evidence |
+| :--- | :--- | :--- |
+| 1 | Active authz-graph staging rollout, RESULT_VERIFIER telemetry capture, and hot-path transport/crypto spike design | `verify_authz_graph_rfc_phases.sh`, status/metrics snapshots, benchmark plan |
+| 2 | Edge Trust Adapter fixture lane and explicit counter-ledger acceleration benchmark | signed telemetry fixtures, counter replay/clone negative cases, `git diff --check` |
+| 3 | Evidence causality fields and replay visibility for state bindings, signer posture, and causal parent refs | replay/materializer tests, toxic-path fixtures, verifier output |
+| 4 | Retrieval authorization boundary and post-validation sidecar rules for any RAG or optimizer work | denied-candidate invisibility tests, operator/proof UI checks, Q2 verification contracts |
 
 ## Execution Update (2026-05-21, Autonomy-Ready Trust Runtime)
 
