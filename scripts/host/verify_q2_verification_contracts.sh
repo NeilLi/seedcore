@@ -26,6 +26,7 @@ bash "${ROOT}/scripts/ci/q2_verification_api_fixture_gate.sh"
 bash "${ROOT}/scripts/host/verify_hot_path_alert_rules.sh"
 bash "${ROOT}/scripts/host/verify_hot_path_benchmark_lane.sh"
 bash "${ROOT}/scripts/host/verify_q2_degraded_edge_drill_matrix.sh"
+bash "${ROOT}/scripts/host/verify_result_verifier_telemetry_contract.sh"
 bash "${ROOT}/scripts/host/verify_result_verifier_postgres_integration.sh"
 
 echo "Q2 verification contract checks passed."

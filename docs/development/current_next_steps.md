@@ -194,6 +194,9 @@ without changing SeedCore's authority semantics:
    `result_verifier_watermark_lag_seconds`, queue outcome counts, and
    quarantine mutations part of the monthly gate evidence. A dedicated verifier
    service remains an ADR-triggered deployment shape, not a default refactor.
+   First implementation step: `scripts/host/verify_result_verifier_telemetry_contract.sh`
+   now runs the always-on telemetry schema/dashboard contract gate without
+   requiring the optional Postgres verifier lane.
 3. **Edge Trust Adapter v0.1 via fixtures.** Build only the thin enrollment and
    signer contract needed for `DeviceIdentity`, `HardwareSignerRef`, telemetry
    refs, asset anchors, zone evidence, and replay-visible signer posture. Use

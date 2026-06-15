@@ -76,6 +76,7 @@ def test_verify_q2_verification_contracts_is_canonical_local_ci_gate() -> None:
     assert "verify_hot_path_alert_rules.sh" in script
     assert "verify_hot_path_benchmark_lane.sh" in script
     assert "verify_q2_degraded_edge_drill_matrix.sh" in script
+    assert "verify_result_verifier_telemetry_contract.sh" in script
     assert "verify_result_verifier_postgres_integration.sh" in script
 
 
@@ -93,6 +94,14 @@ def test_result_verifier_postgres_integration_script_is_opt_in_but_hard_fails_wh
     assert "SEEDCORE_ENABLE_RESULT_VERIFIER_PG_TESTS" in script
     assert "SEEDCORE_RESULT_VERIFIER_TEST_DSN" in script
     assert "tests/test_result_verifier_postgres_integration.py" in script
+
+
+def test_result_verifier_telemetry_contract_script_is_always_on_and_lightweight() -> None:
+    script = (ROOT / "scripts" / "host" / "verify_result_verifier_telemetry_contract.sh").read_text()
+
+    assert "tests/test_result_verifier_telemetry_contract.py" in script
+    assert "SEEDCORE_RESULT_VERIFIER_TEST_DSN" not in script
+    assert "RESULT_VERIFIER telemetry contract checks passed." in script
 
 
 def test_verify_design_notes_full_wires_extended_design_notes_gate() -> None:
