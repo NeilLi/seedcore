@@ -162,7 +162,9 @@ evidence closure, and verifier acceptance.
    Benchmark Protobuf or FlatBuffers only as an internal hot-path mirror;
    preserve JSON-LD as the replay/export contract. Benchmark Rust/PyO3 CMAC and
    KDF paths against the current verifier fixtures before claiming a production
-   crypto migration.
+   crypto migration. The transport spike starts with Protobuf v3 and explicitly
+   rejects zero-allocation / zero-decoding claims until measured against the
+   current FastAPI/Pydantic serving path.
 6. **Benchmark monotonic counter acceleration behind the explicit ledger.**
    Redis, Dragonfly, Lua, WATCH pipelines, RESP3 client-side caching, or a
    durable-store-plus-cache shape may be evaluated for p99 freshness lookups,

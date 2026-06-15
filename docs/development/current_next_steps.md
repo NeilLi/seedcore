@@ -210,7 +210,11 @@ without changing SeedCore's authority semantics:
 5. **Hot-path transport and crypto spike.** Evaluate Protobuf or FlatBuffers as
    an internal mirror and benchmark Rust/PyO3 CMAC/KDF paths, while keeping
    JSON-LD as the canonical replay/export surface and the existing PDP/token
-   contract as the authority boundary.
+   contract as the authority boundary. The transport side is now scoped in
+   [hot_path_transport_serialization_spike.md](hot_path_transport_serialization_spike.md):
+   start with Protobuf v3 as a measured internal mirror, keep FlatBuffers as a
+   later Rust-first candidate, and avoid zero-allocation / zero-decoding claims
+   until benchmark artifacts prove them.
 6. **Counter-ledger acceleration behind the explicit ledger.** Redis,
    Dragonfly, Lua, WATCH pipelines, or RESP3 client-side caching may be
    benchmarked as near-local acceleration for monotonic counter admission, but

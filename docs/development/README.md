@@ -425,6 +425,7 @@ Primary planning docs:
 - [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md)
 - [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md)
+- [`hot_path_transport_serialization_spike.md`](hot_path_transport_serialization_spike.md)
 - [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md)
 
 ### Historical or frozen references
