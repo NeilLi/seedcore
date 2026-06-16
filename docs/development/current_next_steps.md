@@ -197,11 +197,13 @@ without changing SeedCore's authority semantics:
    First implementation step: `scripts/host/verify_result_verifier_telemetry_contract.sh`
    now runs the always-on telemetry schema/dashboard contract gate without
    requiring the optional Postgres verifier lane.
-3. **Edge Trust Adapter v0.1 via fixtures.** Build only the thin enrollment and
-   signer contract needed for `DeviceIdentity`, `HardwareSignerRef`, telemetry
-   refs, asset anchors, zone evidence, and replay-visible signer posture. Use
-   simulator / Jetson-profile fixtures first; keep IGX Thor as the preferred
-   future trusted-edge profile, not a June prerequisite.
+3. **Edge Trust Adapter v0.1 via fixtures.** **Done (2026-06-16).** Implemented the thin enrollment and
+   signer models for `DeviceIdentity` and `HardwareSignerRef`, along with `AssetAnchor`,
+   `ZoneEvidence`, and `EdgeTrustEnrollmentBundle` in [edge_trust.py](../../src/seedcore/models/edge_trust.py).
+   Built the `FixtureEdgeTrustAdapter` and integrated edge trust validation checks into the evidence
+   verifier flow [verification.py](../../src/seedcore/ops/evidence/verification.py). Fully validated
+   all failure modes (revoked signers, quarantined devices, zone/profile mismatches, stale telemetry)
+   via unit and integration tests.
 4. **Evidence state-binding extension.** Pull the lightweight
    `prior_state_binding`, `result_state_binding`, and `causal_parent_refs`
    work from ADR 0005 into the replay/evidence plan if it fits the current
