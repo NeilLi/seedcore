@@ -14,6 +14,7 @@ from seedcore.models.edge_telemetry import (
     EDGE_TELEMETRY_ENVELOPE_VERSION,
     SignedEdgeTelemetryRefV0,
 )
+from seedcore.ops.evidence.edge_trust_adapter import validate_edge_trust_telemetry_refs
 from seedcore.ops.evidence.policy import (
     canonical_json,
     resolve_public_key_from_registry,
@@ -346,6 +347,12 @@ def _verify_required_signed_edge_telemetry(model: EvidenceBundle) -> dict[str, A
         if expected_asset and _normalize_asset_ref(parsed.asset_ref) != _normalize_asset_ref(expected_asset):
             result.update({"verified": False, "error": "signed_edge_telemetry_asset_mismatch"})
             return result
+    edge_trust_result = _verify_edge_trust_fixture(model, expected_asset_ref=expected_asset)
+    if edge_trust_result is not None:
+        result["edge_trust"] = edge_trust_result
+        if edge_trust_result.get("error") is not None:
+            result.update({"verified": False, "error": str(edge_trust_result.get("error"))})
+            return result
     return result
 
 
@@ -406,6 +413,76 @@ def _expected_evidence_asset_ref(model: EvidenceBundle) -> Optional[str]:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
+
+
+def _verify_edge_trust_fixture(
+    model: EvidenceBundle,
+    *,
+    expected_asset_ref: Optional[str],
+) -> Optional[dict[str, Any]]:
+    inputs = model.evidence_inputs if isinstance(model.evidence_inputs, dict) else {}
+    enrollment = inputs.get("edge_trust_enrollment")
+    if not isinstance(enrollment, dict):
+        return None
+
+    policy = (
+        inputs.get("edge_trust_policy")
+        if isinstance(inputs.get("edge_trust_policy"), dict)
+        else {}
+    )
+    return validate_edge_trust_telemetry_refs(
+        telemetry_refs=[
+            ref
+            for ref in model.telemetry_refs
+            if isinstance(ref, dict)
+        ],
+        enrollment=enrollment,
+        expected_asset_ref=(
+            str(policy.get("expected_asset_ref")).strip()
+            if policy.get("expected_asset_ref") is not None
+            else expected_asset_ref
+        ),
+        expected_zone_ref=(
+            str(policy.get("expected_zone_ref")).strip()
+            if policy.get("expected_zone_ref") is not None
+            else None
+        ),
+        required_trust_anchor_types=(
+            list(policy.get("required_trust_anchor_types"))
+            if isinstance(policy.get("required_trust_anchor_types"), list)
+            else []
+        ),
+        required_device_profiles=(
+            list(policy.get("required_device_profiles"))
+            if isinstance(policy.get("required_device_profiles"), list)
+            else []
+        ),
+        reference_time=(
+            str(policy.get("reference_time")).strip()
+            if policy.get("reference_time") is not None
+            else None
+        ),
+        max_age_seconds=(
+            int(policy.get("max_age_seconds"))
+            if policy.get("max_age_seconds") is not None
+            else None
+        ),
+        observed_not_before=(
+            str(policy.get("observed_not_before")).strip()
+            if policy.get("observed_not_before") is not None
+            else None
+        ),
+        observed_not_after=(
+            str(policy.get("observed_not_after")).strip()
+            if policy.get("observed_not_after") is not None
+            else None
+        ),
+        replayed_payload_hashes=(
+            list(policy.get("replayed_payload_hashes"))
+            if isinstance(policy.get("replayed_payload_hashes"), list)
+            else []
+        ),
+    )
 
 
 def _normalize_asset_ref(value: str) -> str:

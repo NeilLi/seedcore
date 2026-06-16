@@ -1,0 +1,126 @@
+{
+  "contract_version": "seedcore.edge_trust_enrollment.v0",
+  "devices": [
+    {
+      "device_id": "device:sim-handoff-bay-3",
+      "edge_node_ref": "edge:handoff-bay-3",
+      "device_profile": "simulator",
+      "hardware_fingerprint": "sha256:sim-handoff-bay-3-fixture",
+      "signer_key_ref": "software_dev_key:edge-signing-demo",
+      "attestation_level": "prototype",
+      "trusted_for_zones": ["handoff_bay_3"],
+      "trusted_for_evidence": ["motor_torque", "weight_cell", "origin_scan", "delivery_scan"],
+      "status": "active",
+      "platform_family": "simulator",
+      "metadata": {
+        "fixture_lane": "software_dev_key"
+      }
+    },
+    {
+      "device_id": "device:prototype-quarantined-01",
+      "edge_node_ref": "edge:prototype-quarantined-01",
+      "device_profile": "prototype_edge",
+      "hardware_fingerprint": "sha256:prototype-quarantined-fixture",
+      "signer_key_ref": "kms:edge:prototype-quarantined-01",
+      "attestation_level": "kms_derived",
+      "trusted_for_zones": ["handoff_bay_3"],
+      "trusted_for_evidence": ["motor_torque", "weight_cell"],
+      "status": "quarantined",
+      "platform_family": "jetson"
+    },
+    {
+      "device_id": "device:trusted-vault-a",
+      "edge_node_ref": "edge:trusted-vault-a",
+      "device_profile": "trusted_edge",
+      "hardware_fingerprint": "sha256:trusted-vault-a-fixture",
+      "signer_key_ref": "tpm:edge:trusted-vault-a:p256:v1",
+      "attestation_level": "tpm_quote",
+      "trusted_for_zones": ["vault_a"],
+      "trusted_for_evidence": ["motor_torque", "weight_cell"],
+      "status": "active",
+      "platform_family": "igx_thor"
+    }
+  ],
+  "signers": [
+    {
+      "signer_key_ref": "software_dev_key:edge-signing-demo",
+      "algorithm": "ed25519",
+      "trust_anchor_type": "software_dev_key",
+      "public_key_fingerprint": "sha256:software-dev-key-demo-public",
+      "device_id": "device:sim-handoff-bay-3",
+      "valid_from": "2026-04-01T00:00:00Z",
+      "valid_until": null,
+      "revocation_id": "rev:software-dev-key:edge-signing-demo:v1",
+      "status": "active"
+    },
+    {
+      "signer_key_ref": "kms:edge:prototype-quarantined-01",
+      "algorithm": "ed25519",
+      "trust_anchor_type": "kms",
+      "public_key_fingerprint": "sha256:prototype-quarantined-public",
+      "device_id": "device:prototype-quarantined-01",
+      "valid_from": "2026-04-01T00:00:00Z",
+      "valid_until": null,
+      "revocation_id": "rev:kms:prototype-quarantined-01:v1",
+      "status": "active"
+    },
+    {
+      "signer_key_ref": "tpm:edge:trusted-vault-a:p256:v1",
+      "algorithm": "p256",
+      "trust_anchor_type": "tpm",
+      "public_key_fingerprint": "sha256:trusted-vault-a-public",
+      "device_id": "device:trusted-vault-a",
+      "valid_from": "2026-04-01T00:00:00Z",
+      "valid_until": null,
+      "revocation_id": "rev:tpm:trusted-vault-a:p256:v1",
+      "status": "active"
+    },
+    {
+      "signer_key_ref": "software_dev_key:revoked-demo",
+      "algorithm": "ed25519",
+      "trust_anchor_type": "software_dev_key",
+      "public_key_fingerprint": "sha256:revoked-demo-public",
+      "device_id": "device:sim-handoff-bay-3",
+      "valid_from": "2026-04-01T00:00:00Z",
+      "valid_until": null,
+      "revocation_id": "rev:software-dev-key:revoked-demo:v1",
+      "status": "revoked"
+    }
+  ],
+  "asset_anchors": [
+    {
+      "asset_ref": "asset:lot-8841",
+      "product_ref": "product:rare-shoe:lot-8841",
+      "anchor_type": "manual_fixture",
+      "anchor_hash": "sha256:asset-anchor-lot-8841",
+      "observed_at": "2026-04-02T12:00:00Z",
+      "telemetry_id": "tel-demo-001",
+      "edge_node_ref": "edge:handoff-bay-3"
+    }
+  ],
+  "zone_evidence": [
+    {
+      "zone_ref": "handoff_bay_3",
+      "coordinate_ref": "warehouse://north/handoff_bay_3",
+      "evidence_type": "device_zone_claim",
+      "observed_at": "2026-04-02T12:00:00Z",
+      "confidence": 1.0,
+      "telemetry_id": "tel-demo-001",
+      "edge_node_ref": "edge:handoff-bay-3"
+    },
+    {
+      "zone_ref": "vault_a",
+      "coordinate_ref": "warehouse://north/vault_a",
+      "evidence_type": "device_zone_claim",
+      "observed_at": "2026-04-02T12:00:00Z",
+      "confidence": 1.0,
+      "telemetry_id": "tel-trusted-001",
+      "edge_node_ref": "edge:trusted-vault-a"
+    }
+  ],
+  "revoked_signer_key_refs": ["software_dev_key:revoked-demo"],
+  "metadata": {
+    "profile": "edge_trust_adapter_v0_fixture_matrix",
+    "production_attestation": false
+  }
+}

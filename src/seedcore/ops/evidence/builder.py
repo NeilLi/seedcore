@@ -332,6 +332,16 @@ def build_evidence_bundle(
             ),
             "request_schema_bundle": request_schema_bundle,
             "taxonomy_bundle": taxonomy_bundle,
+            "edge_trust_enrollment": (
+                dict(governance.get("edge_trust_enrollment"))
+                if isinstance(governance.get("edge_trust_enrollment"), dict)
+                else None
+            ),
+            "edge_trust_policy": (
+                dict(governance.get("edge_trust_policy"))
+                if isinstance(governance.get("edge_trust_policy"), dict)
+                else None
+            ),
             "transition_receipts": [
                 receipt.model_dump(mode="json")
                 for receipt in transition_receipts

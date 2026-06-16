@@ -141,6 +141,14 @@ from .edge_telemetry import (
     SignedEdgeTelemetryRefV0,
     signed_telemetry_ref_from_envelope_v0,
 )
+from .edge_trust import (
+    EDGE_TRUST_ENROLLMENT_VERSION,
+    AssetAnchor,
+    DeviceIdentity,
+    EdgeTrustEnrollmentBundle,
+    HardwareSignerRef,
+    ZoneEvidence,
+)
 from .rare_shoe_rct import (
     CollectibleShoeRegistration,
     RareShoeBoundedCustodyAuthority,
@@ -244,6 +252,12 @@ __all__ = [
     "EdgeTelemetrySignerV0",
     "SignedEdgeTelemetryRefV0",
     "signed_telemetry_ref_from_envelope_v0",
+    "EDGE_TRUST_ENROLLMENT_VERSION",
+    "AssetAnchor",
+    "DeviceIdentity",
+    "EdgeTrustEnrollmentBundle",
+    "HardwareSignerRef",
+    "ZoneEvidence",
     "CollectibleShoeRegistration",
     "RareShoeBoundedCustodyAuthority",
     "RareShoeConditionGrade",
