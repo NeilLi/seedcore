@@ -65,7 +65,7 @@ spec:
 
           - name: EventizerService
             num_replicas: 3
-            max_concurrent_queries: 200
+            max_ongoing_requests: 200
             ray_actor_options:
               num_cpus: 0.8
               memory: 4294967296    # 4GB
@@ -104,7 +104,7 @@ spec:
   #  Ray Cluster Configuration
   # ===================================================================
   rayClusterConfig:
-    rayVersion: "2.53.0"
+    rayVersion: "2.55.1"
     
     # -------------------------------------------------------------------
     #  Head Node Specification
@@ -377,4 +377,3 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             fsGroup: 1000
-

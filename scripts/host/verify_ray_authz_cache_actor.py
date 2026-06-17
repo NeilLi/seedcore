@@ -177,6 +177,7 @@ def _compare_fixture_snapshot(actor) -> Dict[str, Any]:
     local_serialized = {
         "allowed": local_match.allowed,
         "matched_subjects": list(local_match.matched_subjects),
+        "authority_paths": [list(path) for path in local_match.authority_paths],
         "matched_permissions_count": len(local_match.matched_permissions),
         "deny_permissions_count": len(local_match.deny_permissions),
         "break_glass_permissions_count": len(local_match.break_glass_permissions),

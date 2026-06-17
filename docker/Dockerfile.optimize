@@ -18,7 +18,7 @@ ARG VCS_REF
 ARG ENABLE_ML=0
 LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.description="SeedCore Serve on Ray (Py3.12, native arm64/amd64)" \
-      org.opencontainers.image.version="2.53.0-py312" \
+      org.opencontainers.image.version="2.55.1-py312" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="seedcore"
@@ -62,7 +62,7 @@ RUN chmod +x /usr/local/bin/seedcore-verify
 # Upgrade pip first, then install Ray system-wide
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip wheel setuptools && \
-    python -m pip install "ray[default]==2.53.0"
+    python -m pip install "ray[default]==2.55.1"
 
 # ---- Python Environment Setup ----
 USER ray

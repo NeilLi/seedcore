@@ -109,6 +109,8 @@ def _instantiate_deployment_backend(deployment_obj: Any, *args, **kwargs) -> Any
 
     Ray 2.53+ disallows constructing Deployment objects directly
     (e.g., `EventizerService()`), but OpsGateway needs in-process backends.
+    Ray Serve ingress wrappers expose the original class through `__wrapped__`;
+    instantiate that class so we do not construct the ASGI wrapper manually.
     """
     target_cls = getattr(deployment_obj, "func_or_class", None) or getattr(
         deployment_obj, "_func_or_class", None
@@ -117,6 +119,7 @@ def _instantiate_deployment_backend(deployment_obj: Any, *args, **kwargs) -> Any
         raise RuntimeError(
             f"Could not resolve backend class from deployment object: {deployment_obj!r}"
         )
+    target_cls = getattr(target_cls, "__wrapped__", target_cls)
     return target_cls(*args, **kwargs)
 
 

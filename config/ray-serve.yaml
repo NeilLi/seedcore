@@ -1,4 +1,4 @@
-# SeedCore v2.5+ Serve Configuration
+# SeedCore Ray 2.55 Serve Configuration
 # Optimized for Local Kind Development (Single Node)
 proxy_location: HeadOnly
 
@@ -13,12 +13,10 @@ applications:
   - name: ml_service
     import_path: entrypoints.ml_entrypoint:build_ml_service
     route_prefix: /ml
-    runtime_env:
-      working_dir: "/app"
     deployments:
       - name: MLService
         num_replicas: 1
-        max_concurrent_queries: 10
+        max_ongoing_requests: 10
         ray_actor_options:
           num_cpus: 0.5
           memory: 1073741824 # 1GB
@@ -34,7 +32,7 @@ applications:
     deployments:
       - name: CognitiveService
         num_replicas: 1
-        max_concurrent_queries: 50
+        max_ongoing_requests: 50
         ray_actor_options:
           num_cpus: 0.2
           memory: 524288000 # 512MB
@@ -50,7 +48,7 @@ applications:
     deployments:
       - name: Coordinator
         num_replicas: 1
-        max_concurrent_queries: 100
+        max_ongoing_requests: 100
         ray_actor_options:
           num_cpus: 0.2
 
@@ -66,7 +64,7 @@ applications:
     deployments:
       - name: OrganismService
         num_replicas: 1
-        max_concurrent_queries: 100
+        max_ongoing_requests: 100
         ray_actor_options:
           num_cpus: 0.3
 

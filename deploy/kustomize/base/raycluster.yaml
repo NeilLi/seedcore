@@ -41,7 +41,7 @@ spec:
       spec:
         containers:
         - name: ray-worker
-          image: rayproject/ray:2.53.0-py312
+          image: rayproject/ray:2.55.1-py312
           envFrom:
             - configMapRef:
                 name: seedcore-env

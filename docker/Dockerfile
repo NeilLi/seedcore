@@ -7,7 +7,7 @@ COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/crates ./crates
 RUN cargo build --release -p seedcore-verify
 
-FROM rayproject/ray:2.53.0-py312
+FROM rayproject/ray:2.55.1-py312
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -16,7 +16,7 @@ ARG VCS_REF
 ARG ENABLE_ML=0
 LABEL org.opencontainers.image.title="seedcore-serve" \
       org.opencontainers.image.description="SeedCore Serve on Ray (Py3.12)" \
-      org.opencontainers.image.version="2.53.0-py312" \
+      org.opencontainers.image.version="2.55.1-py312" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="seedcore"

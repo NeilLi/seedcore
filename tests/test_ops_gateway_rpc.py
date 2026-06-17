@@ -44,6 +44,23 @@ def test_ops_gateway_routes_cover_state_and_energy_paths():
     assert "/energy/logs" in paths
 
 
+def test_ops_gateway_backend_instantiation_unwraps_ingress_class():
+    class Backend:
+        def __init__(self, value):
+            self.value = value
+
+    class Wrapper:
+        __wrapped__ = Backend
+
+    class DeploymentLike:
+        func_or_class = Wrapper
+
+    instance = ops._instantiate_deployment_backend(DeploymentLike(), "ok")
+
+    assert isinstance(instance, Backend)
+    assert instance.value == "ok"
+
+
 @pytest.mark.asyncio
 async def test_state_service_client_prefers_ops_rpc(monkeypatch):
     handle = _Handle(

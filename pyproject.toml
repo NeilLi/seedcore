@@ -71,7 +71,7 @@ dependencies = [
     
     # Runtime Platform
     # Ray Serve routing stays at serve.run() / app config on 2.5x+.
-    "ray==2.53.0",
+    "ray==2.55.1",
     "openai>=1.30.0",
     "google-generativeai>=0.8.0",  # Google Gemini API client for embeddings and generative AI
     "dspy-ai==2.4.9",

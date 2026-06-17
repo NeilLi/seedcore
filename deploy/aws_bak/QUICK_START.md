@@ -159,7 +159,7 @@ NAMESPACE=seedcore  # or your preferred namespace
 ECR_REGISTRY=<your-ecr-registry>
 ECR_REPO=seedcore
 SEEDCORE_IMAGE_TAG=latest
-RAY_VERSION=2.53.0
+RAY_VERSION=2.55.1
 ```
 
 ---

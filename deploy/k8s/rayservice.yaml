@@ -9,7 +9,7 @@ spec:
   serviceUnhealthySecondThreshold: 300 
   deploymentUnhealthySecondThreshold: 300
   # ===================================================================
-  #  Serve Configuration (Optimized for Ray 2.53 + Py3.12)
+  #  Serve Configuration (Optimized for Ray 2.55 + Py3.12)
   # ===================================================================
   serveConfigV2: |
     http_options:
@@ -36,7 +36,7 @@ spec:
               max_replicas: 2
               target_num_ongoing_requests_per_replica: 10
               downscale_delay_s: 300
-            max_concurrent_queries: 20
+            max_ongoing_requests: 20
             ray_actor_options:
               num_cpus: 0.5        # Give a full core for numpy/torch logic
               memory: 1073741824   
@@ -57,7 +57,7 @@ spec:
               min_replicas: 1
               max_replicas: 2
               target_num_ongoing_requests_per_replica: 50
-            max_concurrent_queries: 100  # High concurrency (Async I/O)
+            max_ongoing_requests: 100  # High concurrency (Async I/O)
             ray_actor_options:
               num_cpus: 0.2        # Low CPU usage (waiting for HTTP)
               memory: 1073741824   
@@ -71,7 +71,7 @@ spec:
         deployments:
           - name: Coordinator
             num_replicas: 1        # Singleton (Manages state/sequences)
-            max_concurrent_queries: 200
+            max_ongoing_requests: 200
             ray_actor_options:
               num_cpus: 0.5
               resources: {"head_node": 0.001} # Keep near Proxy if latency sensitive
@@ -91,7 +91,7 @@ spec:
               min_replicas: 1
               max_replicas: 2
               target_num_ongoing_requests_per_replica: 100
-            max_concurrent_queries: 200 # Matches our Async/Lazy optimization
+            max_ongoing_requests: 200 # Matches our Async/Lazy optimization
             health_check_period_s: 10
             health_check_timeout_s: 30
             ray_actor_options:
@@ -120,7 +120,7 @@ spec:
         deployments:
           - name: MCPService
             num_replicas: 1
-            max_concurrent_queries: 50
+            max_ongoing_requests: 50
             ray_actor_options:
               num_cpus: 0.1
               memory: 524288000
@@ -136,7 +136,7 @@ spec:
   # GCS fault tolerance (external Redis, etc.) is infra-specific; enable per KubeRay/Ray
   # version docs when you need strict head-loss durability beyond RayService restarts.
   rayClusterConfig:
-    rayVersion: "2.53.0"
+    rayVersion: "2.55.1"
     # -------------------------------------------------------------------
     #  Head Node Specification
     # -------------------------------------------------------------------
