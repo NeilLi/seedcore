@@ -7,7 +7,7 @@
 
 Agent frameworks decide **what to do**. Prompt guardrails control **what is said**. SeedCore controls **what is allowed to execute**.
 
-SeedCore is a zero-trust execution and proof runtime for high-consequence autonomous workflows. It sits between advisory AI intent and real-world execution, then checks identity, delegation, policy scope, asset state, hardware or custody boundaries, and evidence requirements before execution authority can exist.
+SeedCore is a zero-trust execution and proof runtime for high-consequence autonomous workflows. It sits between advisory AI intent and real-world execution, then checks identity, delegation, policy scope, asset state, policy or graph mutation provenance, hardware or custody boundaries, and evidence requirements before execution authority can exist.
 
 Unlike a model guardrail, tool-calling wrapper, or heuristic security detector, SeedCore is a deterministic execution gate:
 
@@ -23,9 +23,20 @@ The model can propose. The Agent is accountable. The PDP decides.
 The actuator executes. The evidence closes the loop.
 ```
 
+## What SeedCore Protects Against
+
+SeedCore is designed for systems where autonomous agents must not be able to turn diagnosis, planning, local state, or self-healing output into authority by themselves. In the current runtime, that means protecting against:
+
+- self-approval of policy or authorization graph changes
+- mutation of the rules that govern the agent's next execution token
+- bypass through local cache, filesystem, or stale active graph state
+- high-impact execution without a scoped `ExecutionToken`
+- policy or infrastructure drift that is not tied to replayable evidence
+- custody, commerce, deployment, or quarantine actions without forensic closure
+
 ## Current Status
 
-SeedCore already has an implemented and contract-tested baseline for the trust-runtime slice: Agent Action Gateway v1, `ExecutionToken` lifecycle, stateless PDP evaluation, evidence bundles, replay verification, Rust proof-kernel paths, and a coordinator-embedded `RESULT_VERIFIER` for Restricted Custody Transfer (RCT) enforcement.
+SeedCore already has an implemented and contract-tested baseline for the trust-runtime slice: Agent Action Gateway v1, `ExecutionToken` lifecycle, stateless PDP evaluation, active authorization graph checks, evidence bundles, replay verification, Rust proof-kernel paths, and a coordinator-embedded `RESULT_VERIFIER` for Restricted Custody Transfer (RCT) enforcement.
 
 The current product focus is narrower and deliberately commercial: package that baseline into an **Agent-Governed Restricted Custody Transfer** workflow, with a collectible rare-shoe custody handoff as the first legible vertical scene.
 
@@ -36,6 +47,7 @@ Important boundaries:
 - Host-mode local runtime verification is green end-to-end for the RCT wedge: the Agent Action Gateway can generate a replayable runtime audit row, the verification API can read queue/detail/replay/runbook views from it, and the productized verification surface protocol passes locally.
 - Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff in that topology still depends on capturing runtime audit rows there.
 - The rare-shoe RCT dynamic NFC simulation lane is implemented and workspace-verified: deterministic fixture evidence covers happy path, replay / clone, stale scan, wrong asset, tamper, and incomplete payload cases without making mock NFC an authority source.
+- The first immutable policy-anchor slice is implemented: AI-origin authz graph inputs fail closed unless accompanied by a co-signed promotion receipt bound to the exact graph version and snapshot hash. The current slice validates receipt structure and graph binding; full KMS/key-registry signature verification remains a follow-on hardening step.
 
 Read the current execution docs:
 
@@ -99,6 +111,7 @@ Commercial actors stay explicit:
 SeedCore's current baseline includes the technical primitives needed for governed execution:
 
 - **Stateless PDP and compiled authz graph**: deterministic evaluation of `ActionIntent` against policy, OPA/WASM support, and ReBAC graph paths.
+- **AI-origin graph mutation gate**: active and explicitly supplied compiled authz graph inputs are checked for AI-origin provenance; un-co-signed or incorrectly bound graph promotions fall back to the pinned path and emit a `trust_alert` for replay and audit surfaces.
 - **Short-lived `ExecutionToken`s**: bounded capability artifacts with TTL, frozen constraints, execution preconditions, Redis CRL revocation, and local development fallbacks.
 - **Coordinator-embedded `RESULT_VERIFIER`**: a background runtime that polls `digital_twin_event_journal`, persists verifier jobs and outcomes, reuses the replay path, calls the Rust proof kernel, and fail-closes RCT state on terminal mismatch.
 - **Replayable evidence bundles**: policy receipts, execution tokens, transition receipts, telemetry refs, and source-preserving replay bundles for independent verification.
