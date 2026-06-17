@@ -77,6 +77,7 @@ class HotPathDecisionView(BaseModel):
     reason: str
     policy_snapshot_ref: str
     policy_snapshot_hash: Optional[str] = None
+    trust_alert: Optional[str] = None
 
 
 class HotPathCheckResult(BaseModel):

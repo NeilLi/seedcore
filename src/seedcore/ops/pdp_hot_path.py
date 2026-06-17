@@ -1071,6 +1071,7 @@ def evaluate_pdp_hot_path(
             reason=str(decision.reason or reason_code),
             policy_snapshot_ref=policy_snapshot_ref,
             policy_snapshot_hash=policy_snapshot_hash,
+            trust_alert=decision.trust_alert,
         ),
         required_approvals=list(decision.required_approvals or []),
         trust_gaps=trust_gaps,

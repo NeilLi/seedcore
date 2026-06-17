@@ -136,6 +136,17 @@ before execution, not by demos that only show happy paths.
   clearance, production deploys, and quarantine release remain policy-admitted
   or human-reviewed actions.
 
+## Status Update (2026-06-17, Immutable Policy Anchor & Graph Mutation Gate)
+
+**Done (2026-06-17).** Added the first contract-level "Immutable Policy Anchor & Graph Mutation Gate" slice for protecting the active PDP path against AI-origin graph or policy snapshot promotion attempts.
+
+- **Models:** Defined `MutationIntent` and graph-bound `CoSignedPromotionReceipt` envelopes in [mutation_intent.py](../../src/seedcore/models/mutation_intent.py) and registered them in [__init__.py](../../src/seedcore/models/__init__.py).
+- **PDP Hardening:** Enhanced active compiled authz graph resolution in `_resolve_compiled_authz_index` ([governance.py](../../src/seedcore/coordinator/core/governance.py)) to detect AI-origin signatures from explicit graph inputs as well as active manager lookups. Provenance detection is prefix-scoped to `agent:` and `ai:` refs so ordinary principals such as `principal:agent-1` do not quarantine the graph.
+- **Promotion Boundary:** Un-co-signed AI-origin graph inputs fail closed and drop back to the pinned fallback path. Co-sign receipts must be bound to the target graph version and snapshot hash and must come from an administrative/hardware signer class (`kms:` or `tpm:`); the current slice validates receipt structure and binding, while full signature verification remains a later key-registry/KMS integration step.
+- **Contract Enforcement:** Integrated `trust_alert` propagation through `_finalize_policy_decision_contract`, the hot-path decision view, and governed receipts so replay/audit surfaces can distinguish policy hijack quarantine from ordinary deny paths.
+- **PKG Manager Integration:** Added registration and retrieval APIs for co-signed promotion receipts on `PKGManager` ([manager.py](../../src/seedcore/ops/pkg/manager.py)).
+- **Adversarial Verification:** Added the "Autonomous Policy Hijack" drill to the commerce drill matrix ([test_rct_commerce_drill_matrix.py](../../tests/test_rct_commerce_drill_matrix.py)) to verify lockout behavior for un-co-signed or incorrectly bound AI-origin graph inputs and the absence of a hijack alert only when the receipt is bound to the active graph.
+
 ## Status Update (2026-06-12, Local Autonomous Application Signal)
 
 The local autonomous application investigation is now captured in

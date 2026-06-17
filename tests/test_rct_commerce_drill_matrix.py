@@ -27,6 +27,7 @@ join keys introduced in ``_build_forensic_linkage``.
 
 from __future__ import annotations
 
+import base64
 import os
 import sys
 import uuid
@@ -700,3 +701,171 @@ def test_drill_commerce_deny_uses_deterministic_workflow_join_key(monkeypatch):
     # Governed receipt is the upstream source of audit_id; the linkage must
     # always mirror it exactly.
     assert body["governed_receipt"]["audit_id"] == expected_fallback
+
+
+# ---------------------------------------------------------------------------
+# 7. Autonomous Policy Hijack drill
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.rct_commerce_drill
+def test_drill_autonomous_policy_hijack(monkeypatch):
+    """Simulate an autonomous policy hijack where an AI agent attempts to
+    relax constraints via an active authz graph mutation.
+    Verify that the PDP immediately flags a trust_alert, locks out the graph
+    mutation, drops back to the fallback, and quarantines/denies the action.
+    """
+    # 1. Enable active authz graph usage
+    monkeypatch.setenv("SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH", "true")
+
+    # 2. Setup the mock manager stub
+    from types import SimpleNamespace
+
+    from datetime import datetime, timezone
+    current_time_str = datetime.now(timezone.utc).isoformat()
+
+    class MockCompiledAuthzIndex:
+        def __init__(self):
+            self.snapshot_ref = "authz_graph@snapshot:pkg-prod-2026-04-03-ai"
+            self.snapshot_id = 1
+            self.snapshot_version = "snapshot:pkg-prod-2026-04-03-ai"
+            self.compiled_at = current_time_str
+            self.role_memberships = {}
+            self.delegations = {}
+            self.authority_links = {}
+            self.resource_zones = {}
+            self.permissions_by_subject = {}
+            self.resource_to_asset = {}
+            self.resource_aliases_by_asset = {}
+            self.asset_states = {}
+            self.nodes_by_ref = {}
+            self.registration_decisions_by_registration = {}
+            self.decision_graph_snapshot = SimpleNamespace(
+                snapshot_hash="h1",
+                restricted_transfer_ready=True,
+                hot_path_workflow="restricted_custody_transfer",
+                provenance_refs=("agent:hijack-agent",)
+            )
+
+        @property
+        def snapshot_hash(self):
+            return "h1"
+
+        @property
+        def restricted_transfer_ready(self):
+            return True
+
+    mock_index = MockCompiledAuthzIndex()
+
+    class MockPKGManager:
+        def __init__(self):
+            self._co_signed_promotion_receipts = []
+
+        def get_active_compiled_authz_index(self):
+            return mock_index
+
+        def get_co_signed_promotion_receipts(self):
+            return self._co_signed_promotion_receipts
+
+        def register_co_signed_promotion_receipt(self, receipt):
+            self._co_signed_promotion_receipts.append(receipt)
+
+        def get_metadata(self):
+            return {
+                "authz_graph": {
+                    "healthy": True,
+                    "active_snapshot_version": "snapshot:pkg-prod-2026-04-03-ai",
+                    "compiled_at": current_time_str,
+                }
+            }
+
+    mock_manager = MockPKGManager()
+
+    import seedcore.ops.pkg.manager as pkg_manager_mod
+    monkeypatch.setattr(
+        pkg_manager_mod,
+        "get_global_pkg_manager",
+        lambda: mock_manager,
+    )
+    import seedcore.ops.pdp_hot_path as pdp_hot_path_mod
+    monkeypatch.setattr(
+        pdp_hot_path_mod,
+        "get_global_pkg_manager",
+        lambda: mock_manager,
+    )
+
+    # 3. Setup standard defaults for other gateway components
+    _wire_router_happy_defaults(monkeypatch)
+
+    # Note: We do NOT patch evaluate_pdp_hot_path here because we want to test
+    # the real PDP hot-path execution check flow!
+
+    # Let's send a payload attempting to access zone vault-a
+    payload = _commerce_payload()
+    payload["policy_snapshot_ref"] = "snapshot:pkg-prod-2026-04-03-ai"
+    payload["telemetry"]["current_zone"] = "vault_a"
+
+    client = _make_client()
+    response = client.post("/api/v1/agent-actions/evaluate", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    # The AI-origin graph is ignored, and it falls back to the pinned fallback snapshot.
+    # The fallback snapshot has no active rules (or is empty), resulting in a deny / quarantine.
+    assert body["decision"]["disposition"] in ("quarantine", "deny")
+    assert body["decision"]["trust_alert"] == "graph_mutation_hijack_attempt"
+    assert body["governed_receipt"]["trust_alert"] == "graph_mutation_hijack_attempt"
+
+    from seedcore.models.mutation_intent import CoSignedPromotionReceipt
+
+    signature_b64 = base64.b64encode(b"seedcore-promotion-signature-fixture" * 2).decode("ascii")
+
+    # A co-sign receipt that is not bound to the exact graph hash must not
+    # become a broad pass for any AI-origin graph.
+    wrong_graph_receipt = CoSignedPromotionReceipt(
+        mutation_id=uuid.uuid4(),
+        target_graph_version="snapshot:pkg-prod-2026-04-03-ai",
+        target_graph_snapshot_hash="wrong-hash",
+        approver_admin_id="admin-1",
+        approver_signer_key_ref="kms:rct-live-signoff-p256",
+        signature_b64=signature_b64,
+        timestamp=datetime.now(timezone.utc),
+    )
+    mock_manager.register_co_signed_promotion_receipt(wrong_graph_receipt)
+
+    payload2 = _commerce_payload(
+        request_id="req-commerce-drill-0002",
+        idempotency_key="idem-commerce-drill-0002",
+    )
+    payload2["policy_snapshot_ref"] = "snapshot:pkg-prod-2026-04-03-ai"
+    payload2["telemetry"]["current_zone"] = "vault_a"
+    response2 = client.post("/api/v1/agent-actions/evaluate", json=payload2)
+    assert response2.status_code == 200
+    body2 = response2.json()
+    assert body2["decision"]["trust_alert"] == "graph_mutation_hijack_attempt"
+
+    # Now verify that a graph-bound CoSignedPromotionReceipt permits the promotion.
+    mock_manager._co_signed_promotion_receipts.clear()
+    valid_receipt = CoSignedPromotionReceipt(
+        mutation_id=uuid.uuid4(),
+        target_graph_version="snapshot:pkg-prod-2026-04-03-ai",
+        target_graph_snapshot_hash="h1",
+        approver_admin_id="admin-1",
+        approver_signer_key_ref="kms:rct-live-signoff-p256",
+        signature_b64=signature_b64,
+        timestamp=datetime.now(timezone.utc),
+    )
+    mock_manager.register_co_signed_promotion_receipt(valid_receipt)
+
+    # Re-evaluate, now it shouldn't hit the hijack lockout (it will use the compiled authz index).
+    # Since the index has no rules in our stub, it will still result in deny, but WITHOUT trust_alert!
+    payload3 = _commerce_payload(
+        request_id="req-commerce-drill-0003",
+        idempotency_key="idem-commerce-drill-0003",
+    )
+    payload3["policy_snapshot_ref"] = "snapshot:pkg-prod-2026-04-03-ai"
+    payload3["telemetry"]["current_zone"] = "vault_a"
+    response3 = client.post("/api/v1/agent-actions/evaluate", json=payload3)
+    assert response3.status_code == 200
+    body3 = response3.json()
+    assert body3["decision"].get("trust_alert") is None

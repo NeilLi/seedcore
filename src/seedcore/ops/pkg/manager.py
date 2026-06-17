@@ -48,6 +48,7 @@ from seedcore.ops.evidence.rct_control_posture import (
     rct_control_fail_closed_issues,
     RCT_WORKFLOW_TYPE,
 )
+from seedcore.models.mutation_intent import CoSignedPromotionReceipt
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class PKGManager:
         self._redis_task: Optional[asyncio.Task] = None
         self._status = {"healthy": False, "error": None, "version": None}
         self._active_contract_artifacts: Dict[str, Any] = {}
+        self._co_signed_promotion_receipts: List[CoSignedPromotionReceipt] = []
 
     def _rct_activation_enforce_enabled(self) -> bool:
         return _pkg_env_truthy("SEEDCORE_PKG_RCT_ACTIVATION_ENFORCE")
@@ -677,6 +679,16 @@ class PKGManager:
 
     def get_active_compiled_authz_index(self):
         return self.authz_graph.get_active_compiled_index()
+
+    def register_co_signed_promotion_receipt(self, receipt: CoSignedPromotionReceipt) -> None:
+        if not hasattr(self, "_co_signed_promotion_receipts"):
+            self._co_signed_promotion_receipts = []
+        self._co_signed_promotion_receipts.append(receipt)
+
+    def get_co_signed_promotion_receipts(self) -> List[CoSignedPromotionReceipt]:
+        if not hasattr(self, "_co_signed_promotion_receipts"):
+            self._co_signed_promotion_receipts = []
+        return list(self._co_signed_promotion_receipts)
 
     async def refresh_active_authz_graph(self) -> Dict[str, Any]:
         with self._swap_lock:

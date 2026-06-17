@@ -149,6 +149,10 @@ from .edge_trust import (
     HardwareSignerRef,
     ZoneEvidence,
 )
+from .mutation_intent import (
+    CoSignedPromotionReceipt,
+    MutationIntent,
+)
 from .rare_shoe_rct import (
     CollectibleShoeRegistration,
     RareShoeBoundedCustodyAuthority,
@@ -275,6 +279,8 @@ __all__ = [
     "WORKFLOW_TYPE_RCT",
     "AttestationProof",
     "CoSignature",
+    "MutationIntent",
+    "CoSignedPromotionReceipt",
 ]
 try:
     __all__.extend([

@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -602,6 +603,28 @@ def test_evaluate_intent_denies_when_compiled_authz_graph_has_no_permission():
 
     assert decision.allowed is False
     assert decision.deny_code == "authz_graph_denied"
+
+
+def test_compiled_authz_ai_origin_check_ignores_agent_principal_refs():
+    graph = AuthzGraphProjector().project_snapshot(
+        snapshot_ref="pkg-authz@test",
+        snapshot_version="snapshot:1",
+        facts=[],
+    )
+    compiled = AuthzGraphCompiler().compile(graph)
+    assert compiled.decision_graph_snapshot is not None
+
+    compiled.decision_graph_snapshot = replace(
+        compiled.decision_graph_snapshot,
+        provenance_refs=("principal:agent-1",),
+    )
+    assert governance_mod._compiled_authz_index_has_ai_origin(compiled) is False
+
+    compiled.decision_graph_snapshot = replace(
+        compiled.decision_graph_snapshot,
+        provenance_refs=("agent:hijack-agent",),
+    )
+    assert governance_mod._compiled_authz_index_has_ai_origin(compiled) is True
 
 
 def test_evaluate_intent_can_use_ray_backed_authz_cache(monkeypatch):

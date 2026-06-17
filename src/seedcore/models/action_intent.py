@@ -363,6 +363,7 @@ class PolicyDecision(BaseModel):
     break_glass: BreakGlassDecisionContext = Field(default_factory=BreakGlassDecisionContext)
     authz_graph: Dict[str, Any] = Field(default_factory=dict)
     governed_receipt: Dict[str, Any] = Field(default_factory=dict)
+    trust_alert: Optional[str] = None
 
 
 def _coerce_operation(action_type: str) -> GovernedOperation:

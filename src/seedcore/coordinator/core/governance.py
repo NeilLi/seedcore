@@ -49,6 +49,15 @@ from seedcore.ops.pkg.authz_graph.compiler import (
 )
 
 
+import threading
+
+_governance_thread_local = threading.local()
+
+GRAPH_MUTATION_HIJACK_ALERT = "graph_mutation_hijack_attempt"
+GRAPH_MUTATION_QUARANTINE_DENY_CODE = "graph_mutation_quarantined"
+GRAPH_PROMOTION_SIGNER_PREFIXES = ("kms:", "tpm:")
+
+
 SYSTEM_PARAM_KEYS = {
     "routing",
     "interaction",
@@ -916,6 +925,8 @@ def evaluate_intent(
             ),
         )
 
+    resolved_compiled_authz_index = _resolve_compiled_authz_index(compiled_authz_index)
+
     if valid_until <= issued_at:
         return _finalize_policy_decision_contract(
             policy_case=policy_case,
@@ -1059,7 +1070,7 @@ def evaluate_intent(
         authz_graph_violation, break_glass_context, transition_evaluation, compiled_match, authz_evaluator = _evaluate_compiled_authz_graph_policy(
             action_intent=action_intent,
             policy_case=policy_case,
-            compiled_authz_index=_resolve_compiled_authz_index(compiled_authz_index),
+            compiled_authz_index=resolved_compiled_authz_index,
         )
         if authz_graph_violation is not None and not use_rust_policy_core:
             return _finalize_policy_decision_contract(
@@ -2190,24 +2201,138 @@ def _evaluate_compiled_authz_graph_policy(
     )
 
 
-def _resolve_compiled_authz_index(
-    explicit_index: CompiledAuthzIndex | None,
-) -> CompiledAuthzIndex | None:
-    if explicit_index is not None:
-        return explicit_index
-    if not _pdp_use_active_authz_graph():
-        return None
+def _compiled_authz_index_snapshot_hash(index: CompiledAuthzIndex) -> str | None:
+    snapshot_hash = getattr(index, "snapshot_hash", None)
+    if snapshot_hash is not None and str(snapshot_hash).strip():
+        return str(snapshot_hash).strip()
+    decision_graph_snapshot = getattr(index, "decision_graph_snapshot", None)
+    snapshot_hash = getattr(decision_graph_snapshot, "snapshot_hash", None)
+    if snapshot_hash is not None and str(snapshot_hash).strip():
+        return str(snapshot_hash).strip()
+    return None
+
+
+def _compiled_authz_index_snapshot_versions(index: CompiledAuthzIndex) -> set[str]:
+    versions: set[str] = set()
+    for value in (
+        getattr(index, "snapshot_version", None),
+        getattr(index, "snapshot_ref", None),
+    ):
+        if value is not None and str(value).strip():
+            versions.add(str(value).strip())
+    return versions
+
+
+def _compiled_authz_index_has_ai_origin(index: CompiledAuthzIndex) -> bool:
+    if bool(getattr(index, "is_agent_origin", False)):
+        return True
+
+    snapshot_version = str(getattr(index, "snapshot_version", "") or "").strip().lower()
+    if snapshot_version.endswith("-ai") or snapshot_version.endswith("-agent"):
+        return True
+
+    decision_graph_snapshot = getattr(index, "decision_graph_snapshot", None)
+    provenance_refs = getattr(decision_graph_snapshot, "provenance_refs", ())
+    for ref in provenance_refs or ():
+        normalized = str(ref).strip().lower()
+        if normalized.startswith("agent:") or normalized.startswith("ai:"):
+            return True
+    return False
+
+
+def _promotion_receipt_signature_is_structurally_valid(receipt: Any) -> bool:
+    signature_b64 = str(getattr(receipt, "signature_b64", "") or "").strip()
+    if not signature_b64:
+        return False
+    try:
+        decoded = base64.b64decode(signature_b64.encode("ascii"), validate=True)
+    except Exception:
+        return False
+    return len(decoded) >= 32
+
+
+def _promotion_receipt_is_bound_to_compiled_index(
+    *,
+    receipt: Any,
+    index: CompiledAuthzIndex,
+) -> bool:
+    signer_key_ref = str(getattr(receipt, "approver_signer_key_ref", "") or "").strip().lower()
+    if not signer_key_ref.startswith(GRAPH_PROMOTION_SIGNER_PREFIXES):
+        return False
+    if not _promotion_receipt_signature_is_structurally_valid(receipt):
+        return False
+
+    target_graph_version = str(getattr(receipt, "target_graph_version", "") or "").strip()
+    if not target_graph_version or target_graph_version not in _compiled_authz_index_snapshot_versions(index):
+        return False
+
+    snapshot_hash = _compiled_authz_index_snapshot_hash(index)
+    target_snapshot_hash = str(getattr(receipt, "target_graph_snapshot_hash", "") or "").strip()
+    if not snapshot_hash or target_snapshot_hash != snapshot_hash:
+        return False
+
+    return True
+
+
+def _compiled_authz_index_has_valid_promotion_receipt(index: CompiledAuthzIndex) -> bool:
     try:
         from seedcore.ops.pkg.manager import get_global_pkg_manager
+
+        manager = get_global_pkg_manager()
     except Exception:
-        return None
-    manager = get_global_pkg_manager()
+        manager = None
+
     if manager is None:
+        return False
+
+    receipts_getter = getattr(manager, "get_co_signed_promotion_receipts", None)
+    if not callable(receipts_getter):
+        return False
+
+    try:
+        receipts = receipts_getter()
+    except Exception:
+        return False
+
+    for receipt in receipts or ():
+        if _promotion_receipt_is_bound_to_compiled_index(receipt=receipt, index=index):
+            return True
+    return False
+
+
+def _resolve_compiled_authz_index(
+    explicit_index: CompiledAuthzIndex | None,
+    *,
+    flag_ai_origin_violation: bool = True,
+) -> CompiledAuthzIndex | None:
+    if explicit_index is not None:
+        index = explicit_index
+    else:
+        if not _pdp_use_active_authz_graph():
+            return None
+        try:
+            from seedcore.ops.pkg.manager import get_global_pkg_manager
+        except Exception:
+            return None
+        manager = get_global_pkg_manager()
+        if manager is None:
+            return None
+        getter = getattr(manager, "get_active_compiled_authz_index", None)
+        if getter is None:
+            return None
+        index = getter()
+        if index is None:
+            return None
+
+    if (
+        _compiled_authz_index_has_ai_origin(index)
+        and not _compiled_authz_index_has_valid_promotion_receipt(index)
+    ):
+        if flag_ai_origin_violation:
+            _governance_thread_local.hijack_alert_detected = True
         return None
-    getter = getattr(manager, "get_active_compiled_authz_index", None)
-    if getter is None:
-        return None
-    return getter()
+
+    return index
 
 
 def _resolve_active_contract_artifacts(
@@ -3236,12 +3361,27 @@ def _finalize_policy_decision_contract(
     policy_case: PolicyCase,
     policy_decision: PolicyDecision,
 ) -> PolicyDecision:
+    if getattr(_governance_thread_local, "hijack_alert_detected", False):
+        _governance_thread_local.hijack_alert_detected = False
+        policy_decision.trust_alert = GRAPH_MUTATION_HIJACK_ALERT
+        if policy_decision.disposition == "allow":
+            policy_decision.disposition = "quarantine"
+            policy_decision.allowed = False
+            policy_decision.deny_code = GRAPH_MUTATION_QUARANTINE_DENY_CODE
+        alert_explanation = f"trust_alert:{GRAPH_MUTATION_HIJACK_ALERT}"
+        if alert_explanation not in policy_decision.explanations:
+            policy_decision.explanations.append(alert_explanation)
+
     action_intent = policy_case.action_intent
     authz_graph = (
         dict(policy_decision.authz_graph)
         if isinstance(policy_decision.authz_graph, Mapping)
         else {}
     )
+    if policy_decision.trust_alert:
+        authz_graph["trust_alert"] = policy_decision.trust_alert
+        if isinstance(policy_decision.governed_receipt, dict):
+            policy_decision.governed_receipt["trust_alert"] = policy_decision.trust_alert
     authz_graph["disposition"] = str(authz_graph.get("disposition") or policy_decision.disposition)
     authz_graph["matched_policy_refs"] = (
         list(authz_graph.get("matched_policy_refs"))
@@ -3463,7 +3603,10 @@ def _finalize_policy_decision_contract(
                     provenance_sources.append(binding_ref)
                 governed_receipt["provenance_sources"] = provenance_sources
 
-    compiled_for_hashes = _resolve_compiled_authz_index(None)
+    compiled_for_hashes = _resolve_compiled_authz_index(
+        None,
+        flag_ai_origin_violation=False,
+    )
     apply_rct_triple_hash_fields(
         authz_graph,
         governed_receipt,
