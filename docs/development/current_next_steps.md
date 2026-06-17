@@ -228,18 +228,25 @@ without changing SeedCore's authority semantics:
    start with Protobuf v3 as a measured internal mirror, keep FlatBuffers as a
    later Rust-first candidate, and avoid zero-allocation / zero-decoding claims
    until benchmark artifacts prove them.
-6. **Counter-ledger acceleration behind the explicit ledger.** Redis,
+6. **Authz graph engine evolution.** Treat the next graph-engine enhancement as
+   a benchmark-gated future-performance track, not a rewrite prerequisite for
+   the current RCT wedge. [ADR 0011](../architecture/adr/adr-0011-benchmark-gated-authz-graph-engine-evolution.md)
+   freezes the rule: tuple import/export and deep-path benchmarks come first;
+   Ray hot-path promotion, path flattening, CSR/CSC layouts, Rust/PyO3 kernels,
+   and memory-mapped graph artifacts require measured pressure. The schedule
+   lives in [authz_graph_engine_evolution_plan.md](authz_graph_engine_evolution_plan.md).
+7. **Counter-ledger acceleration behind the explicit ledger.** Redis,
    Dragonfly, Lua, WATCH pipelines, or RESP3 client-side caching may be
    benchmarked as near-local acceleration for monotonic counter admission, but
    the ledger remains explicit and fail-closed. Cache success cannot replace
    verifier, token, or evidence closure.
-7. **Ingress and programmatic identity as guarded setup.** If the GKE path is
+8. **Ingress and programmatic identity as guarded setup.** If the GKE path is
    active this month, IAP/Gateway API work should protect operator/admin
    surfaces and bypass public trust routes deliberately. DPoP, SPIFFE/SPIRE,
    WIMSE-aligned workload identity, and brokered transaction tokens should be
    modeled as hardening targets for programmatic callers, not as permission to
    skip gateway/PDP evaluation.
-8. **Two-stage RAG authorization only where a retrieval surface exists.** Any
+9. **Two-stage RAG authorization only where a retrieval surface exists.** Any
    agent-facing document or memory retrieval must coarse-filter first and then
    run fine-grained PDP or policy checks before chunks reach rerankers, LLMs,
    proof UIs, or operator copilots. Denied candidates should be invisible to
@@ -830,6 +837,10 @@ security boundary a distributed-system bottleneck. The important distinction is:
 - the served gateway and `/pdp/hot-path/evaluate` surface must continue to be
   promoted by measured millisecond SLOs, parity evidence, freshness gates, and
   rollback readiness;
+- graph-engine upgrades such as tuple round trips, path flattening, Ray
+  production routing, CSR/CSC layouts, or Rust/PyO3 kernels are governed by
+  [ADR 0011](../architecture/adr/adr-0011-benchmark-gated-authz-graph-engine-evolution.md)
+  and should advance only after benchmark evidence shows they are needed;
 - no cache, LLM, memory lookup, or advisory enrichment becomes authority unless
   it is converted into typed, freshness-aware, policy-admitted context.
 

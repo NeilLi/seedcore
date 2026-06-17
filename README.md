@@ -127,6 +127,8 @@ Key architecture references:
 - [ExecutionToken lifecycle management](docs/development/execution_token_lifecycle_management.md)
 - [Policy gate matrix](docs/development/policy_gate_matrix.md)
 - [Hardware-anchored telemetry MVP contract](docs/development/hardware_anchored_telemetry_mvp_contract.md)
+- [ADR 0011: Benchmark-Gated Authorization Graph Engine Evolution](docs/architecture/adr/adr-0011-benchmark-gated-authz-graph-engine-evolution.md)
+- [Authz graph engine evolution plan](docs/development/authz_graph_engine_evolution_plan.md)
 - [ADR 0004: Coordinator-Embedded RESULT_VERIFIER](docs/architecture/adr/adr-0004-result-verifier-runtime.md)
 - [ADR 0005: Replayable Evidence for Governed State Transitions](docs/architecture/adr/adr-0005-replayable-evidence-governed-state-transitions.md)
 

@@ -92,6 +92,10 @@ time. The infrastructure around it should evolve in these specific directions:
   for massive relationship scale, but the current wedge keeps the default hot
   path compiled, near-local, and focused on restricted custody, evidence, and
   execution-token semantics.
+- Authorization graph engine upgrades are benchmark-gated by
+  [ADR 0011](../architecture/adr/adr-0011-benchmark-gated-authz-graph-engine-evolution.md):
+  tuple import/export and structural benchmarks come before path flattening,
+  Ray hot-path promotion, CSR/CSC layouts, or Rust/PyO3 graph kernels.
 
 Start here for the active spine:
 
@@ -199,7 +203,7 @@ This table is the shortest answer to "what stage are we in?"
 | :--- | :--- | :--- | :--- |
 | 0. Runtime substrate | Build the Python/Ray execution and agent foundation | Done baseline | [`archive/historical/project_stage_milestone_summary.md`](archive/historical/project_stage_milestone_summary.md) |
 | 1. Zero-trust execution boundary | Make all high-risk actions tokenized, revocable, and receipt-bound | Materially implemented | [`current_next_steps.md`](current_next_steps.md) |
-| 2. PKG policy and authz graph | Pin decisions to a snapshot and compile a deterministic hot-path graph | Implemented, still being hardened | [`pkg_authz_graph_rfc.md`](pkg_authz_graph_rfc.md), [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md), [`pdp_authz_graph_staging_rollout.md`](pdp_authz_graph_staging_rollout.md) |
+| 2. PKG policy and authz graph | Pin decisions to a snapshot and compile a deterministic hot-path graph | Implemented, still being hardened | [`pkg_authz_graph_rfc.md`](pkg_authz_graph_rfc.md), [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md), [`pdp_authz_graph_staging_rollout.md`](pdp_authz_graph_staging_rollout.md), [`authz_graph_engine_evolution_plan.md`](authz_graph_engine_evolution_plan.md) |
 | 3. Replay and proof surface | Expose replayable verification so third parties can inspect outcomes | Implemented | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md), [`productized_verification_surface_protocol.md`](productized_verification_surface_protocol.md) |
 | 4. RCT contract freeze | Lock one must-win workflow, artifact chain, and business-state truth table | Done for Slice 1 | [`archive/historical/killer_demo_execution_spine.md`](archive/historical/killer_demo_execution_spine.md), [`archive/historical/next_killer_demo_contract_freeze.md`](archive/historical/next_killer_demo_contract_freeze.md) |
 | 5. Trust hardening | Prove signer provenance, TPM/KMS policies, and operational drills | Checkpoint crossed, not fully closed | [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md), [`tpm_fleet_rollout_maturity_decision_memo.md`](tpm_fleet_rollout_maturity_decision_memo.md) |
@@ -506,6 +510,9 @@ there is a strong reason. Prefer this ownership split:
 - `q2_2026_audit_trail_ui_spec.md` = product surface and operator UX contract
 - `execution_replay_studio_development_plan.md` = advanced read-only forensic
   replay UI step over the existing verification/replay contracts
+- `authz_graph_engine_evolution_plan.md` = future-performance schedule for
+  tuple contracts, structural benchmarks, Ray/cache hardening, and native graph
+  kernels, gated by ADR 0011
 - `north_star_autonomous_trade_environment.md` = final ambition and long-range
   architecture reference
 - `local_kafka_streams_schedule.md` = local Kafka transport rollout (intent,
