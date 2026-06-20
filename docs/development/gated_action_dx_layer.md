@@ -1,7 +1,7 @@
 # Gated Action DX Layer
 
 Date: 2026-05-17
-Status: Priority 30-day MVP spec for autonomy-ready developer experience; not yet implemented as `seedcore.sdk`
+Status: MVP implemented for one RCT path; next work is external-agent productization and promotion hardening
 
 ## Purpose
 
@@ -59,10 +59,13 @@ from becoming an alternate authorization path.
 
 ## Baseline Reality Check
 
-As of 2026-05-21, this document is a **specification and immediate
-implementation target**, not a shipped SDK surface.
+As of 2026-06-20, this document is both the original DX specification and the
+baseline contract for the landed MVP. The current implementation is deliberately
+narrow: one Restricted Custody Transfer path, explicit-authority preflight,
+shadow/no-execute behavior, and guarded enforce mode that requires PDP allow,
+an `ExecutionToken`, and a configured executor.
 
-Implemented baseline to build on:
+Implemented baseline:
 
 - strict Agent Action Gateway v1 request/response models:
   `src/seedcore/models/agent_action_gateway.py`
@@ -74,23 +77,34 @@ Implemented baseline to build on:
   `declared_value_usd`, and `economic_hash`:
   `src/seedcore/adapters/shopify_sandbox_commerce_adapter.py`
 - MCP/plugin wrappers for `seedcore.agent_action.evaluate` and
-  `seedcore.agent_action.execute`:
+  `seedcore.agent_action.check_policy` / `seedcore.agent_action.execute`:
   `src/seedcore/plugin/mcp_server.py`
+- Python SDK surface with `@gated_action`, `using_evaluator`,
+  `set_executor`, `GovernedResult`, and schema-exported manifests:
+  `src/seedcore/sdk/gated_action.py`,
+  `src/seedcore/sdk/schema_exporter.py`
+- self-regulation drill and host entrypoint:
+  `src/seedcore/drills/agent_self_regulation.py`,
+  `scripts/host/verify_agent_self_regulation_drill.sh`
 - productization coverage:
-  `tests/test_agent_action_gateway_productization.py`
+  `tests/test_agent_action_gateway_productization.py`,
+  `tests/test_gated_action_sdk.py`,
+  `tests/test_sdk_gated_action_enforce.py`,
+  `tests/test_agent_self_regulation_drill.py`
 
-Not implemented yet:
+Still not complete:
 
-- no `src/seedcore/sdk/` package;
-- no `from seedcore.sdk import gated_action` import path;
-- no Python decorator that converts an arbitrary function call into a gateway
-  evaluate request;
-- no automatic OPA/PDP schema generation from a decorator declaration;
-- no enforce-mode switch or promotion workflow for decorated actions.
+- no broad workflow/plugin framework beyond the RCT MVP;
+- no automatic policy promotion from generated manifests;
+- no authority-bearing role for MCP output, LLM advice, memory, evals, or
+  governance-learning scores;
+- no production `shadow -> enforce` promotion without explicit gate evidence
+  and operator/policy admission.
 
-Until those pieces land, references to `@gated_action(...)` are target API
-examples. The only current executable path is the lower-level gateway/MCP
-evaluate path listed above.
+The executable path now includes both the lower-level gateway/MCP evaluate path
+and the `seedcore.sdk` decorator wrapper. Both remain declarative convenience
+layers over the same authority path; neither can mint authority without PDP
+allow and scoped token issuance.
 
 ## Non-Goal
 
@@ -254,7 +268,7 @@ unless a prior token is being referenced for revocation or closure.
 
 ## 30-Day MVP
 
-The first implementation should be deliberately small:
+The landed first implementation is deliberately small:
 
 1. Implement a local Python decorator or wrapper around one existing
    restricted-custody transfer adapter path.
@@ -269,7 +283,8 @@ The first implementation should be deliberately small:
    evidence, fail mode, and workflow correlation fields.
 7. Start in preflight/shadow mode: return the evaluate result and contract
    scaffold without executing business logic.
-8. Add enforce mode only after allow/deny/quarantine fixture behavior is green.
+8. Add guarded enforce mode only after allow/deny/quarantine fixture behavior is
+   green.
 9. Return a governed result object with decision, reason code, evidence bundle
    ID, verification status, replay reference, and audit ID where available.
 10. Add fixtures proving allow, deny, quarantine, and missing-evidence behavior.
@@ -278,6 +293,12 @@ The first implementation should be deliberately small:
 
 Do not start with a broad plugin framework, general workflow engine, or every
 possible evidence type.
+
+Current follow-on: productize the external-agent boundary around the existing
+gateway request and MCP wrapper. Return bounded structured self-correction data
+(`decision`, `reason_code`, `trust_gaps`, `obligations`, replay/correlation
+refs) while keeping secret material, policy internals, and execution tokens out
+of preflight/no-execute responses.
 
 ## Assistant Workflow Contract
 

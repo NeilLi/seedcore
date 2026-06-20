@@ -427,13 +427,22 @@ Immediate priority order:
    forensic expansion of the replay surface. Next Studio work is to deepen the
    artifact inspector, policy snapshot fields, telemetry hash checks, signer
    chain validation, and toxic-path fixture coverage;
-4. Close deployment-realistic proof topology by running the verification API in
-   the same cluster as the already-green hot-path gates;
-5. Continue rare-shoe RCT proof-bundle and toxic-path expansion as the
+4. **Next:** close the local verification-surface rehearsal through
+   `deploy/local/`: run the host API/HAL plus
+   `deploy/local/run-verification-api.sh`, then
+   `deploy/local/verify-rct-verification-surface.sh` to prove runtime audit
+   generation, verification queue/detail/replay/runbook reads, and the
+   productized surface protocol against one local RCT audit row;
+5. After the local gate is green, close deployment-realistic proof topology by
+   repeating the same evidence path in Kind/Kubernetes with the verification API
+   in the same cluster as the already-green hot-path gates. Kafka is a
+   delegated-intent/readiness-drill follow-on, not the blocker for
+   verification-surface signoff;
+6. Continue rare-shoe RCT proof-bundle and toxic-path expansion as the
    commercial scene feeding Studio and public proof. The virtual NFC simulation
    lane is now implemented and verified, so remaining rare-shoe work should
    build on that evidence contract rather than re-defining dynamic NFC.
-6. When model-promotion, privacy/unlearning, or advisory-drift audits enter the
+7. When model-promotion, privacy/unlearning, or advisory-drift audits enter the
    eval lane, use
    [statistical_model_audit_shadow_contract.md](statistical_model_audit_shadow_contract.md)
    as the boundary: statistical audit outputs may block promotion or trigger

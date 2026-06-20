@@ -7,11 +7,13 @@ Use these when you want to run SeedCore directly on your machine without Kuberne
 - `init-full-db-direct.sh`
 - `run-api.sh`
 - `run-hal.sh`
+- `run-verification-api.sh`
 - `run-ray-head.sh`
 - `run-serve-app.py`
 - `run-bootstrap.sh`
 - `run-ray-stack.sh`
 - `run-task-stack.sh`
+- `verify-rct-verification-surface.sh`
 
 ## Rust verifier binary (recommended)
 
@@ -127,6 +129,32 @@ Quick checks:
 curl http://127.0.0.1:8002/health
 curl http://127.0.0.1:8003/status
 ```
+
+### Local verification-surface closure
+
+Use this as the local rehearsal for the full productized verification-surface
+gate before repeating the same evidence path in Kind/Kubernetes. It proves that
+the host API can generate a runtime RCT audit row and that the verification API
+can read queue, detail, replay, runbook, and productized protocol views from
+that row.
+
+Start the API and HAL as above, then start the verification API in a third
+terminal:
+
+```bash
+bash deploy/local/run-verification-api.sh
+```
+
+Run the local gate:
+
+```bash
+bash deploy/local/verify-rct-verification-surface.sh
+```
+
+This lane should pass before claiming that the same topology is ready for the
+Kubernetes full-surface signoff. Kafka is intentionally not required for this
+gate; use the optional local Kafka section when you need delegated-intent
+ingress or readiness-dependency drills.
 
 Hot-path checks:
 

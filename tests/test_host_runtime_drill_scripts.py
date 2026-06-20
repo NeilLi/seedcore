@@ -161,3 +161,24 @@ def test_local_stop_runtime_covers_seedcore_processes_and_shared_services_are_op
 
     assert "./deploy/local/stop-local-runtime.sh" in readme
     assert "Homebrew Postgres/Redis are left alone by default" in readme
+
+
+def test_local_verification_surface_helpers_wrap_runtime_audit_gate() -> None:
+    run_script = (ROOT / "deploy" / "local" / "run-verification-api.sh").read_text()
+    verify_script = (ROOT / "deploy" / "local" / "verify-rct-verification-surface.sh").read_text()
+    readme = (ROOT / "deploy" / "local" / "README.md").read_text()
+
+    assert 'source "${SCRIPT_DIR}/host-env.sh"' in run_script
+    assert 'PORT="${PORT:-7071}"' in run_script
+    assert "SEEDCORE_RUNTIME_API_BASE" in run_script
+    assert "serve:verification-api" in run_script
+
+    assert "verify_runtime_rct_audit_surface.sh" in verify_script
+    assert "bash deploy/local/run-api.sh" in verify_script
+    assert "bash deploy/local/run-verification-api.sh" in verify_script
+    assert "SEEDCORE_VERIFICATION_API_BASE" in verify_script
+
+    assert "Local verification-surface closure" in readme
+    assert "bash deploy/local/run-verification-api.sh" in readme
+    assert "bash deploy/local/verify-rct-verification-surface.sh" in readme
+    assert "Kafka is intentionally not required" in readme

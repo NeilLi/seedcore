@@ -231,10 +231,14 @@ advertising tools that only work in fixture or host-only environments.
 
 The next highest-value kube work should be:
 
-1. run `deploy/deploy-all.sh ... --deploy-verification-api --verify-kube`
+1. rehearse the productized verification-surface path locally with
+   `deploy/local/run-verification-api.sh` and
+   `deploy/local/verify-rct-verification-surface.sh`; this proves runtime audit
+   generation and verification API reads before spending remote-cluster cycles
+2. run `deploy/deploy-all.sh ... --deploy-verification-api --verify-kube`
    on the target remote cluster and capture the full-surface signoff report
    (`verification_surface_available=true`,
    `verification_surface_protocol_passed=true`)
-2. add Kafka only when the topology is ready to exercise real readiness-gate
+3. add Kafka only when the topology is ready to exercise real readiness-gate
    and delegated-intent ingress drills
-3. keep Q3 bridge work read-only until those two topology gaps are closed
+4. keep Q3 bridge work read-only until those topology gaps are closed
