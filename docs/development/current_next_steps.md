@@ -154,6 +154,33 @@ before execution, not by demos that only show happy paths.
 - **Scenario Curriculum:** Expanded `GovernanceScenarioGenerator` in [governance_scenarios.py](../../src/seedcore/ml/curriculum/governance_scenarios.py) with advanced coordinate-redirect, replay-injection, tampered-signature, and missing-cosignature synthetic intent probes.
 - **Contract Tests:** Added [test_governance_learning_harness.py](../../tests/test_governance_learning_harness.py) to validate schema checks, exporter boundaries, verdict isolation, and generator probes.
 
+## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
+
+**Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against
+SeedCore's existing ADR 0008/0009 and governed RAG contract slice. The
+repo-native conclusion is: adopt the governance shape, not a new RAG product
+center or premature vendor stack.
+
+- **Adoption review:** Added
+  [policy_governed_rag_research_adoption_review.md](policy_governed_rag_research_adoption_review.md)
+  to capture the deeper mapping from contracts/control, manifests/trails, and
+  receipts/verification into SeedCore's PDP, evidence, verifier, and replay
+  semantics.
+- **Contract refinement:** Extended the
+  [RAG Evidence Bundle and Trace Contract](../architecture/contracts/rag_evidence_bundle_trace_contract.md)
+  with a future `RAGReceipt` profile, verifier-owned minimal evidence set,
+  degraded `abstained` / `lite_receipt` semantics, and side-channel-safe
+  denied-candidate telemetry.
+- **ADR alignment:** Updated ADR 0008 and ADR 0009 to preserve the narrower
+  SeedCore claim: denied chunks must not enter model-visible context under the
+  enforced contract. Receipts prove process integrity and replay closure; they
+  do not mint execution authority or prove the LLM answer is globally true.
+- **Stack posture:** Keep existing SeedCore signer profiles and JSON receipts
+  as the MVP path. JOSE/JWS, COSE/CBOR, SCITT-style transparency, NLI
+  verifiers, vector databases, and enterprise connectors remain profile-gated
+  follow-ons after the controlled-source RAG lane and replay validator are
+  green.
+
 ## Status Update (2026-06-17, Immutable Policy Anchor & Graph Mutation Gate)
 
 **Done (2026-06-17).** Added the first contract-level "Immutable Policy Anchor & Graph Mutation Gate" slice for protecting the active PDP path against AI-origin graph or policy snapshot promotion attempts.
@@ -274,8 +301,15 @@ without changing SeedCore's authority semantics:
    [`src/seedcore/ops/rag/authorization_boundary.py`](../../src/seedcore/ops/rag/authorization_boundary.py):
    only explicitly allowed chunk decisions become `RAGEvidenceItem`s, while
    denied or missing-decision candidates are reduced to aggregate counts before
-   downstream model context is assembled. Qdrant, Milvus, Triton, and
-   cross-encoder adapters remain later integration steps under this boundary.
+   downstream model context is assembled. The next safe slice is a signed
+   `RAGReceipt` / minimal-evidence-set contract and side-channel-safe telemetry
+   tests, as scoped in
+   [policy_governed_rag_research_adoption_review.md](policy_governed_rag_research_adoption_review.md)
+   and the
+   [RAG Evidence Bundle and Trace Contract](../architecture/contracts/rag_evidence_bundle_trace_contract.md).
+   Qdrant, Milvus, Triton, JOSE/JWS, COSE/CBOR, SCITT transparency, NLI
+   verifiers, and cross-encoder adapters remain later integration steps under
+   this boundary.
 
 The following should not become June blockers:
 
@@ -296,6 +330,10 @@ The following should not become June blockers:
 - treating Protobuf, FlatBuffers, Pydantic Core, Rust, Redis, or Dragonfly as
   authority sources. They are implementation choices under PDP, token, replay,
   and verifier contracts.
+- treating RAG receipts, minimal evidence sets, JOSE/JWS, COSE/CBOR, SCITT
+  registration, vector stores, or model-based claim verifiers as authority
+  sources. They are proof, transport, substrate, or verifier-profile choices
+  under SeedCore's existing PDP/evidence/replay boundary.
 
 ## Status Update (2026-05-25, Execution Replay Studio Drafted)
 

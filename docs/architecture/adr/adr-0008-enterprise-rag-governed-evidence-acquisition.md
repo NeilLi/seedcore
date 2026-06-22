@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-05-17
 - Scope: Enterprise document and knowledge retrieval as SeedCore-governed evidence
-- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0004](./adr-0004-result-verifier-runtime.md), [ADR 0005](./adr-0005-replayable-evidence-governed-state-transitions.md), [Agent Action Gateway Contract](../../development/agent_action_gateway_contract.md), [Q2 Audit Trail UI Spec](../../development/q2_2026_audit_trail_ui_spec.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md)
+- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0004](./adr-0004-result-verifier-runtime.md), [ADR 0005](./adr-0005-replayable-evidence-governed-state-transitions.md), [Agent Action Gateway Contract](../../development/agent_action_gateway_contract.md), [Q2 Audit Trail UI Spec](../../development/q2_2026_audit_trail_ui_spec.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md), [Policy-Governed RAG Research Adoption Review](../../development/policy_governed_rag_research_adoption_review.md)
 
 ## Context
 
@@ -37,6 +37,8 @@ Enterprise RAG output is accepted by SeedCore only when:
 4. evidence items are bound into a RAG evidence bundle;
 5. generated claims are verified against the authorized evidence bundle;
 6. the full request, retrieval, generation, verification, and final status are recorded in a RAG trace.
+7. a signed RAG receipt can bind the trace, bundle hash, answer hash,
+   verified claims, policy decisions, and safe telemetry for replay.
 
 ## Scope
 
@@ -100,6 +102,22 @@ This decision also keeps SemanticMemory in its current architectural lane. Gener
 
 The first milestone is not better search quality. The first milestone is proof that the model only saw authorized evidence and that every final material claim is supported by that evidence.
 
+Research on policy-governed RAG reinforces this direction with a useful
+triptych: contracts/control, manifests/trails, and receipts/verification.
+SeedCore adopts that shape as follows:
+
+- contracts/control map to the authorization envelope, coarse retrieval filter,
+  and per-candidate PDP decision;
+- manifests/trails map to `RAGEvidenceItem`, `RAGEvidenceBundle`, source and
+  chunk hashes, ACL snapshots, and replayable trace refs;
+- receipts/verification map to `VerifiedRAGClaim`, `RAGTrace`, and the future
+  `RAGReceipt` profile.
+
+SeedCore does not adopt research-language overclaims such as complete leak
+elimination. The enforceable claim is narrower: under the contract, denied
+chunks must not enter model-visible context, citations, ordinary logs, or proof
+UI payloads.
+
 ## Consequences
 
 Positive consequences:
@@ -117,6 +135,8 @@ Negative consequences:
 - Ingestion must preserve source permissions, provenance, hashes, and versioning.
 - Claim-level verification becomes mandatory for authoritative answers.
 - Teams must distinguish between advisory semantic memory and typed governed evidence.
+- Receipt signing, minimal-evidence derivation, and side-channel-safe telemetry
+  become explicit contract work before broad connector adoption.
 
 ## Non-Goals
 
@@ -124,8 +144,13 @@ Negative consequences:
 - Replace SeedCore PDP with LLM reasoning.
 - Treat semantic similarity as authorization.
 - Treat citations as sufficient proof without verification.
+- Treat a signed receipt as execution authority.
+- Treat model-selected minimal evidence as legal sufficiency.
 - Allow model-generated claims to authorize actions.
 - Choose Qdrant, pgvector, Weaviate, or any other vector backend as an architecture decision in this ADR.
+- Choose COSE, JOSE, SCITT, C2PA, NLI, or an LLM judge as a required
+  production stack before the SeedCore receipt payload and replay validator are
+  stable.
 
 ## Alternatives Considered
 
@@ -143,4 +168,8 @@ This ADR is satisfied when SeedCore can demonstrate:
 3. unauthorized chunks never reach the prompt;
 4. every final material claim cites authorized evidence;
 5. unsupported claims are blocked or escalated;
-6. a RAG trace can reconstruct the full path from query to final answer.
+6. a RAG trace can reconstruct the full path from query to final answer;
+7. a RAG receipt can bind the trace closure without exposing denied candidate
+   content;
+8. abstain or lite-receipt outcomes are emitted when authorization,
+   freshness, evidence, or verifier closure is insufficient.

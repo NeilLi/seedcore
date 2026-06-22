@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-05-17
 - Scope: Authorization and leakage boundary for SeedCore-governed Enterprise RAG
-- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0008](./adr-0008-enterprise-rag-governed-evidence-acquisition.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md)
+- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0008](./adr-0008-enterprise-rag-governed-evidence-acquisition.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md), [Policy-Governed RAG Research Adoption Review](../../development/policy_governed_rag_research_adoption_review.md)
 
 ## Context
 
@@ -122,6 +122,16 @@ Denied candidate content shall not be exposed to:
 
 Whether the existence of denied resources may be disclosed is policy-controlled.
 
+Denied-candidate telemetry must also be side-channel safe. Ordinary traces,
+receipts, logs, proof UI payloads, and operator copilot surfaces may expose
+only aggregate denied counts, coarse reason-count buckets, and coarse latency
+histograms. They must not expose denied document IDs, chunk IDs, source URIs,
+titles, snippets, raw text refs, or per-denied-resource timing.
+
+If the retrieval boundary cannot safely decide or disclose an answer, the
+pipeline must produce a policy-safe blocked, escalated, abstained, or
+lite-receipt outcome rather than falling back to ungoverned retrieval.
+
 ## Rationale
 
 SeedCore must never rely on the LLM, reranker, or prompt assembly layer as the access-control boundary. Those components may transform, score, or explain already-authorized evidence, but they must not process text that the principal is not allowed to see.
@@ -156,6 +166,7 @@ This ADR mitigates:
 - citation laundering
 - prompt injection through retrieved documents
 - over-disclosure through denial messages
+- timing and diagnostic side channels that reveal denied resource existence
 - advisory memory being mistaken for authority
 
 ## Alternatives Considered
@@ -164,6 +175,10 @@ This ADR mitigates:
 - **Rely only on vector-store metadata filters:** Rejected because metadata filters are necessary but insufficient for fine-grained policy, purpose, workflow, delegation, and freshness checks.
 - **Let the LLM self-police access rules:** Rejected because policy enforcement must be deterministic, replayable, and external to the model.
 - **Expose denied snippets to operators by default:** Rejected because denial disclosure itself can be sensitive and must be policy-controlled.
+- **Expose detailed denied-resource telemetry for debugging:** Rejected for
+  ordinary traces, logs, receipts, and proof UI because timing, title, snippet,
+  or source metadata can leak the existence of restricted resources. Restricted
+  forensic retention requires a separate policy and access-control decision.
 
 ## Acceptance Criteria
 
@@ -176,4 +191,8 @@ This ADR is satisfied when tests prove:
 5. denied chunks do not enter prompts;
 6. denied chunks do not appear in citations;
 7. every authorized chunk has a policy decision ID;
-8. every RAG answer can be traced back to a RAG evidence bundle.
+8. every RAG answer can be traced back to a RAG evidence bundle;
+9. ordinary receipt/log/proof payloads expose only aggregate denied-candidate
+   telemetry;
+10. unsafe or incomplete retrieval closure produces blocked, escalated,
+    abstained, or lite-receipt outcomes without ungoverned fallback.

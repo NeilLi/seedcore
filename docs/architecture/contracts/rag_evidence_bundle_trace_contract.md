@@ -226,6 +226,121 @@ Allowed `final_status` values:
 - `accepted`
 - `blocked`
 - `escalated`
+- `abstained`
+
+## 11. RAGReceipt
+
+`RAGReceipt` is the portable proof object for a completed governed RAG
+interaction. It signs the trace closure; it does not authorize future
+execution, clear quarantine, or prove that the generated answer is objectively
+true.
+
+```json
+{
+  "receipt_id": "ragreceipt_001",
+  "receipt_profile": "seedcore_rag_receipt_json_v1",
+  "trace_id": "ragtrace_001",
+  "authorization_envelope_id": "authenv_001",
+  "evidence_bundle_id": "evb_001",
+  "draft_answer_id": "draft_001",
+  "verified_claim_ids": ["claim_001", "claim_002"],
+  "policy_decision_ids": ["dec_001", "dec_002"],
+  "minimal_evidence_item_ids": ["ev_001"],
+  "denied_candidate_summary_hash": "sha256:...",
+  "safe_telemetry_ref": "telemetry://rag/ragtrace_001",
+  "bundle_hash": "sha256:...",
+  "answer_hash": "sha256:...",
+  "trace_hash": "sha256:...",
+  "final_status": "accepted",
+  "degradation_mode": null,
+  "issued_at": "2026-05-17T10:02:05Z",
+  "signer_metadata": {
+    "signer_type": "service",
+    "signer_id": "seedcore-rag-receipt-service",
+    "signing_scheme": "hmac_sha256",
+    "key_ref": "kms-or-dev-key-ref",
+    "attestation_level": "baseline"
+  },
+  "signature": "base64-or-hex-signature"
+}
+```
+
+Allowed `receipt_profile` values:
+
+- `seedcore_rag_receipt_json_v1`: internal JSON payload signed by the existing
+  SeedCore evidence signer profiles.
+- `jws_rag_receipt_v1`: future JOSE/JWS external audit profile.
+- `cose_rag_receipt_v1`: future COSE/CBOR compact or device-profile audit
+  profile.
+
+Allowed `degradation_mode` values:
+
+- `lite_receipt`: the boundary stopped safely but did not complete full answer
+  verification.
+- `abstain_insufficient_evidence`: authorized evidence was absent or
+  insufficient.
+- `abstain_stale_evidence`: candidate evidence failed freshness requirements.
+- `abstain_conflicted_evidence`: authorized evidence conflicted and no safe
+  answer could be accepted.
+- `abstain_verifier_unavailable`: verification could not complete inside the
+  required policy window.
+- `policy_blocked`: policy or PDP evaluation blocked the RAG interaction.
+- `none`: full receipt with no degradation.
+
+## 12. Minimal Evidence Set
+
+The minimal evidence set is a verifier artifact, not a model-selected
+authority source. It may be derived only from already authorized
+`RAGEvidenceItem` objects.
+
+Required fields for a minimal evidence artifact:
+
+```json
+{
+  "minimal_evidence_set_id": "mses_001",
+  "trace_id": "ragtrace_001",
+  "evidence_bundle_id": "evb_001",
+  "claim_ids": ["claim_001"],
+  "minimal_evidence_item_ids": ["ev_001"],
+  "candidate_evidence_item_ids": ["ev_001", "ev_002"],
+  "selection_algorithm": "greedy_remove_reverify_v1",
+  "verifier_version": "rag_verifier_v1",
+  "created_at": "2026-05-17T10:01:45Z"
+}
+```
+
+The full authorized evidence bundle must remain available for replay and
+forensics even when a smaller minimal set is attached to a receipt.
+
+## 13. Side-Channel-Safe Telemetry
+
+RAG denial and timing telemetry must avoid leaking sensitive resource
+existence. Ordinary traces, receipts, logs, and proof UI payloads may expose
+only aggregate denied counts, reason-count buckets, and coarse latency
+histograms.
+
+```json
+{
+  "safe_telemetry_id": "ragtelemetry_001",
+  "trace_id": "ragtrace_001",
+  "candidate_count": 20,
+  "authorized_count": 5,
+  "denied_candidate_count": 15,
+  "missing_decision_count": 0,
+  "reason_counts": {
+    "acl_mismatch": 10,
+    "classification_ceiling": 5
+  },
+  "proof_latency_histogram": {
+    "bucket_ms": [50, 100, 250, 500, 1000],
+    "counts": [2, 7, 5, 1, 0]
+  }
+}
+```
+
+Denied document IDs, chunk IDs, titles, snippets, raw text refs, and
+per-denied-resource timings must not appear in ordinary receipts, prompts,
+citations, logs, or proof UI payloads.
 
 ## Required Invariants
 
@@ -238,6 +353,13 @@ Allowed `final_status` values:
 7. Revoked or stale chunks must not be retrieved for new decisions.
 8. The system must support replay from `RAGTrace`.
 9. Denied candidate content must not appear in reranker input, prompt input, citations, ordinary logs, or operator proof UI.
+10. No accepted or full RAG receipt may exist without a trace, bundle hash,
+    policy decision IDs, verified claim IDs, and a signer profile.
+11. A minimal evidence set may reduce verifier-visible support only from
+    already authorized evidence; it must never introduce new evidence or expose
+    denied candidate content.
+12. Degraded receipts must preserve fail-closed semantics and disclose only
+    policy-safe refusal or abstention metadata.
 
 ## MVP Acceptance Tests
 
@@ -250,6 +372,10 @@ Allowed `final_status` values:
 - Citation laundering test.
 - Replay reconstruction test.
 - Semantic-memory-not-authority test.
+- RAG receipt closure test.
+- Minimal evidence set verifier test.
+- Lite receipt / abstain degradation test.
+- Side-channel-safe denied telemetry test.
 
 ## Open Implementation Notes
 
@@ -257,3 +383,8 @@ Allowed `final_status` values:
 - Connector framework choice is intentionally left open.
 - The first MVP should use one controlled document source before broad enterprise connector support.
 - Claim verification may start with structured citations and lexical span checks before adding NLI or LLM-judge support.
+- COSE/JOSE should wrap a stable SeedCore RAG receipt payload, not replace the
+  SeedCore trace or verifier contracts.
+- Transparency registration, such as SCITT-style publication, is a later
+  external audit profile after local receipt generation and replay validation
+  are green.
