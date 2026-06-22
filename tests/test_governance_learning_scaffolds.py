@@ -29,6 +29,10 @@ def test_governance_scenario_generator_emits_shadow_only_rct_probes() -> None:
         "stale_telemetry_preflight",
         "out_of_bounds_preflight",
         "missing_required_evidence",
+        "coordinate_redirect",
+        "replay_injection",
+        "tampered_telemetry_signature",
+        "high_value_missing_cosignature",
     ]
     assert all(scenario.shadow_only for scenario in scenarios)
     assert all(scenario.expected_no_execute for scenario in scenarios)

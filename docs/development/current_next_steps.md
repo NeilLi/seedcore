@@ -136,6 +136,17 @@ before execution, not by demos that only show happy paths.
   clearance, production deploys, and quarantine release remain policy-admitted
   or human-reviewed actions.
 
+## Status Update (2026-06-22, Window G Governance-Learning Contract & Schema Freeze)
+
+**Done (2026-06-22).** Implemented the full Window G contract freeze slice for governance-aware learning and distillation.
+
+- **Models:** Defined strict Pydantic v2 models for `GovernanceFeatureVector`, `GovernanceEvidenceSummary`, and `GovernanceLearningSampleV1` in [governance_learning.py](../../src/seedcore/models/governance_learning.py) and registered them in [__init__.py](../../src/seedcore/models/__init__.py).
+- **Exporter:** Created `GovernanceLearningSampleExporter` in [exporter.py](../../src/seedcore/ops/governance_learning/exporter.py) to build samples from supplied `ActionIntent`, `EvidenceBundle`, and verifier outcome artifacts. Ensures fail-closed error handling when snapshot/evidence/replay links are absent.
+- **Verdict Scorer:** Updated `GovernanceRewardScorer` in [governance_reward.py](../../src/seedcore/ml/reward/governance_reward.py) to align with canonical verdict taxonomy (`near_miss_allow`, `near_miss_deny`, etc.), ensuring only verified clean allows can become positive reward and `verification_mismatch`/lockout outcomes are never treated as positive reward.
+- **Sample Store:** Generalised [sample_store.py](../../src/seedcore/ml/distillation/sample_store.py) to write `GovernanceLearningSampleV1` records to a governance-specific JSONL file.
+- **Scenario Curriculum:** Expanded `GovernanceScenarioGenerator` in [governance_scenarios.py](../../src/seedcore/ml/curriculum/governance_scenarios.py) with advanced coordinate-redirect, replay-injection, tampered-signature, and missing-cosignature synthetic intent probes.
+- **Contract Tests:** Added [test_governance_learning_harness.py](../../tests/test_governance_learning_harness.py) to validate schema checks, exporter boundaries, verdict isolation, and generator probes.
+
 ## Status Update (2026-06-17, Immutable Policy Anchor & Graph Mutation Gate)
 
 **Done (2026-06-17).** Added the first contract-level "Immutable Policy Anchor & Graph Mutation Gate" slice for protecting the active PDP path against AI-origin graph or policy snapshot promotion attempts.

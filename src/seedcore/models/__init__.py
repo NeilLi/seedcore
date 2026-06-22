@@ -98,6 +98,11 @@ from .replay import (
     TrustPageProjection,
     VerificationResult,
 )
+from .governance_learning import (
+    GovernanceLearningSampleV1,
+    GovernanceFeatureVector,
+    GovernanceEvidenceSummary,
+)
 from .mutation_receipt import MutationReceipt
 from .pdp_hot_path import (
     HotPathAssetContext,
@@ -281,6 +286,9 @@ __all__ = [
     "CoSignature",
     "MutationIntent",
     "CoSignedPromotionReceipt",
+    "GovernanceLearningSampleV1",
+    "GovernanceFeatureVector",
+    "GovernanceEvidenceSummary",
 ]
 try:
     __all__.extend([

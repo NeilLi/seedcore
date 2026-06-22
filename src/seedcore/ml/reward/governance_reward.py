@@ -7,7 +7,8 @@ from typing import Dict, Literal, Optional, Sequence
 GovernanceVerdict = Literal[
     "clean_allow",
     "clean_deny",
-    "near_miss_policy_gap",
+    "near_miss_allow",
+    "near_miss_deny",
     "quarantine",
     "escalate",
     "verification_mismatch",
@@ -59,10 +60,16 @@ class GovernanceRewardScorer:
     _VERIFIER_FAILURES = {
         "verification_failed",
         "verification_mismatch",
+        "verification_lockout",
         "result_verifier_failed",
+        "result_verifier_lockout",
+        "result_verifier_verification_failed",
         "failed",
+        "lockout",
         "mismatch",
+        "replay_mismatch",
     }
+    _VERIFIED_OUTCOMES = {"verified"}
 
     def score(self, observation: GovernanceRewardObservation) -> GovernanceRewardVerdict:
         disposition = observation.pdp_disposition.strip().lower()
@@ -76,9 +83,9 @@ class GovernanceRewardScorer:
         elif all_codes & self._STALE_CODES:
             verdict = "stale_context"
         elif disposition == "allow":
-            verdict = "clean_allow"
+            verdict = "near_miss_allow" if trust_gap_codes else "clean_allow"
         elif disposition == "deny":
-            verdict = "near_miss_policy_gap" if reason_code.startswith("near_miss") else "clean_deny"
+            verdict = "near_miss_deny" if (reason_code.startswith("near_miss") or "near_miss" in reason_code) else "clean_deny"
         elif disposition == "quarantine":
             verdict = "quarantine"
         elif disposition == "escalate":
@@ -87,6 +94,11 @@ class GovernanceRewardScorer:
             verdict = "clean_deny"
 
         training_eligible, missing_links = self._training_eligibility(observation)
+        notes = [f"missing_{name}" for name in missing_links]
+        verified_outcome = verifier_outcome in self._VERIFIED_OUTCOMES
+        if training_eligible and not verified_outcome:
+            notes.append("missing_verified_verifier_outcome")
+        admissible_for_positive_reward = verdict == "clean_allow" and training_eligible and verified_outcome
         return GovernanceRewardVerdict(
             request_id=observation.request_id,
             verdict=verdict,
@@ -96,9 +108,9 @@ class GovernanceRewardScorer:
             policy_snapshot_hash=observation.policy_snapshot_hash,
             decision_graph_snapshot_hash=observation.decision_graph_snapshot_hash,
             verifier_outcome=observation.verifier_outcome,
-            admissible_for_positive_reward=verdict == "clean_allow" and training_eligible,
+            admissible_for_positive_reward=admissible_for_positive_reward,
             training_eligible=training_eligible,
-            notes=tuple(f"missing_{name}" for name in missing_links),
+            notes=tuple(notes),
         )
 
     @staticmethod

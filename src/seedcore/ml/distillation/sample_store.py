@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 # You can mount a PVC here in Kubernetes, or override via env var.
 DISTILLATION_DIR = Path(os.getenv("XGB_STORAGE_PATH", "/app/data"))
 SAMPLES_FILE = DISTILLATION_DIR / "distillation_samples.jsonl"
+GOVERNANCE_SAMPLES_FILE = DISTILLATION_DIR / "governance_learning_samples.jsonl"
+
+from seedcore.models.governance_learning import GovernanceLearningSampleV1
 
 
 def _ensure_dir() -> None:
@@ -175,3 +178,52 @@ def load_distillation_dataset(
         f"N={X.shape[0]}, D={X.shape[1]}, features={feature_names}"
     )
     return X, y, feature_names
+
+
+async def append_governance_sample(sample: GovernanceLearningSampleV1) -> None:
+    """
+    Append a single GovernanceLearningSampleV1 record to the governance JSONL file.
+    """
+    _ensure_dir()
+    data = sample.model_dump()
+    sanitized = _sanitize_sample(data)
+
+    def _write():
+        try:
+            with GOVERNANCE_SAMPLES_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(sanitized) + "\n")
+        except Exception as e:
+            logger.error(f"[sample_store] Failed to append governance sample: {e}")
+            raise
+
+    await asyncio.to_thread(_write)
+    logger.debug(f"[sample_store] Appended governance learning sample: sample_id={sample.sample_id}")
+
+
+def load_governance_dataset() -> List[GovernanceLearningSampleV1]:
+    """
+    Load all GovernanceLearningSampleV1 records from the governance JSONL file.
+    """
+    if not GOVERNANCE_SAMPLES_FILE.exists():
+        logger.warning(f"[sample_store] Governance samples file not found: {GOVERNANCE_SAMPLES_FILE}")
+        return []
+
+    samples: List[GovernanceLearningSampleV1] = []
+    try:
+        with GOVERNANCE_SAMPLES_FILE.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        samples.append(GovernanceLearningSampleV1(**obj))
+                except Exception as e:
+                    logger.warning(f"[sample_store] Skipping invalid governance line: {e}")
+    except Exception as e:
+        logger.error(f"[sample_store] Failed to read governance samples file: {e}")
+        raise
+
+    logger.info(f"[sample_store] Loaded {len(samples)} governance samples from {GOVERNANCE_SAMPLES_FILE}")
+    return samples

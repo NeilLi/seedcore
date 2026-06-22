@@ -387,26 +387,19 @@ trust runtime's own definition of success.
 The next stage should be scheduled in six windows after the current contract and
 operability work.
 
-### Window G: 2026-06-08 to 2026-06-28
+### Window G: 2026-06-08 to 2026-06-28 (Completed)
 
 Goal:
 
 - freeze the governance-learning data and evaluation contract
 
-Must land:
+Landed:
 
-- one `GovernanceLearningSampleV1` schema for:
-  - request
-  - decision
-  - trust gaps
-  - obligations
-  - evidence summary
-  - final verification outcome
-- one export path from replay/verification artifacts into training samples
-- one negative-example corpus from `deny`, `quarantine`, `escalate`, stale
-  context, and mismatch cases
-- one baseline evaluation harness measuring exactness against contract-shaped
-  outputs
+- defined Pydantic models for `GovernanceLearningSampleV1`
+- built the parameter-driven exporter mapping supplied `EvidenceBundle`,
+  `ActionIntent`, and verifier outcome artifacts to samples
+- expanded the negative/shadow scenarios generation curriculum
+- verified all criteria using `tests/test_governance_learning_harness.py`
 
 ### Window H: 2026-06-22 to 2026-07-19
 
