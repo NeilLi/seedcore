@@ -35,6 +35,37 @@ vendor-neutral implementation slice for allow-only evidence promotion:
 The research should therefore be adopted as a hardening overlay, not as a new
 architecture center and not as a reason to import a full RAG platform.
 
+## Verified Current Implementation State
+
+As of 2026-06-22, the implemented codebase should be described narrowly:
+
+- The governed RAG data contracts and allow-only promotion guard are implemented
+  in `src/seedcore/models/rag.py` and
+  `src/seedcore/ops/rag/authorization_boundary.py`.
+- `promote_authorized_rag_candidates(...)` promotes only explicit
+  `allow` decisions into `RAGEvidenceItem` objects and collapses denied,
+  quarantined, or missing-decision candidates into aggregate denial counts.
+- Focused tests in `tests/test_governed_rag_contracts.py` cover the promotion
+  boundary, missing-decision handling, supported-claim evidence requirement, and
+  accepted-trace closure-reference requirement.
+
+The following pieces are not yet implemented as an end-to-end governed RAG
+service and should remain explicit next work rather than implied current
+behavior:
+
+- production retrieval adapters that emit `RAGCandidateChunk` objects from a
+  controlled source;
+- a synchronous PDP or policy-check callout that mints the
+  `RAGAuthorizationDecision` inputs consumed by the promotion guard;
+- guarded prompt assembly that can only read from the returned
+  `RAGEvidenceBundle`;
+- verifier checks that every cited `evidence_item_id` belongs to the authorized
+  bundle;
+- trace/replay validation that cross-checks bundle, draft, claim, and policy
+  decision references against concrete artifacts;
+- RAG receipt signing, minimal-evidence-set artifacts, degraded/lite receipt
+  outcomes, and side-channel-safe telemetry tests.
+
 Primary references checked:
 
 - [Policy-Governed RAG - Research Design Study](https://arxiv.org/abs/2510.19877)
@@ -175,14 +206,23 @@ validator exist would create cryptographic ceremony around an immature contract.
 
 ## Immediate SeedCore Work
 
-1. Extend the RAG contract with a `RAGReceipt` profile and degradation modes.
-2. Add `minimal_evidence_item_ids` and verifier metadata to the RAG trace or a
+1. Build a controlled-source retrieval adapter that emits `RAGCandidateChunk`
+   objects without selecting a broad vector-database or enterprise connector
+   stack.
+2. Add the PDP/policy decision callout that turns candidate chunks into
+   `RAGAuthorizationDecision` inputs for the existing promotion guard.
+3. Add guarded prompt assembly that accepts only a `RAGEvidenceBundle` and test
+   that denied or missing-decision content cannot enter prompt input, citations,
+   ordinary logs, or proof UI payloads.
+4. Extend verifier and trace validation so supported claims cite only authorized
+   bundle members and accepted traces cross-check bundle, draft, claim, and
+   policy decision references.
+5. Extend the RAG contract with a `RAGReceipt` profile and degradation modes.
+6. Add `minimal_evidence_item_ids` and verifier metadata to the RAG trace or a
    companion verifier artifact.
-3. Add side-channel-safe telemetry fields for aggregate denial and latency
+7. Add side-channel-safe telemetry fields for aggregate denial and latency
    reporting.
-4. Add focused tests that prove denied candidate details do not enter receipts,
-   prompts, citations, ordinary logs, or proof UI payloads.
-5. Keep vector DB, connector, COSE, JOSE, SCITT, and NLI choices behind the
+8. Keep vector DB, connector, COSE, JOSE, SCITT, and NLI choices behind the
    contract until the controlled-source RAG lane is green.
 
 ## Bottom Line

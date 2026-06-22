@@ -180,6 +180,12 @@ center or premature vendor stack.
   verifiers, vector databases, and enterprise connectors remain profile-gated
   follow-ons after the controlled-source RAG lane and replay validator are
   green.
+- **Implementation truth check:** The codebase currently has the vendor-neutral
+  RAG models, allow-only promotion guard, and focused contract tests. It does
+  not yet have an end-to-end governed RAG service path: production retrieval
+  adapters, PDP decision minting, guarded prompt assembly, bundle-membership
+  verifier checks, trace cross-validation, receipt signing, and side-channel
+  telemetry tests remain explicit next slices under the same authority boundary.
 
 ## Status Update (2026-06-17, Immutable Policy Anchor & Graph Mutation Gate)
 
@@ -302,7 +308,9 @@ without changing SeedCore's authority semantics:
    only explicitly allowed chunk decisions become `RAGEvidenceItem`s, while
    denied or missing-decision candidates are reduced to aggregate counts before
    downstream model context is assembled. The next safe slice is a signed
-   `RAGReceipt` / minimal-evidence-set contract and side-channel-safe telemetry
+   controlled-source adapter plus PDP decision callout, followed by guarded
+   prompt assembly, verifier bundle-membership checks, trace cross-validation,
+   and then `RAGReceipt` / minimal-evidence-set / side-channel-safe telemetry
    tests, as scoped in
    [policy_governed_rag_research_adoption_review.md](policy_governed_rag_research_adoption_review.md)
    and the
