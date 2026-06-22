@@ -24,6 +24,8 @@ Canonical north-star references:
 
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
   (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
+- [`seedcore_north_star_architecture_v1.2.0.pdf`](assets/seedcore_north_star_architecture_v1.2.0.pdf)
+  - visual companion deck; the Markdown North Star remains canonical
 - [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
   - market-signal memo for why local autonomous applications, RTX Spark /
     DGX-class compute, and frontier agents accelerate the need for governed
@@ -445,6 +447,8 @@ Primary planning docs:
 
 - [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
   (cluster posture includes Kafka; local rollout → [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
+- [`seedcore_north_star_architecture_v1.2.0.pdf`](assets/seedcore_north_star_architecture_v1.2.0.pdf)
+  — cleaned visual companion deck for the North Star; not a separate roadmap
 - [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
   — category framing reference for external messaging, partner docs, and README
   language
