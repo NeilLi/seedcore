@@ -22,13 +22,21 @@ This contract is intentionally narrow: one workflow, one evidence model, one dec
    or a signed context envelope.
 7. Causality-sensitive requests must prove the local view is at least as fresh
    as the user's last relevant mutation or fail closed.
-8. Zanzibar-style external graph checks are not part of the default RCT hot
+8. Mutation-derived causality must be anchored in a signed mutation receipt or
+   equivalent trusted sequencer output. A client-supplied token is only a
+   freshness demand; it is not proof unless the receipt signature, scope,
+   sequence, session binding, and epoch are valid.
+9. Zanzibar-style external graph checks are not part of the default RCT hot
    path; graph inputs must be compiled into bounded local decision artifacts
    before evaluation.
-9. Context sufficiency must be decided before policy allow: required fields,
-   context-envelope signatures, causality freshness, and freshness SLAs must all
-   pass or the request returns `deny`, `quarantine`, or `escalate` with an
-   explicit trust gap.
+10. Context sufficiency must be decided before policy allow: required fields,
+    context-envelope signatures, causality freshness, and freshness SLAs must all
+    pass or the request returns `deny`, `quarantine`, or `escalate` with an
+    explicit trust gap.
+11. If the local context watermark is behind the receipt-required sequence, the
+    engine may block only inside a bounded convergence budget. If it cannot
+    prove catch-up in time, it must return `quarantine` with
+    `replay_mismatch_fail_closed` and mint no `ExecutionToken`.
 
 ## Context Infrastructure Pattern
 
@@ -42,6 +50,49 @@ The hot path follows ADR 0001's ecosystem posture:
   into subscribed local views through CDC or equivalent event streams.
 - External graph PDP services remain future scale options, not the current
   execution gate for Restricted Custody Transfer.
+
+## Signed Mutation Receipt And Watermark Gate
+
+The next contract extension sharpens the existing `context_freshness` field into
+a deterministic replay gate. A causality token should point to a signed mutation
+receipt produced by the system that accepted the upstream mutation, such as an
+approval update, delegation revoke, custody transition, asset lock, or source
+registration change.
+
+Minimum receipt semantics:
+
+- `receipt_id`: stable opaque receipt reference.
+- `mutation_type`: bounded operation class such as `approval.updated` or
+  `delegation.revoked`.
+- `sequence_number` or `log_offset`: monotonic boundary for the relevant
+  tenant, cluster, or context stream.
+- `snapshot_ref`: policy or context snapshot family the mutation belongs to,
+  when known.
+- `issued_at` and `expires_at`: short epoch for replay control.
+- `subject_ref`, `resource_ref`, and optional `workflow_id`: scope binding.
+- `session_binding_hash`: hash of the active caller/session/public-key binding
+  when the profile requires proof-of-possession.
+- `issuer`, `key_ref`, and `signature_ref`: verification material for the
+  sequencer or mutation authority.
+
+Runtime gate:
+
+1. Verify the receipt signature, scope, epoch, and session binding.
+2. Resolve the request's `required_watermark` from the receipt sequence or log
+   offset.
+3. Compare the local context projection's `local_view_watermark` with the
+   required watermark.
+4. If `local_view_watermark >= required_watermark`, evaluate normally.
+5. If the local view is behind, block only inside the declared
+   `barrier_timeout_ms` to let the local view converge or to use an explicitly
+   admitted direct-source read for that profile.
+6. If the boundary still cannot be proven, return `quarantine` with
+   `replay_mismatch_fail_closed`, emit the receipt and watermark evidence, and
+   withhold the `ExecutionToken`.
+
+This is a bounded freshness barrier, not a general request-time database fan-out
+permission. The final PDP decision remains synchronous and deterministic over
+the proven context package.
 
 ## Endpoint (Proposed)
 
@@ -61,6 +112,10 @@ Optional debug:
   "policy_snapshot_ref": "snapshot:pkg-prod-2026-04-02",
   "context_freshness": {
     "causality_token": "ctx:approval-transfer-001:000042",
+    "mutation_receipt_ref": "mutation_receipt:approval-transfer-001:000042",
+    "required_watermark": "000042",
+    "local_view_watermark": "000042",
+    "barrier_timeout_ms": 25,
     "minimum_observed_at": "2026-04-02T08:00:12Z",
     "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
     "local_view_version": "000042",
@@ -70,6 +125,10 @@ Optional debug:
     "schema_profile": "rct.hot_path.context.v1",
     "required_fields_present": true,
     "causality_satisfied": true,
+    "mutation_receipt_verified": true,
+    "watermark_gate_satisfied": true,
+    "session_binding_satisfied": true,
+    "token_epoch_satisfied": true,
     "freshness_sla_satisfied": true,
     "signed_envelopes_verified": true,
     "state_binding_hash": "sha256:state-binding-transfer-001"
@@ -152,6 +211,9 @@ Optional debug:
 - `context_freshness.local_view_ref`
 - `context_freshness.local_view_version`
 - `context_freshness.freshness_sla_profile`
+- `context_freshness.mutation_receipt_ref` for causality-sensitive mutations
+- `context_freshness.required_watermark` for receipt-backed freshness checks
+- `context_freshness.local_view_watermark` when a local view is used as proof
 - `context_sufficiency.schema_profile`
 - `context_sufficiency.state_binding_hash`
 - `action_intent` (existing SeedCore model shape)
@@ -171,6 +233,12 @@ Optional debug:
    based on the failed context class.
 9. Missing or unverifiable `state_binding_hash` input for a high-consequence
    RCT path -> `quarantine`.
+10. Missing, unsigned, expired, scope-mismatched, or session-mismatched mutation
+    receipt for a causality-sensitive request -> `quarantine`.
+11. `local_view_watermark < required_watermark` after the bounded barrier
+    budget -> `quarantine` with `replay_mismatch_fail_closed`.
+12. A repeated token/receipt pair outside the admitted session or epoch ->
+    `deny` or `quarantine` according to the policy profile.
 
 ## Response Contract
 
@@ -231,9 +299,18 @@ Optional debug:
     "snapshot_ref": "snapshot:pkg-prod-2026-04-02",
     "context_freshness": {
       "causality_token": "ctx:approval-transfer-001:000042",
+      "mutation_receipt_ref": "mutation_receipt:approval-transfer-001:000042",
       "local_view_ref": "view:rct-edge-handoff-bay-3:000042",
       "local_view_version": "000042",
+      "required_watermark": "000042",
+      "local_view_watermark": "000042",
       "freshness_sla_profile": "rct.fixture.v1"
+    },
+    "freshness_barrier": {
+      "required_watermark": "000042",
+      "local_view_watermark": "000042",
+      "barrier_result": "already_satisfied",
+      "barrier_wait_ms": 0
     },
     "state_binding_hash": "sha256:state-binding-transfer-001",
     "asset_ref": "asset:lot-8841",
@@ -277,6 +354,9 @@ Optional debug:
 - `snapshot_not_ready`
 - `insufficient_context`
 - `context_freshness_breach`
+- `mutation_receipt_invalid`
+- `context_watermark_behind`
+- `replay_mismatch_fail_closed`
 - `state_binding_hash_missing`
 - `hot_path_dependency_unavailable`
 - `trust_gap_quarantine`
@@ -328,7 +408,13 @@ Optional debug:
 - 100% decisions produce replay-verifiable artifacts.
 - All allow-path decisions include replay-visible context sufficiency,
   causality/freshness, signed-envelope, and `state_binding_hash` evidence.
+- Causality-sensitive allow paths include a verified signed mutation receipt,
+  required watermark, local-view watermark, barrier result, session binding
+  status, and token epoch status.
 - Missing, stale, invalid, or partial context fixtures resolve to deterministic
   `deny`, `quarantine`, or `escalate`; no insufficient-context fixture may mint
   an `ExecutionToken`.
+- Receipt replay, session mismatch, expired epoch, local-watermark lag, and
+  barrier-timeout fixtures resolve to deterministic `deny` or `quarantine` with
+  no `ExecutionToken`.
 - Verification surfaces render business-readable states without raw stack traces.

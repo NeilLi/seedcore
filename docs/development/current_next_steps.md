@@ -60,6 +60,10 @@ reasoning at decision time.
 - **Precision target:** pass only typed, freshness-aware, policy-admitted fields
   into the authority path. Memory, LLM advice, eval scores, and flywheel feedback
   remain advisory unless transformed into explicit policy inputs.
+- **Freshness target:** for causality-sensitive mutations, require a verified
+  signed mutation receipt plus `local_view_watermark >= required_watermark`
+  before evaluation; barrier timeout, replay, session mismatch, or expired epoch
+  returns a fail-closed result and no `ExecutionToken`.
 
 ### Step 3: Tokenize The Handoff Before Any Mutation
 
@@ -79,6 +83,9 @@ closure, or blanket execution authority.
   entrypoint so actuator calls, custody-state writes, NFC scan transitions, and
   settlement updates all reject missing, expired, replayed, or scope-mismatched
   tokens.
+- **Receipt target:** upstream governed mutations should return signed receipts
+  with monotonic sequence or log-offset bounds so follow-on PDP checks can prove
+  read-your-own-writes freshness instead of trusting a client-supplied token.
 
 ### Step 4: Make Evidence And Replay The Accountability Plane
 

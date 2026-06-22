@@ -26,7 +26,11 @@ Before enabling the flag in staging, confirm all of the following:
    - role facts
    - permission facts
    - resource-zone facts where applicable
-5. The current staging flow is already green without the flag enabled.
+5. Causality-sensitive fixtures include signed mutation receipts, required
+   watermarks, local-view watermarks, and expected barrier outcomes for at least
+   one allow, one stale-watermark quarantine, and one replay/session/epoch
+   failure.
+6. The current staging flow is already green without the flag enabled.
 
 ## Recommended Rollout Order
 
@@ -66,6 +70,17 @@ Check that these match:
 - `active_snapshot_version` from `GET /api/v1/pkg/authz-graph/status`
 
 If they do not match, do not enable the flag yet.
+
+Also validate the freshness barrier for causality-sensitive requests:
+
+- signed mutation receipt signature and scope are accepted only for the
+  intended workflow/session;
+- `required_watermark` from the receipt is at or below the local context
+  projection's `local_view_watermark` before evaluation;
+- local-watermark lag beyond the bounded barrier produces
+  `replay_mismatch_fail_closed`;
+- replayed, expired, or session-mismatched receipt/token pairs do not mint an
+  `ExecutionToken`.
 
 ## Step 3: Enable In One Staging Environment
 
@@ -112,6 +127,11 @@ Treat any of the following as rollout blockers:
 
 - `authz_graph_snapshot_mismatch`
 - unexpected `authz_graph_denied`
+- `mutation_receipt_invalid`
+- `context_watermark_behind`
+- `replay_mismatch_fail_closed` on fixtures expected to be fresh
+- any stale-watermark, expired-epoch, or receipt-replay fixture that mints an
+  `ExecutionToken`
 - repeated authz-graph refresh failures
 - PKG snapshot activation succeeds but authz graph activation is unhealthy
 - staging behavior diverges from the known allow/deny matrix
@@ -145,11 +165,14 @@ Promote to production only after staging shows all of the following:
 3. successful manual authz-graph refresh during runtime
 4. no snapshot mismatch errors
 5. no unexplained policy deny increase
+6. signed receipt / local-watermark fixtures prove both happy-path convergence
+   and fail-closed replay mismatch behavior
 
 ## Minimal Operator Checklist
 
 - PKG status healthy
 - authz graph status healthy
 - snapshot versions aligned
+- mutation receipt and local-watermark barrier fixtures pass
 - allow/deny smoke tests pass
 - rollback path tested once in staging

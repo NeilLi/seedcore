@@ -24,6 +24,9 @@ The hot-path (candidate) must match the baseline (governance core) results acros
 - `minted_artifacts` (Presence of ExecutionToken)
 - `context_sufficiency` (Schema, envelope, causality, freshness, and
   `state_binding_hash` outcomes)
+- `freshness_barrier` (Signed mutation receipt status, required watermark,
+  local-view watermark, barrier result, session binding, and token epoch status
+  for causality-sensitive requests)
 
 ---
 
@@ -47,11 +50,21 @@ Before promotion, the following telemetry and safety mechanisms must be active:
     context, stale local views, freshness-SLA breaches, invalid signed context
     envelopes, and missing `state_binding_hash` inputs. Any insufficiency on an
     allow-path candidate blocks token minting and emits an explicit trust gap.
+*   **Watermark Replay Gate Monitor:** Active counters and histograms for
+    invalid mutation receipts, local-watermark lag against receipt-required
+    watermarks, bounded barrier wait time, barrier timeouts, session-binding
+    mismatches, expired token epochs, and duplicated receipt/token replays.
+    `replay_mismatch_fail_closed` must be replay-visible whenever the local view
+    cannot prove catch-up inside the declared budget.
 *   **Parity Alerting:** Automated alerts triggered immediately on any shadow parity mismatch.
 *   **Audit Trail Consistency:** Verified that the `audit_id` from the hot-path matches the audit chain in the persistent audit ledger.
 *   **Replay Sufficiency Consistency:** Verified that governed receipts bind
     the policy snapshot, causality token, local-view version, freshness outcome,
     signer/envelope provenance, and `state_binding_hash` used at decision time.
+*   **Receipt And Watermark Consistency:** Verified that governed receipts bind
+    the signed mutation receipt, required watermark, local-view watermark,
+    barrier result, session binding status, token epoch status, and any replay
+    mismatch reason code used at decision time.
 *   **Rollback Mechanism:** The ability to toggle `SEEDCORE_RCT_HOT_PATH_MODE` back to `shadow` via environment variable or feature flag without a service restart.
 
 ---
@@ -64,6 +77,9 @@ If any of these conditions occur in `enforce` mode, the system should be immedia
 3.  **Hot-Path Dependency Failure:** Loss of Redis or PKG Manager connectivity.
 4.  **Sufficiency Fail-Open:** Any missing, stale, invalid, or replay-unbound
     context package that still mints an `ExecutionToken`.
+5.  **Watermark Fail-Open:** Any causality-sensitive request with an invalid
+    receipt, local watermark below the required watermark, expired epoch,
+    session mismatch, or barrier timeout that still mints an `ExecutionToken`.
 
 ---
 
@@ -75,6 +91,10 @@ The transition to `enforce` mode requires a sign-off report containing:
 4.  **Context Sufficiency Evidence:** Negative-path fixture results showing
     missing fields, stale causality, SLA breaches, invalid envelopes, and
     missing `state_binding_hash` inputs resolve to deterministic
+    deny/quarantine/escalate outcomes with no execution token.
+5.  **Freshness Barrier Evidence:** Negative-path fixture results showing
+    invalid mutation receipts, receipt/token replay, session mismatch, expired
+    epoch, local-watermark lag, and barrier timeout resolve to deterministic
     deny/quarantine/escalate outcomes with no execution token.
 
 ---

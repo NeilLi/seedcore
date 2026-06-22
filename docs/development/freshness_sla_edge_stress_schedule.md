@@ -43,6 +43,21 @@ source mutation or telemetry event accepted by context pipeline
 -> local PDP view can prove freshness at or beyond the request causality token
 ```
 
+For causality-sensitive mutations, the freshness token should resolve to a
+signed mutation receipt with a monotonic sequence number or source log offset.
+The hot-path gate is therefore:
+
+```text
+signed mutation receipt verified
+-> local_view_watermark >= receipt.required_watermark
+-> PDP may evaluate the bounded request
+```
+
+If the local view is behind, the runtime may wait only inside a bounded
+convergence barrier. Barrier timeout, invalid receipt signature, session-binding
+mismatch, expired epoch, or replayed receipt/token pairs are fail-closed
+outcomes, not best-effort freshness downgrades.
+
 Why it matters:
 
 - if Convergence P99 drifts above the lane's freshness bound, strict PDP checks
@@ -55,9 +70,12 @@ Why it matters:
 Every stress run should report:
 
 - Convergence P50, P95, and P99;
+- local watermark lag P50, P95, and P99 against receipt-required watermarks;
+- bounded barrier wait P50, P95, and P99;
 - PDP decision latency P50, P95, and P99;
 - signature verification latency P50, P95, and P99;
 - freshness-failure count by reason code;
+- mutation-receipt failure count by reason code;
 - false-positive quarantine count;
 - replay parity rate;
 - evidence bundle completeness;
@@ -84,22 +102,32 @@ Work schedule:
 1. Freeze fixture schemas for `DeviceIdentity`, `HardwareSignerRef`,
    `SignedEdgeTelemetryRefV0`, freshness windows, causality tokens, and
    `state_binding_hash` inputs.
-2. Add synthetic network-partition fixtures that delay context propagation
+2. Add `SignedMutationReceiptV0` fixture data for approval, delegation,
+   custody, source-registration, and telemetry-relevant mutations. Include
+   receipt signature refs, monotonic sequence or log-offset fields, session
+   binding hashes, short token epochs, and source snapshot refs.
+3. Add synthetic network-partition fixtures that delay context propagation
    beyond the declared freshness SLA.
-3. Verify that the PDP fails closed immediately when the simulated causality
-   token is fresher than the local view can prove.
-4. Add stale telemetry, missing telemetry, replayed telemetry, wrong asset,
+4. Verify that the PDP fails closed when the simulated receipt requires a
+   watermark fresher than the local view can prove after the bounded barrier
+   budget.
+5. Add invalid receipt signature, expired epoch, session mismatch, duplicated
+   receipt/token replay, and wrong-workflow receipt cases to the fixture matrix.
+6. Add stale telemetry, missing telemetry, replayed telemetry, wrong asset,
    wrong zone, and payload-hash mismatch cases to the RCT degraded-edge matrix.
-5. Persist replay artifacts that show the freshness bound, causality token,
-   local-view ref, telemetry refs, signer refs, and verifier outcome.
+7. Persist replay artifacts that show the freshness bound, causality token,
+   signed mutation receipt, required watermark, local-view watermark, barrier
+   result, telemetry refs, signer refs, and verifier outcome.
 
 Exit criteria:
 
 - replay parity is 1:1 for happy path and toxic-path fixtures;
 - stale or causality-breached context never settles as accepted;
+- stale local watermarks, invalid receipts, expired epochs, and replayed
+  receipt/token pairs never mint an `ExecutionToken`;
 - freshness reason codes are stable enough for operator surfaces and dashboards;
-- Convergence P99 and false-positive quarantine count are emitted by the test
-  harness.
+- Convergence P99, watermark-lag P99, barrier wait, receipt failure counts, and
+  false-positive quarantine count are emitted by the test harness.
 
 ## Lane 2: Jetson Orin Prototype Edge
 
@@ -241,6 +269,8 @@ Exit criteria:
 - complete Lane 1 fixture schema and toxic-path coverage;
 - add Convergence P99, false-positive quarantine, and replay parity metrics to
   the fixture harness;
+- add signed mutation receipt fixtures, local-watermark lag metrics, bounded
+  barrier timeout cases, and replay/session/epoch binding toxic paths;
 - expose freshness outcomes in Execution Replay Studio fixture payloads;
 - document the operator reason-code taxonomy for stale context and stale
   telemetry.

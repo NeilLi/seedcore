@@ -64,6 +64,9 @@ remote fan-out, LLM reasoning, or best-effort fallback.
 | :--- | :--- | :--- | :--- |
 | **Missing Required Context Field** | Policy class requires an approval, custody, telemetry, or signer field that is absent or untyped | `DENY` / `QUARANTINE` | `insufficient_context` |
 | **Local View Behind Causality Token** | `context_freshness.local_view_version` cannot prove freshness at or beyond the request causality token | `QUARANTINE` | `context_freshness_breach` |
+| **Invalid Mutation Receipt** | Causality-sensitive request references a missing, unsigned, expired, scope-mismatched, or session-mismatched mutation receipt | `DENY` / `QUARANTINE` | `mutation_receipt_invalid` |
+| **Local Watermark Behind Receipt** | Signed mutation receipt requires sequence or log offset `N`, but the local context projection can prove only `< N` before the bounded barrier expires | `QUARANTINE` | `context_watermark_behind` / `replay_mismatch_fail_closed` |
+| **Receipt Replay Outside Binding** | A previously valid receipt/token pair is replayed outside the bound session, workflow, proof-of-possession key, or short token epoch | `DENY` / `QUARANTINE` | `receipt_replay_detected` / `mutation_receipt_invalid` |
 | **Freshness SLA Breach** | Telemetry, custody, approval, delegation, or device context exceeds its explicit freshness SLA | `QUARANTINE` | `stale_context` / `stale_telemetry` |
 | **Invalid Signed Context Envelope** | Required context envelope has invalid signature, caveat, issuer, scope, or expiry | `DENY` / `QUARANTINE` | `invalid_context_envelope` |
 | **Missing State Binding** | High-consequence path lacks replay-visible `state_binding_hash` inputs for accepted policy/context state | `QUARANTINE` | `state_binding_hash_missing` |
@@ -74,6 +77,12 @@ Implementation anchors:
 - `docs/architecture/adr/adr-0001-pdp-hot-path.md`
 - `docs/development/asset_centric_pdp_hot_path_contract.md`
 - `docs/development/freshness_sla_edge_stress_schedule.md`
+
+Signed mutation receipts and local watermarks are the concrete SeedCore
+extension of Zanzibar-style zookie semantics. A client-supplied token can demand
+freshness, but the PDP path must verify the sequencer receipt and prove that its
+local context view has converged to the required watermark before any allow
+decision can mint an `ExecutionToken`.
 
 ## Recursive Agent Delegation Gates
 

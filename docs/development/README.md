@@ -87,6 +87,10 @@ time. The infrastructure around it should evolve in these specific directions:
 - Causality tokens, informed by SpiceDB `ZedToken` and Zanzibar zookie
   semantics, let a request demand context at least as fresh as the user's last
   relevant action, closing "New Enemy" and "Ghost Resource" races.
+- Signed mutation receipts sharpen those causality tokens into replayable
+  watermarks: the PDP may evaluate only after the receipt signature, scope,
+  session binding, token epoch, and local-view watermark prove the request is at
+  least as fresh as the admitted upstream mutation.
 - CDC-backed subscribed local views, informed by Debezium-style architectures,
   keep approval, custody, delegation, resource, and edge state near the PDP for
   synchronous low-latency reads.
