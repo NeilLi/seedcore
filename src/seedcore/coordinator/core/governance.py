@@ -3901,9 +3901,21 @@ def _compiled_authz_transition_deny_decision(
     )
 
 
+def _pdp_authz_graph_rollout_stage() -> int:
+    raw = os.getenv("SEEDCORE_PDP_AUTHZ_GRAPH_ROLLOUT_STAGE")
+    if raw is not None:
+        try:
+            return max(0, min(4, int(raw)))
+        except ValueError:
+            return 0
+    use_active_raw = os.getenv("SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH", "false")
+    if str(use_active_raw).strip().lower() in {"1", "true", "yes", "on"}:
+        return 4
+    return 0
+
+
 def _pdp_use_active_authz_graph() -> bool:
-    raw = os.getenv("SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH", "false")
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return _pdp_authz_graph_rollout_stage() >= 1
 
 
 def _pdp_use_authz_graph_transitions() -> bool:

@@ -154,6 +154,49 @@ before execution, not by demos that only show happy paths.
 - **Scenario Curriculum:** Expanded `GovernanceScenarioGenerator` in [governance_scenarios.py](../../src/seedcore/ml/curriculum/governance_scenarios.py) with advanced coordinate-redirect, replay-injection, tampered-signature, and missing-cosignature synthetic intent probes.
 - **Contract Tests:** Added [test_governance_learning_harness.py](../../tests/test_governance_learning_harness.py) to validate schema checks, exporter boundaries, verdict isolation, and generator probes.
 
+## Status Update (2026-06-23, Infrastructure Hardening Verification)
+
+**Done (2026-06-23).** Reviewed and hardened the SeedCore infrastructure
+hardening slice against the live baseline, then verified the local runtime and
+Rust/Python test paths.
+
+- **Authz graph rollout:** Staged compiled-authz-graph rollout behavior in
+  [pdp_hot_path.py](../../src/seedcore/ops/pdp_hot_path.py) and
+  [governance.py](../../src/seedcore/coordinator/core/governance.py) now keeps
+  baseline authority for shadow stages, emits warning metadata for divergence,
+  preserves full fail-closed behavior by default, and avoids leaking candidate
+  `ExecutionToken` or governed-receipt fields into non-authoritative stages.
+- **Workload identity:** `ActionIntent` and agent-action principal models now
+  carry optional `spiffe_id` and `dpop_jkt` fields, with router propagation in
+  [agent_actions_router.py](../../src/seedcore/api/routers/agent_actions_router.py)
+  and verification helpers in [workload.py](../../src/seedcore/ops/identity/workload.py).
+  SPIFFE/DPoP identity is treated as identity evidence, not standalone
+  execution authority; session or actor proof remains required.
+- **Revocation-safe caching:** [ray_cache.py](../../src/seedcore/ops/pkg/authz_graph/ray_cache.py)
+  now includes revocation epoch and token-counter version in decision cache keys,
+  caps positive decision caching to a short TTL, and preserves negative/deny
+  caching semantics.
+- **Protobuf transport spike:** Added
+  [pdp_hot_path.proto](../../src/seedcore/ops/pdp_hot_path.proto),
+  [pdp_hot_path_pb2.py](../../src/seedcore/ops/pdp_hot_path_pb2.py), and
+  [pdp_protobuf_serialization.py](../../src/seedcore/ops/pdp_protobuf_serialization.py)
+  as a mirror transport profile for hot-path request/response payloads without
+  changing the authoritative PDP contract.
+- **Rust/PyO3 test contract:** Feature-gated `seedcore-proof-py` so Rust
+  workspace tests run with `--no-default-features` while Python-extension
+  packaging keeps the `pyo3/extension-module` default. Updated
+  [README.md](../../README.md) to document the verified Rust command and fixed
+  the proof bridge unit-test fixture/env isolation in
+  [lib.rs](../../rust/crates/seedcore-proof-py/src/lib.rs).
+- **Verification:** Focused hardening tests passed:
+  `pytest tests/test_pdp_authz_graph_rollout_stages.py tests/test_workload_identity.py tests/test_authz_cache_security.py tests/test_pdp_protobuf_serialization.py -q`
+  (`23 passed`). The local `deploy/local/` runtime was brought up and
+  `bash scripts/host/verify_authz_graph_rfc_phases.sh` passed both its focused
+  pytest phase (`79 passed`) and live `127.0.0.1:8002` phase (`8 passed,
+  0 failed`). Rust workspace verification now passes with
+  `cargo test --manifest-path rust/Cargo.toml --workspace --no-default-features`
+  (`79 passed`).
+
 ## Status Update (2026-06-23, Governance-Learning Windows H-K Adoption Review)
 
 **Docs aligned (2026-06-23).** Reviewed the proposed Windows H-K plan for

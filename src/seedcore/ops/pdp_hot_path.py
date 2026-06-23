@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import zlib
@@ -953,67 +954,70 @@ def evaluate_pdp_hot_path(
         publish_pdp_hot_path_policy_outcome_best_effort(request, signed_context_response)
         return signed_context_response
 
-    runtime_status = _resolve_hot_path_runtime_status()
-    compiled_authz_index = runtime_status.get("compiled_authz_index")
-    if compiled_authz_index is None:
-        checks.append(_check("compiled_authz_graph_ready", False, "active compiled authz graph unavailable"))
-        response = _build_terminal_response(
-            request=request,
-            started=started,
-            checks=checks,
-            disposition="quarantine",
-            reason_code="hot_path_dependency_unavailable",
-            reason="Active compiled authorization graph is unavailable.",
-            policy_snapshot_ref=request.policy_snapshot_ref,
-        )
-        _record_terminal_shadow_result(request=request, response=response)
-        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
-        return response
+    stage = _pdp_authz_graph_rollout_stage()
+    runtime_status = _resolve_hot_path_runtime_status() if stage > 0 else {}
+    compiled_authz_index = runtime_status.get("compiled_authz_index") if stage > 0 else None
 
-    graph_freshness_ok = bool(runtime_status.get("graph_freshness_ok", True))
-    checks.append(
-        _check(
-            "compiled_authz_graph_fresh",
-            graph_freshness_ok,
-            "active compiled authz graph is stale",
-        )
-    )
-    if not graph_freshness_ok:
-        response = _build_terminal_response(
-            request=request,
-            started=started,
-            checks=checks,
-            disposition="quarantine",
-            reason_code="compiled_authz_graph_stale",
-            reason="Active compiled authorization graph is older than the allowed freshness window.",
-            policy_snapshot_ref=request.policy_snapshot_ref,
-        )
-        _record_terminal_shadow_result(request=request, response=response)
-        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
-        return response
+    if stage > 0:
+        if compiled_authz_index is None:
+            checks.append(_check("compiled_authz_graph_ready", False, "active compiled authz graph unavailable"))
+            response = _build_terminal_response(
+                request=request,
+                started=started,
+                checks=checks,
+                disposition="quarantine",
+                reason_code="hot_path_dependency_unavailable",
+                reason="Active compiled authorization graph is unavailable.",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            )
+            _record_terminal_shadow_result(request=request, response=response)
+            publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+            return response
 
-    compiled_snapshot = str(runtime_status.get("active_snapshot_version") or "").strip() or (
-        str(getattr(compiled_authz_index, "snapshot_version", "")).strip()
-        or str(getattr(compiled_authz_index, "snapshot_ref", "")).strip()
-    )
-    snapshot_ok = not compiled_snapshot or compiled_snapshot == request.policy_snapshot_ref
-    checks.append(_check("snapshot_consistency", snapshot_ok, "requested snapshot does not match active compiled graph"))
-    if not snapshot_ok:
-        response = _build_terminal_response(
-            request=request,
-            started=started,
-            checks=checks,
-            disposition="quarantine",
-            reason_code="snapshot_not_ready",
-            reason=(
-                f"Requested snapshot '{request.policy_snapshot_ref}' does not match "
-                f"active compiled snapshot '{compiled_snapshot}'."
-            ),
-            policy_snapshot_ref=request.policy_snapshot_ref,
+        graph_freshness_ok = bool(runtime_status.get("graph_freshness_ok", True))
+        checks.append(
+            _check(
+                "compiled_authz_graph_fresh",
+                graph_freshness_ok,
+                "active compiled authz graph is stale",
+            )
         )
-        _record_terminal_shadow_result(request=request, response=response)
-        publish_pdp_hot_path_policy_outcome_best_effort(request, response)
-        return response
+        if not graph_freshness_ok:
+            response = _build_terminal_response(
+                request=request,
+                started=started,
+                checks=checks,
+                disposition="quarantine",
+                reason_code="compiled_authz_graph_stale",
+                reason="Active compiled authorization graph is older than the allowed freshness window.",
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            )
+            _record_terminal_shadow_result(request=request, response=response)
+            publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+            return response
+
+        compiled_snapshot = str(runtime_status.get("active_snapshot_version") or "").strip() or (
+            str(getattr(compiled_authz_index, "snapshot_version", "")).strip()
+            or str(getattr(compiled_authz_index, "snapshot_ref", "")).strip()
+        )
+        snapshot_ok = not compiled_snapshot or compiled_snapshot == request.policy_snapshot_ref
+        checks.append(_check("snapshot_consistency", snapshot_ok, "requested snapshot does not match active compiled graph"))
+        if not snapshot_ok:
+            response = _build_terminal_response(
+                request=request,
+                started=started,
+                checks=checks,
+                disposition="quarantine",
+                reason_code="snapshot_not_ready",
+                reason=(
+                    f"Requested snapshot '{request.policy_snapshot_ref}' does not match "
+                    f"active compiled snapshot '{compiled_snapshot}'."
+                ),
+                policy_snapshot_ref=request.policy_snapshot_ref,
+            )
+            _record_terminal_shadow_result(request=request, response=response)
+            publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+            return response
 
     approved_source_registrations: dict[str, str | None] = {}
     if (request.asset_context.source_registration_status or "").strip().upper() == "APPROVED":
@@ -1045,6 +1049,22 @@ def evaluate_pdp_hot_path(
     apply_rct_triple_hash_fields(_ag, _gr, compiled_authz_index=compiled_authz_index)
     decision.authz_graph = _ag
     decision.governed_receipt = _gr
+
+    if compiled_authz_index is not None:
+        mismatch = (baseline_decision.allowed != decision.allowed) or (baseline_decision.disposition != decision.disposition)
+        if stage in (1, 2):
+            comparison_decision = decision
+            decision = baseline_decision.model_copy(deep=True)
+            if mismatch and stage == 2:
+                decision.trust_alert = json.dumps({
+                    "alert_level": "warning",
+                    "code": "authz_graph_divergence",
+                    "message": f"Divergence detected: baseline is '{baseline_decision.disposition}', compiled graph is '{comparison_decision.disposition}'."
+                })
+        elif stage == 3:
+            is_critical = (request.action_intent.action.type == "TRANSFER_CUSTODY")
+            if is_critical:
+                decision = baseline_decision.model_copy(deep=True)
 
     checks.extend(_decision_checks(decision))
     trust_gaps = _extract_trust_gaps(decision)
@@ -1255,7 +1275,22 @@ def hot_path_prometheus_text() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _pdp_authz_graph_rollout_stage() -> int:
+    raw = os.getenv("SEEDCORE_PDP_AUTHZ_GRAPH_ROLLOUT_STAGE")
+    if raw is not None:
+        try:
+            return max(0, min(4, int(raw)))
+        except ValueError:
+            return 4
+    use_active_raw = os.getenv("SEEDCORE_PDP_USE_ACTIVE_AUTHZ_GRAPH")
+    if use_active_raw is not None:
+        return 4 if str(use_active_raw).strip().lower() in {"1", "true", "yes", "on"} else 0
+    return 4
+
+
 def _resolve_compiled_authz_index() -> Any | None:
+    if _pdp_authz_graph_rollout_stage() == 0:
+        return None
     return _resolve_hot_path_runtime_status().get("compiled_authz_index")
 
 

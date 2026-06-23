@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package seedcore.pdp;
+
+message ContextFreshness {
+  string local_view_ref = 1;
+  string minimum_observed_at = 2;
+  string causality_token = 3;
+}
+
+message SignedContextEnvelope {
+  string envelope_id = 1;
+  string issuer = 2;
+  string issued_at = 3;
+  string claims_hash = 4;
+  string signature_ref = 5;
+  repeated string caveats = 6;
+}
+
+message AssetContext {
+  string asset_ref = 1;
+  string current_custodian_ref = 2;
+  string current_zone = 3;
+  string source_registration_status = 4;
+  string registration_decision_ref = 5;
+}
+
+message TelemetryContext {
+  string observed_at = 1;
+  int32 freshness_seconds = 2;
+  bool has_freshness_seconds = 3;
+  int32 max_allowed_age_seconds = 4;
+  bool has_max_allowed_age_seconds = 5;
+  repeated string evidence_refs = 6;
+  string current_zone = 7;
+  string current_coordinate_ref = 8;
+}
+
+message HotPathEvaluateRequestProto {
+  string contract_version = 1;
+  string request_id = 2;
+  string requested_at = 3;
+  string policy_snapshot_ref = 4;
+  ContextFreshness context_freshness = 5;
+  string action_intent_json = 6;
+  repeated SignedContextEnvelope signed_context_envelopes = 7;
+  AssetContext asset_context = 8;
+  TelemetryContext telemetry_context = 9;
+  string request_schema_bundle_json = 10;
+  string taxonomy_bundle_json = 11;
+}
+
+message DecisionView {
+  bool allowed = 1;
+  string disposition = 2;
+  string reason_code = 3;
+  string reason = 4;
+  string policy_snapshot_ref = 5;
+  string policy_snapshot_hash = 6;
+  string trust_alert = 7;
+}
+
+message CheckResult {
+  string check_id = 1;
+  string result = 2;
+  string detail = 3;
+}
+
+message SignerProvenance {
+  string artifact_type = 1;
+  string signer_type = 2;
+  string signer_id = 3;
+  string key_ref = 4;
+  string attestation_level = 5;
+}
+
+message HotPathEvaluateResponseProto {
+  string contract_version = 1;
+  string request_id = 2;
+  string decided_at = 3;
+  int32 latency_ms = 4;
+  DecisionView decision = 5;
+  repeated string required_approvals = 6;
+  repeated string trust_gaps = 7;
+  string obligations_json = 8;
+  repeated CheckResult checks = 9;
+  string execution_token_json = 10;
+  string execution_preconditions_json = 11;
+  string governed_receipt_json = 12;
+  repeated SignerProvenance signer_provenance = 13;
+  string request_schema_bundle_json = 14;
+  string taxonomy_bundle_json = 15;
+}

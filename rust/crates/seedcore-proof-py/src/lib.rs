@@ -1087,6 +1087,9 @@ mod tests {
     use seedcore_kernel_testkit::load_replay_bundle;
     use std::path::PathBuf;
     use std::str::FromStr;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn replay_bundle_fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1102,7 +1105,7 @@ mod tests {
 
     #[test]
     fn verify_chain_accepts_valid_fixture_bundle() {
-        let bundle = load_replay_bundle(&replay_bundle_fixture("allow_case.replay_bundle.json"))
+        let bundle = load_replay_bundle(&replay_bundle_fixture("allow_chain.json"))
             .expect("bundle should load");
         let report = verify_chain_inner(bundle, None);
         assert!(report.verified);
@@ -1110,7 +1113,9 @@ mod tests {
 
     #[test]
     fn verify_chain_accepts_wrapped_bridge_payload() {
-        let bundle = load_replay_bundle(&replay_bundle_fixture("allow_case.replay_bundle.json"))
+        let _lock = ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("SEEDCORE_VERIFY_TRUST_BUNDLE");
+        let bundle = load_replay_bundle(&replay_bundle_fixture("allow_chain.json"))
             .expect("bundle should load");
         let wrapped = serde_json::json!({ "bundle": bundle });
         let rendered = serde_json::to_string(&wrapped).expect("wrapped bundle should serialize");
@@ -1146,6 +1151,7 @@ mod tests {
 
     #[test]
     fn trust_bundle_env_path_is_used_by_verify_chain() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         std::env::set_var(
             "SEEDCORE_VERIFY_TRUST_BUNDLE",
             receipt_fixture("restricted_transition_trust_bundle.json"),
@@ -1171,6 +1177,7 @@ mod tests {
 
     #[test]
     fn verify_chain_reports_bad_trust_bundle_path() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let payload = r#"{"bundle":{"artifacts":[]},"trust_bundle_path":"./does-not-exist.json"}"#;
         let response = verify_chain(payload);
         assert!(response.is_err());

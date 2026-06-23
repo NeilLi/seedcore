@@ -18,4 +18,8 @@ seedcore-kernel-testkit = { path = "../seedcore-kernel-testkit" }
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23" }
+
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]

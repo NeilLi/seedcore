@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
+import time
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import ray  # pyright: ignore[reportMissingImports]
@@ -24,6 +26,7 @@ from .projector import AuthzGraphProjector
 from .service import AuthzGraphProjectionService
 
 DEFAULT_AUTHZ_GRAPH_CACHE_ACTOR_NAME = "seedcore_authz_graph_cache"
+logger = logging.getLogger(__name__)
 
 
 def _parse_optional_datetime(value: Any) -> Optional[datetime]:
@@ -89,6 +92,14 @@ def _serialize_transition_evaluation(evaluation: CompiledTransitionEvaluation) -
             "provenance_sources": list(evaluation.receipt.provenance_sources),
         },
     }
+
+
+def _positive_cache_ttl_seconds() -> float:
+    raw = os.getenv("SEEDCORE_POSITIVE_CACHE_TTL_SECONDS", "5")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 5.0
 
 
 def _index_status(index: CompiledAuthzIndex, *, source: str) -> Dict[str, Any]:
@@ -459,8 +470,25 @@ class AuthzGraphCacheActor:
             raise RuntimeError("No compiled authz index loaded")
         cache_key = _transition_cache_key(self._compiled_index, payload)
         cached = self._transition_cache.get(cache_key)
+        now = time.time()
+
         if cached is not None:
-            return dict(cached)
+            allowed = cached.get("allowed", False)
+            cached_at = cached.get("cached_at", 0.0)
+            ttl = _positive_cache_ttl_seconds()
+
+            if not allowed or (now - cached_at <= ttl):
+                logger.info(
+                    "Cache-assisted decision: hit on transition key %s (allowed=%s, disposition=%s, age_seconds=%.2f)",
+                    cache_key, allowed, cached.get("disposition"), now - cached_at
+                )
+                res = dict(cached)
+                res.pop("cached_at", None)
+                return res
+            else:
+                self._transition_cache.pop(cache_key, None)
+                self._status["transition_cache_entries"] = len(self._transition_cache)
+
         request = AuthzTransitionRequest(
             principal_ref=str(payload["principal_ref"]),
             operation=str(payload["operation"]),
@@ -487,9 +515,14 @@ class AuthzGraphCacheActor:
         )
         evaluation = self._compiled_index.evaluate_transition(request)
         serialized = _serialize_transition_evaluation(evaluation)
+
+        serialized["cached_at"] = now
         self._transition_cache[cache_key] = dict(serialized)
         self._status["transition_cache_entries"] = len(self._transition_cache)
-        return serialized
+
+        res = dict(serialized)
+        res.pop("cached_at", None)
+        return res
 
 
 def _transition_cache_key(index: CompiledAuthzIndex, payload: Mapping[str, Any]) -> str:
@@ -517,6 +550,11 @@ def _transition_cache_key(index: CompiledAuthzIndex, payload: Mapping[str, Any])
             "require_approved_source_registration",
             "allow_quarantine",
             "break_glass",
+            "revocation_epoch",
+            "token_counter_version",
+            "principal_id",
+            "token_id",
+            "policy_snapshot_id",
         )
     }
     canonical = json.dumps(

@@ -232,7 +232,7 @@ curl http://localhost:8002/api/v1/pdp/hot-path/metrics
 ### Rust Proof Kernel and TypeScript Surfaces
 
 ```bash
-cargo test --workspace --manifest-path rust/Cargo.toml
+cargo test --workspace --no-default-features --manifest-path rust/Cargo.toml
 cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
 
 npm --prefix ts install
@@ -266,7 +266,7 @@ Confirm tools with `/extensions list`. For details, see [GEMINI.md](GEMINI.md), 
 ```bash
 .venv/bin/pytest
 npm --prefix ts run test
-cargo test --workspace --manifest-path rust/Cargo.toml
+cargo test --workspace --no-default-features --manifest-path rust/Cargo.toml
 ```
 
 The CI workflow is defined in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).

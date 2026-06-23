@@ -518,6 +518,8 @@ def _map_to_hot_path_request(
             role_profile=payload.principal.role_profile,
             session_token=payload.principal.session_token or "",
             actor_token=payload.principal.actor_token,
+            spiffe_id=payload.principal.spiffe_id,
+            dpop_jkt=payload.principal.dpop_jkt,
         ),
         action=IntentAction(
             type=payload.workflow.action_type,
