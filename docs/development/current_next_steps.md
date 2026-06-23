@@ -154,6 +154,30 @@ before execution, not by demos that only show happy paths.
 - **Scenario Curriculum:** Expanded `GovernanceScenarioGenerator` in [governance_scenarios.py](../../src/seedcore/ml/curriculum/governance_scenarios.py) with advanced coordinate-redirect, replay-injection, tampered-signature, and missing-cosignature synthetic intent probes.
 - **Contract Tests:** Added [test_governance_learning_harness.py](../../tests/test_governance_learning_harness.py) to validate schema checks, exporter boundaries, verdict isolation, and generator probes.
 
+## Status Update (2026-06-23, Governance-Learning Windows H-K Adoption Review)
+
+**Docs aligned (2026-06-23).** Reviewed the proposed Windows H-K plan for
+distilled reasoning, HALT/abstention tuning, trust-proof refinement, and
+simulation-based governance validation.
+
+- **Decision:** Apply the plan as a deeper breakdown of the existing
+  [Governance-Aware Learning Next Stage Plan](governance_aware_learning_next_stage_plan.md),
+  not as a new parallel planning tree.
+- **Path correction:** Do not create top-level `docs/governance_learning/`,
+  `src/governance_learning/`, or `src/simulation/` roots for this work. Route
+  follow-on docs through `docs/development/`, and route implementation through
+  existing `src/seedcore/ml/...`, `src/seedcore/ops/governance_learning/...`,
+  verifier, replay, and sample-store surfaces.
+- **Next live window:** Window H should start with advisory taxonomies,
+  deterministic teacher labels from PDP/verifier/schema/token/replay outcomes,
+  replay-derived datasets, and shadow-only student evaluation. The student
+  artifact cannot become a final PDP, mint or expand `ExecutionToken`s, alter
+  evidence, or clear verifier failures.
+- **Safety posture:** Windows I-K are valid only if abstention remains a safe
+  no-execute/manual-review recommendation, refinement produces candidate
+  patches with replay/audit provenance, and simulation success does not imply
+  physical deployment readiness.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against

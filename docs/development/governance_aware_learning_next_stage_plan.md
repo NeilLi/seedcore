@@ -401,6 +401,49 @@ Landed:
 - expanded the negative/shadow scenarios generation curriculum
 - verified all criteria using `tests/test_governance_learning_harness.py`
 
+### Post-Window G Adoption Note: Windows H-K Detail (2026-06-23)
+
+The detailed H-K learning plan should be adopted as a decomposition of this
+canonical plan, not as a parallel docs or source tree. Its strongest
+contribution is the implementation discipline it adds after Window G:
+
+- start with stable taxonomies and deterministic baselines
+- keep teacher labels derived from PDP, verifier, schema, token, and replay
+  outcomes before using any LLM explanation enrichment
+- measure advisory outputs against the real hot-path and verifier outcomes
+- treat abstention as a first-class safe output
+- make verifier-guided repairs candidate patches only, never silent evidence
+  mutation
+- begin simulation with scripted governance agents before any RL policy
+
+The literal deliverable paths in the external plan are **not** adopted. They
+should be remapped into SeedCore's existing surfaces:
+
+| External-plan path | SeedCore-native target |
+| :--- | :--- |
+| `docs/governance_learning/*.md` | sections or follow-on memos under `docs/development/`, linked from this plan |
+| `docs/verifier/verifier_error_contract.md` | `docs/development/` verifier/replay contract memo, cross-linked to ADR 0004 and ADR 0005 |
+| `docs/simulation/governance_simulation_scenarios.md` | `docs/development/` simulation/scenario memo, subordinate to the RCT trust slice |
+| `src/governance_learning/*.py` | `src/seedcore/ml/scaffolds/`, `src/seedcore/ml/distillation/`, `src/seedcore/ml/reward/`, or `src/seedcore/ops/governance_learning/` depending on responsibility |
+| `src/simulation/*.py` | SeedCore runtime or ML simulation modules under `src/seedcore/`, not a top-level simulation package |
+| `data/governance_learning/*.jsonl` | generated artifacts produced by the sample store/exporter and excluded from authority paths |
+| `reports/window_*_eval.md` | generated evaluation reports; docs may summarize them, but reports do not become authority |
+
+The adoption decision is therefore:
+
+1. **Adopt H-K as the current roadmap sequence.** Window H is the next live
+   work after the completed Window G contract freeze.
+2. **Adopt the safety rules verbatim in spirit.** Learned components may
+   explain, abstain, repair, and simulate, but they cannot issue tokens,
+   override PDP, clear verifier failures, mutate signed evidence, or imply
+   physical deployment readiness.
+3. **Do not adopt the package layout verbatim.** New implementation should use
+   existing `src/seedcore` namespaces and existing `docs/development` routing.
+4. **Do not treat compute scale as the milestone.** The durable milestones are
+   taxonomy stability, replay-linkable samples, deterministic baselines,
+   schema-valid advisory outputs, zero false-safe critical advisories, and
+   verifier/replay closure.
+
 ### Window H: 2026-06-22 to 2026-07-19
 
 Goal:
@@ -409,20 +452,32 @@ Goal:
 
 Must land:
 
-- teacher prompt/spec for RCT preflight and explanation scaffolds
+- advisory output taxonomy for `reason_code`, `trust_gap_codes`,
+  `missing_authority_context`, `evidence_risk_flags`, and expected abstention
+  reasons
+- teacher prompt/spec plus deterministic teacher labeler for RCT preflight and
+  explanation scaffolds, with labels derived first from PDP, verifier, schema,
+  token, and replay outcomes
+- replay-derived dataset from `GovernanceLearningSampleV1` records, preserving
+  policy snapshot, decision-graph snapshot, verifier outcome, and evidence
+  references
 - one student artifact that predicts bounded outputs such as:
   - `reason_code`
   - `trust_gap_codes`
   - `required_obligations`
   - `abstain`
-- shadow evaluation path in the ML service or equivalent offline harness
+- shadow evaluation path in the ML service or equivalent offline harness,
+  including exact match, taxonomy-valid match, trust-gap precision/recall,
+  false-safe advisory rate, and zero final-authority usage
 - promotion gates comparing teacher/student predictions with real hot-path
   outcomes
 
 Success criteria:
 
 - no use of the student artifact as the final PDP
-- exact or taxonomy-valid output on the chosen evaluation slice
+- `student_final_authority_usage = 0`
+- taxonomy-valid output on the chosen evaluation slice
+- zero false-safe advisory outputs on critical cases
 
 ### Window I: 2026-07-13 to 2026-08-09
 
@@ -433,9 +488,10 @@ Goal:
 Must land:
 
 - one abstention taxonomy for the agent boundary
-- supervised fine-tuning dataset from failed preflights, denied requests,
-  stale-context cases, and human escalation examples
-- request-path behavior that routes abstention to:
+- negative and ambiguous examples from failed preflights, denied requests,
+  stale-context cases, incomplete evidence, unclear token scope, and human
+  escalation examples
+- confidence calibration that routes authority uncertainty to:
   - preflight only
   - operator review
   - no-execute
@@ -445,6 +501,8 @@ Must land:
 Success criteria:
 
 - the tuned model abstains on authority ambiguity instead of inventing a path
+- critical uncertainty miss rate is zero on the selected critical slice
+- false-allow advisory rate is zero on critical cases
 - no regression in strict gateway or verification contracts
 
 ### Window J: 2026-08-03 to 2026-08-30
@@ -458,8 +516,12 @@ Must land:
 - one verification-agent workflow that wraps strict replay verification
 - one structured feedback parser for `seedcore-verify` or
   `verify_rct_replay_strict.py`
+- one deterministic error-to-repair mapping from verifier errors to candidate
+  patches, where a patch can reference a source trace only when the source
+  trace contains the matching value
 - one refinement loop that proposes contract-shaped repairs to malformed proof
-  bundles
+  bundles, with original bundle hash, candidate patch, source provenance,
+  replay result, and review status
 - one supervised fine-tuning or self-distillation pass over successful
   `trust_proof` artifacts and verified evidence bundles
 
@@ -467,6 +529,10 @@ Success criteria:
 
 - improved replay-verification pass rate on held-out malformed examples
 - no automatic mutation of already-verified artifacts in production paths
+- `silent_evidence_mutation = 0`
+- `accepted_without_replay = 0`
+- critical verifier errors cannot be auto-fixed without review unless the
+  contract explicitly allows that class
 
 ### Window K: 2026-08-24 to 2026-09-27
 
@@ -476,15 +542,23 @@ Goal:
 
 Must land:
 
+- governance-specific simulation scenarios covering expired tokens, asset
+  scope mismatch, E-STOP preference, missing telemetry, verifier quarantine,
+  incomplete delegation chains, and stale policy snapshots
+- one scripted baseline agent before any RL work
 - one simulator reward contract including:
   - mission completion
   - zone compliance
   - token scope compliance
   - E-STOP / safety behavior
   - evidence capture completion
-- one simulation backend path for Unitree B2/Z1 or equivalent environment
-- one policy-distillation pass from the RL teacher into a bounded student policy
-  artifact
+- one simulation backend path for Unitree B2/Z1 or equivalent environment,
+  only after the scripted governance loop is green
+- optional lightweight RL with a small discrete action space (`proceed`,
+  `halt`, `request_manual_review`, `refresh_context`, `generate_evidence`,
+  `quarantine_and_stop`)
+- one policy-distillation pass from any RL teacher into a bounded student
+  policy artifact
 - one evaluation slice proving the learned policy respects governance
   constraints more often than a naive baseline
 
@@ -493,6 +567,8 @@ Success criteria:
 - unauthorized motion incurs heavy negative reward
 - simulated execution still requires valid authority artifacts in the loop
 - physical execution remains gated by SeedCore, not by the RL policy alone
+- E-STOP violation, critical boundary violation, invalid-token proceed, and
+  quarantine-continue rates are zero on the selected critical slice
 
 ### Window L: 2026-09-21 onward
 
