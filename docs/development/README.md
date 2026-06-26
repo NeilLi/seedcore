@@ -205,6 +205,10 @@ Start here for the active spine:
    reliability pattern: pluggable settlement protocols, proof-vector
    accumulation, append-only compensation, and cryptographic integrity for
    evidence.
+24. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
+   sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
+   verifier bridge architecture, and phased container runtime sandboxing rollout.
+
 
 ## 3. Stage Goals And Status Map
 
