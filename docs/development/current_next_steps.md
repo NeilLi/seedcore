@@ -220,6 +220,55 @@ simulation-based governance validation.
   no-execute/manual-review recommendation, refinement produces candidate
   patches with replay/audit provenance, and simulation success does not imply
   physical deployment readiness.
+- **Window J refinement safety:** Adopt the repair-safety matrix,
+  `authority_effect` taxonomy, `RefinementRecommendationV1` recommendation
+  shape, and `dev_repair` / `staging_shadow` / `production_advisory` operating
+  modes as formal design requirements for the trust-proof refinement phase.
+  The adopted form is intentionally narrower than the outside note: hash,
+  signature, key, trust-anchor, attestation, revocation, replay, transparency,
+  and evidence co-signature failures are diagnostic/manual-review only; only
+  representation-only fixture repairs can be auto-applied in dev, and every
+  candidate still requires replay.
+
+## Status Update (2026-06-26, Window H Offline Governance-Advisory Scaffold)
+
+**Done (2026-06-26).** Landed the first Window H scaffold as a strictly
+offline, shadow-only advisory learning loop in commit `58fa58d`
+(`feat: add governance advisory shadow scaffold`).
+
+- **Advisory contract:** Added
+  [governance_advisory.py](../../src/seedcore/models/governance_advisory.py)
+  with strict `GovernanceAdvisoryOutputV1` validation. Student outputs are
+  bounded to advisory fields and schema-enforced as `shadow_only=True`,
+  `final_authority=False`, and `student_final_authority_usage=0`.
+- **Teacher labels:** Added
+  [labeler.py](../../src/seedcore/ops/governance_learning/labeler.py) to derive
+  deterministic advisory labels from `GovernanceLearningSampleV1` records. The
+  labeler abstains for every case except already-verified clean allows and does
+  not reinterpret PDP or verifier outcomes.
+- **Replay-derived dataset:** Added
+  [governance_dataset.py](../../src/seedcore/ml/distillation/governance_dataset.py)
+  to encode a fixed feature order from `features` and `evidence_summary`, attach
+  teacher labels, and split train/eval rows deterministically by `sample_id`
+  hash.
+- **Offline student and evaluator:** Added
+  [governance_student.py](../../src/seedcore/ml/models/governance_student.py)
+  and
+  [governance_shadow_eval.py](../../src/seedcore/ml/distillation/governance_shadow_eval.py).
+  The v1 student is a conservative exact-row baseline that abstains on unknown
+  rows; the evaluator measures taxonomy validity, reason-code match,
+  trust-gap precision/recall, abstention match, false-safe advisories, and
+  authority usage.
+- **Contract tests:** Added
+  [test_governance_shadow_eval.py](../../tests/test_governance_shadow_eval.py)
+  for teacher-label mapping, strict authority-invariant validation, stable
+  dataset encoding/splitting, conservative student fallback, and false-safe /
+  authority-usage checks. Verification passed with
+  `pytest tests/test_governance_learning_harness.py tests/test_governance_shadow_eval.py -q`
+  (`14 passed`) and `git diff --cached --check`.
+- **Deferred by design:** No live PDP hook, coordinator hook, ML service route,
+  XGBoost/Ray training path, model serving endpoint, or promotion path was
+  added in this slice.
 
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
@@ -1075,6 +1124,10 @@ Once that program is materially closed, the next-stage implementation track is:
   refinement, and simulation RL
 - canonical plan:
   [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
+- Window J proof refinement must follow the plan's repair-safety contract:
+  candidate patches are typed recommendations with `authority_effect`, source
+  provenance, replay requirement, and review status; production remains
+  advisory/read-only.
 
 ## Program Lock: One Must-Win Workflow
 
