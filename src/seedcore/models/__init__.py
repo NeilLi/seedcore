@@ -103,6 +103,7 @@ from .governance_learning import (
     GovernanceFeatureVector,
     GovernanceEvidenceSummary,
 )
+from .governance_advisory import GovernanceAdvisoryOutputV1
 from .mutation_receipt import MutationReceipt
 from .pdp_hot_path import (
     HotPathAssetContext,
@@ -289,6 +290,7 @@ __all__ = [
     "GovernanceLearningSampleV1",
     "GovernanceFeatureVector",
     "GovernanceEvidenceSummary",
+    "GovernanceAdvisoryOutputV1",
 ]
 try:
     __all__.extend([

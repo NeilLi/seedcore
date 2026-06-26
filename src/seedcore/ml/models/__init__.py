@@ -7,13 +7,20 @@ This module provides model services for:
 - Batch and real-time prediction
 """
 
-from .xgboost_service import XGBoostService, XGBoostConfig, TrainingConfig, get_xgboost_service
-from .xgboost_models import (
-    TrainModelRequest, PredictRequest, BatchPredictRequest,
-    LoadModelRequest, DeleteModelRequest,
-    TrainModelResponse, PredictResponse, BatchPredictResponse,
-    ModelInfoResponse, ModelListResponse, DeleteModelResponse
-)
+import logging
+
+from .governance_student import GovernanceShadowStudent
+
+try:
+    from .xgboost_service import XGBoostService, XGBoostConfig, TrainingConfig, get_xgboost_service
+    from .xgboost_models import (
+        TrainModelRequest, PredictRequest, BatchPredictRequest,
+        LoadModelRequest, DeleteModelRequest,
+        TrainModelResponse, PredictResponse, BatchPredictResponse,
+        ModelInfoResponse, ModelListResponse, DeleteModelResponse
+    )
+except ModuleNotFoundError as e:
+    logging.getLogger(__name__).debug(f"Skipping optional XGBoost model imports in thin environment: {e}")
 
 __all__ = [
     # Service classes
@@ -21,6 +28,7 @@ __all__ = [
     "XGBoostConfig", 
     "TrainingConfig",
     "get_xgboost_service",
+    "GovernanceShadowStudent",
     
     # Request models
     "TrainModelRequest",
@@ -36,4 +44,4 @@ __all__ = [
     "ModelInfoResponse",
     "ModelListResponse",
     "DeleteModelResponse"
-] 
+]
