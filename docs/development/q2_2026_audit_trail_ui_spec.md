@@ -246,6 +246,27 @@ Use these patterns consistently across console pages and this document:
 - **Trust alert** and **status** rows match the frozen business vocabulary (`verified`, `quarantined`, …) and use **sentence case** in bullet lists.
 - **API** subsections list each endpoint on its own bullet; query parameters stay on the same line as the `GET`/`POST` path.
 
+### Operator design contract
+
+If SeedCore introduces a dashboard `DESIGN.md`, it should be a design-system
+companion for implementation tools, not a product or authority contract. Its
+structured tokens may define status colors, spacing, typography, component
+states, and contrast requirements for the operator console. Its prose may
+explain why the console prioritizes anomaly-first scanning, replay visibility,
+status vocabulary, and proof-preserving drill-down.
+
+Required boundaries:
+
+- the design file cannot define, infer, or override `verified`, `quarantined`,
+  `rejected`, `review_required`, or `pending_approval` states;
+- status, replay consistency, trust alerts, and runbook links must still come
+  from verification projections and deterministic builders;
+- design lint results such as contrast or token-reference failures are UI
+  diagnostics only, never verifier outcomes;
+- generated UI changes must preserve WCAG AA contrast, keyboard-accessible
+  navigation, readable table density, and frozen status vocabulary before they
+  are accepted.
+
 ## 5. Information architecture
 
 Q2 should ship 4 screens and 1 shared shell.

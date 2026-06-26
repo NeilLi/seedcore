@@ -521,8 +521,12 @@ there is a strong reason. Prefer this ownership split:
 - `current_next_steps.md` = live status and immediate execution order
 - `seedcore_2026_execution_plan.md` = workstreams, stage goals, and sequencing
 - `q2_2026_audit_trail_ui_spec.md` = product surface and operator UX contract
+  including any non-authoritative dashboard design-token companion
 - `execution_replay_studio_development_plan.md` = advanced read-only forensic
   replay UI step over the existing verification/replay contracts
+- `policy_graph_builder_implementation_plan.md` = policy-package authoring,
+  structured metadata, customer policy graph templates, and compile/test
+  expectations before PDP promotion
 - `authz_graph_engine_evolution_plan.md` = future-performance schedule for
   tuple contracts, structural benchmarks, Ray/cache hardening, and native graph
   kernels, gated by ADR 0011

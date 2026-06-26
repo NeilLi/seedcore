@@ -168,6 +168,10 @@ Must land:
 - eval cases for malformed evidence bundles, missing telemetry refs, stale
   signer posture, replay tamper, outbox delay, and verifier mismatch;
 - a structured parser for strict replay verification output;
+- a proof-refinement recommendation contract aligned with
+  [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md):
+  every suggestion carries `repair_class`, `authority_effect`, value sources,
+  replay requirement, and review status;
 - a comparison view showing proposed proof repairs beside deterministic
   verifier outcomes.
 
@@ -176,6 +180,8 @@ Exit criteria:
 - proof-refinement assistance improves malformed-example pass rate in shadow;
 - verified production artifacts are never automatically mutated by the
   refinement loop.
+- hash, signature, trust-anchor, attestation, revocation, replay, and
+  transparency failures are diagnostic/manual-review only, never auto-patched.
 
 ## Window S4: 2026-08-24 To 2026-09-27
 

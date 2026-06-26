@@ -89,6 +89,73 @@ The initial template should target the current product wedge:
 High-value collectible transfer / rare-shoe Restricted Custody Transfer
 ```
 
+## Policy Package Format
+
+PolicyGraph Builder should adopt the useful part of agent-readable Markdown
+formats: structured metadata for deterministic tooling plus semantic prose for
+reviewers and operators. The SeedCore version should be a **policy package**,
+not a hot-path `POLICY.md` that the PDP reads directly at request time.
+
+The machine-readable header is a compile-and-test input. It declares the typed
+policy graph, evidence requirements, reason codes, fixtures, redaction rules,
+and runbook references that should be compiled into PDP-adjacent artifacts and
+replay tests. The Markdown body explains rationale, operator handling, and
+customer-facing semantics. The authority-bearing runtime remains the compiled
+policy snapshot, PDP evaluation, scoped `ExecutionToken`, evidence closure, and
+verifier outcome.
+
+Illustrative package shape:
+
+```yaml
+---
+policy_package: rare_shoe_rct_v1
+status: draft
+pdp_contract: seedcore.agent_action_gateway.v1
+policy_snapshot_ref: policy_snapshot:rare_shoe_rct:v1
+required_context:
+  - source_registration
+  - buyer_delegation
+  - approval_envelope
+  - signed_delivery_telemetry
+evidence_requirements:
+  - id: origin_scan
+    signer_profile: enrolled_or_fixture_device
+    freshness_sla: policy_defined
+    binds:
+      - asset_id
+      - workflow_join_key
+reason_codes:
+  - REGISTRATION_NOT_APPROVED
+  - TELEMETRY_SIGNATURE_INVALID
+  - CROSS_ASSET_REPLAY
+runbooks:
+  quarantine: result_verifier_quarantine_remediation_runbook.md
+fixtures:
+  happy_path: rust/fixtures/transfers/allow_case
+  toxic_paths:
+    - rust/fixtures/transfers/deny_missing_approval
+    - rust/fixtures/transfers/quarantine_stale_telemetry
+---
+
+## Business Rule
+
+Human-readable policy rationale, approval semantics, exception handling,
+operator runbook notes, and fixture expectations live here.
+```
+
+Required guardrails:
+
+- a package can propose policy intent, but only compiled snapshots and the PDP
+  can admit execution authority;
+- front matter values that affect authority must be schema-validated and
+  fixture-tested before promotion;
+- runbook prose cannot relax a deny, quarantine, revocation, or verifier
+  failure;
+- missing, ambiguous, or uncompiled package fields fail closed during
+  admission testing;
+- any generated policy diff must include structured diagnostics and replay
+  fixture results before review.
+
 ## Customer-Facing Policy Questions
 
 Most customers cannot start with a policy graph. They can answer operational

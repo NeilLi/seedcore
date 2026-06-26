@@ -296,6 +296,125 @@ Target outputs:
 - fewer malformed evidence bundles
 - deterministic repair suggestions instead of free-form retries
 
+Design boundary:
+
+- the refiner consumes verifier reports; it does not reinterpret verifier
+  outcomes
+- candidate repairs are recommendations until strict replay verifies the
+  patched candidate bundle
+- production paths are read-only advisory; the refiner never mutates
+  already-verified artifacts, clears quarantine, substitutes hashes, replaces
+  signatures, or rewrites authority-bearing values
+
+#### Refinement Safety Contract
+
+Window J must treat proof refinement as a typed safety contract around the
+deterministic verifier, not as an agentic repair oracle. The first
+implementation should consume the structured `ReplayVerificationReport` /
+`VerificationReport` shape emitted by `seedcore-proof-core` and the grouped
+`seedcore-verify list-error-codes` manifest, then map verifier failures into
+bounded recommendation classes.
+
+The initial repair matrix is extensible, but it must classify at least the
+current verifier families below:
+
+| Verifier signal | Repair class | Patch surface | Auto-apply | Replay required | Manual review |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `canonicalization_failed` caused by representation-only issues | `format_repair` | candidate patch | dev fixtures only | yes | if the normalized bytes differ in hash material |
+| Missing optional non-authority metadata with a matching schema/provenance value | `schema_completion` | candidate patch | dev fixtures only | yes | yes unless `authority_effect` is `none` |
+| `artifact_hash_mismatch`, `payload_hash_mismatch`, `snapshot_hash_mismatch`, `state_binding_hash_mismatch`, or related direct replay mismatch codes | `diagnostic_hash_recompute` | diagnostic metadata only | no | yes | yes |
+| `replay_chain_mismatch` | `candidate_chain_reorder` | new candidate bundle only | no | yes | yes |
+| `signature_mismatch`, `missing_key_ref`, `key_not_found`, `unsupported_signing_scheme`, `invalid_key_material`, `invalid_trust_anchor`, `key_ref_mismatch`, `invalid_key_algorithm`, `endpoint_binding_mismatch`, `missing_attestation_binding`, `revoked_signer`, `replayed`, transparency failures, and evidence co-signature failures | `not_agent_repairable` | none, diagnostic only | no | yes | yes |
+| Rust verifier timeout or unavailable retry codes | `verifier_retry` | no proof mutation | retry verifier only | yes | if retry still fails |
+
+`diagnostic_hash_recompute` may compute and display the hash the verifier saw,
+but it must not replace declared artifact hashes in production records.
+`candidate_chain_reorder` may propose a reordered candidate bundle only when
+the original artifacts are preserved byte-for-byte and the suggestion is tied
+to the original bundle hash. Signature, key, trust-anchor, attestation,
+revocation, replay, and transparency failures are not agent-repairable.
+
+Every recommendation must include an `authority_effect`:
+
+- `none` — no change to authority-bearing values
+- `format_only` — representation normalization only, with no semantic or hash
+  material change
+- `changes_hash_material` — any proposed edit changes bytes covered by a hash
+  or signature
+- `changes_chain_order` — artifact ordering or predecessor links change
+- `changes_signature_domain` — signer, key, scheme, trust anchor, attestation,
+  revocation, or transparency interpretation changes
+- `changes_authority_interpretation` — PDP outcome, token scope, verifier
+  status, quarantine posture, or settlement interpretation would change
+- `unknown` — default fail-closed classification
+
+Only `none` and `format_only` can be eligible for dev-fixture auto-apply.
+All other values require manual review and replay. In staging and production,
+`can_auto_apply` must be false regardless of repair class unless a later ADR
+creates a narrower allowlist.
+
+The refiner should emit a strict `RefinementRecommendationV1` object:
+
+```json
+{
+  "refinement_id": "refine_...",
+  "input_bundle_hash": "sha256:...",
+  "verifier_error": {
+    "error_code": "artifact_hash_mismatch",
+    "artifact_type": "EvidenceBundle",
+    "field_path": "$.artifacts[2].artifact_hash",
+    "severity": "critical"
+  },
+  "repair_class": "diagnostic_hash_recompute",
+  "repair_status": "manual_review_required",
+  "authority_effect": "changes_hash_material",
+  "requires_replay": true,
+  "requires_manual_review": true,
+  "requires_resigning": false,
+  "can_auto_apply": false,
+  "suggested_patch": null,
+  "value_sources": [
+    {
+      "source_type": "verifier_report",
+      "source_id": "seedcore-verify:...",
+      "source_path": "$.artifact_reports[2].details",
+      "source_hash": "sha256:..."
+    }
+  ],
+  "diagnostics": {},
+  "safety_notes": []
+}
+```
+
+Diagnostics should use compiler-style JSON findings so agents, reviewers, and
+CI can consume the same shape without parsing prose. A finding must include at
+least `severity`, `error_code`, `artifact_type`, `field_path`, `message`, and
+`authority_effect`. When a finding is derived from replay or verifier output,
+it must also carry the verifier report reference and input bundle hash. These
+diagnostics are explanation and routing material; they do not reinterpret the
+verifier result or authorize patch application.
+
+Allowed `repair_class` values for the first contract are
+`format_repair`, `schema_completion`, `diagnostic_hash_recompute`,
+`candidate_chain_reorder`, `verifier_retry`, and `not_agent_repairable`.
+Allowed `repair_status` values are `proposed`, `applied_in_dev_fixture`,
+`manual_review_required`, `replay_failed`, `replay_passed`, and
+`unrepairable`. Allowed `source_type` values are `verifier_report`,
+`provenance_trace`, `schema_definition`, `original_bundle`, and
+`operator_input`; `operator_input` may justify review context, but it cannot
+by itself justify authority-bearing mutation.
+
+Operating modes:
+
+- `dev_repair`: local fixtures and mock replay suites may auto-apply
+  `format_repair`, and only fixture-scoped `schema_completion`, when
+  `authority_effect` is `none` or `format_only`; replay is still required.
+- `staging_shadow`: proposes patches and measures recovery rate through shadow
+  replay; no production state is mutated and `can_auto_apply` is false.
+- `production_advisory`: read-only diagnostics only; no patch application,
+  hash substitution, signature repair, quarantine clearance, or evidence
+  mutation.
+
 ### 4. Governance-Aware RL In Simulation
 
 Train robot policies so contract compliance is part of the reward function, not
@@ -516,12 +635,12 @@ Must land:
 - one verification-agent workflow that wraps strict replay verification
 - one structured feedback parser for `seedcore-verify` or
   `verify_rct_replay_strict.py`
-- one deterministic error-to-repair mapping from verifier errors to candidate
-  patches, where a patch can reference a source trace only when the source
-  trace contains the matching value
+- one deterministic error-to-repair mapping from verifier errors to the
+  refinement safety contract above, where a patch can reference a source trace
+  only when the source trace contains the matching value
 - one refinement loop that proposes contract-shaped repairs to malformed proof
   bundles, with original bundle hash, candidate patch, source provenance,
-  replay result, and review status
+  `authority_effect`, replay result, and review status
 - one supervised fine-tuning or self-distillation pass over successful
   `trust_proof` artifacts and verified evidence bundles
 
@@ -533,6 +652,9 @@ Success criteria:
 - `accepted_without_replay = 0`
 - critical verifier errors cannot be auto-fixed without review unless the
   contract explicitly allows that class
+- every recommendation with `changes_hash_material`,
+  `changes_signature_domain`, `changes_authority_interpretation`, or
+  `unknown` is manual-review only
 
 ### Window K: 2026-08-24 to 2026-09-27
 
@@ -644,6 +766,11 @@ Implementation direction:
 - use strict verifier feedback as the training signal
 - bias for exact schemas, hashes, and signature-related fidelity
 - keep refinement out of the final decision path unless separately approved
+- require `RefinementRecommendationV1` output for repair suggestions
+- preserve the original bundle hash and emit candidate patches instead of
+  overwriting proof material
+- classify every suggestion with `repair_class`, `authority_effect`, replay
+  requirement, value sources, and review status
 
 Best first use cases:
 
