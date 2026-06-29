@@ -309,6 +309,39 @@ slice while preserving the PDP authority boundary.
   probe script passed syntax validation and skipped at runtime because `runsc`
   is not installed locally.
 
+## Status Update (2026-06-29, KG / GraphRAG Research Reference)
+
+**Docs aligned (2026-06-29).** Reviewed the June 2026 KG / GraphRAG research
+summary against SeedCore's existing governed RAG ADR/contract spine. The
+repo-native conclusion is: treat GraphRAG as a baseline retrieval pattern, then
+route newer graph research through contract-first evidence boundaries rather
+than making a graph system or KG model authoritative.
+
+- **Reference added:** Added
+  [kg_rag_research_reference.md](kg_rag_research_reference.md) to map efficient
+  GraphRAG, path-centric retrieval, agentic graph query/control systems, and KG
+  foundation models into SeedCore's governed retrieval roadmap.
+- **Authority boundary:** Graph-derived chunks, relational paths, Cypher/SPARQL
+  answers, and inferred KG edges remain advisory or candidate evidence until
+  admitted through PDP/policy decisions, `RAGEvidenceItem` /
+  `RAGEvidenceBundle`, verifier checks, and replay/receipt closure.
+- **Path-evidence direction:** PathRAG / K-Paths-style retrieval is a good next
+  contract extension after the controlled-source chunk lane is green. A future
+  path-evidence item should bind path hashes, node/edge/source hashes, graph
+  snapshot refs, authorization decisions, freshness posture, and denied-path
+  aggregate counts without exposing denied node or edge details.
+- **Tooling boundary:** Plan-on-Graph, Text-to-Cypher, MCP graph tools, and KG
+  foundation models should be treated as constrained advisory/query tools or
+  shadow reasoning inputs. Write-capable graph actions, policy/authz graph
+  promotion, custody graph mutation, and quarantine clearance still require
+  gated action semantics, PDP allow, scoped `ExecutionToken`, co-signed
+  mutation receipts where required, and verifier/replay closure.
+- **Next implementation order unchanged:** Finish the controlled-source RAG
+  adapter, PDP decision callout, guarded prompt assembly, bundle-membership
+  verifier checks, trace cross-validation, and RAG receipt work before selecting
+  a graph database, Cypher agent, GraphRAG implementation, or KG foundation
+  model as production substrate.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against

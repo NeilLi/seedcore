@@ -131,7 +131,13 @@ Start here for the active spine:
    0009, and the RAG trace contract when turning document or memory retrieval
    into signed, replayable, side-channel-safe evidence without making RAG,
    receipts, or model-selected citations authority-bearing.
-9. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
+9. [`kg_rag_research_reference.md`](kg_rag_research_reference.md) -
+   KG / GraphRAG research reference for efficient graph retrieval,
+   path-centric evidence, agentic graph query tools, and graph foundation
+   models. Use it as roadmap input for governed retrieval only; graph-derived
+   context, paths, Cypher answers, and inferred KG edges remain non-authority
+   until promoted through PDP, evidence, verifier, and replay boundaries.
+10. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
    for declaring governed action boundaries without making developers or coding
    agents manually wire PDP calls, execution tokens, evidence bundles, verifier
    outcomes, and replay proof chains. **MVP implemented and targeted-test
@@ -141,45 +147,45 @@ Start here for the active spine:
    `seedcore.agent_action.check_policy` exposes explicit-authority preflight
    checks; and `src/seedcore/sdk/schema_exporter.py` exports path-qualified
    gated-action manifests for PDP/PKG scaffolding.
-10. [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md) -
+11. [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md) -
    harness guardrail for the energy flywheel: deterministic gates, circuit
    breaker posture, legible cycle artifacts, and the rule that adaptive tuning
    never becomes execution authority.
-11. [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) -
+12. [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) -
    staged schedule for turning AI-system eval discipline into SeedCore-native
    regression fixtures across decision, policy, forensic, and agent-governance
    behavior without making eval tooling an authority source.
-12. [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) -
+13. [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) -
    bounded governance-learning plan for Window G/H-K: strict
    `GovernanceLearningSampleV1` records, deterministic teacher labels,
    conservative advisory students, isolated live-shadow advisory telemetry, and
    future XGBoost/HALT/refinement/simulation work that remains non-authoritative.
-13. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
+14. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
    shadow-only contract for using statistical model audits, including
    Regularized f-Divergence Kernel Tests, as promotion and review evidence
    without changing PDP, `ExecutionToken`, replay, or `RESULT_VERIFIER`
    authority.
-14. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+15. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-15. [`physical_telemetry_processing_contract.md`](physical_telemetry_processing_contract.md) -
+16. [`physical_telemetry_processing_contract.md`](physical_telemetry_processing_contract.md) -
    development contract for turning multi-rate embodied telemetry into
    replay-grade physical episode traces, alignment quality gates, digital-twin
    parity checks, and LeRobot-compatible sidecar exports without making data
    processing an authority source.
-16. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
+17. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
    implemented simulation-first dynamic NFC challenge-response fixture lane for
    rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
    tamper-state outcomes without treating mock NFC evidence as authority.
-17. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
+18. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
    implementation track for the explicit, anchor-scoped monotonic NFC counter
    ledger that prevents replay across workflows without making the pure NFC
    verifier instantiate storage.
-18. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
+19. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
    staged transition plan for KMS-backed NTAG 424 DNA verification as a
    profile-specific shadow adapter before any production hardware enforcement.
-19. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
+20. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical
@@ -188,31 +194,31 @@ Start here for the active spine:
      signed envelopes, missing required fields, and missing `state_binding_hash`
      inputs are fail-closed authorization conditions, not retriable LLM context
      gaps.
-19. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+21. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-20. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
+22. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
    control-plane memo for recursive agent delegation: root context anchoring,
    signed agent identity/capability credentials, per-hop attenuation, visible
    tool calls, out-of-band approval, child-run closure, and replayable
    delegation lineage.
-21. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+23. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-22. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+24. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
-23. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
+25. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
    distilled reference for persistent twin settlement as a real-world AI
    reliability pattern: pluggable settlement protocols, proof-vector
    accumulation, append-only compensation, and cryptographic integrity for
    evidence.
-24. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
+26. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
    sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
    verifier bridge architecture, and phased container runtime sandboxing rollout.
 

@@ -7,6 +7,7 @@ Related:
 - [ADR 0008: Enterprise RAG as Governed Evidence Acquisition](../architecture/adr/adr-0008-enterprise-rag-governed-evidence-acquisition.md)
 - [ADR 0009: Authorization-Aware Retrieval Boundary](../architecture/adr/adr-0009-authorization-aware-retrieval-boundary.md)
 - [RAG Evidence Bundle and Trace Contract](../architecture/contracts/rag_evidence_bundle_trace_contract.md)
+- [Knowledge Graph RAG Research Reference](kg_rag_research_reference.md)
 - [Current Next Steps](current_next_steps.md)
 
 ## Research Signal
@@ -34,6 +35,14 @@ vendor-neutral implementation slice for allow-only evidence promotion:
 
 The research should therefore be adopted as a hardening overlay, not as a new
 architecture center and not as a reason to import a full RAG platform.
+
+The June 2026 KG / GraphRAG research signal adds one refinement to this review:
+GraphRAG is better treated as a baseline retrieval pattern than as the frontier
+itself. The frontier has split into efficient graph-enhanced retrieval,
+path-centric evidence retrieval, agentic graph query/control systems, and graph
+foundation models for structural KG reasoning. SeedCore should use that split as
+roadmap input, while keeping every graph-derived chunk, path, query result, or
+inferred edge behind the same PDP, evidence, verifier, and replay boundaries.
 
 ## Verified Current Implementation State
 
@@ -78,6 +87,23 @@ Primary references checked:
 - [Cedar policy language reference](https://docs.cedarpolicy.com/)
 
 ## What To Adopt
+
+### 0. KG / GraphRAG routing taxonomy
+
+Use [Knowledge Graph RAG Research Reference](kg_rag_research_reference.md) as
+the living map for graph-retrieval research. Its SeedCore mapping is:
+
+- Efficient GraphRAG patterns can inform the controlled-source retriever, but
+  retrieved context still needs authorization before model-visible use.
+- PathRAG / K-Paths-style retrieval can inform a future path-evidence profile,
+  but each material node, edge, source, and graph snapshot must be authorized
+  and replay-bound.
+- Plan-on-Graph, Text-to-Cypher, and MCP graph tools belong behind constrained,
+  policy-visible tool schemas. Write-capable graph actions require gated
+  action semantics, scoped execution authority, and receipt closure.
+- KG foundation models such as ULTRA, MERRY, and GraphOracle are advisory
+  or shadow reasoning inputs until their outputs are promoted through a
+  governed evidence or graph-mutation path.
 
 ### 1. Receipt profile for RAG traces
 
@@ -192,6 +218,15 @@ COSE and JOSE are useful formats, but they should wrap a stable SeedCore
 payload. Adding a signing container before the receipt schema and replay
 validator exist would create cryptographic ceremony around an immature contract.
 
+### Do not make KG inference authority-bearing
+
+Graph foundation models, path-pruning algorithms, Text-to-Cypher validators, or
+agentic graph planners may improve candidate discovery and explanation quality.
+They must not authorize access, publish policy/authz graph mutations, clear
+quarantine, or replace replayable evidence closure. If they propose a new edge,
+relation, path, or policy candidate, SeedCore should record it as a
+provenance-bound proposal until a governed promotion path admits it.
+
 ## Recommended Stack Posture
 
 | Layer | Adopt now | Spike later | Defer |
@@ -203,6 +238,7 @@ validator exist would create cryptographic ceremony around an immature contract.
 | Claim verification | Deterministic citation/span checks first | NLI or LLM-judge as advisory verifier input with fail-closed handling | Unbounded model self-verification |
 | Minimal evidence | Verifier-side minimal support set | Greedy minimization with recorded algorithm version | Model-selected legal sufficiency |
 | Metrics | Aggregate denied counts and coarse latency histograms | Side-channel review under adversarial fixtures | Per-denied-document diagnostics in ordinary logs |
+| KG / graph retrieval | Controlled-source chunk retrieval first | Path-evidence profile and constrained read-only graph query tools | Broad graph connector sprawl or write-capable graph agents before gated action boundaries |
 
 ## Immediate SeedCore Work
 
@@ -222,8 +258,12 @@ validator exist would create cryptographic ceremony around an immature contract.
    companion verifier artifact.
 7. Add side-channel-safe telemetry fields for aggregate denial and latency
    reporting.
-8. Keep vector DB, connector, COSE, JOSE, SCITT, and NLI choices behind the
-   contract until the controlled-source RAG lane is green.
+8. After the chunk-level lane is green, add a path-evidence contract extension
+   that binds path hashes, node/edge/source hashes, graph snapshot refs,
+   authorization decision IDs, and denied-path aggregate counts.
+9. Keep vector DB, graph DB, connector, COSE, JOSE, SCITT, NLI, Cypher agent,
+   and KG foundation model choices behind the contract until the
+   controlled-source RAG lane is green.
 
 ## Bottom Line
 
