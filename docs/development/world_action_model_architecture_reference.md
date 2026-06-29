@@ -152,6 +152,11 @@ Dataset records must not be promoted into policy facts merely because a model
 trained on them performs well. Promotion still requires the normal contract,
 review, and evidence path.
 
+For the telemetry processing rules behind this lane, see
+[Physical Telemetry Processing Contract](physical_telemetry_processing_contract.md):
+raw multi-rate streams must be hash-bound, aligned, episode-chunked, and
+replay-linked before they become WAM/VLA training sidecars.
+
 ### 5. Edge Runtime Split
 
 WAM inference is likely to be slower than low-level motor control. SeedCore
@@ -306,12 +311,14 @@ first:
 2. Define a `RuntimeSafetyReceiptV0` draft contract with original command hash,
    filtered command hash when applicable, invariant outcome, fallback mode, and
    threshold reason code.
-3. Add deterministic fixtures that show one accepted candidate, one stale
+3. Define a `PhysicalEpisodeTraceV0` fixture for any real/simulated high-rate
+   telemetry used as WAM/VLA training material.
+4. Add deterministic fixtures that show one accepted candidate, one stale
    observation, one endpoint mismatch, one safe-recovery command narrowing, and
    one trajectory-divergence quarantine.
-4. Feed those fixtures through the existing robot-sim or evidence-materializer
+5. Feed those fixtures through the existing robot-sim or evidence-materializer
    path before integrating any live WAM inference service.
-5. Only after the contract is replay-visible, connect an external WAM such as
+6. Only after the contract is replay-visible, connect an external WAM such as
    DreamZero, Cosmos, or a LeRobot-compatible policy as an advisory proposal
    provider.
 

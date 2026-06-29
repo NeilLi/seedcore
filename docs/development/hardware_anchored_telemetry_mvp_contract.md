@@ -52,6 +52,13 @@ SeedCore already has several pieces this MVP should reuse:
 
 This contract narrows those pieces into one implementation target for high-consequence physical execution.
 
+For high-rate embodied telemetry, read this contract with
+[Physical Telemetry Processing Contract](physical_telemetry_processing_contract.md).
+This MVP defines closure-grade signed telemetry refs and signer checks; the
+processing contract defines how multi-rate camera, joint, force, torque, and
+simulation streams become replay-grade physical episode traces before those refs
+are used for closure or sidecar training export.
+
 ## Core Rule
 
 For high-consequence physical workflows:
@@ -243,6 +250,18 @@ The MVP verifier path should check:
 9. trust anchor profile matches the deployment lane;
 10. evidence bundle and replay materialization include the telemetry refs used for closure.
 
+For robotics and WAM/VLA sidecar paths, add processing-quality checks before
+closure or training export:
+
+11. required physical streams are present for the policy profile;
+12. stream clock skew, alignment error, dropped-sample rate, and gap count stay
+    inside the declared profile bounds;
+13. the raw episode archive hash is preserved even when a trimmed training view
+    is derived;
+14. digital-twin replay parity passes or emits a quarantine/review disposition;
+15. training exports remain sidecar-only and link back to the physical episode
+    trace, evidence bundle, and verifier disposition.
+
 ## Failure Modes
 
 | Failure | Default outcome | Reason code |
@@ -257,6 +276,11 @@ The MVP verifier path should check:
 | Replay nonce/hash reuse | `deny` | `telemetry_replay_detected` |
 | Payload hash mismatch | `quarantine` | `telemetry_payload_hash_mismatch` |
 | Insufficient trust anchor for profile | `escalate` | `telemetry_trust_anchor_insufficient` |
+| Missing required physical stream | `quarantine` | `telemetry_stream_missing` |
+| Clock skew beyond profile bound | `quarantine` | `telemetry_clock_skew` |
+| Alignment gap beyond profile bound | `quarantine` | `telemetry_alignment_gap` |
+| Digital-twin parity mismatch | `quarantine` | `digital_twin_parity_mismatch` |
+| Training trace lacks replay binding | reject export | `training_trace_unbound` |
 
 Exact reason-code spelling may be aligned with existing gateway and verifier taxonomy during implementation. The behavior is the important contract.
 
@@ -302,6 +326,10 @@ The first implementation should stay narrow:
 5. Ensure replay materialization exposes the telemetry refs and signer refs.
 6. Add verifier checks that fail closed on missing or contradictory hardware evidence.
 7. Keep simulator fixtures explicitly labeled as `device_profile=simulator` or `attestation_level=prototype`.
+8. For robotics/WAM telemetry, add a `PhysicalEpisodeTraceV0` draft fixture
+   path before connecting live high-rate capture.
+9. Preserve raw episode archives separately from semantic trims or LeRobot-style
+   training exports.
 
 Do not start by building a full hardware enrollment service, remote attestation platform, or vendor-specific trusted-edge stack.
 
@@ -345,6 +373,7 @@ A compromised cloud agent should not be able to fake real-world execution becaus
 - [ADR 0003: IGX Thor Trusted Edge Profile](../architecture/adr/adr-0003-igx-thor-trusted-edge-profile.md)
 - [Agent Action Gateway Contract](agent_action_gateway_contract.md)
 - [Edge Telemetry Evidence Closure Draft](edge_telemetry_evidence_closure_draft.md)
+- [Physical Telemetry Processing Contract](physical_telemetry_processing_contract.md)
 - [Virtual NFC Simulation Plan](virtual_nfc_simulation_plan.md)
 - [TPM Fleet Rollout Runbook](tpm_fleet_rollout_runbook.md)
 - [Rare-Shoe RCT Demo Spec](rare_shoes_collecting_transfer_demo_spec.md)

@@ -163,18 +163,23 @@ Start here for the active spine:
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-15. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
+15. [`physical_telemetry_processing_contract.md`](physical_telemetry_processing_contract.md) -
+   development contract for turning multi-rate embodied telemetry into
+   replay-grade physical episode traces, alignment quality gates, digital-twin
+   parity checks, and LeRobot-compatible sidecar exports without making data
+   processing an authority source.
+16. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
    implemented simulation-first dynamic NFC challenge-response fixture lane for
    rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
    tamper-state outcomes without treating mock NFC evidence as authority.
-16. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
+17. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
    implementation track for the explicit, anchor-scoped monotonic NFC counter
    ledger that prevents replay across workflows without making the pure NFC
    verifier instantiate storage.
-17. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
+18. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
    staged transition plan for KMS-backed NTAG 424 DNA verification as a
    profile-specific shadow adapter before any production hardware enforcement.
-18. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
+19. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical

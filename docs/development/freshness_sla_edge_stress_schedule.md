@@ -80,6 +80,16 @@ Every stress run should report:
 - replay parity rate;
 - evidence bundle completeness;
 - packet or envelope size on the hot path.
+- physical episode alignment error P50, P95, and P99 when multi-rate robot
+  streams are present;
+- stream clock-skew, dropped-sample, and gap counts by sensor kind;
+- digital-twin physical-vs-sim delta P50, P95, and P99 for replayable robotics
+  episodes;
+- training-export rejection counts for unbound, quarantined, or parity-failed
+  episodes.
+
+For the processing contract behind these metrics, see
+[Physical Telemetry Processing Contract](physical_telemetry_processing_contract.md).
 
 ## Lane 1: RCT Fixture / Simulator
 
@@ -102,22 +112,30 @@ Work schedule:
 1. Freeze fixture schemas for `DeviceIdentity`, `HardwareSignerRef`,
    `SignedEdgeTelemetryRefV0`, freshness windows, causality tokens, and
    `state_binding_hash` inputs.
-2. Add `SignedMutationReceiptV0` fixture data for approval, delegation,
+2. Add a draft `PhysicalEpisodeTraceV0` fixture for multi-rate telemetry
+   processing, including raw archive ref, stream refs, alignment summary,
+   episode bounds, digital-twin replay summary, and optional training export
+   admission.
+3. Add `SignedMutationReceiptV0` fixture data for approval, delegation,
    custody, source-registration, and telemetry-relevant mutations. Include
    receipt signature refs, monotonic sequence or log-offset fields, session
    binding hashes, short token epochs, and source snapshot refs.
-3. Add synthetic network-partition fixtures that delay context propagation
+4. Add synthetic network-partition fixtures that delay context propagation
    beyond the declared freshness SLA.
-4. Verify that the PDP fails closed when the simulated receipt requires a
+5. Verify that the PDP fails closed when the simulated receipt requires a
    watermark fresher than the local view can prove after the bounded barrier
    budget.
-5. Add invalid receipt signature, expired epoch, session mismatch, duplicated
+6. Add invalid receipt signature, expired epoch, session mismatch, duplicated
    receipt/token replay, and wrong-workflow receipt cases to the fixture matrix.
-6. Add stale telemetry, missing telemetry, replayed telemetry, wrong asset,
+7. Add stale telemetry, missing telemetry, replayed telemetry, wrong asset,
    wrong zone, and payload-hash mismatch cases to the RCT degraded-edge matrix.
-7. Persist replay artifacts that show the freshness bound, causality token,
+8. Add missing required stream, clock-skew breach, alignment-gap breach,
+   dropped-sample breach, digital-twin parity mismatch, and quarantined
+   training-export cases to the telemetry matrix.
+9. Persist replay artifacts that show the freshness bound, causality token,
    signed mutation receipt, required watermark, local-view watermark, barrier
-   result, telemetry refs, signer refs, and verifier outcome.
+   result, telemetry refs, signer refs, physical episode trace, alignment
+   summary, digital-twin parity outcome, and verifier outcome.
 
 Exit criteria:
 
@@ -128,6 +146,10 @@ Exit criteria:
 - freshness reason codes are stable enough for operator surfaces and dashboards;
 - Convergence P99, watermark-lag P99, barrier wait, receipt failure counts, and
   false-positive quarantine count are emitted by the test harness.
+- alignment, stream-gap, clock-skew, and digital-twin parity outcomes are
+  replay-visible;
+- quarantined or parity-failed episodes cannot enter positive LeRobot-style
+  sidecar exports unless explicitly labeled as negative examples.
 
 ## Lane 2: Jetson Orin Prototype Edge
 
@@ -245,12 +267,15 @@ Work schedule:
    active manipulation, high-velocity movement, and closure confirmation.
 2. Bind each class to required telemetry kinds, signer posture, local-view
    freshness, and fail-closed disposition.
-3. Evaluate the final token at the execution boundary and stop immediately when
+3. Define per-state episode processing profiles for camera, depth, LiDAR, IMU,
+   joint-state, torque, and force streams, including alignment error, clock
+   skew, and dropped-sample bounds.
+4. Evaluate the final token at the execution boundary and stop immediately when
    connection quality, local-view freshness, node health, or telemetry
    provenance degrades beyond policy bounds.
-4. Add multi-entity custody drills for courier/robot handoff, wrong recipient,
+5. Add multi-entity custody drills for courier/robot handoff, wrong recipient,
    stale zone, cross-asset replay, connection degradation, and delayed closure.
-5. Keep public proof narrow while operator forensics shows the richer telemetry
+6. Keep public proof narrow while operator forensics shows the richer telemetry
    and signer chain.
 
 Exit criteria:
