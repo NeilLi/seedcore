@@ -598,6 +598,29 @@ Success criteria:
 - taxonomy-valid output on the chosen evaluation slice
 - zero false-safe advisory outputs on critical cases
 
+Implementation status (2026-06-29):
+
+- Window H has landed in two bounded slices. The first slice added the strict
+  `GovernanceAdvisoryOutputV1` schema, deterministic teacher labeler,
+  replay-derived `GovernanceLearningSampleV1` dataset encoding, conservative
+  exact-row `GovernanceShadowStudent`, and offline evaluator.
+- The live-shadow contract now exposes
+  `POST /xgboost/governance/advisory` and
+  `POST /xgboost/governance/train_shadow_student` in the ML service, using the
+  conservative student as the initial backend. Training remains an explicit
+  operator/CI-triggered action and refuses false-safe or authority-usage
+  metrics.
+- The PDP hot path has an opt-in
+  `SEEDCORE_ENABLE_GOVERNANCE_SHADOW_ADVISORY` hook that enqueues best-effort
+  advisory comparisons after the authoritative response exists. The hook does
+  not wait on model inference and cannot modify the PDP disposition,
+  `ExecutionToken`, obligations, evidence, quarantine, or verifier outcomes.
+- Advisory telemetry is isolated under
+  `.local-runtime/governance_shadow_advisory` via
+  `SEEDCORE_GOVERNANCE_SHADOW_LOG` / `SEEDCORE_GOVERNANCE_SHADOW_DB`, separate
+  from compiled-authz hot-path parity evidence. XGBoost remains the next
+  backend phase behind the same contract.
+
 ### Window I: 2026-07-13 to 2026-08-09
 
 Goal:

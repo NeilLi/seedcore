@@ -88,6 +88,14 @@ Instead of delaying sandbox validation entirely, we will execute a thin-slice co
 *   **Telemetry:** Capture any sandbox-induced failures or performance penalties as metrics.
 *   **Boundary Control:** Do not enforce full production-hardening gates yet; focus on signal collection.
 
+**Implementation status (2026-06-29):** The local compatibility probe is now
+checked in as [`scripts/host/test_gvisor_compat_probe.sh`](../../scripts/host/test_gvisor_compat_probe.sh).
+It validates that Docker exposes a `runsc` runtime, optionally mounts the local
+`seedcore-verify` binary, and exits with a clear skip when `runsc`, Docker, or
+the Docker daemon are unavailable. This probe is a sandbox signal only; it does
+not gate Window H advisory correctness and does not change the subprocess-first
+verifier bridge decision.
+
 ### B. Post-Window H: Full Sandbox Hardening
 Once the functional requirements of Window H are verified, we will harden the infrastructure layer:
 *   **Kubernetes Manifests:** Formalize the `RuntimeClass` in Helm and Kubernetes templates to bind actuator pods to `runsc`.

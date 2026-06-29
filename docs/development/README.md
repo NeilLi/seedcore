@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-06-15
+Date: 2026-06-29
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -149,27 +149,32 @@ Start here for the active spine:
    staged schedule for turning AI-system eval discipline into SeedCore-native
    regression fixtures across decision, policy, forensic, and agent-governance
    behavior without making eval tooling an authority source.
-12. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
+12. [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) -
+   bounded governance-learning plan for Window G/H-K: strict
+   `GovernanceLearningSampleV1` records, deterministic teacher labels,
+   conservative advisory students, isolated live-shadow advisory telemetry, and
+   future XGBoost/HALT/refinement/simulation work that remains non-authoritative.
+13. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
    shadow-only contract for using statistical model audits, including
    Regularized f-Divergence Kernel Tests, as promotion and review evidence
    without changing PDP, `ExecutionToken`, replay, or `RESULT_VERIFIER`
    authority.
-13. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+14. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-14. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
+15. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
    implemented simulation-first dynamic NFC challenge-response fixture lane for
    rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
    tamper-state outcomes without treating mock NFC evidence as authority.
-15. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
+16. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
    implementation track for the explicit, anchor-scoped monotonic NFC counter
    ledger that prevents replay across workflows without making the pure NFC
    verifier instantiate storage.
-16. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
+17. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
    staged transition plan for KMS-backed NTAG 424 DNA verification as a
    profile-specific shadow adapter before any production hardware enforcement.
-17. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
+18. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical
@@ -178,31 +183,31 @@ Start here for the active spine:
      signed envelopes, missing required fields, and missing `state_binding_hash`
      inputs are fail-closed authorization conditions, not retriable LLM context
      gaps.
-18. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+19. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-19. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
+20. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
    control-plane memo for recursive agent delegation: root context anchoring,
    signed agent identity/capability credentials, per-hop attenuation, visible
    tool calls, out-of-band approval, child-run closure, and replayable
    delegation lineage.
-20. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+21. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-21. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+22. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
-22. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
+23. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
    distilled reference for persistent twin settlement as a real-world AI
    reliability pattern: pluggable settlement protocols, proof-vector
    accumulation, append-only compensation, and cryptographic integrity for
    evidence.
-23. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
+24. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
    sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
    verifier bridge architecture, and phased container runtime sandboxing rollout.
 
@@ -226,7 +231,7 @@ This table is the shortest answer to "what stage are we in?"
 | 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
 | 10. External agent boundary | Expose a stable agent-action gateway and public SDK for developer convenience | **v1 productized + Agent Self-Regulation baseline landed**: `@gated_action` shadow/enforce wrapper, SDK preflight, telemetry checks, thread-local evaluator/executor utilities, explicit-authority MCP `check_policy`, schema exporter scaffolding, reference adapters, and MCP evaluate path | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gated_action_dx_layer.md`](gated_action_dx_layer.md) |
 | 11. Sidecar innovation tracks | Keep robotics/VLA and deep twin research from diluting the commerce RCT story | Sidecar: intake/twin tracks support the wedge as **upstream evidence**, not a second product center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
-| 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, simulation RL, and statistical model audits as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Pulled forward for shadow/simulation scaffolding; never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md), [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md), [`current_next_steps.md`](current_next_steps.md) |
+| 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, simulation RL, and statistical model audits as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Window G schema/sample contracts and Window H offline + opt-in live shadow advisory contract implemented; still never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md), [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md), [`current_next_steps.md`](current_next_steps.md) |
 | 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
 
 ## 4. What Is Done
@@ -276,6 +281,17 @@ Treat these as real repo capabilities, not aspirational roadmap items:
   wrong asset, and incomplete payload cases; rare-shoe RCT delegates to the
   helper while preserving compatibility reason codes; and replay materialization
   exposes redacted NFC verifier metadata without challenge or key material.
+- **Window H live governance advisory shadow contract**:
+  `src/seedcore/ml/ml_service.py` exposes
+  `POST /xgboost/governance/advisory` and
+  `POST /xgboost/governance/train_shadow_student` over the conservative
+  `GovernanceShadowStudent`; `src/seedcore/ops/pdp_hot_path.py` can enqueue
+  opt-in best-effort shadow advisory comparisons after the authoritative PDP
+  response is built; and
+  `src/seedcore/ops/governance_learning/shadow_parity_log.py` stores advisory
+  telemetry in a separate `.local-runtime/governance_shadow_advisory` JSONL /
+  SQLite lane. This does not affect PDP disposition, `ExecutionToken`s,
+  obligations, evidence, quarantine, verifier, or compiled-authz parity DBs.
 
 Primary proof docs:
 
@@ -285,7 +301,7 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-06-15**, the project is in **Q2 operational closure -> Q3 bounded
+As of **2026-06-29**, the project is in **Q2 operational closure -> Q3 bounded
 agent integration**, still on one wedge:
 
 - The **June stack triage is now applied**: staged authz-graph rollout,
@@ -332,6 +348,12 @@ agent integration**, still on one wedge:
   and workspace-verified. It strengthens physical-presence evidence with
   deterministic fixture CMAC checks, monotonic counters, freshness, tamper, and
   wrong-asset coverage while remaining evidence-only and non-authority-bearing.
+- **Window H governance-aware learning** now has both the offline advisory
+  scaffold and an opt-in live shadow advisory contract. Shadow predictions are
+  schema-bounded, explicit-training only, and logged in an isolated advisory
+  telemetry store; they can expose false-safe advisory signals for review, but
+  cannot alter PDP decisions, mint tokens, update evidence, or clear
+  quarantine.
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 
@@ -394,8 +416,10 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
    checks that keep public proof narrow.
 9. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-10. Pull forward Scenario Generator + Governance Reward Scorer scaffolds for RCT
-   drills in shadow/simulation only:
+10. Continue Window H from the implemented live-shadow contract toward a
+   governance-specific XGBoost backend adapter and artifact metadata only after
+   the conservative advisory endpoint, isolated telemetry, and false-safe gates
+   remain green:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 11. Define the first AI-led self-healing target around a degraded-edge or
    telemetry/outbox failure, with the repair loop ending in a reviewable patch
@@ -483,6 +507,10 @@ Primary planning docs:
 - [`source_registration_tracking_event_curl_collection.md`](source_registration_tracking_event_curl_collection.md)
 - [`vla_2026_optimizations.md`](vla_2026_optimizations.md)
 - [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) — bounded learning plan that converts VLA/distillation ideas into a trust-slice-aligned execution track
+  - Window H status: strict advisory schema, deterministic labeler,
+    replay-derived dataset, conservative student, ML service advisory/train
+    endpoints, isolated shadow telemetry, and opt-in PDP shadow hook are
+    implemented; XGBoost remains the next backend phase.
 - [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md)
   — shadow-only contract for using statistical distribution tests as
     model-promotion and review evidence without entering authority-bearing

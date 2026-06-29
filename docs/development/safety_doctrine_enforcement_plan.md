@@ -29,8 +29,27 @@ This document maps the 10 core safety guardrails to concrete implementation patt
 
 ## 4. Make Advisory Learning Shadow-Only
 *   **Status:** **Implemented**
-*   **Enforcement Mechanism:** Bounded outputs (such as `shadow_only=True` and `student_final_authority_usage=0`) are hardcoded in the [governance_advisory.py](file:///Users/ningli/project/seedcore/src/seedcore/models/governance_advisory.py#L8) schema. The learning evaluations reject authority-bearing recommendations in [governance_shadow_eval.py](file:///Users/ningli/project/seedcore/src/seedcore/ml/distillation/governance_shadow_eval.py#L84).
-*   **Verification Gate:** The direct coupling test in [test_safety_doctrine_boundaries.py](file:///Users/ningli/project/seedcore/tests/test_safety_doctrine_boundaries.py#L50) mock-injects advisory predictions to ensure the `/api/v1/pdp/hot-path/evaluate` endpoint ignores them and determines outcomes solely via deterministic policy rules.
+*   **Enforcement Mechanism:** Bounded outputs (such as `shadow_only=True` and
+    `student_final_authority_usage=0`) are hardcoded in the
+    [governance_advisory.py](file:///Users/ningli/project/seedcore/src/seedcore/models/governance_advisory.py#L8)
+    schema. The learning evaluations reject authority-bearing recommendations
+    in
+    [governance_shadow_eval.py](file:///Users/ningli/project/seedcore/src/seedcore/ml/distillation/governance_shadow_eval.py#L84).
+    The live Window H hook in
+    [pdp_hot_path.py](file:///Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py#L924)
+    is opt-in, queue-backed, and runs only after the authoritative PDP response
+    exists; it records advisory comparison telemetry in
+    [shadow_parity_log.py](file:///Users/ningli/project/seedcore/src/seedcore/ops/governance_learning/shadow_parity_log.py#L13),
+    separate from hot-path parity evidence.
+*   **Verification Gate:** The direct coupling test in
+    [test_safety_doctrine_boundaries.py](file:///Users/ningli/project/seedcore/tests/test_safety_doctrine_boundaries.py#L50)
+    mock-injects advisory predictions to ensure the
+    `/api/v1/pdp/hot-path/evaluate` endpoint ignores them and determines
+    outcomes solely via deterministic policy rules.
+    [test_governance_shadow_live_advisory.py](file:///Users/ningli/project/seedcore/tests/test_governance_shadow_live_advisory.py#L1)
+    verifies that the live advisory hook does not change PDP decisions,
+    `ExecutionToken`s, obligations, or trust gaps, and that queue-full /
+    malformed-prediction cases are logged as shadow telemetry.
 
 ---
 
