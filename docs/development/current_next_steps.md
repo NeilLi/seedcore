@@ -1388,11 +1388,16 @@ Recommended dependency rule:
 
 The VLA track in
 [vla_2026_optimizations.md](vla_2026_optimizations.md)
-remains sidecar for this phase.
+and the WAM architecture reference in
+[world_action_model_architecture_reference.md](world_action_model_architecture_reference.md)
+remain sidecar for this phase.
 
-It may continue in parallel as research or future-performance work, but it is
-not on the critical path for the must-win demo or for Slice 1 runtime
-hardening.
+They may continue in parallel as research, proposal-quality, simulation,
+trajectory-stress, or future-performance work, but they are not on the critical
+path for the must-win demo or for Slice 1 runtime hardening. WAM outputs remain
+candidate rollouts or advisory evidence until converted into typed
+`ActionIntent` inputs, admitted by the PDP, scoped by an `ExecutionToken`, and
+closed through evidence / replay.
 
 ### 1. Irrefutable Trust Anchors
 
