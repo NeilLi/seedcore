@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Lock
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from seedcore.ml.distillation.governance_dataset import GovernanceDatasetRow
@@ -38,3 +39,33 @@ class GovernanceShadowStudent:
     @staticmethod
     def _feature_key(features: Sequence[float]) -> Tuple[float, ...]:
         return tuple(round(float(value), 8) for value in features)
+
+
+_ACTIVE_STUDENT: GovernanceShadowStudent | None = None
+_ACTIVE_STUDENT_LOCK = Lock()
+
+
+def get_active_shadow_student() -> GovernanceShadowStudent:
+    """Return the process-local Window H shadow student.
+
+    The default student is intentionally conservative: without explicit training
+    it abstains for every unknown feature row.
+    """
+    global _ACTIVE_STUDENT
+    with _ACTIVE_STUDENT_LOCK:
+        if _ACTIVE_STUDENT is None:
+            _ACTIVE_STUDENT = GovernanceShadowStudent()
+        return _ACTIVE_STUDENT
+
+
+def set_active_shadow_student(student: GovernanceShadowStudent) -> GovernanceShadowStudent:
+    global _ACTIVE_STUDENT
+    with _ACTIVE_STUDENT_LOCK:
+        _ACTIVE_STUDENT = student
+        return _ACTIVE_STUDENT
+
+
+def train_conservative_shadow_student(
+    rows: Iterable[GovernanceDatasetRow],
+) -> GovernanceShadowStudent:
+    return set_active_shadow_student(GovernanceShadowStudent().fit(rows))

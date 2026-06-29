@@ -270,6 +270,45 @@ offline, shadow-only advisory learning loop in commit `58fa58d`
   XGBoost/Ray training path, model serving endpoint, or promotion path was
   added in this slice.
 
+## Status Update (2026-06-29, Window H Live Shadow Advisory Contract)
+
+**Done (2026-06-29).** Implemented the contract-first live shadow advisory
+slice while preserving the PDP authority boundary.
+
+- **Isolated shadow metrics:** Added a governance-advisory telemetry store in
+  [shadow_parity_log.py](../../src/seedcore/ops/governance_learning/shadow_parity_log.py)
+  with separate JSONL/SQLite paths under `.local-runtime/governance_shadow_advisory`
+  and `SEEDCORE_GOVERNANCE_SHADOW_LOG` / `SEEDCORE_GOVERNANCE_SHADOW_DB`
+  overrides. These events do not write to the compiled-authz hot-path parity DB.
+- **Explicit ML service contract:** Added
+  `POST /xgboost/governance/advisory` and
+  `POST /xgboost/governance/train_shadow_student` in
+  [ml_service.py](../../src/seedcore/ml/ml_service.py). The current backend is
+  the conservative exact-row `GovernanceShadowStudent`; training is an explicit
+  operator/CI-triggered action and refuses artifacts with false-safe or
+  authority-usage metrics.
+- **Opt-in PDP hook:** Added `SEEDCORE_ENABLE_GOVERNANCE_SHADOW_ADVISORY`,
+  `SEEDCORE_GOVERNANCE_SHADOW_ADVISORY_URL`, and
+  `SEEDCORE_GOVERNANCE_SHADOW_QUEUE_SIZE` handling in
+  [pdp_hot_path.py](../../src/seedcore/ops/pdp_hot_path.py). The hook enqueues
+  best-effort shadow advisory work after the authoritative PDP response exists;
+  it never changes disposition, `ExecutionToken`s, obligations, quarantine
+  state, or evidence.
+- **Sandbox probe:** Added
+  [test_gvisor_compat_probe.sh](../../scripts/host/test_gvisor_compat_probe.sh)
+  as a separate runsc compatibility signal. It skips cleanly when local gVisor
+  prerequisites are unavailable.
+- **Verification:** Focused tests passed:
+  `pytest tests/test_governance_shadow_live_advisory.py -q` (`7 passed`),
+  `pytest tests/test_governance_learning_harness.py tests/test_governance_shadow_eval.py -q`
+  (`14 passed`),
+  `pytest tests/test_hot_path_parity_log.py tests/test_governance_shadow_eval.py -q`
+  (`8 passed`), and
+  `pytest tests/test_safety_doctrine_boundaries.py -q` (`2 passed`).
+  `bash scripts/host/verify_q2_verification_contracts.sh` passed. The gVisor
+  probe script passed syntax validation and skipped at runtime because `runsc`
+  is not installed locally.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against

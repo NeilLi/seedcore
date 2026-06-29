@@ -99,12 +99,14 @@ import uuid
 import asyncio
 import threading
 import concurrent.futures
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import numpy as np  # pyright: ignore[reportMissingImports]
 import ray  # pyright: ignore[reportMissingImports]
 from fastapi import BackgroundTasks, FastAPI, HTTPException  # pyright: ignore[reportMissingImports]
 from ray import serve  # pyright: ignore[reportMissingImports]
+from seedcore.models.governance_advisory import GovernanceAdvisoryOutputV1
 
 
 # ---------------------------------------------------------------------
@@ -426,6 +428,10 @@ async def root():
                 },
                 "distillation": {
                     "distill_episode": "/xgboost/distill/episode"
+                },
+                "governance_shadow": {
+                    "advisory": "/xgboost/governance/advisory",
+                    "train_shadow_student": "/xgboost/governance/train_shadow_student"
                 }
             }
         }
@@ -1009,6 +1015,154 @@ async def list_models():
 # ---------------------------------------------------------------------
 # XGBoost (main API under /xgboost/*)
 # ---------------------------------------------------------------------
+
+def _coerce_governance_feature_vector(features: Any) -> list[float]:
+    from seedcore.ml.distillation.governance_dataset import FEATURE_NAMES
+
+    if not isinstance(features, list):
+        raise HTTPException(status_code=400, detail="features must be a list")
+    if len(features) != len(FEATURE_NAMES):
+        raise HTTPException(
+            status_code=400,
+            detail=f"features must contain exactly {len(FEATURE_NAMES)} values",
+        )
+    out: list[float] = []
+    for idx, value in enumerate(features):
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"features[{idx}] must be numeric",
+            ) from None
+    return out
+
+
+def _governance_shadow_metrics_payload(metrics: Any) -> dict[str, Any]:
+    return {
+        "total": int(metrics.total),
+        "exact_reason_matches": int(metrics.exact_reason_matches),
+        "taxonomy_valid_predictions": int(metrics.taxonomy_valid_predictions),
+        "trust_gap_true_positive": int(metrics.trust_gap_true_positive),
+        "trust_gap_false_positive": int(metrics.trust_gap_false_positive),
+        "trust_gap_false_negative": int(metrics.trust_gap_false_negative),
+        "abstention_matches": int(metrics.abstention_matches),
+        "false_safe_advisory_count": int(metrics.false_safe_advisory_count),
+        "authority_usage_count": int(metrics.authority_usage_count),
+        "exact_reason_match_rate": float(metrics.exact_reason_match_rate),
+        "taxonomy_valid_rate": float(metrics.taxonomy_valid_rate),
+        "trust_gap_precision": float(metrics.trust_gap_precision),
+        "trust_gap_recall": float(metrics.trust_gap_recall),
+        "abstention_match_rate": float(metrics.abstention_match_rate),
+    }
+
+
+@ml_app.post("/xgboost/governance/advisory", response_model=GovernanceAdvisoryOutputV1)
+async def predict_governance_advisory(request: Dict[str, Any]):
+    """
+    Return a bounded Window H governance advisory prediction.
+
+    This endpoint is shadow-only: the response schema forbids final authority
+    and the active conservative student abstains unless explicitly trained.
+    """
+    try:
+        from seedcore.ml.models.governance_student import get_active_shadow_student
+
+        features = _coerce_governance_feature_vector(request.get("features"))
+        prediction = get_active_shadow_student().predict_one(features)
+        return GovernanceAdvisoryOutputV1(**prediction.model_dump())
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in governance advisory prediction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@ml_app.post("/xgboost/governance/train_shadow_student")
+async def train_governance_shadow_student(request: Dict[str, Any]):
+    """
+    Explicit operator/CI-triggered training for the conservative Window H student.
+
+    No background timer or self-tuning loop is started here. The trained student
+    is accepted only when evaluation preserves the zero-authority and zero
+    false-safe contract.
+    """
+    try:
+        from seedcore.ml.distillation.governance_dataset import load_governance_advisory_dataset
+        from seedcore.ml.distillation.governance_shadow_eval import evaluate_shadow_student
+        from seedcore.ml.models.governance_student import train_conservative_shadow_student
+        from seedcore.ops.governance_learning.shadow_parity_log import (
+            get_governance_shadow_advisory_logger,
+        )
+
+        try:
+            eval_fraction = float(request.get("eval_fraction", 0.2))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="eval_fraction must be numeric") from None
+
+        split = await asyncio.to_thread(
+            load_governance_advisory_dataset,
+            eval_fraction=eval_fraction,
+        )
+        all_rows = tuple(split.train) + tuple(split.eval)
+        if not all_rows:
+            raise HTTPException(status_code=400, detail="no governance learning samples available")
+
+        training_rows = tuple(split.train) or all_rows
+        evaluation_rows = tuple(split.eval) or all_rows
+        student = await asyncio.to_thread(train_conservative_shadow_student, training_rows)
+        metrics = await asyncio.to_thread(evaluate_shadow_student, student, evaluation_rows)
+        metrics_payload = _governance_shadow_metrics_payload(metrics)
+        accepted = (
+            metrics.false_safe_advisory_count == 0
+            and metrics.authority_usage_count == 0
+        )
+
+        event = {
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "status": "completed" if accepted else "failed",
+            "event_type": "governance_shadow_student_training",
+            "request_id": str(request.get("request_id") or ""),
+            "asset_ref": "",
+            "backend": "conservative_exact_row",
+            "sample_count": len(all_rows),
+            "train_count": len(training_rows),
+            "eval_count": len(evaluation_rows),
+            "feature_names": list(split.feature_names),
+            "accepted": accepted,
+            "false_safe_advisory": metrics.false_safe_advisory_count > 0,
+            "student_final_authority_usage": metrics.authority_usage_count,
+            "metrics": metrics_payload,
+        }
+        get_governance_shadow_advisory_logger().append(event)
+
+        if not accepted:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "accepted": False,
+                    "reason": "governance shadow student violated acceptance gates",
+                    "metrics": metrics_payload,
+                },
+            )
+
+        return {
+            "status": "success",
+            "accepted": True,
+            "backend": "conservative_exact_row",
+            "sample_count": len(all_rows),
+            "train_count": len(training_rows),
+            "eval_count": len(evaluation_rows),
+            "feature_names": list(split.feature_names),
+            "metrics": metrics_payload,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error training governance shadow student: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @ml_app.post("/xgboost/train")
 async def train_xgboost_model(request: Dict[str, Any]):
     try:

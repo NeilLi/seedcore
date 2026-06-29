@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
+import urllib.error
+import urllib.request
 import zlib
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
 from seedcore.coordinator.dao import TransferApprovalEnvelopeDAO
@@ -46,6 +49,9 @@ HOT_PATH_MODE_ENV = "SEEDCORE_RCT_HOT_PATH_MODE"
 HOT_PATH_CANARY_PERCENT_ENV = "SEEDCORE_RCT_HOT_PATH_CANARY_PERCENT"
 HOT_PATH_PROMOTION_GATE_DISABLED_ENV = "SEEDCORE_HOT_PATH_PROMOTION_GATE_DISABLED"
 HOT_PATH_PARITY_DRILL_STABLE_DENY_ENV = "SEEDCORE_HOT_PATH_PARITY_DRILL_STABLE_DENY"
+GOVERNANCE_SHADOW_ENABLED_ENV = "SEEDCORE_ENABLE_GOVERNANCE_SHADOW_ADVISORY"
+GOVERNANCE_SHADOW_URL_ENV = "SEEDCORE_GOVERNANCE_SHADOW_ADVISORY_URL"
+GOVERNANCE_SHADOW_QUEUE_SIZE_ENV = "SEEDCORE_GOVERNANCE_SHADOW_QUEUE_SIZE"
 HOT_PATH_STALE_GRAPH_MAX_AGE_SECONDS = int(
     os.getenv("SEEDCORE_RCT_HOT_PATH_GRAPH_MAX_AGE_SECONDS", "600")
 )
@@ -180,6 +186,9 @@ class HotPathShadowStats:
 
 _HOT_PATH_SHADOW_STATS = HotPathShadowStats()
 _TRANSFER_APPROVAL_DAO = TransferApprovalEnvelopeDAO()
+_GOVERNANCE_SHADOW_QUEUE: queue.Queue[dict[str, Any]] | None = None
+_GOVERNANCE_SHADOW_QUEUE_LOCK = Lock()
+_GOVERNANCE_SHADOW_WORKER_STARTED = False
 
 
 def resolve_hot_path_mode() -> str:
@@ -848,6 +857,297 @@ def record_false_positive_hot_path_signal(
     )
 
 
+def _governance_shadow_enabled() -> bool:
+    return str(os.getenv(GOVERNANCE_SHADOW_ENABLED_ENV, "false")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _governance_shadow_advisory_url() -> str:
+    return (
+        str(os.getenv(GOVERNANCE_SHADOW_URL_ENV, "")).strip()
+        or "http://127.0.0.1:8000/xgboost/governance/advisory"
+    )
+
+
+def _governance_shadow_queue_size() -> int:
+    try:
+        return max(1, int(str(os.getenv(GOVERNANCE_SHADOW_QUEUE_SIZE_ENV, "256")).strip()))
+    except ValueError:
+        return 256
+
+
+def _get_governance_shadow_queue() -> queue.Queue[dict[str, Any]]:
+    global _GOVERNANCE_SHADOW_QUEUE
+    with _GOVERNANCE_SHADOW_QUEUE_LOCK:
+        if _GOVERNANCE_SHADOW_QUEUE is None:
+            _GOVERNANCE_SHADOW_QUEUE = queue.Queue(maxsize=_governance_shadow_queue_size())
+        return _GOVERNANCE_SHADOW_QUEUE
+
+
+def _ensure_governance_shadow_worker() -> None:
+    global _GOVERNANCE_SHADOW_WORKER_STARTED
+    with _GOVERNANCE_SHADOW_QUEUE_LOCK:
+        if _GOVERNANCE_SHADOW_WORKER_STARTED:
+            return
+        worker = Thread(
+            target=_governance_shadow_worker_loop,
+            name="seedcore-governance-shadow-advisory",
+            daemon=True,
+        )
+        worker.start()
+        _GOVERNANCE_SHADOW_WORKER_STARTED = True
+
+
+def _governance_shadow_worker_loop() -> None:
+    shadow_queue = _get_governance_shadow_queue()
+    while True:
+        item = shadow_queue.get()
+        try:
+            _run_governance_shadow_advisory_job(item)
+        except Exception as exc:  # pragma: no cover - final safety net for daemon loop
+            logger.warning("Governance shadow advisory worker failed: %s", exc)
+        finally:
+            shadow_queue.task_done()
+
+
+def _reset_governance_shadow_queue_for_tests() -> None:
+    global _GOVERNANCE_SHADOW_QUEUE, _GOVERNANCE_SHADOW_WORKER_STARTED
+    with _GOVERNANCE_SHADOW_QUEUE_LOCK:
+        _GOVERNANCE_SHADOW_QUEUE = None
+        _GOVERNANCE_SHADOW_WORKER_STARTED = False
+
+
+def _enqueue_governance_shadow_advisory(
+    *,
+    request: HotPathEvaluateRequest,
+    response: HotPathEvaluateResponse,
+) -> None:
+    if not _governance_shadow_enabled():
+        return
+
+    try:
+        item = _build_governance_shadow_advisory_item(request=request, response=response)
+    except Exception as exc:
+        _record_governance_shadow_event(
+            {
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "status": "failed",
+                "event_type": "governance_shadow_advisory",
+                "request_id": request.request_id,
+                "asset_ref": request.asset_context.asset_ref,
+                "failure_reason": "feature_encoding_failed",
+                "error": str(exc),
+                "false_safe_advisory": False,
+                "student_final_authority_usage": 0,
+            }
+        )
+        return
+
+    shadow_queue = _get_governance_shadow_queue()
+    try:
+        shadow_queue.put_nowait(item)
+        _ensure_governance_shadow_worker()
+    except queue.Full:
+        _record_governance_shadow_event(
+            {
+                **item,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "status": "queue_full",
+                "failure_reason": "queue_full",
+                "false_safe_advisory": False,
+                "student_final_authority_usage": 0,
+            }
+        )
+
+
+def _build_governance_shadow_advisory_item(
+    *,
+    request: HotPathEvaluateRequest,
+    response: HotPathEvaluateResponse,
+) -> dict[str, Any]:
+    return {
+        "event_type": "governance_shadow_advisory",
+        "request_id": request.request_id,
+        "asset_ref": request.asset_context.asset_ref,
+        "advisory_url": _governance_shadow_advisory_url(),
+        "features": _encode_governance_shadow_features(request=request, response=response),
+        "pdp": {
+            "disposition": str(response.decision.disposition or ""),
+            "reason_code": str(response.decision.reason_code or ""),
+            "trust_gaps": list(response.trust_gaps),
+        },
+    }
+
+
+def _encode_governance_shadow_features(
+    *,
+    request: HotPathEvaluateRequest,
+    response: HotPathEvaluateResponse,
+) -> list[float]:
+    action_parameters = (
+        request.action_intent.action.parameters
+        if isinstance(request.action_intent.action.parameters, Mapping)
+        else {}
+    )
+    approval_context = (
+        action_parameters.get("approval_context")
+        if isinstance(action_parameters.get("approval_context"), Mapping)
+        else {}
+    )
+    resource = request.action_intent.resource
+    telemetry = request.telemetry_context
+    governed_receipt = response.governed_receipt if isinstance(response.governed_receipt, Mapping) else {}
+    freshness_seconds = float(telemetry.freshness_seconds or 0)
+    max_age = telemetry.max_allowed_age_seconds
+    distance_to_boundary = (
+        float(max_age - telemetry.freshness_seconds)
+        if max_age is not None and telemetry.freshness_seconds is not None
+        else 0.0
+    )
+    declared_value = _coerce_float(
+        action_parameters.get("declared_value_usd")
+        or getattr(resource, "declared_value_usd", None)
+        or 0.0
+    )
+    required_roles = approval_context.get("required_roles")
+    requires_co_signature = bool(required_roles) or any(
+        str(item.get("type") or "").lower() in {"co_signature", "cosignature"}
+        for item in response.obligations
+        if isinstance(item, Mapping)
+    )
+    has_policy_receipt = bool(
+        governed_receipt.get("policy_receipt")
+        or governed_receipt.get("policy_receipt_id")
+        or response.decision.policy_snapshot_hash
+    )
+    has_transition_receipts = bool(
+        governed_receipt.get("transition_receipt")
+        or governed_receipt.get("transition_receipt_id")
+        or governed_receipt.get("transition_receipt_ids")
+    )
+    has_asset_fingerprint = bool(
+        governed_receipt.get("asset_fingerprint")
+        or governed_receipt.get("asset_fingerprint_hash")
+        or request.asset_context.asset_ref
+    )
+    signer_profile_known = bool(response.signer_provenance)
+    return [
+        freshness_seconds,
+        _bool_float(bool(telemetry.current_coordinate_ref)),
+        _bool_float(bool(request.signed_context_envelopes)),
+        _bool_float(request.action_intent.resource.asset_id == request.asset_context.asset_ref),
+        _bool_float(
+            bool(
+                request.action_intent.principal.actor_token
+                or request.action_intent.principal.session_token
+                or request.action_intent.principal.spiffe_id
+                or request.action_intent.principal.dpop_jkt
+            )
+        ),
+        _bool_float(
+            bool(request.asset_context.current_zone)
+            and request.asset_context.current_zone == request.action_intent.resource.target_zone
+        ),
+        _bool_float(bool(approval_context)),
+        declared_value,
+        _bool_float(requires_co_signature),
+        float(len(response.trust_gaps)),
+        distance_to_boundary,
+        _bool_float(has_transition_receipts),
+        _bool_float(has_policy_receipt),
+        _bool_float(has_asset_fingerprint),
+        _bool_float(signer_profile_known),
+        float(len(telemetry.evidence_refs)),
+        0.0,
+    ]
+
+
+def _run_governance_shadow_advisory_job(item: Mapping[str, Any]) -> None:
+    base_event = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "event_type": "governance_shadow_advisory",
+        "request_id": str(item.get("request_id") or ""),
+        "asset_ref": str(item.get("asset_ref") or ""),
+        "pdp": dict(item.get("pdp") or {}),
+        "features": list(item.get("features") or []),
+    }
+    try:
+        prediction_payload = _post_governance_shadow_advisory(
+            url=str(item.get("advisory_url") or _governance_shadow_advisory_url()),
+            features=base_event["features"],
+        )
+        from seedcore.models.governance_advisory import GovernanceAdvisoryOutputV1
+
+        prediction = GovernanceAdvisoryOutputV1(**prediction_payload)
+        pdp_disposition = str(base_event["pdp"].get("disposition") or "").lower()
+        false_safe = pdp_disposition in {"deny", "quarantine", "escalate"} and not prediction.abstain
+        _record_governance_shadow_event(
+            {
+                **base_event,
+                "status": "completed",
+                "prediction": prediction.model_dump(mode="json"),
+                "false_safe_advisory": false_safe,
+                "student_final_authority_usage": prediction.student_final_authority_usage,
+            }
+        )
+    except Exception as exc:
+        _record_governance_shadow_event(
+            {
+                **base_event,
+                "status": "failed",
+                "failure_reason": "advisory_prediction_failed",
+                "error": str(exc),
+                "false_safe_advisory": False,
+                "student_final_authority_usage": 0,
+            }
+        )
+
+
+def _post_governance_shadow_advisory(*, url: str, features: Sequence[float]) -> dict[str, Any]:
+    payload = json.dumps({"features": list(features)}, separators=(",", ":")).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=0.75) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"governance advisory service unavailable: {exc}") from exc
+    parsed = json.loads(body)
+    if not isinstance(parsed, dict):
+        raise ValueError("governance advisory response must be a JSON object")
+    return parsed
+
+
+def _record_governance_shadow_event(event: Mapping[str, Any]) -> None:
+    try:
+        from seedcore.ops.governance_learning.shadow_parity_log import (
+            get_governance_shadow_advisory_logger,
+        )
+
+        get_governance_shadow_advisory_logger().append(dict(event))
+    except Exception as exc:
+        logger.warning("Governance shadow advisory log write failed: %s", exc)
+
+
+def _bool_float(value: bool) -> float:
+    return 1.0 if bool(value) else 0.0
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def resolve_authoritative_transfer_approval(
     request: HotPathEvaluateRequest,
 ) -> dict[str, Any]:
@@ -907,6 +1207,7 @@ def evaluate_pdp_hot_path(
         )
         _record_terminal_shadow_result(request=request, response=response)
         publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+        _enqueue_governance_shadow_advisory(request=request, response=response)
         return response
 
     freshness_ok = True
@@ -932,6 +1233,7 @@ def evaluate_pdp_hot_path(
         )
         _record_terminal_shadow_result(request=request, response=response)
         publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+        _enqueue_governance_shadow_advisory(request=request, response=response)
         return response
 
     context_freshness_response = _validate_context_freshness_bound(
@@ -942,6 +1244,7 @@ def evaluate_pdp_hot_path(
     if context_freshness_response is not None:
         _record_terminal_shadow_result(request=request, response=context_freshness_response)
         publish_pdp_hot_path_policy_outcome_best_effort(request, context_freshness_response)
+        _enqueue_governance_shadow_advisory(request=request, response=context_freshness_response)
         return context_freshness_response
 
     signed_context_response = _validate_signed_context_envelopes(
@@ -952,6 +1255,7 @@ def evaluate_pdp_hot_path(
     if signed_context_response is not None:
         _record_terminal_shadow_result(request=request, response=signed_context_response)
         publish_pdp_hot_path_policy_outcome_best_effort(request, signed_context_response)
+        _enqueue_governance_shadow_advisory(request=request, response=signed_context_response)
         return signed_context_response
 
     stage = _pdp_authz_graph_rollout_stage()
@@ -972,6 +1276,7 @@ def evaluate_pdp_hot_path(
             )
             _record_terminal_shadow_result(request=request, response=response)
             publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+            _enqueue_governance_shadow_advisory(request=request, response=response)
             return response
 
         graph_freshness_ok = bool(runtime_status.get("graph_freshness_ok", True))
@@ -994,6 +1299,7 @@ def evaluate_pdp_hot_path(
             )
             _record_terminal_shadow_result(request=request, response=response)
             publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+            _enqueue_governance_shadow_advisory(request=request, response=response)
             return response
 
         compiled_snapshot = str(runtime_status.get("active_snapshot_version") or "").strip() or (
@@ -1017,6 +1323,7 @@ def evaluate_pdp_hot_path(
             )
             _record_terminal_shadow_result(request=request, response=response)
             publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+            _enqueue_governance_shadow_advisory(request=request, response=response)
             return response
 
     approved_source_registrations: dict[str, str | None] = {}
@@ -1125,6 +1432,7 @@ def evaluate_pdp_hot_path(
         ),
     )
     publish_pdp_hot_path_policy_outcome_best_effort(request, response)
+    _enqueue_governance_shadow_advisory(request=request, response=response)
     return response
 
 
