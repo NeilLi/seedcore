@@ -110,31 +110,28 @@ Start here for the active spine:
 2. [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md) - stage
    goals, workstreams, sequencing, and canonical positioning.
 3. [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) - current
-   verification/operator product surface and contract-level UX behavior.
-4. [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) section 4.1 -
-   operator legibility layer (queue signals, replay verdict, deterministic +
-   optional LLM copilot API).
-5. [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md) -
+   verification/operator product surface and contract-level UX behavior (including the Section 4.1 operator legibility layer with queue signals, replay verdict, and the deterministic + optional LLM copilot API).
+4. [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md) -
    "Visualize It" development step for an advanced forensic replay UI that
    makes execution steps, policy snapshots, telemetry hashes, signer chains,
    and timeline reproduction inspectable without adding new authority.
-6. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
+5. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
    collectible rare-shoe transfer as a commercial vertical scene on the same
    RCT contract: authentication registration first, bounded custody authority
    second, replayable proof last.
-7. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
+6. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
    boundary memo for using AP2 as the upstream agent-payment protocol while
    keeping SeedCore focused on custody, evidence, and replay-valid closure.
-8. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
+7. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
    technical memo for turning customer business rules into executable,
    testable Policy Knowledge Graphs that compile into PDP rules, authority
    constraints, evidence requirements, reason codes, and replay fixtures.
-9. [`policy_governed_rag_research_adoption_review.md`](policy_governed_rag_research_adoption_review.md) -
+8. [`policy_governed_rag_research_adoption_review.md`](policy_governed_rag_research_adoption_review.md) -
    adoption review for policy-governed RAG research. Use it with ADR 0008, ADR
    0009, and the RAG trace contract when turning document or memory retrieval
    into signed, replayable, side-channel-safe evidence without making RAG,
    receipts, or model-selected citations authority-bearing.
-10. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
+9. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
    for declaring governed action boundaries without making developers or coding
    agents manually wire PDP calls, execution tokens, evidence bundles, verifier
    outcomes, and replay proof chains. **MVP implemented and targeted-test
@@ -144,35 +141,35 @@ Start here for the active spine:
    `seedcore.agent_action.check_policy` exposes explicit-authority preflight
    checks; and `src/seedcore/sdk/schema_exporter.py` exports path-qualified
    gated-action manifests for PDP/PKG scaffolding.
-11. [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md) -
+10. [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md) -
    harness guardrail for the energy flywheel: deterministic gates, circuit
    breaker posture, legible cycle artifacts, and the rule that adaptive tuning
    never becomes execution authority.
-12. [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) -
+11. [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) -
    staged schedule for turning AI-system eval discipline into SeedCore-native
    regression fixtures across decision, policy, forensic, and agent-governance
    behavior without making eval tooling an authority source.
-13. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
+12. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
    shadow-only contract for using statistical model audits, including
    Regularized f-Divergence Kernel Tests, as promotion and review evidence
    without changing PDP, `ExecutionToken`, replay, or `RESULT_VERIFIER`
    authority.
-14. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
+13. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
    implementation contract for making hardware-bound signer identity, signed
    telemetry, asset anchors, zone evidence, and verifier replay central to
    physical execution proof.
-15. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
+14. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
    implemented simulation-first dynamic NFC challenge-response fixture lane for
    rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
    tamper-state outcomes without treating mock NFC evidence as authority.
-16. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
+15. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
    implementation track for the explicit, anchor-scoped monotonic NFC counter
    ledger that prevents replay across workflows without making the pure NFC
    verifier instantiate storage.
-17. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
+16. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
    staged transition plan for KMS-backed NTAG 424 DNA verification as a
    profile-specific shadow adapter before any production hardware enforcement.
-18. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
+17. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
    staged stress schedule for establishing freshness-SLA metrics across RCT
    fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
    handoff environments without treating Spark/DGX workstations as physical
@@ -181,33 +178,34 @@ Start here for the active spine:
      signed envelopes, missing required fields, and missing `state_binding_hash`
      inputs are fail-closed authorization conditions, not retriable LLM context
      gaps.
-19. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
+18. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
    strategic memo connecting SeedCore's implemented delegation path to
    cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
    capability attenuation, ReBAC graph paths, SCITT-style evidence, and
    hardware-backed intent.
-20. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
+19. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
    control-plane memo for recursive agent delegation: root context anchoring,
    signed agent identity/capability credentials, per-hop attenuation, visible
    tool calls, out-of-band approval, child-run closure, and replayable
    delegation lineage.
-21. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
+20. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
    lifecycle memo for `ExecutionToken` as a short-lived deterministic
    capability artifact, including mint/withhold semantics, TTL bounding,
    constraint freezing, delegated subtokens, replay, quarantine, and candidate
    hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-22. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
+21. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
    development memo for an Obsidian-compatible Markdown memory vault that makes
    advisory memory, admitted facts, rejected claims, and operator notes readable
    and editable without making memory an authority source.
-23. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
+22. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
    distilled reference for persistent twin settlement as a real-world AI
    reliability pattern: pluggable settlement protocols, proof-vector
    accumulation, append-only compensation, and cryptographic integrity for
    evidence.
-24. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
+23. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
    sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
    verifier bridge architecture, and phased container runtime sandboxing rollout.
+
 
 
 ## 3. Stage Goals And Status Map
