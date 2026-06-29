@@ -198,6 +198,104 @@ human-reviewed promotion.
 | Controller safety gate | Local fail-closed enforcement | Expand PDP scope or settle custody |
 | WAM checkpoint | Advisory model artifact | Become trusted merely by benchmark rank |
 
+## Runtime Assurance Adoption Judgment
+
+The current robotics safety direction strengthens, rather than changes,
+SeedCore's architecture. The useful pattern is not "trust the better robot
+brain." It is:
+
+```text
+cognitive model proposes action chunks
+deterministic runtime assurance filters the vectors
+SeedCore PDP admits or withholds scoped authority
+HAL/controller enforces token, endpoint, and safety bounds
+receipts expose the exact threshold or invariant outcome
+```
+
+### Pick Now: Command Envelope And Safety Receipt Contract
+
+SeedCore should immediately adopt the contract idea behind deterministic
+runtime governance:
+
+- trajectory intent schema with position, velocity, acceleration, jerk, torque,
+  workspace, endpoint, zone, cadence, and payload-hash bounds
+- `safety_gate_summary` with pass, narrowed, fallback, or blocked disposition
+- threshold receipts for velocity, acceleration, jerk, torque, collision,
+  workspace, stale-sensor, and controller-overrun failures
+- explicit `safe_recovery` versus `fail_closed` outcomes
+- replay-visible binding from safety receipt to `ActionIntent`, token id,
+  endpoint id, and transition receipt
+
+This is the cleanest near-term fit because it extends existing evidence,
+robot-sim, and degraded-edge drills without requiring live hard real-time
+hardware.
+
+### Pilot Next: Simplex Runtime Assurance
+
+Simplex-style runtime assurance is a good SeedCore pilot pattern:
+
+- the WAM or VLA remains the advanced, unverified controller
+- a small verified or conservative baseline controller owns safe fallback
+- a decision module switches or narrows control when the advanced controller
+  approaches an unsafe state
+
+For SeedCore, the important artifact is not the controller implementation
+itself. It is the switch receipt: which invariant was at risk, which fallback
+controller was selected, whether the attempt remained inside token scope, and
+whether replay accepted closure.
+
+### Pilot In Simulation: CBF Safety Filters
+
+Control Barrier Function (CBF) filters are attractive for smooth safe-recovery
+because they can minimally adjust an unsafe command toward a safe invariant
+set. SeedCore should pilot them in simulation and trajectory-stability fixtures
+before treating them as hardware enforcement:
+
+- use CBF outputs as `safe_recovery` evidence, not as a PDP override
+- record the original command hash and filtered command hash
+- require policy to declare whether command rewriting is allowed for the action
+  class
+- quarantine when the filter cannot find a feasible safe command inside the
+  token's endpoint, zone, and payload bounds
+
+This keeps CBFs useful without letting a controller silently perform a
+different business or custody act from the one the PDP admitted.
+
+### Track, Do Not Pick Yet: FEARL-Style Separation
+
+FEARL-style separation is directionally aligned: keep the foundation model on
+high-dimensional perception and task context, then pass compact context plus
+low-dimensional safety sensors into a smaller safety module.
+
+SeedCore should track this as a design influence, not pick it as a dependency
+yet:
+
+- it is still a research framing, not a settled production platform
+- the acronym and exact architecture may drift across papers and repos
+- the SeedCore-compatible lesson is stable: safety-critical control should use
+  low-dimensional, typed, replayable sensor vectors rather than raw model
+  belief
+
+The first SeedCore artifact should therefore be a compact safety-vector
+contract, not a FEARL integration.
+
+### Defer For Main Path: Hard Real-Time And PLC Binding
+
+Hard real-time kernels, safety PLCs, and safety-rated industrial networks are
+real deployment concerns, but they should stay out of the main development path
+until SeedCore has the contract-level rehearsal in place.
+
+Use them as future deployment profiles:
+
+- simulator profile: deterministic fixtures and robot-sim HAL receipts
+- prototype edge profile: Jetson / real-time Linux timing measurements
+- trusted edge profile: IGX / industrial controller / PLC integration
+- certified production profile: safety-rated controller and formal safety case
+
+Do not make the current RCT wedge depend on 4 kHz control loops or certified
+PLC hardware. SeedCore can enforce the architecture first by requiring typed
+intent, token scope, safety receipts, and replay outcomes.
+
 ## Minimal Next Slice
 
 The smallest useful implementation slice should be documentation and contract
@@ -205,11 +303,15 @@ first:
 
 1. Define a `WamRolloutEvidenceV0` draft contract with model ref, observation
    refs, rollout hash, action hash, embodiment profile, and safety summary.
-2. Add deterministic fixtures that show one accepted candidate, one stale
-   observation, one endpoint mismatch, and one trajectory-divergence quarantine.
-3. Feed those fixtures through the existing robot-sim or evidence-materializer
+2. Define a `RuntimeSafetyReceiptV0` draft contract with original command hash,
+   filtered command hash when applicable, invariant outcome, fallback mode, and
+   threshold reason code.
+3. Add deterministic fixtures that show one accepted candidate, one stale
+   observation, one endpoint mismatch, one safe-recovery command narrowing, and
+   one trajectory-divergence quarantine.
+4. Feed those fixtures through the existing robot-sim or evidence-materializer
    path before integrating any live WAM inference service.
-4. Only after the contract is replay-visible, connect an external WAM such as
+5. Only after the contract is replay-visible, connect an external WAM such as
    DreamZero, Cosmos, or a LeRobot-compatible policy as an advisory proposal
    provider.
 
