@@ -537,6 +537,8 @@ without changing SeedCore's authority semantics:
    Ray hot-path promotion, path flattening, CSR/CSC layouts, Rust/PyO3 kernels,
    and memory-mapped graph artifacts require measured pressure. The schedule
    lives in [authz_graph_engine_evolution_plan.md](authz_graph_engine_evolution_plan.md).
+   For Zero-Cold-Start schema updates, see the relational-path generalization reference
+   in [zero_cold_start_policy_evolution_ultra.md](zero_cold_start_policy_evolution_ultra.md).
 7. **Counter-ledger acceleration behind the explicit ledger.** Redis,
    Dragonfly, Lua, WATCH pipelines, or RESP3 client-side caching may be
    benchmarked as near-local acceleration for monotonic counter admission, but
