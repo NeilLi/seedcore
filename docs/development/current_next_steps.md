@@ -309,6 +309,41 @@ slice while preserving the PDP authority boundary.
   probe script passed syntax validation and skipped at runtime because `runsc`
   is not installed locally.
 
+## Status Update (2026-06-30, Window H XGBoost Shadow Student Safety Fix)
+
+**Done (2026-06-30).** Hardened the Window H XGBoost shadow-student backend in
+commit `faab19c` (`fix: gate xgboost shadow student activation`) after review
+of commit `ab4e138`.
+
+- **Activation gate fixed:** The ML service now builds XGBoost and conservative
+  student candidates without side effects, evaluates the candidate first, and
+  only saves or activates it after the zero false-safe and zero
+  `student_final_authority_usage` gates pass. A rejected training attempt cannot
+  replace the active in-process shadow student.
+- **XGBoost backend hardened:** `GovernanceShadowStudent` now supports
+  explicit constant abstention and reason-code heads for single-class datasets,
+  normalizes XGBoost prediction shapes before indexing, and preserves the
+  schema-valid abstention fallback for missing models, unknown labels,
+  malformed metadata, or low-confidence predictions.
+- **Route contract clarified:** `POST /xgboost/governance/train_shadow_student`
+  validates `thresholds` and `xgb_config` as objects, reports both
+  `eval_metrics` and `gate_metrics`, and keeps existing `metrics` compatibility
+  for evaluation metrics.
+- **Parity telemetry clarified:** Governance-shadow window stats now separate
+  advisory prediction events from training events. False-safe rates, prediction
+  failure warnings, and queue-pressure warnings are computed over live advisory
+  events only, while training failures remain visible as separate counters.
+- **Regression coverage:** Added tests for rejected XGBoost candidates not
+  replacing the active student, no rejected model bundle being saved, constant
+  clean-allow and deny-only heads, malformed route options, and advisory-only
+  false-safe rate accounting.
+- **Verification:** Passed
+  `pytest tests/test_governance_shadow_eval.py tests/test_governance_shadow_live_advisory.py -q`
+  (`21 passed`),
+  `pytest tests/test_hot_path_parity_log.py tests/test_safety_doctrine_boundaries.py -q`
+  (`4 passed`), `python -m compileall -q` on the touched Python modules,
+  `git diff --check`, and `bash scripts/host/verify_q2_verification_contracts.sh`.
+
 ## Status Update (2026-06-29, KG / GraphRAG Research Reference)
 
 **Docs aligned (2026-06-29).** Reviewed the June 2026 KG / GraphRAG research

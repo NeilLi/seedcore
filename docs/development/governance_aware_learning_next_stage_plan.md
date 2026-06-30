@@ -598,7 +598,7 @@ Success criteria:
 - taxonomy-valid output on the chosen evaluation slice
 - zero false-safe advisory outputs on critical cases
 
-Implementation status (2026-06-29):
+Implementation status (2026-06-30):
 
 - Window H has landed in two bounded slices. The first slice added the strict
   `GovernanceAdvisoryOutputV1` schema, deterministic teacher labeler,
@@ -606,10 +606,11 @@ Implementation status (2026-06-29):
   exact-row `GovernanceShadowStudent`, and offline evaluator.
 - The live-shadow contract now exposes
   `POST /xgboost/governance/advisory` and
-  `POST /xgboost/governance/train_shadow_student` in the ML service, using the
-  conservative student as the initial backend. Training remains an explicit
-  operator/CI-triggered action and refuses false-safe or authority-usage
-  metrics.
+  `POST /xgboost/governance/train_shadow_student` in the ML service, with both
+  conservative exact-row and XGBoost shadow backends. Training remains an
+  explicit operator/CI-triggered action. Candidate students are evaluated before
+  activation, and rejected artifacts cannot replace the active in-process
+  student or become the saved shadow bundle.
 - The PDP hot path has an opt-in
   `SEEDCORE_ENABLE_GOVERNANCE_SHADOW_ADVISORY` hook that enqueues best-effort
   advisory comparisons after the authoritative response exists. The hook does
@@ -618,8 +619,14 @@ Implementation status (2026-06-29):
 - Advisory telemetry is isolated under
   `.local-runtime/governance_shadow_advisory` via
   `SEEDCORE_GOVERNANCE_SHADOW_LOG` / `SEEDCORE_GOVERNANCE_SHADOW_DB`, separate
-  from compiled-authz hot-path parity evidence. XGBoost remains the next
-  backend phase behind the same contract.
+  from compiled-authz hot-path parity evidence. Window stats distinguish live
+  advisory prediction events from training events so false-safe rates and
+  prediction alerts are not diluted by operator-triggered training failures.
+- The XGBoost backend is still shadow-only: it uses constant heads for
+  single-class datasets, normalizes prediction shapes, returns schema-valid
+  abstention on malformed or low-confidence outputs, and remains bound by
+  `shadow_only=True`, `final_authority=False`, and
+  `student_final_authority_usage=0`.
 
 ### Window I: 2026-07-13 to 2026-08-09
 

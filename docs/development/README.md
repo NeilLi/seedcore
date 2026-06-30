@@ -295,10 +295,11 @@ Treat these as real repo capabilities, not aspirational roadmap items:
 - **Window H live governance advisory shadow contract**:
   `src/seedcore/ml/ml_service.py` exposes
   `POST /xgboost/governance/advisory` and
-  `POST /xgboost/governance/train_shadow_student` over the conservative
-  `GovernanceShadowStudent`; `src/seedcore/ops/pdp_hot_path.py` can enqueue
-  opt-in best-effort shadow advisory comparisons after the authoritative PDP
-  response is built; and
+  `POST /xgboost/governance/train_shadow_student` over conservative and
+  XGBoost `GovernanceShadowStudent` backends. Candidate students are evaluated
+  before activation, rejected artifacts cannot replace the active student, and
+  `src/seedcore/ops/pdp_hot_path.py` can enqueue opt-in best-effort shadow
+  advisory comparisons after the authoritative PDP response is built; and
   `src/seedcore/ops/governance_learning/shadow_parity_log.py` stores advisory
   telemetry in a separate `.local-runtime/governance_shadow_advisory` JSONL /
   SQLite lane. This does not affect PDP disposition, `ExecutionToken`s,
@@ -360,10 +361,11 @@ agent integration**, still on one wedge:
   deterministic fixture CMAC checks, monotonic counters, freshness, tamper, and
   wrong-asset coverage while remaining evidence-only and non-authority-bearing.
 - **Window H governance-aware learning** now has both the offline advisory
-  scaffold and an opt-in live shadow advisory contract. Shadow predictions are
-  schema-bounded, explicit-training only, and logged in an isolated advisory
-  telemetry store; they can expose false-safe advisory signals for review, but
-  cannot alter PDP decisions, mint tokens, update evidence, or clear
+  scaffold, an opt-in live shadow advisory contract, and a gated XGBoost shadow
+  backend. Shadow predictions are schema-bounded, explicit-training only, and
+  logged in an isolated advisory telemetry store; rejected candidates cannot
+  become active, and advisory outputs can expose false-safe signals for review
+  but cannot alter PDP decisions, mint tokens, update evidence, or clear
   quarantine.
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
@@ -427,10 +429,9 @@ Real near-term execution order (commerce-coherent and autonomy-ready):
    checks that keep public proof narrow.
 9. Advance edge telemetry closure and signed forensic-block linkage without
    reopening frozen projection contracts.
-10. Continue Window H from the implemented live-shadow contract toward a
-   governance-specific XGBoost backend adapter and artifact metadata only after
-   the conservative advisory endpoint, isolated telemetry, and false-safe gates
-   remain green:
+10. Continue Window H from the implemented gated XGBoost shadow backend toward
+   broader replay-derived evaluation coverage and Window I abstention taxonomy
+   hardening while keeping the advisory student outside the authority path:
    [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
 11. Define the first AI-led self-healing target around a degraded-edge or
    telemetry/outbox failure, with the repair loop ending in a reviewable patch
@@ -519,9 +520,9 @@ Primary planning docs:
 - [`vla_2026_optimizations.md`](vla_2026_optimizations.md)
 - [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) — bounded learning plan that converts VLA/distillation ideas into a trust-slice-aligned execution track
   - Window H status: strict advisory schema, deterministic labeler,
-    replay-derived dataset, conservative student, ML service advisory/train
-    endpoints, isolated shadow telemetry, and opt-in PDP shadow hook are
-    implemented; XGBoost remains the next backend phase.
+    replay-derived dataset, conservative and XGBoost shadow students, ML
+    service advisory/train endpoints, isolated shadow telemetry, gated
+    candidate activation, and opt-in PDP shadow hook are implemented.
 - [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md)
   — shadow-only contract for using statistical distribution tests as
     model-promotion and review evidence without entering authority-bearing
