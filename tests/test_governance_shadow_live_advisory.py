@@ -6,14 +6,18 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
-from seedcore.ml.distillation.governance_dataset import FEATURE_NAMES
+from seedcore.ml.distillation.governance_dataset import FEATURE_NAMES, build_governance_dataset_rows
 from seedcore.ml.distillation.governance_shadow_eval import GovernanceShadowEvalMetrics
 from seedcore.ml.distillation import sample_store
 from seedcore.ml.ml_service import (
     predict_governance_advisory,
     train_governance_shadow_student,
 )
-from seedcore.ml.models.governance_student import GovernanceShadowStudent, set_active_shadow_student
+from seedcore.ml.models.governance_student import (
+    GovernanceShadowStudent,
+    get_active_shadow_student,
+    set_active_shadow_student,
+)
 from seedcore.models.governance_learning import (
     GovernanceEvidenceSummary,
     GovernanceFeatureVector,
@@ -128,6 +132,62 @@ async def test_explicit_training_endpoint_refuses_false_safe_metrics(monkeypatch
         await train_governance_shadow_student({"backend": "conservative_exact_row", "eval_fraction": 0.5})
     assert excinfo.value.status_code == 409
     assert get_governance_shadow_advisory_logger().window_stats()["failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_rejected_xgboost_student_does_not_replace_active_student() -> None:
+    previous_rows = build_governance_dataset_rows(
+        [_sample("previous-deny", "deny", "coordinate_mismatch", "verified", "clean_deny")]
+    )
+    previous_student = GovernanceShadowStudent().fit(previous_rows)
+    set_active_shadow_student(previous_student)
+
+    _write_governance_samples(
+        [
+            _sample("a1", "allow", "allowed", "verified", "clean_allow"),
+            _sample("a2", "allow", "allowed", "verified", "clean_allow"),
+            _sample("d1", "deny", "coordinate_mismatch", "verified", "clean_deny"),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await train_governance_shadow_student(
+            {
+                "backend": "xgboost",
+                "eval_fraction": 0.5,
+                "thresholds": {
+                    "confidence_threshold_abstain": 0.1,
+                    "confidence_threshold_reason": 0.1,
+                },
+                "xgb_config": {"num_boost_round": 3},
+            }
+        )
+
+    assert excinfo.value.status_code == 409
+    assert "gate_metrics" in excinfo.value.detail
+    assert get_active_shadow_student() is previous_student
+    assert previous_student.predict_one(previous_rows[0].features).abstain is True
+    assert not (sample_store.GOVERNANCE_SAMPLES_FILE.parent / "governance_shadow_student" / "metadata.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_training_route_rejects_malformed_xgboost_options() -> None:
+    _write_governance_samples(
+        [
+            _sample("clean-a", "allow", "allowed", "verified", "clean_allow"),
+            _sample("deny-b", "deny", "coordinate_mismatch", "verified", "clean_deny"),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await train_governance_shadow_student({"backend": "xgboost", "thresholds": "bad"})
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "thresholds must be an object"
+
+    with pytest.raises(HTTPException) as excinfo:
+        await train_governance_shadow_student({"backend": "xgboost", "xgb_config": "bad"})
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "xgb_config must be an object"
 
 
 def test_pdp_shadow_hook_does_not_change_authoritative_response(monkeypatch) -> None:
@@ -288,6 +348,47 @@ def test_status_endpoint_reports_critical_alerts_and_warnings(monkeypatch) -> No
     status_with_warn = pdp_hot_path.hot_path_shadow_status()
     alerts_with_warn = status_with_warn["observability"]["alerts"]
     assert any(a["code"] == "governance_shadow_queue_full" for a in alerts_with_warn)
+
+
+def test_governance_shadow_stats_separate_training_from_advisory_events() -> None:
+    logger = get_governance_shadow_advisory_logger()
+    logger.append(
+        {
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "event_type": "governance_shadow_student_training",
+            "status": "failed",
+            "false_safe_advisory": True,
+            "student_final_authority_usage": "not-an-int",
+        }
+    )
+    logger.append(
+        {
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "event_type": "governance_shadow_advisory",
+            "status": "completed",
+            "request_id": "req-live-false-safe",
+            "false_safe_advisory": True,
+            "student_final_authority_usage": 0,
+        }
+    )
+    logger.append(
+        {
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "event_type": "governance_shadow_advisory",
+            "status": "completed",
+            "request_id": "req-live-ok",
+            "false_safe_advisory": False,
+            "student_final_authority_usage": 0,
+        }
+    )
+
+    stats = logger.window_stats()
+    assert stats["failed"] == 1
+    assert stats["training_failed"] == 1
+    assert stats["false_safe_advisory_count"] == 1
+    assert stats["training_false_safe_advisory_count"] == 1
+    assert stats["false_safe_advisory_rate"] == 0.5
+    assert stats["last_false_safe_metadata"]["request_id"] == "req-live-false-safe"
 
 
 def _stale_hot_path_request() -> HotPathEvaluateRequest:

@@ -245,8 +245,7 @@ def _sample(
 
 
 def test_xgboost_shadow_student_training_saving_prediction(tmp_path) -> None:
-    from seedcore.ml.models.governance_student import train_xgboost_shadow_student, GovernanceShadowStudent
-    import os
+    from seedcore.ml.models.governance_student import build_xgboost_shadow_student, GovernanceShadowStudent
 
     samples = [
         _sample("known-clean1", "allow", "allowed", "verified", "clean_allow"),
@@ -258,7 +257,7 @@ def test_xgboost_shadow_student_training_saving_prediction(tmp_path) -> None:
     rows = build_governance_dataset_rows(samples)
     feature_names = FEATURE_NAMES
 
-    student = train_xgboost_shadow_student(
+    student = build_xgboost_shadow_student(
         rows=rows,
         eval_rows=rows,
         feature_names=feature_names,
@@ -299,3 +298,63 @@ def test_xgboost_shadow_student_training_saving_prediction(tmp_path) -> None:
     # Compare predictions
     assert loaded_student.predict_one(rows[0].features).reason_code == pred_clean.reason_code
     assert loaded_student.predict_one(rows[0].features).abstain == pred_clean.abstain
+
+
+def test_xgboost_shadow_student_constant_clean_allow_head_save_load(tmp_path) -> None:
+    from seedcore.ml.models.governance_student import build_xgboost_shadow_student, GovernanceShadowStudent
+
+    rows = build_governance_dataset_rows(
+        [
+            _sample("allow-only-a", "allow", "allowed", "verified", "clean_allow"),
+            _sample("allow-only-b", "allow", "allowed", "verified", "clean_allow"),
+        ]
+    )
+
+    student = build_xgboost_shadow_student(
+        rows=rows,
+        eval_rows=rows,
+        feature_names=FEATURE_NAMES,
+        xgb_config={"num_boost_round": 3},
+    )
+
+    prediction = student.predict_one(rows[0].features)
+    assert prediction.reason_code == "allowed"
+    assert prediction.abstain is False
+    assert prediction.shadow_only is True
+    assert prediction.final_authority is False
+    assert prediction.student_final_authority_usage == 0
+    assert student.metadata["constant_abstain"] is False
+    assert student.metadata["constant_reason_code"] == "allowed"
+
+    model_dir = str(tmp_path / "constant_clean_model")
+    student.save(model_dir)
+    loaded_student = GovernanceShadowStudent(model_dir=model_dir)
+    loaded_prediction = loaded_student.predict_one(rows[0].features)
+    assert loaded_student.backend == "xgboost"
+    assert loaded_prediction.reason_code == "allowed"
+    assert loaded_prediction.abstain is False
+
+
+def test_xgboost_shadow_student_constant_deny_head_abstains() -> None:
+    from seedcore.ml.models.governance_student import build_xgboost_shadow_student
+
+    rows = build_governance_dataset_rows(
+        [
+            _sample("deny-only-a", "deny", "coordinate_mismatch", "verified", "clean_deny", has_valid_coordinates=False),
+            _sample("deny-only-b", "deny", "coordinate_mismatch", "verified", "clean_deny", has_valid_coordinates=False),
+        ]
+    )
+
+    student = build_xgboost_shadow_student(
+        rows=rows,
+        eval_rows=rows,
+        feature_names=FEATURE_NAMES,
+        xgb_config={"num_boost_round": 3},
+    )
+
+    prediction = student.predict_one(rows[0].features)
+    assert prediction.reason_code == "coordinate_mismatch"
+    assert prediction.abstain is True
+    assert prediction.student_final_authority_usage == 0
+    assert student.metadata["constant_abstain"] is True
+    assert student.metadata["constant_reason_code"] == "coordinate_mismatch"

@@ -57,19 +57,37 @@ class GovernanceShadowStudent:
                 meta = json.load(f)
             backend = meta.get("backend", "conservative_exact_row")
             if backend == "xgboost":
-                import xgboost as xgb
                 abstention_file = dir_path / "abstention_model.json"
                 reason_file = dir_path / "reason_model.json"
-                if abstention_file.is_file() and reason_file.is_file():
+                has_constant_abstain = "constant_abstain" in meta
+                has_constant_reason = bool(meta.get("constant_reason_code"))
+                if not has_constant_abstain and not abstention_file.is_file():
+                    return
+                if not has_constant_reason and not reason_file.is_file():
+                    return
+
+                xgb = None
+                if abstention_file.is_file() or reason_file.is_file():
+                    import xgboost as xgb
+
+                abs_bst = None
+                if abstention_file.is_file():
+                    if xgb is None:
+                        return
                     abs_bst = xgb.Booster()
                     abs_bst.load_model(str(abstention_file))
+                self._abstention_model = abs_bst
+
+                res_bst = None
+                if reason_file.is_file():
+                    if xgb is None:
+                        return
                     res_bst = xgb.Booster()
                     res_bst.load_model(str(reason_file))
+                self._reason_model = res_bst
 
-                    self._abstention_model = abs_bst
-                    self._reason_model = res_bst
-                    self.metadata = meta
-                    self.backend = "xgboost"
+                self.metadata = meta
+                self.backend = "xgboost"
             else:
                 self.backend = "conservative_exact_row"
         except Exception:
@@ -90,35 +108,30 @@ class GovernanceShadowStudent:
             json.dump(self.metadata, f, indent=2, default=str)
 
         if self.backend == "xgboost":
-            import xgboost as xgb
-            if self._abstention_model:
+            if self._abstention_model is not None:
                 self._abstention_model.save_model(str(dir_path / "abstention_model.json"))
-            if self._reason_model:
+            if self._reason_model is not None:
                 self._reason_model.save_model(str(dir_path / "reason_model.json"))
 
     def predict_one(self, features: Sequence[float]) -> GovernanceAdvisoryOutputV1:
-        if self.backend == "xgboost" and self._abstention_model is not None and self._reason_model is not None:
+        if self.backend == "xgboost":
             try:
-                import numpy as np
-                import xgboost as xgb
-
                 feat_names = self.metadata.get("feature_names", [])
                 if len(features) != len(feat_names):
                     return self._default_label
 
-                x = np.array([features], dtype=np.float32)
-                dmat = xgb.DMatrix(x, feature_names=list(feat_names))
+                dmat = None
+                if self._abstention_model is not None or self._reason_model is not None:
+                    import numpy as np
+                    import xgboost as xgb
 
-                # 1. Predict abstention (probability of abstain)
-                prob_abstain = float(self._abstention_model.predict(dmat)[0])
+                    x = np.array([features], dtype=np.float32)
+                    dmat = xgb.DMatrix(x, feature_names=list(feat_names))
 
-                # 2. Predict reason code multiclass
-                prob_reasons = self._reason_model.predict(dmat)[0]
-                pred_class_idx = int(np.argmax(prob_reasons))
-                reason_confidence = float(prob_reasons[pred_class_idx])
-
-                idx_to_reason = self.metadata.get("reason_code_map_reverse", {})
-                reason_code = idx_to_reason.get(str(pred_class_idx))
+                prob_abstain = self._predict_abstain_probability(dmat)
+                reason_code, reason_confidence = self._predict_reason_code(dmat)
+                if reason_code is None:
+                    return self._default_label
 
                 thresholds = self.metadata.get("thresholds", {})
                 conf_thresh_abstain = float(thresholds.get("confidence_threshold_abstain", 0.8))
@@ -155,6 +168,50 @@ class GovernanceShadowStudent:
         else:
             return self._labels_by_features.get(self._feature_key(features), self._default_label)
 
+    def _predict_abstain_probability(self, dmat: Any) -> float:
+        if "constant_abstain" in self.metadata:
+            return 1.0 if bool(self.metadata.get("constant_abstain")) else 0.0
+        if self._abstention_model is None:
+            raise ValueError("missing abstention model")
+        if dmat is None:
+            raise ValueError("missing abstention matrix")
+        import numpy as np
+
+        raw = np.asarray(self._abstention_model.predict(dmat), dtype=float).reshape(-1)
+        if raw.size < 1:
+            raise ValueError("empty abstention prediction")
+        return float(raw[0])
+
+    def _predict_reason_code(self, dmat: Any) -> tuple[str | None, float]:
+        constant_reason = self.metadata.get("constant_reason_code")
+        if constant_reason:
+            return str(constant_reason), 1.0
+        if self._reason_model is None:
+            raise ValueError("missing reason model")
+        if dmat is None:
+            raise ValueError("missing reason matrix")
+
+        import numpy as np
+
+        idx_to_reason = self.metadata.get("reason_code_map_reverse", {})
+        class_count = len(idx_to_reason)
+        if class_count <= 0:
+            raise ValueError("missing reason class map")
+
+        raw = np.asarray(self._reason_model.predict(dmat), dtype=float)
+        if raw.size == class_count:
+            probs = raw.reshape(class_count)
+        elif raw.size % class_count == 0:
+            probs = raw.reshape(-1, class_count)[0]
+        else:
+            raise ValueError("invalid reason prediction shape")
+
+        pred_class_idx = int(np.argmax(probs))
+        reason_code = idx_to_reason.get(str(pred_class_idx))
+        if not reason_code:
+            return None, 0.0
+        return str(reason_code), float(probs[pred_class_idx])
+
     def predict_batch(self, feature_rows: Iterable[Sequence[float]]) -> List[GovernanceAdvisoryOutputV1]:
         return [self.predict_one(features) for features in feature_rows]
 
@@ -183,13 +240,19 @@ def set_active_shadow_student(student: GovernanceShadowStudent) -> GovernanceSha
         return _ACTIVE_STUDENT
 
 
+def build_conservative_shadow_student(
+    rows: Iterable[GovernanceDatasetRow],
+) -> GovernanceShadowStudent:
+    return GovernanceShadowStudent().fit(rows)
+
+
 def train_conservative_shadow_student(
     rows: Iterable[GovernanceDatasetRow],
 ) -> GovernanceShadowStudent:
-    return set_active_shadow_student(GovernanceShadowStudent().fit(rows))
+    return set_active_shadow_student(build_conservative_shadow_student(rows))
 
 
-def train_xgboost_shadow_student(
+def build_xgboost_shadow_student(
     rows: Iterable[GovernanceDatasetRow],
     eval_rows: Iterable[GovernanceDatasetRow],
     feature_names: Sequence[str],
@@ -250,8 +313,14 @@ def train_xgboost_shadow_student(
         "tree_method": str((xgb_config or {}).get("tree_method", "hist")),
     }
 
-    dtrain_abs = xgb.DMatrix(X_train, label=y_abstain, feature_names=list(feature_names))
-    bst_abs = xgb.train(abs_params, dtrain_abs, num_boost_round=num_boost_round)
+    unique_abstain_targets = set(float(value) for value in y_abstain.tolist())
+    constant_abstain = None
+    bst_abs = None
+    if len(unique_abstain_targets) == 1:
+        constant_abstain = bool(next(iter(unique_abstain_targets)))
+    else:
+        dtrain_abs = xgb.DMatrix(X_train, label=y_abstain, feature_names=list(feature_names))
+        bst_abs = xgb.train(abs_params, dtrain_abs, num_boost_round=num_boost_round)
 
     res_params = {
         "objective": "multi:softprob",
@@ -261,8 +330,13 @@ def train_xgboost_shadow_student(
         "eta": float((xgb_config or {}).get("eta", 0.1)),
         "tree_method": str((xgb_config or {}).get("tree_method", "hist")),
     }
-    dtrain_res = xgb.DMatrix(X_train, label=y_reason, feature_names=list(feature_names))
-    bst_res = xgb.train(res_params, dtrain_res, num_boost_round=num_boost_round)
+    constant_reason_code = None
+    bst_res = None
+    if len(unique_reasons) == 1:
+        constant_reason_code = unique_reasons[0]
+    else:
+        dtrain_res = xgb.DMatrix(X_train, label=y_reason, feature_names=list(feature_names))
+        bst_res = xgb.train(res_params, dtrain_res, num_boost_round=num_boost_round)
 
     metadata = {
         "backend": "xgboost",
@@ -273,6 +347,10 @@ def train_xgboost_shadow_student(
         "thresholds": resolved_thresholds,
         "training_metrics": {},
     }
+    if constant_abstain is not None:
+        metadata["constant_abstain"] = constant_abstain
+    if constant_reason_code is not None:
+        metadata["constant_reason_code"] = constant_reason_code
 
     student = GovernanceShadowStudent()
     student.backend = "xgboost"
@@ -280,4 +358,23 @@ def train_xgboost_shadow_student(
     student._reason_model = bst_res
     student.metadata = metadata
 
-    return set_active_shadow_student(student)
+    return student
+
+
+def train_xgboost_shadow_student(
+    rows: Iterable[GovernanceDatasetRow],
+    eval_rows: Iterable[GovernanceDatasetRow],
+    feature_names: Sequence[str],
+    *,
+    thresholds: dict[str, Any] | None = None,
+    xgb_config: dict[str, Any] | None = None,
+) -> GovernanceShadowStudent:
+    return set_active_shadow_student(
+        build_xgboost_shadow_student(
+            rows,
+            eval_rows,
+            feature_names,
+            thresholds=thresholds,
+            xgb_config=xgb_config,
+        )
+    )

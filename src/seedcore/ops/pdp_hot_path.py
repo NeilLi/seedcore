@@ -318,13 +318,13 @@ def _build_hot_path_observability(status: Mapping[str, Any]) -> dict[str, Any]:
             "governance_shadow_authority_usage",
             "Critical: student authority usage detected in shadow student predictions.",
         )
-    if int(gov.get("failed") or 0) > 5:
+    if int(gov.get("advisory_failed") or 0) > 5:
         add(
             "warning",
             "governance_shadow_prediction_failures",
             "Warning: high prediction failure rate detected in governance shadow advisory.",
         )
-    if int(gov.get("queue_full") or 0) > 5:
+    if int(gov.get("advisory_queue_full") or 0) > 5:
         add(
             "warning",
             "governance_shadow_queue_full",
@@ -362,8 +362,8 @@ def _build_hot_path_observability(status: Mapping[str, Any]) -> dict[str, Any]:
             "strict_promotion_eligible": bool(status.get("strict_promotion_eligible")),
             "rollback_triggered": bool(status.get("rollback_triggered")),
             "promotion_window_healthy": bool(prom.get("promotion_eligible")) if prom else None,
-            "gov_shadow_completed": int(gov.get("completed") or 0),
-            "gov_shadow_failed": int(gov.get("failed") or 0),
+            "gov_shadow_completed": int(gov.get("advisory_completed") or 0),
+            "gov_shadow_failed": int(gov.get("advisory_failed") or 0),
             "gov_shadow_false_safe_count": int(gov.get("false_safe_advisory_count") or 0),
             "gov_shadow_authority_usage_count": int(gov.get("authority_usage_count") or 0),
         },

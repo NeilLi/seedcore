@@ -88,14 +88,40 @@ class GovernanceShadowAdvisoryLogger:
         completed = sum(1 for item in window if item.get("status") == "completed")
         failed = sum(1 for item in window if item.get("status") == "failed")
         queue_full = sum(1 for item in window if item.get("status") == "queue_full")
-        false_safe = sum(1 for item in window if bool(item.get("false_safe_advisory")))
-        authority_usage = sum(1 for item in window if int(item.get("student_final_authority_usage") or 0) != 0)
 
-        false_safe_rate = false_safe / completed if completed > 0 else 0.0
-        authority_usage_rate = authority_usage / completed if completed > 0 else 0.0
+        advisory_window = [
+            item
+            for item in window
+            if item.get("event_type") != "governance_shadow_student_training"
+        ]
+        training_window = [
+            item
+            for item in window
+            if item.get("event_type") == "governance_shadow_student_training"
+        ]
+        advisory_completed = sum(1 for item in advisory_window if item.get("status") == "completed")
+        advisory_failed = sum(1 for item in advisory_window if item.get("status") == "failed")
+        advisory_queue_full = sum(1 for item in advisory_window if item.get("status") == "queue_full")
+        training_completed = sum(1 for item in training_window if item.get("status") == "completed")
+        training_failed = sum(1 for item in training_window if item.get("status") == "failed")
+        false_safe = sum(1 for item in advisory_window if bool(item.get("false_safe_advisory")))
+        authority_usage = sum(
+            1
+            for item in advisory_window
+            if _safe_int(item.get("student_final_authority_usage")) != 0
+        )
+        training_false_safe = sum(1 for item in training_window if bool(item.get("false_safe_advisory")))
+        training_authority_usage = sum(
+            1
+            for item in training_window
+            if _safe_int(item.get("student_final_authority_usage")) != 0
+        )
+
+        false_safe_rate = false_safe / advisory_completed if advisory_completed > 0 else 0.0
+        authority_usage_rate = authority_usage / advisory_completed if advisory_completed > 0 else 0.0
 
         last_false_safe_meta = None
-        for item in reversed(window):
+        for item in reversed(advisory_window):
             if bool(item.get("false_safe_advisory")):
                 last_false_safe_meta = {
                     "request_id": item.get("request_id"),
@@ -110,9 +136,9 @@ class GovernanceShadowAdvisoryLogger:
             alert_hints.append("critical: false_safe_advisory_detected")
         if authority_usage > 0:
             alert_hints.append("critical: student_authority_usage_detected")
-        if failed > 5:
+        if advisory_failed > 5:
             alert_hints.append("warning: high_prediction_failure_rate")
-        if queue_full > 5:
+        if advisory_queue_full > 5:
             alert_hints.append("warning: queue_pressure_detected")
 
         return {
@@ -121,10 +147,17 @@ class GovernanceShadowAdvisoryLogger:
             "completed": completed,
             "failed": failed,
             "queue_full": queue_full,
+            "advisory_completed": advisory_completed,
+            "advisory_failed": advisory_failed,
+            "advisory_queue_full": advisory_queue_full,
+            "training_completed": training_completed,
+            "training_failed": training_failed,
             "false_safe_advisory_count": false_safe,
             "false_safe_advisory_rate": false_safe_rate,
             "authority_usage_count": authority_usage,
             "authority_usage_rate": authority_usage_rate,
+            "training_false_safe_advisory_count": training_false_safe,
+            "training_authority_usage_count": training_authority_usage,
             "last_false_safe_metadata": last_false_safe_meta,
             "alert_hints": alert_hints,
             "log_path": str(governance_shadow_log_file_path()),
@@ -161,7 +194,7 @@ class GovernanceShadowAdvisoryLogger:
                         str(event.get("asset_ref") or ""),
                         str(event.get("status") or ""),
                         1 if bool(event.get("false_safe_advisory")) else 0,
-                        int(event.get("student_final_authority_usage") or 0),
+                        _safe_int(event.get("student_final_authority_usage")),
                         json.dumps(event, separators=(",", ":"), default=str),
                     ),
                 )
@@ -251,3 +284,10 @@ def reset_governance_shadow_advisory_logger_for_tests() -> None:
     global _GOVERNANCE_SHADOW_LOGGER
     with _LOGGER_LOCK:
         _GOVERNANCE_SHADOW_LOGGER = None
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0

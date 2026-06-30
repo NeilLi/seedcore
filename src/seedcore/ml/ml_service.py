@@ -100,7 +100,7 @@ import asyncio
 import threading
 import concurrent.futures
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import numpy as np  # pyright: ignore[reportMissingImports]
 import ray  # pyright: ignore[reportMissingImports]
@@ -1091,8 +1091,9 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
         from seedcore.ml.distillation.governance_dataset import load_governance_advisory_dataset
         from seedcore.ml.distillation.governance_shadow_eval import evaluate_shadow_student
         from seedcore.ml.models.governance_student import (
-            train_conservative_shadow_student,
-            train_xgboost_shadow_student,
+            build_conservative_shadow_student,
+            build_xgboost_shadow_student,
+            set_active_shadow_student,
         )
         from seedcore.ops.governance_learning.shadow_parity_log import (
             get_governance_shadow_advisory_logger,
@@ -1103,7 +1104,7 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="eval_fraction must be numeric") from None
 
-        backend = str(request.get("backend", "xgboost")).strip()
+        backend = str(request.get("backend", "xgboost")).strip().lower()
         if backend not in {"xgboost", "conservative_exact_row"}:
             raise HTTPException(status_code=400, detail="backend must be xgboost or conservative_exact_row")
 
@@ -1118,12 +1119,18 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
         training_rows = tuple(split.train) or all_rows
         evaluation_rows = tuple(split.eval) or all_rows
 
-        thresholds_dict = request.get("thresholds") or {}
-        xgb_config_dict = request.get("xgb_config") or {}
+        thresholds_raw = request.get("thresholds") or {}
+        xgb_config_raw = request.get("xgb_config") or {}
+        if not isinstance(thresholds_raw, Mapping):
+            raise HTTPException(status_code=400, detail="thresholds must be an object")
+        if not isinstance(xgb_config_raw, Mapping):
+            raise HTTPException(status_code=400, detail="xgb_config must be an object")
+        thresholds_dict = dict(thresholds_raw)
+        xgb_config_dict = dict(xgb_config_raw)
 
         if backend == "xgboost":
             student = await asyncio.to_thread(
-                train_xgboost_shadow_student,
+                build_xgboost_shadow_student,
                 training_rows,
                 evaluation_rows,
                 split.feature_names,
@@ -1131,7 +1138,7 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
                 xgb_config=xgb_config_dict,
             )
         else:
-            student = await asyncio.to_thread(train_conservative_shadow_student, training_rows)
+            student = await asyncio.to_thread(build_conservative_shadow_student, training_rows)
 
         metrics = await asyncio.to_thread(evaluate_shadow_student, student, evaluation_rows)
         metrics_payload = _governance_shadow_metrics_payload(metrics)
@@ -1143,6 +1150,7 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
             metrics_for_gate = await asyncio.to_thread(evaluate_shadow_student, student, all_rows)
         else:
             metrics_for_gate = metrics
+        gate_metrics_payload = _governance_shadow_metrics_payload(metrics_for_gate)
 
         accepted = (
             metrics_for_gate.false_safe_advisory_count == 0
@@ -1152,7 +1160,9 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
         if accepted:
             if backend == "xgboost":
                 student.metadata["training_metrics"] = metrics_payload
+                student.metadata["gate_metrics"] = gate_metrics_payload
                 await asyncio.to_thread(student.save)
+            set_active_shadow_student(student)
 
         event = {
             "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -1169,6 +1179,8 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
             "false_safe_advisory": metrics_for_gate.false_safe_advisory_count > 0,
             "student_final_authority_usage": metrics_for_gate.authority_usage_count,
             "metrics": metrics_payload,
+            "eval_metrics": metrics_payload,
+            "gate_metrics": gate_metrics_payload,
         }
         get_governance_shadow_advisory_logger().append(event)
 
@@ -1179,6 +1191,8 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
                     "accepted": False,
                     "reason": "governance shadow student violated acceptance gates",
                     "metrics": metrics_payload,
+                    "eval_metrics": metrics_payload,
+                    "gate_metrics": gate_metrics_payload,
                 },
             )
 
@@ -1191,6 +1205,8 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
             "eval_count": len(evaluation_rows),
             "feature_names": list(split.feature_names),
             "metrics": metrics_payload,
+            "eval_metrics": metrics_payload,
+            "gate_metrics": gate_metrics_payload,
         }
 
     except HTTPException:
