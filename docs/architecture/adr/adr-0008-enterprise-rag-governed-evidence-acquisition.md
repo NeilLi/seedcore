@@ -35,9 +35,12 @@ Enterprise RAG output is accepted by SeedCore only when:
 2. retrieved evidence is authorized by SeedCore policy;
 3. retrieved evidence is represented as typed RAG evidence items;
 4. evidence items are bound into a RAG evidence bundle;
-5. generated claims are verified against the authorized evidence bundle;
-6. the full request, retrieval, generation, verification, and final status are recorded in a RAG trace.
-7. a signed RAG receipt can bind the trace, bundle hash, answer hash,
+5. any prompt rendered for generation is assembled only from the authorized
+   evidence bundle and versioned prompt profile;
+6. generated claims are verified against the authorized evidence bundle;
+7. the full request, retrieval, generation, verification, and final status are
+   recorded in a RAG trace;
+8. a signed RAG receipt can bind the trace, bundle hash, answer hash,
    verified claims, policy decisions, and safe telemetry for replay.
 
 ## Scope
@@ -94,6 +97,16 @@ RAGTrace / Forensic Ledger
 
 The initial implementation should begin with one controlled source, such as local SeedCore markdown docs or a controlled object-store document set, rather than broad enterprise connector support.
 
+Guarded prompt assembly belongs inside the generator boundary after
+`RAGEvidenceBundle` creation. Prompt templates may use deterministic
+XML-style sections such as `<evidence>`, `<policy_rules>`, and
+`<action_parameters>`, scratchpad isolation, and optional response prefill for
+strict JSON/schema output. These are versioned formatting and parser controls,
+not policy decisions, evidence objects, or execution authority. A parse failure,
+schema failure, verifier mismatch, or missing authorized evidence must close as
+blocked, escalated, abstained, or lite-receipt rather than falling back to an
+ungoverned answer.
+
 ## Rationale
 
 SeedCore's existing architecture already differentiates between advisory reasoning and authoritative execution. Enterprise RAG should preserve that distinction. The LLM can make evidence legible, but SeedCore's PDP, evidence bundle, verifier, and replay surfaces must remain the authority-bearing components.
@@ -137,6 +150,9 @@ Negative consequences:
 - Teams must distinguish between advisory semantic memory and typed governed evidence.
 - Receipt signing, minimal-evidence derivation, and side-channel-safe telemetry
   become explicit contract work before broad connector adoption.
+- Prompt assembly now needs versioned templates, denied-content exclusion
+  tests, strict parser behavior, and replay metadata before generated answers
+  can be accepted.
 
 ## Non-Goals
 
@@ -172,4 +188,7 @@ This ADR is satisfied when SeedCore can demonstrate:
 7. a RAG receipt can bind the trace closure without exposing denied candidate
    content;
 8. abstain or lite-receipt outcomes are emitted when authorization,
-   freshness, evidence, or verifier closure is insufficient.
+   freshness, evidence, or verifier closure is insufficient;
+9. prompt assembly templates, response-prefill profiles, and parser failures
+   are versioned and replayable without making prompt structure an authority
+   source.

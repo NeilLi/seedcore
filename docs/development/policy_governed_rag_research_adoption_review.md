@@ -44,6 +44,12 @@ foundation models for structural KG reasoning. SeedCore should use that split as
 roadmap input, while keeping every graph-derived chunk, path, query result, or
 inferred edge behind the same PDP, evidence, verifier, and replay boundaries.
 
+The enterprise trusted-AI / LLMOps signal adds a narrower prompt-engineering
+lesson: versioned prompt structure, testing, and strict output schemas are
+useful only when they sit behind SeedCore's governed evidence boundary. XML
+tags, scratchpad isolation, and response prefill can improve prompt assembly
+and parser reliability, but they do not become policy, authority, or proof.
+
 ## Verified Current Implementation State
 
 As of 2026-06-22, the implemented codebase should be described narrowly:
@@ -104,6 +110,39 @@ the living map for graph-retrieval research. Its SeedCore mapping is:
 - KG foundation models such as ULTRA, MERRY, and GraphOracle are advisory
   or shadow reasoning inputs until their outputs are promoted through a
   governed evidence or graph-mutation path.
+
+### 0A. Guarded prompt assembly conventions
+
+Adopt structured prompt conventions as a route-level guarded prompt assembly
+profile, not as new core evidence-schema fields.
+
+Recommended posture:
+
+- Use deterministic section delimiters, including XML-style tags such as
+  `<evidence>`, `<policy_rules>`, and `<action_parameters>`, inside prompt
+  templates that render from an already authorized `RAGEvidenceBundle`.
+- Treat those tags as model-visible isolation boundaries only. They do not
+  replace `RAGEvidenceItem`, `RAGEvidenceBundle`, PDP decision IDs,
+  `VerifiedRAGClaim`, `RAGTrace`, or receipt validation.
+- Keep scratchpad or chain-of-thought instructions isolated from the parsed
+  final payload. Do not persist scratchpad text as authority-bearing evidence.
+- Version the prompt template, model config, route schema, and parser profile
+  so replay can reconstruct which assembly profile produced a draft answer.
+- Add negative tests proving denied, quarantined, or missing-decision chunks
+  cannot appear in any rendered prompt section, citation payload, ordinary log,
+  or proof UI.
+
+Decision on XML tag standardization: standardize tag names in guarded prompt
+assembly templates and tests first. Do not put `<evidence>` or
+`<policy_rules>` inside RAG evidence schema validation levels until an
+implementation needs a serialized prompt-render artifact with verifier support.
+
+Decision on prefill conventions: allow response-prefill profiles for strict
+developer-facing routers, but keep them optional and route-configured. SDK
+preflight checks should not automatically emit a prefill prefix by default,
+because preflight is about authority and readiness, while prefill is a
+formatting reliability control. A route may advertise a suggested prefix only
+when it also declares the expected output schema and fail-closed parse behavior.
 
 ### 1. Receipt profile for RAG traces
 
@@ -249,7 +288,9 @@ provenance-bound proposal until a governed promotion path admits it.
    `RAGAuthorizationDecision` inputs for the existing promotion guard.
 3. Add guarded prompt assembly that accepts only a `RAGEvidenceBundle` and test
    that denied or missing-decision content cannot enter prompt input, citations,
-   ordinary logs, or proof UI payloads.
+   ordinary logs, or proof UI payloads. This slice should include versioned
+   prompt sections, optional route-level response prefill, strict schema parse
+   failure handling, and replayable prompt-render metadata.
 4. Extend verifier and trace validation so supported claims cite only authorized
    bundle members and accepted traces cross-check bundle, draft, claim, and
    policy decision references.
@@ -270,7 +311,7 @@ provenance-bound proposal until a governed promotion path admits it.
 SeedCore should adopt the research's governance shape, not its hype. The
 architecture already points in the right direction: policy before context,
 evidence before generation, verifier before acceptance, replay before trust.
-The next upgrade is to make RAG receipts, minimal evidence sets, degraded
-outcomes, and side-channel-safe telemetry explicit enough that every later
-retriever, connector, verifier, or signing format has to obey the same
-authority-preserving contract.
+The next upgrade is to make guarded prompt assembly, RAG receipts, minimal
+evidence sets, degraded outcomes, and side-channel-safe telemetry explicit
+enough that every later retriever, connector, verifier, prompt profile, or
+signing format has to obey the same authority-preserving contract.

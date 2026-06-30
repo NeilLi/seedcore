@@ -377,6 +377,34 @@ than making a graph system or KG model authoritative.
   a graph database, Cypher agent, GraphRAG implementation, or KG foundation
   model as production substrate.
 
+## Status Update (2026-06-30, Enterprise Trusted-AI Prompt Assembly Alignment)
+
+**Docs aligned (2026-06-30).** Reviewed the enterprise trusted-AI / LLMOps
+lessons artifact against SeedCore's governed RAG and governance-learning
+baseline. The repo-native conclusion is: adopt structured prompt management as
+a guarded prompt assembly profile, not as a new authority layer.
+
+- **XML tag decision:** Standardize `<evidence>`, `<policy_rules>`, and
+  `<action_parameters>` as prompt-template section delimiters for the future
+  guarded prompt assembly slice. Do not put those tags inside
+  `RAGEvidenceItem` or `RAGEvidenceBundle` schema validation yet; the
+  authoritative boundary remains PDP-admitted evidence, bundle membership,
+  verifier checks, and trace/receipt closure.
+- **Prefill decision:** Allow optional route-level response-prefill profiles
+  for strict JSON/schema generation, but do not have SDK preflight checks emit
+  prefill prefixes by default. Preflight remains an authority/readiness check;
+  prefill is only a formatting reliability aid and must fail closed on parse or
+  schema errors.
+- **Scratchpad boundary:** Scratchpad or chain-of-thought isolation can be used
+  inside prompt templates, but scratchpad text must not be persisted as
+  authority-bearing evidence or used to relax abstain, block, escalation, or
+  verifier-failure semantics.
+- **Next RAG slice clarified:** The controlled-source RAG lane should add
+  guarded prompt rendering from `RAGEvidenceBundle`, prompt-render metadata,
+  denied-content exclusion tests, strict output parsing, and malformed-output
+  `abstained` / `blocked` / `lite_receipt` behavior before broad connector,
+  vector-database, GraphRAG, or LLM-provider choices.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against

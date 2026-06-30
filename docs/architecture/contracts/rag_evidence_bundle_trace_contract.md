@@ -178,7 +178,41 @@ Request
 }
 ```
 
-## 9. VerifiedRAGClaim
+## 9. Guarded Prompt Assembly Profile
+
+Guarded prompt assembly is an implementation profile over an authorized
+`RAGEvidenceBundle`; it is not a replacement for the bundle contract and does
+not add authority to the LLM output. Prompt templates may use deterministic
+section delimiters, including XML-style tags such as `<evidence>`,
+`<policy_rules>`, and `<action_parameters>`, to keep authorized evidence,
+policy reminders, and request parameters isolated in model-visible context.
+
+These tags are prompt-assembly boundaries, not schema-validation fields inside
+`RAGEvidenceItem` or `RAGEvidenceBundle`. The authoritative validation remains:
+
+- only authorized `RAGEvidenceItem` objects may be rendered inside
+  `<evidence>`;
+- denied, quarantined, or missing-decision candidates must not be rendered in
+  any model-visible section;
+- policy text rendered inside `<policy_rules>` is explanatory context and must
+  not replace the PDP decision IDs already bound into the trace;
+- scratchpad or chain-of-thought instructions, if used, must be isolated from
+  the parsed final payload and must not be persisted as authority-bearing
+  evidence.
+
+Guarded generators may also use response-prefill conventions, such as a JSON
+object prefix for strict schema completion, when the downstream parser expects a
+typed output. Prefill is a formatting reliability aid. It is not an
+authorization control, cannot relax abstain/block semantics, and should be
+configured on the guarded generator or route profile rather than emitted by SDK
+preflight checks by default.
+
+MVP acceptance for this profile requires tests proving that the rendered prompt
+can be reconstructed from the bundle, contains no denied candidate content, and
+that malformed or non-schema-valid model output produces blocked, escalated,
+abstained, or lite-receipt closure rather than ungoverned fallback.
+
+## 10. VerifiedRAGClaim
 
 ```json
 {
@@ -201,7 +235,7 @@ Allowed `support_status` values:
 - `conflicted`
 - `insufficient`
 
-## 10. RAGTrace
+## 11. RAGTrace
 
 ```json
 {
@@ -228,7 +262,7 @@ Allowed `final_status` values:
 - `escalated`
 - `abstained`
 
-## 11. RAGReceipt
+## 12. RAGReceipt
 
 `RAGReceipt` is the portable proof object for a completed governed RAG
 interaction. It signs the trace closure; it does not authorize future
@@ -287,7 +321,7 @@ Allowed `degradation_mode` values:
 - `policy_blocked`: policy or PDP evaluation blocked the RAG interaction.
 - `none`: full receipt with no degradation.
 
-## 12. Minimal Evidence Set
+## 13. Minimal Evidence Set
 
 The minimal evidence set is a verifier artifact, not a model-selected
 authority source. It may be derived only from already authorized
@@ -312,7 +346,7 @@ Required fields for a minimal evidence artifact:
 The full authorized evidence bundle must remain available for replay and
 forensics even when a smaller minimal set is attached to a receipt.
 
-## 13. Side-Channel-Safe Telemetry
+## 14. Side-Channel-Safe Telemetry
 
 RAG denial and timing telemetry must avoid leaking sensitive resource
 existence. Ordinary traces, receipts, logs, and proof UI payloads may expose
@@ -360,6 +394,9 @@ citations, logs, or proof UI payloads.
     denied candidate content.
 12. Degraded receipts must preserve fail-closed semantics and disclose only
     policy-safe refusal or abstention metadata.
+13. Guarded prompt assembly must render only authorized evidence bundle
+    members and must treat XML tags, policy reminders, scratchpads, and
+    response prefill as non-authoritative formatting controls.
 
 ## MVP Acceptance Tests
 
@@ -376,6 +413,8 @@ citations, logs, or proof UI payloads.
 - Minimal evidence set verifier test.
 - Lite receipt / abstain degradation test.
 - Side-channel-safe denied telemetry test.
+- Guarded prompt assembly reconstruction and denied-content exclusion test.
+- Schema-prefill failure-to-abstain or failure-to-block test.
 
 ## Open Implementation Notes
 
@@ -388,3 +427,6 @@ citations, logs, or proof UI payloads.
 - Transparency registration, such as SCITT-style publication, is a later
   external audit profile after local receipt generation and replay validation
   are green.
+- XML-style prompt sections and response prefill should be versioned with the
+  prompt template profile and route schema, not with core evidence item
+  validation.
