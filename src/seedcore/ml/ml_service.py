@@ -1081,7 +1081,7 @@ async def predict_governance_advisory(request: Dict[str, Any]):
 @ml_app.post("/xgboost/governance/train_shadow_student")
 async def train_governance_shadow_student(request: Dict[str, Any]):
     """
-    Explicit operator/CI-triggered training for the conservative Window H student.
+    Explicit operator/CI-triggered training for the Window H shadow student.
 
     No background timer or self-tuning loop is started here. The trained student
     is accepted only when evaluation preserves the zero-authority and zero
@@ -1090,7 +1090,10 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
     try:
         from seedcore.ml.distillation.governance_dataset import load_governance_advisory_dataset
         from seedcore.ml.distillation.governance_shadow_eval import evaluate_shadow_student
-        from seedcore.ml.models.governance_student import train_conservative_shadow_student
+        from seedcore.ml.models.governance_student import (
+            train_conservative_shadow_student,
+            train_xgboost_shadow_student,
+        )
         from seedcore.ops.governance_learning.shadow_parity_log import (
             get_governance_shadow_advisory_logger,
         )
@@ -1099,6 +1102,10 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
             eval_fraction = float(request.get("eval_fraction", 0.2))
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="eval_fraction must be numeric") from None
+
+        backend = str(request.get("backend", "xgboost")).strip()
+        if backend not in {"xgboost", "conservative_exact_row"}:
+            raise HTTPException(status_code=400, detail="backend must be xgboost or conservative_exact_row")
 
         split = await asyncio.to_thread(
             load_governance_advisory_dataset,
@@ -1110,13 +1117,42 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
 
         training_rows = tuple(split.train) or all_rows
         evaluation_rows = tuple(split.eval) or all_rows
-        student = await asyncio.to_thread(train_conservative_shadow_student, training_rows)
+
+        thresholds_dict = request.get("thresholds") or {}
+        xgb_config_dict = request.get("xgb_config") or {}
+
+        if backend == "xgboost":
+            student = await asyncio.to_thread(
+                train_xgboost_shadow_student,
+                training_rows,
+                evaluation_rows,
+                split.feature_names,
+                thresholds=thresholds_dict,
+                xgb_config=xgb_config_dict,
+            )
+        else:
+            student = await asyncio.to_thread(train_conservative_shadow_student, training_rows)
+
         metrics = await asyncio.to_thread(evaluate_shadow_student, student, evaluation_rows)
         metrics_payload = _governance_shadow_metrics_payload(metrics)
+
+        # If the eval split lacks abstaining/deny/quarantine/escalate examples,
+        # also evaluate against the full available dataset before accepting.
+        eval_has_abstains = any(row.label.abstain for row in evaluation_rows)
+        if not eval_has_abstains:
+            metrics_for_gate = await asyncio.to_thread(evaluate_shadow_student, student, all_rows)
+        else:
+            metrics_for_gate = metrics
+
         accepted = (
-            metrics.false_safe_advisory_count == 0
-            and metrics.authority_usage_count == 0
+            metrics_for_gate.false_safe_advisory_count == 0
+            and metrics_for_gate.authority_usage_count == 0
         )
+
+        if accepted:
+            if backend == "xgboost":
+                student.metadata["training_metrics"] = metrics_payload
+                await asyncio.to_thread(student.save)
 
         event = {
             "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -1124,14 +1160,14 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
             "event_type": "governance_shadow_student_training",
             "request_id": str(request.get("request_id") or ""),
             "asset_ref": "",
-            "backend": "conservative_exact_row",
+            "backend": backend,
             "sample_count": len(all_rows),
             "train_count": len(training_rows),
             "eval_count": len(evaluation_rows),
             "feature_names": list(split.feature_names),
             "accepted": accepted,
-            "false_safe_advisory": metrics.false_safe_advisory_count > 0,
-            "student_final_authority_usage": metrics.authority_usage_count,
+            "false_safe_advisory": metrics_for_gate.false_safe_advisory_count > 0,
+            "student_final_authority_usage": metrics_for_gate.authority_usage_count,
             "metrics": metrics_payload,
         }
         get_governance_shadow_advisory_logger().append(event)
@@ -1149,13 +1185,14 @@ async def train_governance_shadow_student(request: Dict[str, Any]):
         return {
             "status": "success",
             "accepted": True,
-            "backend": "conservative_exact_row",
+            "backend": backend,
             "sample_count": len(all_rows),
             "train_count": len(training_rows),
             "eval_count": len(evaluation_rows),
             "feature_names": list(split.feature_names),
             "metrics": metrics_payload,
         }
+
     except HTTPException:
         raise
     except Exception as e:

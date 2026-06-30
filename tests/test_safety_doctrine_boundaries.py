@@ -45,6 +45,10 @@ def test_pdp_hot_path_ast_imports_contain_no_llm_sdks():
         "cohere",
         "transformers",
         "cognitive_service",
+        "xgboost",
+        "xgboost_ray",
+        "pandas",
+        "sklearn",
     ]
     
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

@@ -90,6 +90,31 @@ class GovernanceShadowAdvisoryLogger:
         queue_full = sum(1 for item in window if item.get("status") == "queue_full")
         false_safe = sum(1 for item in window if bool(item.get("false_safe_advisory")))
         authority_usage = sum(1 for item in window if int(item.get("student_final_authority_usage") or 0) != 0)
+
+        false_safe_rate = false_safe / completed if completed > 0 else 0.0
+        authority_usage_rate = authority_usage / completed if completed > 0 else 0.0
+
+        last_false_safe_meta = None
+        for item in reversed(window):
+            if bool(item.get("false_safe_advisory")):
+                last_false_safe_meta = {
+                    "request_id": item.get("request_id"),
+                    "recorded_at": item.get("recorded_at"),
+                    "pdp": item.get("pdp"),
+                    "prediction": item.get("prediction"),
+                }
+                break
+
+        alert_hints = []
+        if false_safe > 0:
+            alert_hints.append("critical: false_safe_advisory_detected")
+        if authority_usage > 0:
+            alert_hints.append("critical: student_authority_usage_detected")
+        if failed > 5:
+            alert_hints.append("warning: high_prediction_failure_rate")
+        if queue_full > 5:
+            alert_hints.append("warning: queue_pressure_detected")
+
         return {
             "window_capacity": self._max_events,
             "window_events": total,
@@ -97,7 +122,11 @@ class GovernanceShadowAdvisoryLogger:
             "failed": failed,
             "queue_full": queue_full,
             "false_safe_advisory_count": false_safe,
+            "false_safe_advisory_rate": false_safe_rate,
             "authority_usage_count": authority_usage,
+            "authority_usage_rate": authority_usage_rate,
+            "last_false_safe_metadata": last_false_safe_meta,
+            "alert_hints": alert_hints,
             "log_path": str(governance_shadow_log_file_path()),
             "db_path": str(governance_shadow_db_file_path()),
         }

@@ -35,6 +35,8 @@ def reset_shadow_state(tmp_path, monkeypatch):
     monkeypatch.setenv("SEEDCORE_GOVERNANCE_SHADOW_DB", str(tmp_path / "governance-shadow.db"))
     monkeypatch.setenv("SEEDCORE_HOT_PATH_PARITY_DB", str(tmp_path / "hot-path-parity.db"))
     monkeypatch.setenv("SEEDCORE_HOT_PATH_PARITY_LOG", str(tmp_path / "hot-path-parity.jsonl"))
+    monkeypatch.setenv("SEEDCORE_GOVERNANCE_STUDENT_PATH", str(tmp_path / "governance_shadow_student"))
+    monkeypatch.setenv("XGB_STORAGE_PATH", str(tmp_path / "xgb_storage"))
     monkeypatch.setattr(sample_store, "DISTILLATION_DIR", tmp_path)
     monkeypatch.setattr(sample_store, "GOVERNANCE_SAMPLES_FILE", tmp_path / "governance_learning_samples.jsonl")
     reset_governance_shadow_advisory_logger_for_tests()
@@ -90,7 +92,7 @@ async def test_explicit_training_endpoint_accepts_safe_conservative_student() ->
         ]
     )
 
-    result = await train_governance_shadow_student({"eval_fraction": 0.34})
+    result = await train_governance_shadow_student({"backend": "conservative_exact_row", "eval_fraction": 0.34})
 
     assert result["accepted"] is True
     assert result["backend"] == "conservative_exact_row"
@@ -123,7 +125,7 @@ async def test_explicit_training_endpoint_refuses_false_safe_metrics(monkeypatch
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        await train_governance_shadow_student({"eval_fraction": 0.5})
+        await train_governance_shadow_student({"backend": "conservative_exact_row", "eval_fraction": 0.5})
     assert excinfo.value.status_code == 409
     assert get_governance_shadow_advisory_logger().window_stats()["failed"] == 1
 
@@ -227,6 +229,65 @@ def _sample(
         ),
         created_at="2026-06-29T00:00:00Z",
     )
+
+
+@pytest.mark.asyncio
+async def test_training_route_xgboost_and_conservative(monkeypatch) -> None:
+    _write_governance_samples(
+        [
+            _sample("clean-a", "allow", "allowed", "verified", "clean_allow"),
+            _sample("clean-b", "allow", "allowed", "verified", "clean_allow"),
+            _sample("clean-c", "allow", "allowed", "verified", "clean_allow"),
+            _sample("deny-d", "deny", "coordinate_mismatch", "verified", "clean_deny"),
+            _sample("deny-e", "deny", "coordinate_mismatch", "verified", "clean_deny"),
+            _sample("deny-f", "deny", "coordinate_mismatch", "verified", "clean_deny"),
+        ]
+    )
+
+    # 1. Train xgboost (eval fraction 0.33 splits 2 rows into eval: 1 allow, 1 deny)
+    result = await train_governance_shadow_student({"backend": "xgboost", "eval_fraction": 0.33})
+    assert result["accepted"] is True
+    assert result["backend"] == "xgboost"
+
+    # 2. Train conservative_exact_row
+    result_cons = await train_governance_shadow_student({"backend": "conservative_exact_row", "eval_fraction": 0.33})
+    assert result_cons["accepted"] is True
+    assert result_cons["backend"] == "conservative_exact_row"
+
+
+def test_status_endpoint_reports_critical_alerts_and_warnings(monkeypatch) -> None:
+    logger = get_governance_shadow_advisory_logger()
+
+    # 1. No false-safe event
+    status = pdp_hot_path.hot_path_shadow_status()
+    alerts = status["observability"]["alerts"]
+    assert not any(a["code"] == "governance_shadow_false_safe" for a in alerts)
+
+    # 2. Append false-safe event
+    logger.append({
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "status": "completed",
+        "false_safe_advisory": True,
+        "student_final_authority_usage": 0,
+    })
+
+    status_with_alert = pdp_hot_path.hot_path_shadow_status()
+    alerts_with_alert = status_with_alert["observability"]["alerts"]
+    assert any(a["code"] == "governance_shadow_false_safe" for a in alerts_with_alert)
+    assert status_with_alert["observability"]["alert_level"] == "critical"
+
+    # 3. Warning for queue pressure
+    for _ in range(10):
+        logger.append({
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "status": "queue_full",
+            "false_safe_advisory": False,
+            "student_final_authority_usage": 0,
+        })
+
+    status_with_warn = pdp_hot_path.hot_path_shadow_status()
+    alerts_with_warn = status_with_warn["observability"]["alerts"]
+    assert any(a["code"] == "governance_shadow_queue_full" for a in alerts_with_warn)
 
 
 def _stale_hot_path_request() -> HotPathEvaluateRequest:

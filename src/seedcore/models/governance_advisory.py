@@ -43,3 +43,16 @@ class GovernanceAdvisoryOutputV1(BaseModel):
             if text and text not in normalized:
                 normalized.append(text)
         return normalized
+
+
+# Window I Groundwork: Abstention taxonomy categories mapping
+WINDOW_I_ABSTENTION_CATEGORIES: Dict[str, str] = {
+    "stale_missing_freshness": "stale/missing freshness context",
+    "invalid_delegation_principal": "invalid delegation/principal context",
+    "coordinate_zone_mismatch": "coordinate or zone scope mismatch",
+    "missing_approval_cosignature": "missing approval/co-signature context",
+    "missing_evidence_closure": "missing evidence closure",
+    "verifier_replay_mismatch": "verifier/replay mismatch",
+    "token_scope_anomaly": "token/scope anomaly",
+    "unknown_out_of_distribution": "unknown/out-of-distribution sample",
+}

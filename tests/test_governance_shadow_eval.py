@@ -242,3 +242,60 @@ def _sample(
         ),
         created_at="2026-06-26T00:00:00Z",
     )
+
+
+def test_xgboost_shadow_student_training_saving_prediction(tmp_path) -> None:
+    from seedcore.ml.models.governance_student import train_xgboost_shadow_student, GovernanceShadowStudent
+    import os
+
+    samples = [
+        _sample("known-clean1", "allow", "allowed", "verified", "clean_allow"),
+        _sample("known-clean2", "allow", "allowed", "verified", "clean_allow"),
+        _sample("known-deny", "deny", "coordinate_mismatch", "verified", "clean_deny", has_valid_coordinates=False),
+        _sample("known-quarantine", "quarantine", "missing_required_evidence", "verified", "quarantine"),
+    ]
+
+    rows = build_governance_dataset_rows(samples)
+    feature_names = FEATURE_NAMES
+
+    student = train_xgboost_shadow_student(
+        rows=rows,
+        eval_rows=rows,
+        feature_names=feature_names,
+        thresholds={"confidence_threshold_abstain": 0.75, "confidence_threshold_reason": 0.75},
+        xgb_config={"num_boost_round": 10},
+    )
+
+    assert student.backend == "xgboost"
+
+    # Check predictions
+    pred_clean = student.predict_one(rows[0].features)
+    assert isinstance(pred_clean, GovernanceAdvisoryOutputV1)
+    assert pred_clean.student_final_authority_usage == 0
+    assert pred_clean.shadow_only is True
+
+    # Deny/quarantine cases must never produce non-abstain predictions
+    pred_deny = student.predict_one(rows[2].features)
+    assert pred_deny.abstain is True
+
+    pred_quar = student.predict_one(rows[3].features)
+    assert pred_quar.abstain is True
+
+    # Low-confidence / out-of-distribution rows abstain
+    ood_features = tuple(val + 500.0 for val in rows[0].features)
+    pred_ood = student.predict_one(ood_features)
+    assert pred_ood.abstain is True
+
+    # Model bundle save/load
+    model_dir = str(tmp_path / "shadow_student_model")
+    student.save(model_dir)
+
+    # Load back
+    loaded_student = GovernanceShadowStudent(model_dir=model_dir)
+    assert loaded_student.backend == "xgboost"
+    assert loaded_student.metadata["feature_names"] == list(feature_names)
+    assert loaded_student.metadata["thresholds"]["confidence_threshold_abstain"] == 0.75
+
+    # Compare predictions
+    assert loaded_student.predict_one(rows[0].features).reason_code == pred_clean.reason_code
+    assert loaded_student.predict_one(rows[0].features).abstain == pred_clean.abstain

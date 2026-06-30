@@ -304,6 +304,33 @@ def _build_hot_path_observability(status: Mapping[str, Any]) -> dict[str, Any]:
             f"Sliding promotion window includes {recent_mm} parity mismatches.",
         )
 
+    # Governance shadow alerts
+    gov = status.get("governance_shadow_advisory") or {}
+    if int(gov.get("false_safe_advisory_count") or 0) > 0:
+        add(
+            "critical",
+            "governance_shadow_false_safe",
+            "Critical: false-safe advisory detected in shadow student predictions.",
+        )
+    if int(gov.get("authority_usage_count") or 0) > 0:
+        add(
+            "critical",
+            "governance_shadow_authority_usage",
+            "Critical: student authority usage detected in shadow student predictions.",
+        )
+    if int(gov.get("failed") or 0) > 5:
+        add(
+            "warning",
+            "governance_shadow_prediction_failures",
+            "Warning: high prediction failure rate detected in governance shadow advisory.",
+        )
+    if int(gov.get("queue_full") or 0) > 5:
+        add(
+            "warning",
+            "governance_shadow_queue_full",
+            "Warning: queue pressure detected in governance shadow advisory.",
+        )
+
     critical = any(a["severity"] == "critical" for a in alerts)
     warning = any(a["severity"] == "warning" for a in alerts)
     if critical:
@@ -335,6 +362,10 @@ def _build_hot_path_observability(status: Mapping[str, Any]) -> dict[str, Any]:
             "strict_promotion_eligible": bool(status.get("strict_promotion_eligible")),
             "rollback_triggered": bool(status.get("rollback_triggered")),
             "promotion_window_healthy": bool(prom.get("promotion_eligible")) if prom else None,
+            "gov_shadow_completed": int(gov.get("completed") or 0),
+            "gov_shadow_failed": int(gov.get("failed") or 0),
+            "gov_shadow_false_safe_count": int(gov.get("false_safe_advisory_count") or 0),
+            "gov_shadow_authority_usage_count": int(gov.get("authority_usage_count") or 0),
         },
     }
 
@@ -1454,6 +1485,15 @@ def hot_path_shadow_status() -> dict[str, Any]:
     rollback_triggered = bool(HOT_PATH_AUTO_ROLLBACK_ENABLED and rollback_reasons)
     enforce_ready = bool(strict_promotion_eligible and not rollback_triggered)
     mode = str(status.get("resolved_mode") or "shadow")
+
+    try:
+        from seedcore.ops.governance_learning.shadow_parity_log import (
+            get_governance_shadow_advisory_logger,
+        )
+        gov_stats = get_governance_shadow_advisory_logger().window_stats()
+    except Exception:
+        gov_stats = {}
+
     status.update(
         {
             "active_snapshot_version": runtime_status.get("active_snapshot_version"),
@@ -1471,6 +1511,7 @@ def hot_path_shadow_status() -> dict[str, Any]:
             "rollback_reasons": rollback_reasons,
             "promotion": promotion,
             "enforce_ready": enforce_ready,
+            "governance_shadow_advisory": gov_stats,
         }
     )
     status["observability"] = _build_hot_path_observability(status)
