@@ -138,10 +138,11 @@ Start here for the active spine:
    context, paths, Cypher answers, and inferred KG edges remain non-authority
    until promoted through PDP, evidence, verifier, and replay boundaries.
 10. [`zero_cold_start_policy_evolution_ultra.md`](zero_cold_start_policy_evolution_ultra.md) -
-   ULTRA design reference mapping inductive relational reasoning backbones
-   into zero-cold-start policy and schema evolution. Treats link predictions
-   as non-authoritative proposals for offline static analysis and simulation
-   gating.
+   ULTRA design reference mapping inductive relational reasoning into future
+   zero-cold-start policy analysis. Treats link predictions as
+   non-authoritative policy package, fixture, or diagnostic proposals that must
+   still pass review, schema validation, fixture testing, snapshot compilation,
+   PDP, token, evidence, and verifier boundaries.
 11. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
    for declaring governed action boundaries without making developers or coding
    agents manually wire PDP calls, execution tokens, evidence bundles, verifier

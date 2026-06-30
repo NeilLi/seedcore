@@ -1,8 +1,8 @@
 # Zero-Cold-Start Policy Evolution with ULTRA Reference
 
-**Date:** 2026-06-30  
-**Status:** Reference Architecture  
-**Scope:** Policy Graph Builder, Zero-Shot Authorization Graph Evolution, and GNN Advisory Gating  
+**Date:** 2026-06-30
+**Status:** Reference architecture / future advisory pilot
+**Scope:** PolicyGraph Builder research, zero-shot authorization graph analysis, and non-authoritative proposal generation
 
 ---
 
@@ -10,10 +10,22 @@
 
 This note evaluates the applicability of the **ULTRA (Towards Foundation Models for Knowledge Graph Reasoning)** relational-path generalization framework to SeedCore's authorization graph engine and policy evolution roadmap.
 
-### The Verdict:
-*   **Adopt in: Policy Graph Builder & Static Analysis.** The mathematical core of ULTRA (modeling relative topological relationships rather than static entity embeddings) is a powerful pattern for zero-shot policy schema evolution, allowing SeedCore to onboard new tenant roles and assets without cold-start retraining.
-*   **Restrict from: PDP Hot Path.** The computational overhead of online GNN path-finding violates the hot path's sub-50ms latency SLA.
-*   **Doctrine Boundary:** ULTRA link predictions are strictly non-authoritative. They serve as offline advisory proposals or missing edge indicators for operators, and must never bypass PDP evaluation or execution token gating.
+### The Verdict
+
+* **Pilot in PolicyGraph Builder and static analysis.** ULTRA's useful pattern
+  is relation-centric generalization: it learns over interaction structure
+  rather than tenant-specific entity embeddings. That makes it a plausible
+  future helper for finding missing graph links, redundant paths, or policy
+  package gaps before a tenant policy is promoted.
+* **Keep out of the PDP hot path.** SeedCore's current authority baseline is a
+  synchronous, deterministic, fail-closed PDP over pinned inputs. Online GNN
+  inference has not been benchmarked or admitted as part of that path, and
+  graph-engine evolution remains governed by ADR 0011 benchmark gates.
+* **Doctrine boundary.** ULTRA link predictions are strictly non-authoritative.
+  They may become reviewable policy package diffs, fixture suggestions, or
+  operator diagnostics. They cannot bypass PDP evaluation, active compiled
+  snapshot selection, `ExecutionToken` constraints, evidence closure, or
+  `RESULT_VERIFIER` acceptance.
 
 ---
 
@@ -27,60 +39,95 @@ ULTRA solves this by shifting the learning target:
 
 ---
 
-## 3. SeedCore Application: Zero-Cold-Start Policy Evolution
+## 3. SeedCore Application: Zero-Cold-Start Policy Analysis
 
-For SeedCore's multi-tenant architecture, this capability addresses a major scaling bottleneck:
+For future multi-tenant PolicyGraph Builder work, this pattern can reduce
+analysis cold start without changing execution authority:
 
 ```text
-Tenant Onboarding (New Roles / New Asset Schemas)
-  ──► Compile capability/delegation graph topology
-  ──► Apply pre-trained ULTRA-style GNN backbone (offline)
-  ──► Predict missing delegation paths or potential access gaps (Zero-Shot)
-  ──► Propose policy/graph updates for operator approval
+Tenant onboarding or schema evolution
+  -> export draft policy package / graph tuple snapshot
+  -> run ULTRA-style relational analysis offline
+  -> propose missing links, redundant paths, or toxic-path fixtures
+  -> review, schema-validate, fixture-test, and sign if required
+     any policy package diff
+  -> compile the approved snapshot for PDP-adjacent admission
 ```
 
-### Key Integration Lanes:
+### Key Integration Lanes
 
 ### A. Zero-Shot Onboarding for Multi-Tenant SaaS
-*   **Problem:** When a new enterprise client onboards, they bring custom security roles, organizational hierarchies, and resource definitions. Training a custom policy checking model for each tenant is structurally and operationally prohibitive.
-*   **Solution:** A single, lightweight pre-trained relational backbone can analyze the new tenant's delegation graph on day one. It can predict missing authorization links or redundantly permissive paths without requiring custom model checkpoints.
 
-### B. Micro-Model Footprint for Edge Environments
-*   **Problem:** Deploying multi-gigabyte models to resource-constrained edge gateways (such as NVIDIA Jetson Orin nodes) introduces severe memory and deployment overhead.
-*   **Solution:** By avoiding the storage of massive static entity embedding tables, the relational reasoning model maintains a tiny parameter footprint (~2 MB). This makes it highly portable, fast to serialize, and cheap to store in edge memory registries.
+* **Problem:** When a new enterprise client onboards, they may bring custom
+  security roles, organizational hierarchies, and resource definitions.
+  Training a custom policy-checking model for each tenant is structurally and
+  operationally unattractive.
+* **Candidate solution:** A pre-trained relational backbone can analyze a draft
+  tenant delegation graph in offline mode. It can suggest missing authorization
+  links, over-broad paths, or additional negative fixtures without requiring a
+  custom tenant checkpoint as a prerequisite.
+
+### B. Small Advisory Checkpoint Footprint
+
+* **Problem:** Policy analysis helpers should not introduce multi-gigabyte
+  model dependencies into the authority path, deployment baseline, or edge
+  evidence profile.
+* **Candidate solution:** ULTRA-style checkpoints avoid tenant-specific entity
+  embedding tables and publicly described checkpoints are small enough to be
+  plausible for local design-time analysis. SeedCore still needs its own
+  benchmark evidence before treating any checkpoint size, latency, or memory
+  profile as a product commitment.
 
 ---
 
-## 4. Policy-Grade Hardening & Guardrails
+## 4. Policy-Grade Guardrails
 
-To remain aligned with SeedCore's **Safety Doctrine**, the following constraints are enforced:
+To remain aligned with SeedCore's safety doctrine, any implementation must obey
+these constraints:
 
 ### 1. Offline/Batch Execution Only (No Real-Time PDP Interference)
-*   **Constraint:** GNN path-finding message passing (like the NBFNet architecture inside ULTRA) is computationally expensive and scales poorly in real-time execution.
-*   **Enforcement:** Relational reasoning is strictly prohibited from running on the synchronous hot path. It is restricted to:
-    *   Offline static analysis of authorization graphs during compilation.
-    *   Background batch pipelines scanning for structural anomalies or missing edges.
-    *   Interactive design-time helpers inside the Policy Replay Studio.
+
+* **Constraint:** GNN path-finding message passing, including NBFNet-shaped
+  architectures used with ULTRA, is not part of the verified PDP path.
+* **Boundary:** Relational reasoning is restricted to:
+  * offline static analysis of draft authorization graphs before promotion;
+  * background batch scans for structural anomalies or missing edges;
+  * design-time PolicyGraph Builder helpers;
+  * read-only display of analysis evidence in Execution Replay Studio, if a
+    future Studio slice needs it.
 
 ### 2. Hybridization with Semantic Content (No Topology-Only Blindness)
-*   **Constraint:** Relational reasoning is structurally blind. If two subgraphs have identical connectivity patterns (e.g., an operator transferring shoes vs. an attacker transferring keys), the model treats them identically.
-*   **Enforcement:** SeedCore hybridizes structural graph inputs with semantic and cryptographic validation:
-    *   The PDP must deterministically verify the X.509 signer certificates, SPIFFE IDs, and token scopes.
-    *   Structural link predictions are ignored if the semantic access checks or cryptographic signatures are invalid.
+
+* **Constraint:** Relational reasoning is structurally biased. If two subgraphs
+  have similar connectivity patterns, topology alone may miss the difference
+  between an allowed custody transfer and an adversarial or out-of-scope flow.
+* **Boundary:** Structural predictions cannot satisfy SeedCore's semantic,
+  freshness, or cryptographic gates. Where policy requires signer identity,
+  SPIFFE/DPoP proof, hardware signer refs, token scope, telemetry binding, or
+  approval envelopes, those checks remain deterministic PDP/evidence/verifier
+  responsibilities.
 
 ### 3. Clear Symbolic Explainability
-*   **Constraint:** Relational probability scores function as black boxes, lacking deterministic audit trails.
-*   **Enforcement:** GNN-predicted links are treated purely as **advisory proposals**. If the model suggests a missing delegation link (e.g., recommending a user be granted a co-signature role), it must be converted into a deterministic, human-reviewed, and signed policy graph update before the PDP will admit it as an active rule.
+
+* **Constraint:** Relational probability scores are not replayable policy
+  reasons by themselves.
+* **Boundary:** GNN-predicted links are advisory proposals. If the model
+  suggests a missing delegation link, the output must become a structured
+  policy package diff with reason codes and fixtures. That diff must be
+  reviewed, schema-validated, fixture-tested, and compiled into an active
+  snapshot before the PDP can use it. Signing a proposal is necessary only if
+  the relevant promotion workflow requires it; it is never sufficient by
+  itself.
 
 ---
 
 ## 5. Architectural Role & Boundary Map
 
-| WAM / Graph Surface | Allowed Role | Prohibited Action |
+| Advisory graph surface | Allowed role | Prohibited action |
 | :--- | :--- | :--- |
-| **Relational Link Prediction** | Suggesting missing authorization paths or policy cleanups | Authorizing requests directly or mutating active PDP policy |
-| **Zero-Shot Transfer Model** | Multi-tenant schema parsing in background | Running on the latency-sensitive PDP hot path |
-| **Topology-Only Checkpoints** | Lightweight (~2 MB) structural analysis backbone | Replacing semantic and cryptographic signature verification |
+| **Relational link prediction** | Suggesting missing authorization paths, redundant paths, or policy cleanups | Authorizing requests directly or mutating active PDP policy |
+| **Zero-shot transfer model** | Draft tenant-schema analysis in background | Running on the latency-sensitive PDP hot path |
+| **Topology-only checkpoint** | Structural advisory analysis, if benchmarked and reviewed | Replacing semantic, freshness, signer, token, evidence, or verifier checks |
 
 ---
 
@@ -88,11 +135,15 @@ To remain aligned with SeedCore's **Safety Doctrine**, the following constraints
 
 ```text
 [Phase 1: Static Policy Graph Analysis (Offline)]
-  ──► Run ULTRA-style analysis to find unreachable nodes or missing co-signers.
-[Phase 2: Shadow Simulation Gating (Window I/J)]
-  ──► Use relation-path checks to generate negative paths for simulation stress-testing.
-[Phase 3: Hybridized Graph Schema Evolution]
-  ──► Enable zero-shot onboarding helpers to suggest permission updates for review.
+  -> Export draft policy tuples and run ULTRA-style analysis to find unreachable
+     nodes, missing co-signers, redundant paths, and fixture candidates.
+[Phase 2: Shadow Simulation Fixture Generation]
+  -> Use relation-path findings to generate negative paths for simulation and
+     replay stress tests without changing enforce behavior.
+[Phase 3: Reviewed Graph Schema Evolution]
+  -> Let zero-shot onboarding helpers suggest policy package diffs for human or
+     policy-admitted review, then promote only through existing compile,
+     fixture, benchmark, PDP, token, evidence, and verifier boundaries.
 ```
 
 ## References
