@@ -1566,7 +1566,11 @@ trajectory-stress, or future-performance work, but they are not on the critical
 path for the must-win demo or for Slice 1 runtime hardening. WAM outputs remain
 candidate rollouts or advisory evidence until converted into typed
 `ActionIntent` inputs, admitted by the PDP, scoped by an `ExecutionToken`, and
-closed through evidence / replay.
+closed through evidence / replay. Luxury-trade signals such as appraisals,
+service history, optical fingerprints, GPS traces, and product-passport
+identifiers follow the same rule: they are evidence or constraints only after
+they are represented in typed contracts, evaluated by policy, and closed by
+replay/verifier evidence.
 
 ### 1. Irrefutable Trust Anchors
 

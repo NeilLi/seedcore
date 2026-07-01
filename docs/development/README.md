@@ -228,8 +228,9 @@ Start here for the active spine:
    sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
    verifier bridge architecture, and phased container runtime sandboxing rollout.
 28. [`second_hand_luxury_trade_evolution.md`](second_hand_luxury_trade_evolution.md) -
-   strategic evolution memo for adapting the Restricted Custody Transfer (RCT)
-   runtime baseline to support high-value second-hand luxury trading.
+   sidecar vertical reference for mapping the Restricted Custody Transfer (RCT)
+   runtime baseline to high-value second-hand luxury trading without changing
+   the current authority path.
 
 
 
