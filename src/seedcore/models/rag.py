@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 RAGAuthorizationDisposition = Literal["allow", "deny", "quarantine"]
-RAGFinalStatus = Literal["draft", "accepted", "rejected", "quarantined"]
+RAGFinalStatus = Literal["draft", "accepted", "rejected", "quarantined", "blocked", "escalated", "abstained"]
 RAGSourceType = Literal[
     "database",
     "document_store",
@@ -250,6 +250,6 @@ class RAGTrace(BaseModel):
                 raise ValueError("accepted RAG traces require verified_claim_ids")
             if not self.policy_decision_ids:
                 raise ValueError("accepted RAG traces require policy_decision_ids")
-        if self.final_status in {"rejected", "quarantined"} and not self.rejection_reason_codes:
-            raise ValueError("rejected or quarantined RAG traces require rejection_reason_codes")
+        if self.final_status in {"rejected", "quarantined", "blocked", "escalated", "abstained"} and not self.rejection_reason_codes:
+            raise ValueError("rejected, quarantined, blocked, escalated, or abstained RAG traces require rejection_reason_codes")
         return self
