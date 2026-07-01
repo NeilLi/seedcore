@@ -227,6 +227,9 @@ Start here for the active spine:
 27. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
    sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
    verifier bridge architecture, and phased container runtime sandboxing rollout.
+28. [`second_hand_luxury_trade_evolution.md`](second_hand_luxury_trade_evolution.md) -
+   strategic evolution memo for adapting the Restricted Custody Transfer (RCT)
+   runtime baseline to support high-value second-hand luxury trading.
 
 
 

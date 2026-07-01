@@ -1554,9 +1554,11 @@ Recommended dependency rule:
 ### Explicit Sidecar
 
 The VLA track in
-[vla_2026_optimizations.md](vla_2026_optimizations.md)
-and the WAM architecture reference in
-[world_action_model_architecture_reference.md](world_action_model_architecture_reference.md)
+[vla_2026_optimizations.md](vla_2026_optimizations.md),
+the WAM architecture reference in
+[world_action_model_architecture_reference.md](world_action_model_architecture_reference.md),
+and the second-hand luxury trade evolution memo in
+[second_hand_luxury_trade_evolution.md](second_hand_luxury_trade_evolution.md)
 remain sidecar for this phase.
 
 They may continue in parallel as research, proposal-quality, simulation,
