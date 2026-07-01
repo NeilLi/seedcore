@@ -405,6 +405,37 @@ a guarded prompt assembly profile, not as a new authority layer.
   `abstained` / `blocked` / `lite_receipt` behavior before broad connector,
   vector-database, GraphRAG, or LLM-provider choices.
 
+## Status Update (2026-07-01, Guarded Prompt Assembly MVP)
+
+**Done (2026-07-01).** Implemented the first guarded prompt assembly MVP as a
+pure render layer over an already authorized `RAGEvidenceBundle`. This moves
+prompt rendering from planning into code without claiming a production
+retrieval adapter, PDP callout, strict parser, generator orchestration path, or
+RAG receipt pipeline.
+
+- **Prompt assembly:** Added
+  [prompt_assembly.py](../../src/seedcore/ops/rag/prompt_assembly.py) with
+  `assemble_guarded_rag_prompt(...)`, `RAGRenderedPrompt`, and
+  `RAGPromptMetadata`. The renderer accepts only a `RAGEvidenceBundle`, renders
+  allowed evidence into `<evidence>`, keeps `<policy_rules>` and
+  `<action_parameters>` as non-authoritative prompt sections, and records
+  replay-friendly template and character-count metadata.
+- **Leakage guard:** Optional evidence text must be keyed by an authorized
+  `evidence_item_id`; unknown IDs fail closed. The renderer also rejects
+  malformed non-`allow` evidence items before prompt construction. Denied or
+  missing-decision candidates remain limited to aggregate denial counts and do
+  not enter prompt text or metadata.
+- **Prefill boundary:** Optional response prefill is recorded by hash as a
+  formatting aid only. It does not change evidence membership, PDP decisions,
+  verifier obligations, or trace/receipt authority.
+- **Verification:** Passed
+  `python -m pytest -q tests/test_rag_guarded_prompt_assembly.py tests/test_governed_rag_contracts.py`
+  (`9 passed`) and `git diff --check`.
+- **Next RAG slice:** Reconcile the RAG status vocabulary across code and
+  contract prose before adding strict parser behavior for malformed output.
+  Then add bundle-membership validation for citations and verified claims,
+  followed by a fixture-only controlled-source RAG harness.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against
