@@ -436,6 +436,40 @@ RAG receipt pipeline.
   Then add bundle-membership validation for citations and verified claims,
   followed by a fixture-only controlled-source RAG harness.
 
+## Status Update (2026-07-01, RAG Parser And Citation Validation Hardening)
+
+**Done (2026-07-01).** Reviewed and hardened the follow-on RAG status
+reconciliation, output parser, and citation validation slice. SeedCore now has
+the first local parser/validator layer after guarded prompt assembly, but still
+does not claim a production retrieval adapter, synchronous PDP callout,
+provider-backed generator, full trace cross-validation path, or RAG receipt
+pipeline.
+
+- **Status vocabulary:** `RAGTrace.final_status` now accepts the reconciled
+  staged values `draft`, `accepted`, `rejected`, `quarantined`, `blocked`,
+  `escalated`, and `abstained`. Accepted traces still require bundle, draft,
+  verified-claim, and policy-decision closure refs; degraded terminal states
+  require `rejection_reason_codes`.
+- **Parser hardening:** `parse_guarded_rag_response(...)` now returns a typed
+  `ParsedRAGResponse` and raises `RAGParseError` with stable reason-code
+  prefixes for missing, malformed, duplicate, or empty `<response>` /
+  `<scratchpad>` sections. Scratchpad content remains non-authoritative parser
+  metadata and must not be promoted into evidence or verifier authority.
+- **Citation validation:** `validate_rag_claims_and_citations(...)` now raises
+  `RAGClaimValidationError` with stable reason-code prefixes for draft/bundle
+  mismatch, unknown bundle citations, duplicate citations, duplicate claim IDs,
+  claim/draft mismatch, and claim citations not present in the draft answer.
+  The validator only checks membership and consistency over already authorized
+  bundle members; it does not perform semantic claim truth verification.
+- **Verification:** Passed
+  `python -m pytest -q tests/test_rag_guarded_prompt_assembly.py tests/test_governed_rag_contracts.py tests/test_rag_pipeline_stages.py`
+  (`18 passed`) and `python -m compileall -q src/seedcore/ops/rag src/seedcore/models/rag.py`.
+- **Next RAG slice:** Add the controlled-source retrieval adapter and PDP
+  decision callout, then wire a fixture-only governed RAG harness that exercises
+  `RAGCandidateChunk -> RAGAuthorizationDecision -> RAGEvidenceBundle ->
+  guarded prompt -> strict parse -> citation validation -> RAGTrace` without
+  introducing vendor connector or LLM-provider authority.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against

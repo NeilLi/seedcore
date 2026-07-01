@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+import re
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
+
+
+class RAGParseError(ValueError):
+    def __init__(self, reason_code: str, detail: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {detail}")
 
 
 class ParsedRAGResponse(BaseModel):
@@ -19,25 +28,43 @@ def parse_guarded_rag_response(
     Parses raw LLM output to extract <scratchpad> reasoning and the <response> body.
     Raises ValueError if tags are malformed or missing.
     """
-    # 1. Extract scratchpad
-    scratchpad_content = ""
-    if "<scratchpad>" in raw_output:
-        start_idx = raw_output.find("<scratchpad>") + len("<scratchpad>")
-        end_idx = raw_output.find("</scratchpad>")
-        if end_idx == -1 or end_idx < start_idx:
-            raise ValueError("Malformed scratchpad tag structure")
-        scratchpad_content = raw_output[start_idx:end_idx].strip()
-    elif require_scratchpad:
-        raise ValueError("Missing required <scratchpad> tag")
+    scratchpad_content = _extract_single_tag(
+        raw_output,
+        "scratchpad",
+        required=require_scratchpad,
+    )
+    response_body = _extract_single_tag(raw_output, "response", required=True)
+    if response_body is None or not response_body.strip():
+        raise RAGParseError("rag_response_empty", "<response> body must be non-empty")
 
-    # 2. Extract response
-    if "<response>" not in raw_output:
-        raise ValueError("Missing <response> tag")
-
-    start_idx = raw_output.find("<response>") + len("<response>")
-    end_idx = raw_output.find("</response>")
-    if end_idx == -1 or end_idx < start_idx:
-        raise ValueError("Malformed response tag structure")
-
-    response_body = raw_output[start_idx:end_idx].strip()
+    scratchpad_content = (scratchpad_content or "").strip()
     return ParsedRAGResponse(scratchpad=scratchpad_content, response_body=response_body)
+
+
+def _extract_single_tag(raw_output: str, tag: str, *, required: bool) -> Optional[str]:
+    open_tag = f"<{tag}>"
+    close_tag = f"</{tag}>"
+    open_count = raw_output.count(open_tag)
+    close_count = raw_output.count(close_tag)
+
+    if open_count == 0 and close_count == 0:
+        if required:
+            raise RAGParseError(f"rag_{tag}_missing", f"{open_tag} tag is required")
+        return None
+    if open_count != 1 or close_count != 1:
+        raise RAGParseError(
+            f"rag_{tag}_malformed",
+            f"expected exactly one {open_tag} and one {close_tag}",
+        )
+
+    pattern = re.compile(
+        rf"{re.escape(open_tag)}(?P<body>.*?){re.escape(close_tag)}",
+        re.DOTALL,
+    )
+    match = pattern.search(raw_output)
+    if match is None:
+        raise RAGParseError(
+            f"rag_{tag}_malformed",
+            f"{close_tag} must appear after {open_tag}",
+        )
+    return match.group("body").strip()

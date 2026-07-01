@@ -52,7 +52,7 @@ and parser reliability, but they do not become policy, authority, or proof.
 
 ## Verified Current Implementation State
 
-As of 2026-06-22, the implemented codebase should be described narrowly:
+As of 2026-07-01, the implemented codebase should be described narrowly:
 
 - The governed RAG data contracts and allow-only promotion guard are implemented
   in `src/seedcore/models/rag.py` and
@@ -60,9 +60,25 @@ As of 2026-06-22, the implemented codebase should be described narrowly:
 - `promote_authorized_rag_candidates(...)` promotes only explicit
   `allow` decisions into `RAGEvidenceItem` objects and collapses denied,
   quarantined, or missing-decision candidates into aggregate denial counts.
+- `assemble_guarded_rag_prompt(...)` renders model-visible context only from an
+  authorized `RAGEvidenceBundle`, records prompt-render metadata, and keeps XML
+  sections plus response prefill as non-authoritative formatting controls.
+- `parse_guarded_rag_response(...)` performs the first strict local
+  `<scratchpad>` / `<response>` extraction and raises reason-code-bearing parse
+  errors for malformed output.
+- `validate_rag_claims_and_citations(...)` checks draft-answer and
+  `VerifiedRAGClaim` citation membership against the authorized bundle and
+  rejects duplicate or mismatched citation references.
+- `RAGTrace.final_status` has been reconciled across the staged RAG statuses:
+  `draft`, `accepted`, `rejected`, `quarantined`, `blocked`, `escalated`, and
+  `abstained`.
 - Focused tests in `tests/test_governed_rag_contracts.py` cover the promotion
   boundary, missing-decision handling, supported-claim evidence requirement, and
   accepted-trace closure-reference requirement.
+- Focused tests in `tests/test_rag_guarded_prompt_assembly.py` and
+  `tests/test_rag_pipeline_stages.py` cover guarded prompt rendering,
+  denied-content exclusion from prompts, parser failure behavior, citation
+  membership validation, and reconciled trace-status requirements.
 
 The following pieces are not yet implemented as an end-to-end governed RAG
 service and should remain explicit next work rather than implied current
@@ -72,12 +88,10 @@ behavior:
   controlled source;
 - a synchronous PDP or policy-check callout that mints the
   `RAGAuthorizationDecision` inputs consumed by the promotion guard;
-- guarded prompt assembly that can only read from the returned
-  `RAGEvidenceBundle`;
-- verifier checks that every cited `evidence_item_id` belongs to the authorized
-  bundle;
-- trace/replay validation that cross-checks bundle, draft, claim, and policy
-  decision references against concrete artifacts;
+- semantic verifier checks that prove material claim support, contradiction, or
+  insufficiency beyond citation membership;
+- trace/replay validation that cross-checks bundle, draft, claim, parser
+  output, and policy decision references against concrete artifacts;
 - RAG receipt signing, minimal-evidence-set artifacts, degraded/lite receipt
   outcomes, and side-channel-safe telemetry tests.
 
@@ -286,14 +300,14 @@ provenance-bound proposal until a governed promotion path admits it.
    stack.
 2. Add the PDP/policy decision callout that turns candidate chunks into
    `RAGAuthorizationDecision` inputs for the existing promotion guard.
-3. Add guarded prompt assembly that accepts only a `RAGEvidenceBundle` and test
-   that denied or missing-decision content cannot enter prompt input, citations,
-   ordinary logs, or proof UI payloads. This slice should include versioned
-   prompt sections, optional route-level response prefill, strict schema parse
-   failure handling, and replayable prompt-render metadata.
-4. Extend verifier and trace validation so supported claims cite only authorized
-   bundle members and accepted traces cross-check bundle, draft, claim, and
-   policy decision references.
+3. Add a fixture-only governed RAG harness that exercises the implemented
+   boundaries end to end without introducing provider or connector authority:
+   candidate chunks, PDP decisions, evidence bundle promotion, guarded prompt
+   rendering, strict response parsing, citation validation, and trace creation.
+4. Extend verifier and trace validation beyond citation membership so supported
+   claims are checked against authorized evidence text and accepted traces
+   cross-check bundle, draft, claim, parser output, and policy decision
+   references.
 5. Extend the RAG contract with a `RAGReceipt` profile and degradation modes.
 6. Add `minimal_evidence_item_ids` and verifier metadata to the RAG trace or a
    companion verifier artifact.
