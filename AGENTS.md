@@ -25,6 +25,7 @@ evidence closes the loop.
   copilot output become authority-bearing by itself.
 - Treat production execution, secrets, deploy pipelines, custody closure, and
   quarantine clearance as human-reviewed or policy-admitted actions.
+- Do not commit or push git modifications to the remote repository without explicit user review and confirmation first.
 
 ## Local Verification
 
