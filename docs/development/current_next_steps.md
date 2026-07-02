@@ -360,22 +360,23 @@ than making a graph system or KG model authoritative.
   answers, and inferred KG edges remain advisory or candidate evidence until
   admitted through PDP/policy decisions, `RAGEvidenceItem` /
   `RAGEvidenceBundle`, verifier checks, and replay/receipt closure.
-- **Path-evidence direction:** PathRAG / K-Paths-style retrieval is a good next
-  contract extension after the controlled-source chunk lane is green. A future
-  path-evidence item should bind path hashes, node/edge/source hashes, graph
-  snapshot refs, authorization decisions, freshness posture, and denied-path
-  aggregate counts without exposing denied node or edge details.
+- **Path-evidence direction:** PathRAG / K-Paths-style retrieval is a good
+  contract extension now that the controlled-source chunk lane is fixture-green.
+  A future path-evidence item should bind path hashes, node/edge/source hashes,
+  graph snapshot refs, authorization decisions, freshness posture, and
+  denied-path aggregate counts without exposing denied node or edge details.
 - **Tooling boundary:** Plan-on-Graph, Text-to-Cypher, MCP graph tools, and KG
   foundation models should be treated as constrained advisory/query tools or
   shadow reasoning inputs. Write-capable graph actions, policy/authz graph
   promotion, custody graph mutation, and quarantine clearance still require
   gated action semantics, PDP allow, scoped `ExecutionToken`, co-signed
   mutation receipts where required, and verifier/replay closure.
-- **Next implementation order unchanged:** Finish the controlled-source RAG
-  adapter, PDP decision callout, guarded prompt assembly, bundle-membership
-  verifier checks, trace cross-validation, and RAG receipt work before selecting
-  a graph database, Cypher agent, GraphRAG implementation, or KG foundation
-  model as production substrate.
+- **Next implementation order updated:** The chunk-level controlled-source RAG
+  harness is now green for fixture coverage. Keep graph/path work behind the
+  same boundary: add trace/replay cross-validation, RAG receipt and
+  minimal-evidence-set semantics, and only then consider a path-evidence
+  profile, graph database, Cypher agent, GraphRAG implementation, or KG
+  foundation model as production substrate.
 
 ## Status Update (2026-06-30, Enterprise Trusted-AI Prompt Assembly Alignment)
 
@@ -470,6 +471,52 @@ pipeline.
   guarded prompt -> strict parse -> citation validation -> RAGTrace` without
   introducing vendor connector or LLM-provider authority.
 
+## Status Update (2026-07-02, Controlled-Source RAG Harness)
+
+**Done (2026-07-02).** Implemented the first fixture-only governed RAG pipeline
+slice in commit `3a4c2c9`
+(`feat: implement controlled RAG retriever, deterministic PDP callout, and query
+harness`). This closes the local controlled-source path described in the prior
+RAG status note while preserving the boundary that RAG evidence, prompts, and
+mock model output do not mint execution authority.
+
+- **Closed classification profile:** Added `RAGClassification` and
+  `classification_ceiling` / document `classification` fields in
+  [rag.py](../../src/seedcore/models/rag.py). The initial profile is the
+  explicit `public` / `confidential` / `restricted` ladder; unknown
+  classifications fail validation rather than silently becoming authorized
+  context.
+- **Controlled retriever:** Added
+  [controlled_retriever.py](../../src/seedcore/ops/rag/controlled_retriever.py)
+  as a local fixture adapter that emits `RAGCandidateChunk` objects from one
+  controlled document set and exposes fixture text only through authorized
+  `text_ref` lookup.
+- **Deterministic policy callout:** Added
+  [pdp_callout.py](../../src/seedcore/ops/rag/pdp_callout.py) to mint
+  per-candidate `RAGAuthorizationDecision` records from the classification
+  ceiling. It is a local deterministic policy-check helper, not an LLM judge,
+  provider connector, or execution-authority path.
+- **Fixture harness:** Added
+  [harness.py](../../src/seedcore/ops/rag/harness.py) with
+  `GovernedRAGHarness` and `GovernedRAGResult`, wiring controlled retrieval,
+  policy decisions, allow-only promotion, guarded prompt assembly, strict output
+  parsing, citation-membership validation, and `RAGTrace` creation.
+- **Leakage and fail-closed tests:** Added
+  [test_governed_rag_harness.py](../../tests/test_governed_rag_harness.py) for
+  accepted, blocked, abstained, and rejected outcomes; denied classifications
+  are excluded from rendered prompts, result serialization, citations, and
+  ordinary trace fields. Failure traces expose stable reason codes rather than
+  raw parser or validator exception detail.
+- **Verification:** Passed
+  `python -m pytest -q tests/test_governed_rag_harness.py tests/test_rag_guarded_prompt_assembly.py tests/test_governed_rag_contracts.py tests/test_rag_pipeline_stages.py`
+  (`26 passed`), `python -m compileall -q src/seedcore/ops/rag src/seedcore/models/rag.py`,
+  and `git diff --check`.
+- **Still not production RAG:** This slice does not add an enterprise retrieval
+  connector, vector database, provider-backed generator, semantic/NLI claim
+  verifier, full trace/replay cross-validator, signed `RAGReceipt`, minimal
+  evidence set, or side-channel telemetry profile. Those remain the next RAG
+  hardening slices.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against
@@ -496,12 +543,14 @@ center or premature vendor stack.
   verifiers, vector databases, and enterprise connectors remain profile-gated
   follow-ons after the controlled-source RAG lane and replay validator are
   green.
-- **Implementation truth check:** The codebase currently has the vendor-neutral
-  RAG models, allow-only promotion guard, and focused contract tests. It does
-  not yet have an end-to-end governed RAG service path: production retrieval
-  adapters, PDP decision minting, guarded prompt assembly, bundle-membership
-  verifier checks, trace cross-validation, receipt signing, and side-channel
-  telemetry tests remain explicit next slices under the same authority boundary.
+- **Implementation truth check:** The codebase now has the vendor-neutral RAG
+  models, allow-only promotion guard, guarded prompt assembly, parser and
+  citation-membership checks, and a fixture-only controlled-source harness with
+  deterministic classification-ceiling decisions. It still does not have a
+  production governed RAG service path: enterprise retrieval adapters,
+  production PDP integration, semantic claim verification, trace/replay
+  cross-validation, receipt signing, and side-channel telemetry tests remain
+  explicit next slices under the same authority boundary.
 
 ## Status Update (2026-06-17, Immutable Policy Anchor & Graph Mutation Gate)
 
@@ -630,10 +679,11 @@ without changing SeedCore's authority semantics:
    only explicitly allowed chunk decisions become `RAGEvidenceItem`s, while
    denied or missing-decision candidates are reduced to aggregate counts before
    downstream model context is assembled. The next safe slice is a signed
-   controlled-source adapter plus PDP decision callout, followed by guarded
-   prompt assembly, verifier bundle-membership checks, trace cross-validation,
-   and then `RAGReceipt` / minimal-evidence-set / side-channel-safe telemetry
-   tests, as scoped in
+   fixture-only controlled-source adapter, deterministic PDP-style callout,
+   guarded prompt assembly, and citation-membership checks are now implemented
+   under this boundary. The next safe slices are trace/replay cross-validation,
+   `RAGReceipt` / minimal-evidence-set semantics, and side-channel-safe
+   telemetry tests, as scoped in
    [policy_governed_rag_research_adoption_review.md](policy_governed_rag_research_adoption_review.md)
    and the
    [RAG Evidence Bundle and Trace Contract](../architecture/contracts/rag_evidence_bundle_trace_contract.md).

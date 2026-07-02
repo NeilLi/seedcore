@@ -140,8 +140,9 @@ authority-relevant only after a governed promotion path admits it.
 
 - Keep GraphRAG, LightRAG, LazyGraphRAG, PathRAG, and K-Paths as research
   inputs for the controlled-source retrieval lane.
-- Extend the future RAG contract vocabulary to allow path evidence once the
-  chunk-level controlled-source adapter and PDP callout are green.
+- With the chunk-level controlled-source fixture adapter and deterministic
+  policy callout green, extend the future RAG contract vocabulary toward path
+  evidence only after trace/replay and receipt boundaries are explicit.
 - Treat graph-query agents as policy-visible tools, not free-form database
   shells.
 - Use graph foundation models only in shadow/advisory lanes until a promotion
@@ -169,15 +170,15 @@ authority-relevant only after a governed promotion path admits it.
 
 ## Immediate Next Slice
 
-Do not start by adding a graph database adapter or foundation model. The next
-safe implementation slice remains the governed RAG controlled-source path:
+Do not start by adding a graph database adapter or foundation model. The
+controlled-source chunk path is now fixture-green; the next safe implementation
+slice is to deepen verifier and replay closure:
 
-1. emit `RAGCandidateChunk` objects from one controlled source;
-2. mint per-candidate `RAGAuthorizationDecision` records through a PDP or
-   policy-check callout;
-3. ensure guarded prompt assembly can read only from `RAGEvidenceBundle`;
-4. add verifier checks that claims cite authorized bundle members;
-5. then add a path-evidence profile for graph paths.
+1. cross-check bundle, draft, claim, parser output, and policy decision
+   references against concrete artifacts;
+2. add a RAG receipt / minimal-evidence-set profile with degraded outcomes;
+3. add side-channel-safe denial and latency telemetry;
+4. then add a path-evidence profile for graph paths.
 
 The path-evidence work should begin as a contract extension and fixture set. It
 should not require selecting Neo4j, Memgraph, RDF, vector search, GraphRAG,

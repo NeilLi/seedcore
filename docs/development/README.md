@@ -296,6 +296,15 @@ Treat these as real repo capabilities, not aspirational roadmap items:
   prompts + strict LLM validation with citations / `uncertainty_notes`; see
   section 4.1 of [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) and
   `docs/schemas/operator_copilot_brief_v0.schema.json`)
+- **Fixture-only governed RAG harness**:
+  `src/seedcore/ops/rag/controlled_retriever.py`,
+  `src/seedcore/ops/rag/pdp_callout.py`, and
+  `src/seedcore/ops/rag/harness.py` exercise the current RAG evidence boundary
+  from controlled chunk retrieval through deterministic classification-ceiling
+  policy decisions, allow-only evidence promotion, guarded prompt assembly,
+  strict parser handling, citation-membership validation, and `RAGTrace`
+  creation. This is a local harness, not a production connector, provider-backed
+  generator, semantic verifier, or authority path.
 - **Virtual NFC simulation lane**: `src/seedcore/ops/evidence/nfc_verification.py`
   now provides a pure deterministic dynamic NFC verifier for fixture evidence;
   `tests/fixtures/nfc/` covers happy path, replay / clone, stale scan, tamper,

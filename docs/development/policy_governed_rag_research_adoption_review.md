@@ -52,7 +52,7 @@ and parser reliability, but they do not become policy, authority, or proof.
 
 ## Verified Current Implementation State
 
-As of 2026-07-01, the implemented codebase should be described narrowly:
+As of 2026-07-02, the implemented codebase should be described narrowly:
 
 - The governed RAG data contracts and allow-only promotion guard are implemented
   in `src/seedcore/models/rag.py` and
@@ -72,6 +72,20 @@ As of 2026-07-01, the implemented codebase should be described narrowly:
 - `RAGTrace.final_status` has been reconciled across the staged RAG statuses:
   `draft`, `accepted`, `rejected`, `quarantined`, `blocked`, `escalated`, and
   `abstained`.
+- `RAGAuthorizationEnvelope` and `RAGDocument` now carry a closed
+  `public` / `confidential` / `restricted` classification profile for the
+  fixture lane.
+- `ControlledRetriever` emits `RAGCandidateChunk` objects from a local
+  controlled document set and exposes fixture text through authorized
+  `text_ref` lookup.
+- `authorize_retrieved_chunks(...)` is a deterministic local policy-check helper
+  that converts classification-ceiling checks into per-candidate
+  `RAGAuthorizationDecision` records. It is not an LLM judge and does not mint
+  execution authority.
+- `GovernedRAGHarness` wires the current fixture-only path from controlled
+  retrieval through policy decision, allow-only promotion, guarded prompt
+  assembly, strict parsing, citation-membership validation, and `RAGTrace`
+  creation.
 - Focused tests in `tests/test_governed_rag_contracts.py` cover the promotion
   boundary, missing-decision handling, supported-claim evidence requirement, and
   accepted-trace closure-reference requirement.
@@ -79,15 +93,19 @@ As of 2026-07-01, the implemented codebase should be described narrowly:
   `tests/test_rag_pipeline_stages.py` cover guarded prompt rendering,
   denied-content exclusion from prompts, parser failure behavior, citation
   membership validation, and reconciled trace-status requirements.
+- Focused tests in `tests/test_governed_rag_harness.py` cover the fixture
+  harness, classification-ceiling denials, no-LLM/ML imports in the RAG ops
+  files, non-leaky rendered prompts, non-leaky result serialization, and stable
+  failure reason codes.
 
 The following pieces are not yet implemented as an end-to-end governed RAG
 service and should remain explicit next work rather than implied current
 behavior:
 
-- production retrieval adapters that emit `RAGCandidateChunk` objects from a
-  controlled source;
-- a synchronous PDP or policy-check callout that mints the
-  `RAGAuthorizationDecision` inputs consumed by the promotion guard;
+- production retrieval adapters that emit `RAGCandidateChunk` objects from real
+  enterprise sources beyond the local controlled fixture set;
+- integration with the production PDP/policy runtime beyond the deterministic
+  local classification-ceiling helper;
 - semantic verifier checks that prove material claim support, contradiction, or
   insufficiency beyond citation membership;
 - trace/replay validation that cross-checks bundle, draft, claim, parser
@@ -295,37 +313,28 @@ provenance-bound proposal until a governed promotion path admits it.
 
 ## Immediate SeedCore Work
 
-1. Build a controlled-source retrieval adapter that emits `RAGCandidateChunk`
-   objects without selecting a broad vector-database or enterprise connector
-   stack.
-2. Add the PDP/policy decision callout that turns candidate chunks into
-   `RAGAuthorizationDecision` inputs for the existing promotion guard.
-3. Add a fixture-only governed RAG harness that exercises the implemented
-   boundaries end to end without introducing provider or connector authority:
-   candidate chunks, PDP decisions, evidence bundle promotion, guarded prompt
-   rendering, strict response parsing, citation validation, and trace creation.
-4. Extend verifier and trace validation beyond citation membership so supported
+1. Extend verifier and trace validation beyond citation membership so supported
    claims are checked against authorized evidence text and accepted traces
    cross-check bundle, draft, claim, parser output, and policy decision
    references.
-5. Extend the RAG contract with a `RAGReceipt` profile and degradation modes.
-6. Add `minimal_evidence_item_ids` and verifier metadata to the RAG trace or a
+2. Extend the RAG contract with a `RAGReceipt` profile and degradation modes.
+3. Add `minimal_evidence_item_ids` and verifier metadata to the RAG trace or a
    companion verifier artifact.
-7. Add side-channel-safe telemetry fields for aggregate denial and latency
+4. Add side-channel-safe telemetry fields for aggregate denial and latency
    reporting.
-8. After the chunk-level lane is green, add a path-evidence contract extension
+5. After the chunk-level fixture lane is stable, add a path-evidence contract extension
    that binds path hashes, node/edge/source hashes, graph snapshot refs,
    authorization decision IDs, and denied-path aggregate counts.
-9. Keep vector DB, graph DB, connector, COSE, JOSE, SCITT, NLI, Cypher agent,
+6. Keep vector DB, graph DB, connector, COSE, JOSE, SCITT, NLI, Cypher agent,
    and KG foundation model choices behind the contract until the
-   controlled-source RAG lane is green.
+   trace/replay and receipt boundary is green.
 
 ## Bottom Line
 
 SeedCore should adopt the research's governance shape, not its hype. The
 architecture already points in the right direction: policy before context,
 evidence before generation, verifier before acceptance, replay before trust.
-The next upgrade is to make guarded prompt assembly, RAG receipts, minimal
+The next upgrade is to make trace/replay cross-validation, RAG receipts, minimal
 evidence sets, degraded outcomes, and side-channel-safe telemetry explicit
 enough that every later retriever, connector, verifier, prompt profile, or
 signing format has to obey the same authority-preserving contract.
