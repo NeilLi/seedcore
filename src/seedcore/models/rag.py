@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 RAGAuthorizationDisposition = Literal["allow", "deny", "quarantine"]
+RAGClassification = Literal["public", "confidential", "restricted"]
 RAGFinalStatus = Literal[
     "draft",
     "accepted",
@@ -41,6 +42,7 @@ class RAGAuthorizationEnvelope(BaseModel):
     expires_at: Optional[datetime] = None
     signed_context_refs: List[str] = Field(default_factory=list)
     context_hash: Optional[str] = None
+    classification_ceiling: RAGClassification = "public"
 
 
 class ACLSnapshot(BaseModel):
@@ -71,6 +73,7 @@ class RAGDocument(BaseModel):
     acl_snapshot: ACLSnapshot
     title_ref: Optional[str] = None
     metadata_hash: Optional[str] = None
+    classification: RAGClassification = "public"
 
 
 class RAGChunk(BaseModel):

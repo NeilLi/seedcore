@@ -8,15 +8,22 @@ from .claim_validation import (
     RAGClaimValidationError,
     validate_rag_claims_and_citations,
 )
+from .controlled_retriever import ControlledRetriever
+from .harness import GovernedRAGHarness, GovernedRAGResult
 from .output_parser import ParsedRAGResponse, RAGParseError, parse_guarded_rag_response
+from .pdp_callout import authorize_retrieved_chunks
 
 __all__ = [
+    "ControlledRetriever",
+    "GovernedRAGHarness",
+    "GovernedRAGResult",
     "ParsedRAGResponse",
     "RAGClaimValidationError",
     "RAGParseError",
     "RAGPromptMetadata",
     "RAGRenderedPrompt",
     "assemble_guarded_rag_prompt",
+    "authorize_retrieved_chunks",
     "parse_guarded_rag_response",
     "promote_authorized_rag_candidates",
     "validate_rag_claims_and_citations",
