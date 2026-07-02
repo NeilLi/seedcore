@@ -231,6 +231,11 @@ Start here for the active spine:
    sidecar vertical reference for mapping the Restricted Custody Transfer (RCT)
    runtime baseline to high-value second-hand luxury trading without changing
    the current authority path.
+29. [`agency_agents_prompt_framework_sketch.md`](agency_agents_prompt_framework_sketch.md) -
+   sidecar design sketch for adapting the msitarzewski/agency-agents prompt
+   profile pattern to SeedCore role legibility. Treat it as advisory prompt
+   structure only; prompt profiles do not admit actions, mint tokens, mutate
+   custody state, or close verifier evidence.
 
 
 

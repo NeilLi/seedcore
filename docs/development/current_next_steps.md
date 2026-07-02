@@ -1607,8 +1607,10 @@ The VLA track in
 [vla_2026_optimizations.md](vla_2026_optimizations.md),
 the WAM architecture reference in
 [world_action_model_architecture_reference.md](world_action_model_architecture_reference.md),
-and the second-hand luxury trade evolution memo in
-[second_hand_luxury_trade_evolution.md](second_hand_luxury_trade_evolution.md)
+the second-hand luxury trade evolution memo in
+[second_hand_luxury_trade_evolution.md](second_hand_luxury_trade_evolution.md),
+and the agency-agents prompt framework design sketch in
+[agency_agents_prompt_framework_sketch.md](agency_agents_prompt_framework_sketch.md)
 remain sidecar for this phase.
 
 They may continue in parallel as research, proposal-quality, simulation,
@@ -1620,7 +1622,10 @@ closed through evidence / replay. Luxury-trade signals such as appraisals,
 service history, optical fingerprints, GPS traces, and product-passport
 identifiers follow the same rule: they are evidence or constraints only after
 they are represented in typed contracts, evaluated by policy, and closed by
-replay/verifier evidence.
+replay/verifier evidence. Prompt-profile outputs follow the same boundary:
+they may improve role legibility, draft quality, citation discipline, and
+operator explanations, but they are not authority sources and cannot bypass the
+PDP, token, evidence, replay, or verifier chain.
 
 ### 1. Irrefutable Trust Anchors
 
