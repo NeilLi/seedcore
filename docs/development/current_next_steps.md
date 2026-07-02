@@ -143,6 +143,24 @@ before execution, not by demos that only show happy paths.
   clearance, production deploys, and quarantine release remain policy-admitted
   or human-reviewed actions.
 
+## Status Update (2026-07-02, CubeSandbox Dependency Investigation)
+
+**Drafted as pilot-only.** The CubeSandbox dependency investigation now lives in
+[`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md).
+
+The current judgment is **pilot next, do not make it a core dependency yet**.
+CubeSandbox is a good optional substrate candidate for isolated code execution,
+agent-eval fan-out, and AI-led self-healing dry runs because it offers KVM
+MicroVM isolation, E2B-compatible APIs, network policy, CubeEgress credential
+injection / audit logs, and snapshot / clone / rollback behavior. It should sit
+behind a SeedCore-owned provider adapter after PDP allow and scoped
+`ExecutionToken` validation.
+
+The authority boundary is unchanged: CubeSandbox may host an execution attempt
+and produce logs, egress-audit refs, snapshot refs, and cleanup evidence, but it
+must not admit actions, mint or widen `ExecutionToken`s, clear quarantine, or
+replace replay / `RESULT_VERIFIER` closure.
+
 ## Status Update (2026-06-22, Window G Governance-Learning Contract & Schema Freeze)
 
 **Done (2026-06-22).** Implemented the full Window G contract freeze slice for governance-aware learning and distillation.

@@ -236,6 +236,12 @@ Start here for the active spine:
    profile pattern to SeedCore role legibility. Treat it as advisory prompt
    structure only; prompt profiles do not admit actions, mint tokens, mutate
    custody state, or close verifier evidence.
+30. [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md) -
+   dependency investigation sketch for using TencentCloud/CubeSandbox as an
+   optional isolated execution provider. Treat CubeSandbox as a sandbox
+   substrate and evidence source only; it does not admit actions, mint
+   `ExecutionToken`s, clear quarantine, or replace replay / RESULT_VERIFIER
+   closure.
 
 
 
@@ -259,6 +265,7 @@ This table is the shortest answer to "what stage are we in?"
 | 11. Sidecar innovation tracks | Keep robotics/VLA/WAM and deep twin research from diluting the commerce RCT story | Sidecar: intake/twin/world-action tracks support the wedge as **upstream evidence**, not a second product center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`world_action_model_architecture_reference.md`](world_action_model_architecture_reference.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
 | 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, simulation RL, and statistical model audits as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Window G schema/sample contracts and Window H offline + opt-in live shadow advisory contract implemented; still never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md), [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md), [`current_next_steps.md`](current_next_steps.md) |
 | 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
+| 14. Optional sandbox substrates | Evaluate stronger isolation providers for untrusted code, eval fan-out, and self-healing rehearsal while preserving PDP/token/verifier authority | CubeSandbox integration sketch drafted as a pilot-only provider boundary; not a core hot-path dependency | [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md), [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) |
 
 ## 4. What Is Done
 
@@ -380,6 +387,10 @@ agent integration**, still on one wedge:
   MCP `check_policy` requires explicit authority and identity, and the gated
   action schema exporter preserves duplicate function names with path-qualified
   action IDs.
+- **CubeSandbox has been evaluated as a dependency candidate** for optional
+  isolated execution. The current judgment is pilot-next as a provider adapter
+  for untrusted code, eval fan-out, and self-healing dry runs, not a core
+  hot-path dependency and not an authority source.
 - The virtual NFC simulation lane for the rare-shoe RCT scene is implemented
   and workspace-verified. It strengthens physical-presence evidence with
   deterministic fixture CMAC checks, monotonic counters, freshness, tamper, and
@@ -491,6 +502,7 @@ Primary planning docs:
 - [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
+- [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md)
 - [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
 - [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - [`gated_action_dx_layer.md`](gated_action_dx_layer.md)

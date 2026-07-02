@@ -103,3 +103,26 @@ Once the functional requirements of Window H are verified, we will harden the in
 *   **Network and File Hardening:** Enforce strict outbound network egress filters and read-only root mounts for running pods.
 *   **E2E Validation:** Verify that policy gates, token issuance, signed receipts, and evidence flows operate normally under the restricted system state.
 *   **CI Pipeline Integration:** Add automated CI steps that execute verification tests inside sandboxed environments to prevent regression.
+
+### C. Optional MicroVM Provider Pilot: CubeSandbox
+
+TencentCloud/CubeSandbox is now tracked as a **pilot-only isolated execution
+provider** in
+[`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md).
+It should be evaluated as a substrate for untrusted code execution, agent-eval
+fan-out, and self-healing rehearsal, not as a replacement for the current
+subprocess-first verifier bridge or the gVisor compatibility lane.
+
+The promotion rule is the same trust-runtime rule used elsewhere:
+
+```text
+CubeSandbox can host an attempt and produce evidence.
+SeedCore still decides admission through PDP allow, scoped ExecutionToken,
+evidence closure, replay, and RESULT_VERIFIER acceptance.
+```
+
+A CubeSandbox adapter must be contract-first and optional. The first slice
+should run against a fake provider before adding the Python SDK dependency, and
+the real provider should remain profile-gated until sandbox ID, template ID,
+network-policy hash, egress-audit hash, log hash, snapshot refs, and cleanup
+status are replay-visible.
