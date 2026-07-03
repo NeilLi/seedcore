@@ -45,11 +45,11 @@ def test_governed_rag_harness_happy_path() -> None:
 
     assert result.trace.final_status == "accepted"
     assert result.evidence_bundle is not None
-    assert len(result.evidence_bundle.evidence_items) == 3
+    assert len(result.evidence_bundle.evidence_items) == 4
     assert result.draft_answer is not None
     assert len(result.verified_claims) == 1
     assert result.prompt_metadata is not None
-    assert len(result.prompt_metadata.evidence_item_ids) == 3
+    assert len(result.prompt_metadata.evidence_item_ids) == 4
     assert result.rendered_prompt is not None
     assert (
         "SeedCore zero-trust RCT execution boundary tokenizes actions."
@@ -80,20 +80,20 @@ def test_governed_rag_harness_unauthorized_leakage_denied() -> None:
     </response>"""
 
     result = harness.run_governed_query(
-        query="actions co-signature secret",
+        query="actions co-signature secret authentication cryptoprocessor",
         envelope=envelope,
         now=NOW,
         mock_llm_response=mock_llm,
     )
 
-    assert result.trace.denied_candidate_count == 2
+    assert result.trace.denied_candidate_count == 4
     assert result.evidence_bundle is not None
-    assert len(result.evidence_bundle.evidence_items) == 1
+    assert len(result.evidence_bundle.evidence_items) == 2
     assert result.evidence_bundle.evidence_items[0].document_id == "doc-public-1"
 
     # Rendered prompt metadata verification
     assert result.prompt_metadata is not None
-    assert result.prompt_metadata.denied_candidate_count == 2
+    assert result.prompt_metadata.denied_candidate_count == 4
     assert result.rendered_prompt is not None
     assert (
         "SeedCore zero-trust RCT execution boundary tokenizes actions."
@@ -101,13 +101,19 @@ def test_governed_rag_harness_unauthorized_leakage_denied() -> None:
     )
     assert "Confidential facility operator" not in result.rendered_prompt
     assert "Restricted transaction audit" not in result.rendered_prompt
+    assert "Confidential Jordan PE authentication" not in result.rendered_prompt
+    assert "Restricted challenge nonce" not in result.rendered_prompt
 
     # Assert denied text never enters any ordinary fields in the trace/result
     dump_str = result.model_dump_json()
     assert "doc-confidential-1" not in dump_str
     assert "doc-restricted-1" not in dump_str
+    assert "doc-confidential-rct-2" not in dump_str
+    assert "doc-restricted-rct-3" not in dump_str
     assert "Confidential facility operator" not in dump_str
     assert "Restricted transaction audit" not in dump_str
+    assert "Confidential Jordan PE authentication" not in dump_str
+    assert "Restricted challenge nonce" not in dump_str
 
 
 def test_governed_rag_harness_blocked_on_zero_evidence() -> None:
@@ -125,7 +131,7 @@ def test_governed_rag_harness_blocked_on_zero_evidence() -> None:
 
     harness = GovernedRAGHarness()
     result = harness.run_governed_query(
-        query="co-signature requirement",
+        query="secret keys",
         envelope=envelope,
         now=NOW,
         mock_llm_response="",

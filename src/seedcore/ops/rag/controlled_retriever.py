@@ -29,6 +29,24 @@ CONTROLLED_DOCUMENTS = [
         "classification": "restricted",
         "ref": "docstore://restricted-1",
     },
+    {
+        "id": "doc-public-rct-1",
+        "text": "Vault custody handoff protocols require co-signatures.",
+        "classification": "public",
+        "ref": "docstore://public-rct-1",
+    },
+    {
+        "id": "doc-confidential-rct-2",
+        "text": "Confidential Jordan PE authentication grades and records.",
+        "classification": "confidential",
+        "ref": "docstore://confidential-rct-2",
+    },
+    {
+        "id": "doc-restricted-rct-3",
+        "text": "Restricted challenge nonce requirements and secure cryptoprocessor states.",
+        "classification": "restricted",
+        "ref": "docstore://restricted-rct-3",
+    },
 ]
 
 

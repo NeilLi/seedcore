@@ -535,6 +535,34 @@ mock model output do not mint execution authority.
   evidence set, or side-channel telemetry profile. Those remain the next RAG
   hardening slices.
 
+## Status Update (2026-07-03, Policy-Assistant RAG Advisory Endpoint)
+
+**Done (2026-07-03).** Exposed the fixture-only governed RAG harness through
+the policy-assistant router as an operator advisory drill endpoint:
+`POST /api/v1/policy-assistant/governed-rag/query`.
+
+- **Advisory API boundary:** The endpoint accepts a governed RAG query,
+  `RAGAuthorizationEnvelope`, fixture `mock_llm_response`, prompt policy rules,
+  action parameters, template version, and claim-support status, then returns
+  the existing `GovernedRAGResult`. It remains no-execute and does not mint
+  `ExecutionToken` artifacts or bypass the Agent Action Gateway / PDP /
+  verifier authority path.
+- **Fixture corpus refresh:** The controlled retriever now includes additional
+  RCT-shaped public, confidential, and restricted fixture documents. These are
+  deterministic local fixtures, not production retrieval connectors or
+  enterprise document-store bindings.
+- **HTTP leakage checks:** Router and harness tests cover accepted, blocked,
+  abstained, and mixed allow/deny HTTP responses. Denied confidential and
+  restricted fixture IDs/text stay out of rendered prompts and ordinary
+  serialized responses; only aggregate denial counts and reason summaries are
+  exposed.
+- **Still not production RAG:** This endpoint does not add provider-backed
+  generation, semantic/NLI claim verification, full trace/replay
+  cross-validation, signed `RAGReceipt`, minimal evidence set semantics, or
+  side-channel telemetry hardening. The next north-star-aligned hardening slice
+  remains trace/replay cross-validation and receipt semantics before broader
+  retrieval or model-provider integration.
+
 ## Status Update (2026-06-22, Policy-Governed RAG Research Adoption Review)
 
 **Docs aligned (2026-06-22).** Reviewed policy-governed RAG research against

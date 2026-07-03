@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 from seedcore.api.routers.agent_actions_router import evaluate_agent_action
 from seedcore.models.agent_action_gateway import AgentActionEvaluateRequest
+from seedcore.models.rag import RAGAuthorizationEnvelope, RAGSupportStatus
+from seedcore.ops.rag import GovernedRAGResult
 
 
 router = APIRouter(tags=["policy-assistant"])
@@ -128,3 +130,52 @@ async def evaluate_scenario_pack(payload: ScenarioPackEvaluateRequest) -> dict[s
         },
         "results": results,
     }
+
+
+class GovernedRAGQueryRequest(BaseModel):
+    query: str
+    envelope: RAGAuthorizationEnvelope
+    mock_llm_response: str
+    policy_rules: list[str] = Field(default_factory=list)
+    action_parameters: dict[str, str] = Field(default_factory=dict)
+    template_version: str = "guarded-rag.v1"
+    claim_support_status: RAGSupportStatus = "supported"
+
+
+@router.post(
+    "/policy-assistant/governed-rag/query",
+    response_model=GovernedRAGResult,
+)
+async def query_governed_rag(
+    payload: GovernedRAGQueryRequest,
+) -> GovernedRAGResult:
+    """
+    Operator advisory route to run a governed RAG query against the local fixture retriever.
+    Non-authoritative: does not issue execution tokens or bypass PDP policies.
+    """
+    from datetime import datetime, timezone
+    from seedcore.ops.rag.harness import GovernedRAGHarness
+
+    harness = GovernedRAGHarness()
+    now = datetime.now(timezone.utc)
+
+    try:
+        result = harness.run_governed_query(
+            query=payload.query,
+            envelope=payload.envelope,
+            now=now,
+            mock_llm_response=payload.mock_llm_response,
+            policy_rules=payload.policy_rules,
+            action_parameters=payload.action_parameters,
+            template_version=payload.template_version,
+            claim_support_status=payload.claim_support_status,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "governed_rag_query_failed",
+                "message": "Governed RAG advisory query failed.",
+            },
+        ) from exc
+    return result
