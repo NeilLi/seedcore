@@ -248,6 +248,12 @@ Start here for the active spine:
    TrustPage projections. Treat it as strategy/reference only; edge nodes do
    not admit actions, mint tokens, clear quarantine, or replace
    `RESULT_VERIFIER` closure.
+32. [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md) -
+   strategy memo mapping the 2026 multi-agent safety research call to
+   SeedCore's current RCT trust-runtime implementation. Use it to compare
+   sandboxes/testbeds, agent-network science, identity/reputation/commitment
+   infrastructure, and population oversight gaps without reframing SeedCore as
+   a generic multi-agent platform or marketplace.
 
 
 
@@ -272,6 +278,7 @@ This table is the shortest answer to "what stage are we in?"
 | 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, simulation RL, and statistical model audits as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Window G schema/sample contracts and Window H offline + opt-in live shadow advisory contract implemented; still never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md), [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md), [`current_next_steps.md`](current_next_steps.md) |
 | 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
 | 14. Optional sandbox substrates | Evaluate stronger isolation providers for untrusted code, eval fan-out, and self-healing rehearsal while preserving PDP/token/verifier authority | CubeSandbox integration sketch drafted as a pilot-only provider boundary; not a core hot-path dependency | [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md), [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) |
+| 15. Multi-agent safety research alignment | Map funded research directions to SeedCore's RCT testbed, infrastructure, network metrics, and population oversight gaps | Strategy memo drafted; implementation remains future work and must preserve PDP/token/evidence/replay/verifier boundaries | [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md), [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) |
 
 ## 4. What Is Done
 
