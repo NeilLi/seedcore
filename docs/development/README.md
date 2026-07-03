@@ -242,6 +242,12 @@ Start here for the active spine:
    substrate and evidence source only; it does not admit actions, mint
    `ExecutionToken`s, clear quarantine, or replace replay / RESULT_VERIFIER
    closure.
+31. [`edge_central_trust_trade_architecture.md`](edge_central_trust_trade_architecture.md) -
+   sidecar architecture sketch for a future Edge-Hub trust loop across
+   hardware-anchored edge evidence, SeedCore PDP/token gating, replay, and
+   TrustPage projections. Treat it as strategy/reference only; edge nodes do
+   not admit actions, mint tokens, clear quarantine, or replace
+   `RESULT_VERIFIER` closure.
 
 
 

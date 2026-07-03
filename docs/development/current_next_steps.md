@@ -1655,8 +1655,10 @@ the WAM architecture reference in
 [world_action_model_architecture_reference.md](world_action_model_architecture_reference.md),
 the second-hand luxury trade evolution memo in
 [second_hand_luxury_trade_evolution.md](second_hand_luxury_trade_evolution.md),
-and the agency-agents prompt framework design sketch in
-[agency_agents_prompt_framework_sketch.md](agency_agents_prompt_framework_sketch.md)
+the agency-agents prompt framework design sketch in
+[agency_agents_prompt_framework_sketch.md](agency_agents_prompt_framework_sketch.md),
+and the Edge-Hub trust loop architecture design sketch in
+[edge_central_trust_trade_architecture.md](edge_central_trust_trade_architecture.md)
 remain sidecar for this phase.
 
 They may continue in parallel as research, proposal-quality, simulation,
@@ -1672,6 +1674,11 @@ replay/verifier evidence. Prompt-profile outputs follow the same boundary:
 they may improve role legibility, draft quality, citation discipline, and
 operator explanations, but they are not authority sources and cannot bypass the
 PDP, token, evidence, replay, or verifier chain.
+The Edge-Hub trust loop sketch follows the same sidecar rule: edge devices,
+distributed hub deployment ideas, TrustPage projections, and trade-loop
+topology proposals stay reference material until represented in typed
+contracts, admitted by PDP policy, scoped by `ExecutionToken`, and closed by
+replay / `RESULT_VERIFIER`.
 
 ### 1. Irrefutable Trust Anchors
 
