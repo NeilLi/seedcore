@@ -22,6 +22,11 @@ env/
 # OS
 .DS_Store
 
+# Local presentation build and QA artifacts
+.tmp/
+*.pptx.inspect.ndjson
+SeedCore_Commerce_Partner_Government_Reference/
+
 # Local config
 local_*.yaml
 .local-runtime/

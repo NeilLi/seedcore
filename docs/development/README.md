@@ -26,6 +26,8 @@ Canonical north-star references:
   (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
 - [`seedcore_north_star_architecture_v1.2.0.pdf`](assets/seedcore_north_star_architecture_v1.2.0.pdf)
   - visual companion deck; the Markdown North Star remains canonical
+- [`SeedCore_Commerce_Partner_Government_Reference.pptx`](assets/SeedCore_Commerce_Partner_Government_Reference.pptx)
+  - partner and government reference deck for the Tourist Design Studio, staged kids' DIY/spatial experience, and governed trade boundaries
 - [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
   - market-signal memo for why local autonomous applications, RTX Spark /
     DGX-class compute, and frontier agents accelerate the need for governed
