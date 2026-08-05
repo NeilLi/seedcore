@@ -255,6 +255,29 @@ Start here for the active spine:
    infrastructure, and population oversight gaps without reframing SeedCore as
    a generic multi-agent platform or marketplace.
 
+### Bounded Tourist Design Studio incubation track
+
+[`tourist_design_studio_pilot_design.md`](tourist_design_studio_pilot_design.md)
+and [`tourist_design_studio_delivery_schedule.md`](tourist_design_studio_delivery_schedule.md)
+describe a separate B2B2C destination-souvenir pilot: one venue, one
+printable T-shirt, constrained co-creation, purchaser phone approval, and one
+fulfillment route. This is an evidence-seeking product-incubation track, not a
+replacement for the active RCT wedge and not an integration of the SeedCore
+PDP, `ExecutionToken`, custody, or replay runtime into consumer checkout.
+
+The delivery schedule owns the pilot timeline, build/release gates, metrics,
+and partner decisions. Promote it into the product center only after Phase 0
+partner discovery and the closed pilot have explicit commercial and
+operational evidence.
+
+[`immersive_commerce_and_governed_trade_architecture.md`](immersive_commerce_and_governed_trade_architecture.md)
+defines the portfolio-level relationship: immersive customer experiences may
+advance from 2D to browser 3D, AR, and private venue installations, while
+rare-shoe agentic trade stays on the existing RCT path of typed intent, PDP
+admission, scoped token, custody evidence, and replay closure. The two tracks
+have separate data and authority boundaries; immersive UI and AI proposals
+never become trade or custody authority.
+
 
 
 ## 3. Stage Goals And Status Map
@@ -625,6 +648,13 @@ there is a strong reason. Prefer this ownership split:
   architecture reference
 - `local_kafka_streams_schedule.md` = local Kafka transport rollout (intent,
   telemetry, policy outcomes) aligned to the north-star cluster table
+- `tourist_design_studio_delivery_schedule.md` = bounded one-venue Tourist
+  Design Studio pilot schedule, release gates, and commercial evidence plan;
+  it remains outside the current RCT authority path
+- `immersive_commerce_and_governed_trade_architecture.md` = portfolio boundary
+  and phased plan for immersive customer experiences alongside governed
+  rare-shoe agentic trade; it keeps XR and AI advisory output out of the RCT
+  authority path
 - operator legibility + copilot API contract = section 4.1 of
   `q2_2026_audit_trail_ui_spec.md` (keep in sync with
   `ts/services/verification-api` and operator console)
