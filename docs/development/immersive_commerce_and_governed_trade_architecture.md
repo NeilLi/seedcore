@@ -84,6 +84,14 @@ voice capture, and cross-visitor interaction are excluded until a specific
 venue use case, age policy, retention model, and commercial result justify
 them.
 
+The planned next-stage product exploration is broader than a single venue
+installation: the **Tourist Journey AI+VR** track may connect anticipation,
+arrival, playful destination activities, and post-visit memory or souvenir
+fulfillment. Its initial product and Godot runtime plan is
+[`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md).
+The track remains staged and evidence-gated; its immersive client is still
+separate from checkout and the governed RCT authority path.
+
 ### 3.2 Rare-shoe trade workspace
 
 The commercial trade experience begins as a practical operator/buyer workspace,
@@ -244,4 +252,3 @@ Make the customer experience magical.
 Make consequential trade execution explicit, bounded, and provable.
 Never use magic as authority.
 ```
-

@@ -143,6 +143,33 @@ before execution, not by demos that only show happy paths.
   clearance, production deploys, and quarantine release remain policy-admitted
   or human-reviewed actions.
 
+## Experience Track Plan (2026-08-10, Tourist Journey AI+VR)
+
+The initial Tourist Journey AI+VR product and Godot integration plan is now documented in
+[`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md).
+This is a product-experience track for tourists, children, and families across
+their journey: anticipation, arrival, playful creation/exploration, and
+memory/fulfillment. It is not limited to a private venue installation. The
+initial printable-souvenir pilot remains independently deliverable, while the
+AI+VR track is staged alongside it and is not an RCT execution surface.
+
+The immediate sequence is deliberately small:
+
+1. Freeze the target journey moment, headset/surface mix, Godot/OpenXR
+   versions, measurable hypothesis, and child-safety/privacy owners.
+2. Build one agent-readable scene and one local AI-guided interaction with
+   headless, scene-load, negative-path, content, and desktop smoke checks.
+3. Run the identical artifact through export, install, input/tracking,
+   performance, thermal, and supervised-usability gates on real hardware.
+4. Run a controlled tourist/family journey experiment only after human review
+   of the evidence; expand to more activities or journey stages only when the
+   product metric and safety guardrails support it.
+
+The XR client remains presentation/application logic. It must not call SeedCore
+authority endpoints directly, receive an `ExecutionToken`, or infer approval
+from local scene state, model output, telemetry scores, or a successful UI
+interaction.
+
 ## Status Update (2026-07-02, CubeSandbox Dependency Investigation)
 
 **Drafted as pilot-only.** The CubeSandbox dependency investigation now lives in

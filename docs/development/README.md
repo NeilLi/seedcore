@@ -280,6 +280,15 @@ admission, scoped token, custody evidence, and replay closure. The two tracks
 have separate data and authority boundaries; immersive UI and AI proposals
 never become trade or custody authority.
 
+For the planned AI-agent-first Tourist Journey AI+VR experience, use
+[`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md).
+It records Godot as the preferred engine candidate because its text-oriented
+project/scene files and CLI workflow are legible to coding agents. This is a
+product-experience track across the tourist journey, not merely an engine
+sidecar; it remains staged alongside the initial printable-souvenir pilot,
+requires real-device validation, and keeps the XR client away from SeedCore
+authority paths and `ExecutionToken`s.
+
 
 
 ## 3. Stage Goals And Status Map
@@ -304,6 +313,7 @@ This table is the shortest answer to "what stage are we in?"
 | 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
 | 14. Optional sandbox substrates | Evaluate stronger isolation providers for untrusted code, eval fan-out, and self-healing rehearsal while preserving PDP/token/verifier authority | CubeSandbox integration sketch drafted as a pilot-only provider boundary; not a core hot-path dependency | [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md), [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) |
 | 15. Multi-agent safety research alignment | Map funded research directions to SeedCore's RCT testbed, infrastructure, network metrics, and population oversight gaps | Strategy memo drafted; implementation remains future work and must preserve PDP/token/evidence/replay/verifier boundaries | [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md), [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) |
+| 16. Tourist Journey AI+VR experience | Build toward an agent-readable, Godot-based tourist and kids/family entertainment journey without weakening the RCT boundary | Initial product/technical plan drafted; first journey slice requires hard headset/device, content, and supervision gates | [`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md), [`immersive_commerce_and_governed_trade_architecture.md`](immersive_commerce_and_governed_trade_architecture.md) |
 
 ## 4. What Is Done
 
@@ -612,7 +622,6 @@ Primary planning docs:
   - research note translating Hermes/Nous instruction-tuning patterns into
     SeedCore-specific post-training workstreams such as contract obedience,
     tool-call discipline, abstention, and evidence-grounded explanation
-
 ### Local operations and protocol references
 
 - [`HAL_TESTING.md`](HAL_TESTING.md)
@@ -657,6 +666,10 @@ there is a strong reason. Prefer this ownership split:
   and phased plan for immersive customer experiences alongside governed
   rare-shoe agentic trade; it keeps XR and AI advisory output out of the RCT
   authority path
+- `godot_agent_operable_xr_runtime_plan.md` = initial product and feasibility
+  plan for a Godot-based AI+VR tourist journey experience, including journey
+  stages, project invariants, device gates, and the no-authority client
+  boundary
 - operator legibility + copilot API contract = section 4.1 of
   `q2_2026_audit_trail_ui_spec.md` (keep in sync with
   `ts/services/verification-api` and operator console)
