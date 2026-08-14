@@ -13,6 +13,41 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Latest Application Focus (2026-08-14, Rare-Shoe RCT Visual Evidence Adapter v0)
+
+**Accepted as the latest RCT application plan; implementation remains staged.**
+The plan is documented in
+[`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md).
+
+The visual pipeline is an evidentiary sidecar for the existing collectible
+rare-shoe custody workflow. It compares an approved origin registration with
+handoff or delivery observations and emits typed `MATCH`, `MISMATCH`,
+`INSUFFICIENT_COVERAGE`, or `ANOMALY_FLAGGED` evidence. Those outcomes do not
+authorize custody by themselves.
+
+The accepted v0 posture is:
+
+1. bind a server challenge, raw capture manifest, asset, workflow, device, and
+   dynamic NFC proof into one versioned capture-session hash
+2. preserve raw frames before SAM 2 masking or COLMAP reconstruction
+3. exclude generative inpainting and view synthesis from every forensic,
+   fingerprint, PDP, and verifier path
+4. admit only pinned capture, processing, calibration, and comparison profiles
+   as typed evidence refs
+5. require the normal delegation, approval, commerce, freshness, quarantine,
+   `ExecutionToken`, transition-receipt, and replay gates regardless of a
+   visual match
+6. start with deterministic fixtures and shadow benchmarks before any visual
+   evidence requirement is promoted into an enforce path
+
+The immediate sequence is contract freeze, negative/replay fixtures, an offline
+iOS/ARKit + App Attest capture spike, SAM 2 + COLMAP shadow processing, a
+same-model/different-pair comparison benchmark, and only then supervised
+gateway/verifier integration. DUSt3R, MASt3R, and the original Inria 3DGS
+implementation remain research references pending commercial-license review.
+Continuous 4D reconstruction, Journey 4Map, blockchain ownership claims, and
+generated missing pixels are out of scope.
+
 ## Zero-Trust RCT Expansion Roadmap
 
 SeedCore is building a trust runtime for AI actions in high-consequence

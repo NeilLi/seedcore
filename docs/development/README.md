@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-06-29
+Date: 2026-08-14
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -43,6 +43,14 @@ Canonical north-star references:
 The current product wedge is **Agent-Governed Restricted Custody Transfer**:
 the governed handshake between a digital transaction and a physical custody
 transition. It is not generic robotics and not a broad trust platform.
+
+The latest application plan is
+[`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md):
+a static visual-evidence sidecar for comparing the registered rare shoe with
+handoff and delivery observations. It keeps raw media, capture integrity,
+physical-anchor binding, model outputs, PDP authority, and verifier closure
+separate. It explicitly rejects a parallel Journey 4Map / continuous-4D product
+and excludes generative inpainting from forensic evidence.
 
 That means the active docs should be read through one question:
 
@@ -120,7 +128,10 @@ Start here for the active spine:
 5. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
    collectible rare-shoe transfer as a commercial vertical scene on the same
    RCT contract: authentication registration first, bounded custody authority
-   second, replayable proof last.
+   second, replayable proof last. Read it with the latest application slice,
+   [`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md),
+   which defines the visual capture, fingerprint, comparison, replay, and
+   generative-exclusion contract.
 6. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
    boundary memo for using AP2 as the upstream agent-payment protocol while
    keeping SeedCore focused on custody, evidence, and replay-valid closure.

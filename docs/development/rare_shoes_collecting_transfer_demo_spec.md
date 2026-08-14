@@ -3,6 +3,13 @@
 Date: 2026-05-15  
 Status: Working development spec for a commercial-grade RCT vertical scene
 
+Latest application addendum: the capture, static reconstruction, spatial
+fingerprint, visual comparison, licensing, and generative-exclusion contract is
+defined in
+[`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md)
+(2026-08-14). That document specializes this demo without changing its PDP,
+`ExecutionToken`, custody, evidence, or verifier authority boundaries.
+
 ## Purpose
 
 This document translates the collectible rare-shoe trading research into a
@@ -795,6 +802,9 @@ Demo success metrics:
   submission-window behavior without requiring real NFC hardware
 - remaining Slice 3 extensions should focus on spatial-fingerprint mismatch,
   signer-chain depth, and adapter parity with future hardware/KMS NFC sources
+- implement spatial-fingerprint work through the shadow-first, raw-preserving
+  [`Rare-Shoe RCT Visual Evidence Adapter v0`](rare_shoe_rct_visual_evidence_adapter_v0.md);
+  a visual `MATCH` is evidence only and cannot close custody or mint authority
 
 ### Slice 4: Replay verifier and proof surfaces
 
@@ -835,6 +845,7 @@ proof linked to replayable receipts, not a standalone digital claim.
 ## Related Docs
 
 - [`README.md`](README.md)
+- [`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md)
 - [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
 - [`source_registration_architecture.md`](source_registration_architecture.md)
