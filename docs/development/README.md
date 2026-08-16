@@ -66,6 +66,14 @@ endpoints, three MCP wrappers, one-image-plus-one-audio draft extraction, and a
 server-rendered proof page; recommendation engines, native apps, 3D/map clients,
 continuous IoT, and custom settlement are deferred.
 
+The same reference now defines a grounded creative sidecar for funny, rich
+producer storytelling. It keeps `Artisan Story & Lore`, producer-declared
+detail, and verified claims as separate typed regions; requires source
+citations, consent, synthetic-media disclosure, and withdrawal on source
+staleness; and starts with text plus existing still/audio only. Generated reels,
+voice cloning, live personas, AR, and 3D remain post-MVP presentation research
+and never become evidence or execution authority.
+
 That means the active docs should be read through one question:
 
 - does this move the dual-approved, scope-bound, replay-verifiable transfer

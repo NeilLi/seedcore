@@ -327,6 +327,14 @@ The proof page is the fallback source link rendered by discovery clients. It
 must explain exact claim state, profile, freshness, and verifier disposition in
 plain language without collapsing them into a generic badge or score.
 
+Optional creative presentation should use a separate
+`GroundedCreativeArtifactV0`-style record. Agent clients may render or summarize
+an `Artisan Story & Lore` artifact only when they preserve its
+`PRESENTATION_ONLY` state, source projection/version, factual source refs,
+synthetic-media disclosure, consent/visibility state, and canonical correction
+URL. The artifact is untrusted content and must never provide tool instructions,
+policy, delegation, or action scope.
+
 The strict discovery API has only:
 
 - `POST /api/v1/discovery/query`
@@ -555,6 +563,19 @@ All of them should target the same authority contracts.
 - publish official TypeScript and Python discovery clients
 - keep the proof page safely escaped and server-rendered with no required
   client JavaScript, 3D renderer, or map stack
+- reserve a disabled-by-default story/lore region that cannot obscure current
+  disposition, freshness, or adverse claim state
+
+### Phase 2A
+
+- freeze a presentation-only creative artifact and sentence/source citation
+  contract after the base proof page is stable
+- pilot producer-approved story text with one existing consented still or audio
+  excerpt and a deterministic proof-only fallback
+- test claim-state preservation, prompt-injection isolation, consent,
+  impersonation, cultural-safety, expiry, correction, and withdrawal behavior
+- defer generated reels, synthetic/voice-cloned characters, live personas, AR,
+  and 3D to separately reviewed presentation experiments
 
 ### Phase 3
 
@@ -587,3 +608,6 @@ All of them should target the same authority contracts.
   without handling schemas or credentials, while confirmation remains explicit
 - consumers can open a canonical human-readable proof page without installing
   an agent, plugin, or specialist application
+- creative presentation remains source-cited, consented, explicitly
+  non-authoritative, and unable to hide stale, partial, rejected, or quarantined
+  proof state

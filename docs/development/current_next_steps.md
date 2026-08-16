@@ -94,6 +94,23 @@ client JavaScript, 3D canvas, or map stack. Payment/escrow webhooks may later
 record a flat verification or closure service charge, but never mint or affect
 execution authority.
 
+**Grounded creative-sidecar integration (2026-08-16):** funny local stories,
+artisan confessionals, multilingual narration, comics, short reels, and simple
+interactive prompts are accepted as presentation ideas, not as new provenance
+or authority. The first proof-page experiment is limited to producer-approved,
+source-cited story text plus an existing consented still or audio excerpt. It
+must render as `Artisan Story & Lore` beside claim-by-claim `Verified Origins`
+and `Producer-Declared Details`. Every factual sentence preserves the source
+claim's exact state; synthetic media, dramatization, and translation are
+disclosed; stale or revoked source projections withdraw dependent stories.
+
+Generated reels, image-to-video, synthetic or cloned voice, live personas, AR,
+and 3D remain deferred presentation research. They do not enter source
+registration, PDP context, visual fingerprints, verifier evidence, or custody
+closure. The rare-shoe RCT visual-evidence adapter remains the active
+application focus; this creative work is an optional follow-on to the local
+producer public-proof slice, not a competing roadmap center.
+
 ## Zero-Trust RCT Expansion Roadmap
 
 SeedCore is building a trust runtime for AI actions in high-consequence

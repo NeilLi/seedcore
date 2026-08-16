@@ -1,7 +1,7 @@
 # Local Producer Provenance And RCT Scenario Expansion
 
 Date: 2026-08-16
-Status: Revised draft; agent-native discovery direction accepted, local vertical activation remains staged
+Status: Revised draft; agent-native discovery and grounded creative-sidecar directions accepted, local vertical activation remains staged
 
 ## Purpose
 
@@ -13,7 +13,8 @@ registration patterns into three adjacent local-producer scenarios:
 3. regional workshops that accept, transform, or return customer property
 
 It also defines how a tourist or traveler may discover and inspect these
-products through a separate presentation and discovery experience.
+products through a separate presentation and discovery experience, including
+source-grounded humor and rich media that remain explicitly non-evidentiary.
 
 The goal is not to build a generic tourism marketplace, a universal provenance
 score, or a 3D map of local businesses. The goal is to test whether SeedCore's
@@ -897,6 +898,143 @@ a separate governed action.
 
 ## Presentation And Generated Content
 
+### Product Principle: Verified Spine, Creative Sidecar
+
+SeedCore may support funny, vivid, locally distinctive storytelling without
+turning generated content into evidence. The reusable pattern is:
+
+```text
+registered raw sources + current public-safe claim projection
+  -> source-grounded creative proposal
+  -> grounding, consent, safety, and disclosure checks
+  -> producer-approved presentation artifact
+  -> "Artisan Story & Lore" beside deterministic "Verified Origins"
+```
+
+The verified projection is the factual spine. A creative sidecar may add tone,
+format, translation, and entertainment, but it cannot add truth status. A joke
+is not verified merely because it was inspired by a verified record, and a
+producer statement remains `CLAIMED` unless an admitted policy/profile has
+verified that exact claim.
+
+This boundary enables experiences such as an artisan confessional, a witty
+travel-buddy explanation, or a short workshop audio story while preserving the
+same proof semantics for humans and AI agents.
+
+### Grounded Creative Artifact Contract
+
+A derived story, comic, audio clip, reel, or widget should be represented as a
+non-authoritative `GroundedCreativeArtifactV0`, not embedded into a claim or
+evidence record. At minimum it should carry:
+
+- artifact id, content kind, locale, and version
+- subject ref, source projection id/version, and projection `as_of` time
+- source artifact refs and transcript/time-span or structured-field citations
+- a machine-readable distinction between `VERIFIED`, `REGISTERED`, `CLAIMED`,
+  and `LORE` material used by the artifact
+- persona/style id and version rather than an untracked free-form system prompt
+- generator, model, template, and transformation versions
+- synthetic-media disclosure, including synthetic or cloned voice state
+- producer/rights-holder review and consent refs when a real person's name,
+  likeness, voice, dialect, workshop ambience, or cultural material is used
+- grounding and safety-check results, public visibility, expiry, content hash,
+  and canonical correction/takedown path
+- `presentation_is_authority: false`
+
+Creative artifact citations explain what grounded the presentation. They do
+not upgrade the cited statement, prove that a humorous event happened, or make
+the generated artifact eligible for PDP, fingerprint, verifier, or custody
+closure input.
+
+### Creative Pipeline With Trust Gates
+
+Creative generation begins only after the registration draft and its explicit
+confirmation have completed. It must not reuse the draft extractor's output as
+public truth or silently publish private intake media.
+
+```text
+one producer image + one producer voice memo
+  -> private SourceRegistrationDraftV0 extraction
+  -> producer correction and explicit registration confirmation
+  -> governed registration decision and public-safe projection
+  -> creative director proposes script/persona/format from allowlisted fields
+  -> grounding validator maps every factual sentence to typed source refs
+  -> consent, cultural-safety, impersonation, and public-redaction checks
+  -> producer/authorized reviewer approves presentation release
+  -> GroundedCreativeArtifactV0 published as presentation-only
+  -> public page or discovery agent renders disclosure + source link
+```
+
+If grounding, consent, redaction, or claim-state checks fail, the system should
+fall back to the deterministic proof card. It must not improvise missing facts.
+Changing or revoking a source projection should mark dependent creative
+artifacts stale or withdrawn; regeneration never edits the historical proof
+record.
+
+### Humor And Cultural-Safety Policy
+
+Humor may exaggerate delivery, metaphor, timing, or persona. It must not
+exaggerate factual claims. In particular, generated content must not invent or
+upgrade:
+
+- awards, certifications, ingredients, health or environmental benefits
+- maker identity, cultural ownership, sacred meaning, family history, labor
+  conditions, geographic origin, dates, quantities, prices, or custody events
+- numerical details such as hours worked, storms survived, animals encountered,
+  or injuries suffered unless they are explicitly sourced and correctly
+  labelled as declared or verified
+- endorsements or dialogue attributed to a real person
+
+The service should also reject demeaning stereotypes, poverty tourism,
+non-consensual jokes about a named person, imitation of a living person's voice
+without explicit permission, and casual reuse of sacred or restricted cultural
+material. A producer can select or reject a persona, edit jokes, withdraw
+presentation consent, and request correction without being able to rewrite
+immutable evidence or verifier history.
+
+Synthetic voice, translated speech, dramatization, animation, and reconstructed
+ambience must be disclosed in the media itself and in nearby text. An
+"authentic local voice" should mean producer-approved language and tone, not an
+undisclosed clone or a model's stereotype of a dialect.
+
+### Format Tiers
+
+The formats are sequenced so creative ambition does not expand the strict MVP:
+
+| Tier | Allowed scope | Status |
+| --- | --- | --- |
+| MVP | safely escaped story/lore text; producer-approved still image; optional native HTML audio with transcript; deterministic verified-origin card directly adjacent | build only after the base proof contract is frozen |
+| Bounded pilot | captioned comic carousel, 15-second subtitled reel, multilingual narration, simple flavor/craft quiz, or static comparison graphic; all pre-rendered and source-linked | feature-flagged, separately reviewed presentation experiment |
+| Deferred research | image-to-video, synthetic/voice-cloned characters, personalized live personas, AR moments, 3D/WebGL experiences, or real-time multimodal generation | not part of the discovery or proof MVP |
+
+No format may be required to understand claim state. Media must not autoplay;
+audio needs a transcript, video needs captions, controls need keyboard access,
+and motion must respect reduced-motion preferences. Low-bandwidth and no-script
+users receive the same proof state and a text alternative.
+
+### Public Proof-Card Composition
+
+The canonical `/verify/{public_anchor_ref}` page may be engaging, but exact
+claim state must remain visible above the fold. Its semantic order should be:
+
+1. subject/batch identity, current disposition, `as_of`, and freshness
+2. optional **Artisan Story & Lore** card with explicit generated/dramatized
+   disclosure and source links
+3. **Verified Origins** with claim-by-claim status and named policy/profile
+4. **Producer-Declared Details** for sourced statements that are not verified
+5. technical evidence detail and correction/dispute paths
+
+For example, "the harvester says he was stung twice" belongs under declared
+detail unless that exact event has admitted evidence. "100% natural nectar" is
+not a verified statistic without a named claim, issuer, evidence, and policy
+profile. A signing timestamp proves that SeedCore recorded a statement or
+artifact at a time; it does not prove every sentence inside it.
+
+The creative card may be visually prominent, but it cannot obscure a stale,
+rejected, partial, or quarantined state. Agent clients should receive the same
+typed separation and may summarize the story only with its
+`PRESENTATION_ONLY` label and canonical source URL.
+
 ### Allowed Presentation Sidecars
 
 - optimized 2D images and safe clips
@@ -919,6 +1057,12 @@ a separate governed action.
 - producers can review public stories without gaining authority to rewrite
   historical evidence or verifier outcomes
 - public cards show pending, rejected, quarantined, and expired states clearly
+- generated factual sentences are source-mapped and preserve the source
+  claim's exact state
+- rights, voice/likeness, cultural-use, and public-media consent are checked
+  before publication
+- a source correction, expiry, or revocation invalidates or withdraws dependent
+  presentation artifacts without rewriting historical evidence
 
 The presentation layer may be delightful. It must not become a softer route
 around registration, policy, custody, or evidence requirements.
@@ -1085,7 +1229,7 @@ micro-producers to surrender unnecessary private data or platform control.
 | --- | --- | --- |
 | Discovery router and MCP | stateless read-only router over static projections; exactly `/query`, `/projections/{id}`, and `/anchors/{ref}` plus three thin MCP tools | recommendation engine, real-time negotiation, multi-agent bidding, dynamic marketplace protocols |
 | Low-tech producer ingest | exactly one image plus one audio clip into an expiring typed draft; source-linked extraction and explicit human confirmation | native merchant app, general document workflow, continuous IoT ingestion, automatic registration |
-| Consumer proof | safely escaped server-rendered `/verify/{anchor_ref}` claim page with deterministic explanation | native tourist app, WebGL/WebGPU or 3D viewer, complex map client, agent-only experience |
+| Consumer proof | safely escaped server-rendered `/verify/{anchor_ref}` claim page with deterministic explanation; optional source-grounded story text and consented still/audio remain presentation-only | native tourist app, generated reel pipeline, synthetic voice, WebGL/WebGPU or 3D viewer, complex map client, agent-only experience |
 | Economic integration | existing payment or escrow webhook may record a flat service charge for a completed verification/export/closure product | token-linked billing, custom settlement engine, crypto token, liquidity pool, or on-chain governance |
 
 The operational sequence is:
@@ -1219,6 +1363,13 @@ producer data.
 - percentage of agent answers that preserve `as_of` and presentation-only labels
 - zero cases where discovery, narration, or presentation output creates
   execution authority
+- creative factual-sentence citation coverage and claim-state preservation
+- producer approval, correction, withdrawal, and takedown turnaround for public
+  creative artifacts
+- synthetic-media disclosure, caption, transcript, no-script, and low-bandwidth
+  completion rates
+- zero generated awards, certifications, ingredients, health claims, custody
+  facts, or cultural claims without eligible typed sources
 
 ### Agriculture Metrics
 
@@ -1314,6 +1465,9 @@ Exit condition:
   `/verify/{public_anchor_ref}` proof-page template
 - require explicit producer/operator confirmation before governed first writes
 - preserve declared, inferred, translated, and verified states separately
+- reserve a presentation-only slot for source-grounded story text; keep it off
+  by default until its artifact, citation, consent, and withdrawal contract is
+  fixture-tested
 
 Exit condition:
 
@@ -1323,6 +1477,29 @@ Exit condition:
 - the page requires no native app, client JavaScript, 3D renderer, or map stack
 - extraction, confirmation, escaping/XSS, stale projection, missing media, and
   conflicting-field fixtures cover the negative paths
+
+### Step 3A: Pilot The Grounded Creative Sidecar
+
+This is a presentation experiment after Step 3, not a prerequisite for public
+proof or a new authority service.
+
+- freeze `GroundedCreativeArtifactV0` and source-span citation semantics
+- begin with producer-approved text and one existing still or audio excerpt
+- label `Artisan Story & Lore`, `Producer-Declared Details`, and
+  `Verified Origins` as separate semantic regions
+- add grounding, consent, redaction, impersonation, cultural-safety, expiry,
+  correction, and withdrawal fixtures
+- require deterministic fallback to the ordinary proof card
+- evaluate a captioned comic or short pre-rendered reel only after the text
+  pilot passes comprehension and false-claim thresholds
+
+Exit condition:
+
+- every factual story sentence maps to a typed source and preserves claim state
+- generated media never enters evidence, fingerprint, PDP, or verifier inputs
+- a stale/revoked projection withdraws or marks dependent stories stale
+- producer and consumer testing confirms humor does not hide partial or adverse
+  proof state
 
 ### Step 4: Package Vendor-Neutral Agent Integrations
 
@@ -1362,6 +1539,8 @@ generalizes beyond trade is the customer-owned workshop custody case.
   confidence proves physical truth by itself
 - no continuous worker or family surveillance
 - no generated pixels or narration in forensic evidence
+- no undisclosed synthetic voice, invented real-person dialogue, or generated
+  factual/cultural claim in public presentation
 - no discovery model, product card, booking, or ordinary checkout minting an
   `ExecutionToken`
 - no MCP tool, plugin, skill, or agent-specific adapter maintaining a separate
@@ -1406,6 +1585,10 @@ This scenario expansion is ready to influence implementation only when:
     state and cannot silently invoke action tools
 16. commercial tiers cannot buy favorable ranking, verification, policy,
     quarantine release, or access to unrelated producer data
+17. creative artifacts preserve sentence-level source and claim-state labels,
+    explicit synthetic-media disclosure, consent, and withdrawal behavior
+18. humor, narrative, and rich media remain optional and cannot obscure or
+    replace the deterministic proof experience
 
 ## Related SeedCore Docs
 
