@@ -3,6 +3,12 @@
 This document turns the Owner / Creator Layer from the zero-trust runtime
 diagram into an explicit external integration surface for SeedCore.
 
+Revision note (2026-08-16): the surface now also covers vendor-neutral,
+read-only verified-projection discovery and a media-first producer registration
+draft flow. Discovery remains non-authoritative, and draft extraction requires
+explicit producer or admitted-operator confirmation before governed first
+writes.
+
 The goal is to let external assistants, plugins, skills, and traditional SDK
 clients manage:
 
@@ -140,6 +146,14 @@ Recommended tool families:
 - `seedcore.owner_context.preflight`
 - `seedcore.agent_action.preflight`
 - `seedcore.agent_action.evaluate`
+- `seedcore.discovery.search`
+- `seedcore.discovery.get_projection`
+- `seedcore.discovery.explain_claim_state`
+- `seedcore.producer.draft_registration_from_media`
+
+The strict discovery MVP stops at those three read tools. Dedicated claim,
+comparison, proof-summary, and anchor-resolution tools are deferred until
+measured client usage requires them.
 
 ### Plugin behavior rules
 
@@ -148,6 +162,8 @@ Recommended tool families:
 - never return "allow" as final authority without a runtime response
 - treat preflight as advisory and evaluate as authoritative
 - surface `source_url`, replay references, and trust gaps back to the assistant
+- treat media-to-registration output as an expiring draft that requires an
+  admitted producer or operator confirmation
 
 ### Skills pattern
 
@@ -158,6 +174,10 @@ Skills should compose these tools into higher-level workflows such as:
 - delegation grant/revoke workflows
 - trust-preference tuning
 - action preflight before execution
+- autonomous read-only exploration of verified public projections
+- comparison and explanation of claim states without proposing authority
+- conversational producer onboarding that drafts, explains, and corrects a
+  registration before explicit confirmation
 
 The skill should orchestrate tool calls, but all persistent writes still go
 through SeedCore.
@@ -235,7 +255,94 @@ const decision = await client.agentActions.evaluate({
 - replay-safe request identifiers
 - no local policy engine
 
-## 4. Kafka Ingress Surface
+## 4. Read-Only Verified Projection Discovery Surface
+
+SeedCore should expose a vendor-neutral read plane for Codex, Gemini, and other
+AI agents to autonomously explore public-safe verified projections.
+
+The first expanded scenario contract for this surface is
+[`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md).
+
+The canonical implementation should remain the SeedCore Projection Discovery
+API. MCP tools, assistant plugins, AI skills, and SDK methods are thin clients
+over that same API and projection schema.
+
+Allowed autonomous behavior includes:
+
+- semantic and structured search
+- filtering and pagination
+- fetching current projection and claim state
+- comparing public-safe projections
+- explaining the difference between claimed, registered, verified, review,
+  rejected, quarantined, and presentation-only state
+- composing route or itinerary candidates
+- resolving a public QR/NFC anchor to its safe projection
+
+The discovery plane must not:
+
+- mutate a registration, policy, projection, inventory, reservation, or
+  custody record
+- infer a new verification verdict
+- expose authority-tier telemetry or private location
+- treat semantic rank or agent preference as trust
+- automatically cross from exploration into booking, purchase, release,
+  workshop approval, custody transfer, or quarantine clearance
+
+Any consequential next step must be represented as a separate proposed action
+and enter the existing owner/delegation, `ActionIntent`, PDP,
+`ExecutionToken`, receipt, and replay path.
+
+Recommended SDK module:
+
+- `verifiedDiscovery`
+
+Recommended minimum methods:
+
+- `search(query)`
+- `getProjection(projectionId)`
+- `explainClaimState(projectionId, claim)`
+
+Additional comparison and proof-summary methods remain future candidates, not
+part of the strict client contract.
+
+Discovery results should preserve projection version, `as_of` time, freshness
+or expiry state, policy/profile refs, current verifier disposition,
+presentation-only labels, and a canonical source URL. Cached results are never
+locally authoritative.
+
+Free-form producer descriptions, presentation narratives, captions, URLs, and
+external documents must be treated as untrusted content. They cannot supply
+tool instructions, delegation, policy, or permission to an autonomous agent.
+
+Frontier-agent hosts reduce the need for SeedCore to build a separate itinerary
+or chat UI for each ecosystem. They do not replace the minimum SeedCore-owned
+surfaces:
+
+- accessible producer draft review and confirmation
+- canonical public `/verify/{public_anchor_ref}` proof page
+- authorized operator exception and dispute workflows
+- privacy, consent, retention, support, and correction documentation
+
+The proof page is the fallback source link rendered by discovery clients. It
+must explain exact claim state, profile, freshness, and verifier disposition in
+plain language without collapsing them into a generic badge or score.
+
+The strict discovery API has only:
+
+- `POST /api/v1/discovery/query`
+- `GET /api/v1/discovery/projections/{projection_id}`
+- `GET /api/v1/discovery/anchors/{public_anchor_ref}`
+
+It is stateless and read-only over static fixtures or projections. Semantic
+recommendation, real-time negotiation, agent bidding, and marketplace protocols
+are explicitly deferred.
+
+The canonical `/verify/{public_anchor_ref}` page is safely escaped,
+server-rendered HTML with no required client JavaScript, native app, 3D canvas,
+or map stack. `explain_claim_state` is deterministic and template-backed in the
+MVP.
+
+## 5. Kafka Ingress Surface
 
 Kafka is appropriate for external assistants or workflow engines that need
 asynchronous delegated-intent submission.
@@ -367,6 +474,28 @@ Minimum fields:
 3. SeedCore Kafka ingress forwards the authoritative evaluate call.
 4. Outcome is observed from runtime responses and Kafka outcome topics.
 
+## Flow E: Autonomous read-only discovery
+
+1. External agent receives a user exploration goal.
+2. Agent calls read-only discovery tools and paginates or refines as needed.
+3. SeedCore returns public-safe projections with versions, claim states,
+   freshness, and verifier disposition.
+4. Agent compares, explains, or drafts an itinerary without mutating state.
+5. If the user requests a consequential action, the agent creates a separate
+   proposed action and enters Flow C under explicit principal and delegation
+   scope.
+
+## Flow F: Media-first producer registration draft
+
+1. Producer or assisted operator uploads exactly one image and one audio clip
+   through an approved channel adapter.
+2. SeedCore creates an expiring `SourceRegistrationDraftV0` with source-linked
+   field candidates, missing fields, conflicts, and public-redaction preview.
+3. Producer or admitted operator reviews and corrects a plain-language summary.
+4. Explicit confirmation produces governed `TrackingEvent` first writes.
+5. The registration workflow separately evaluates and emits a
+   `RegistrationDecision`; the drafting agent never emits that decision.
+
 ## Guardrails
 
 - Do not allow plugin-side local overrides of delegation or trust policy.
@@ -375,6 +504,16 @@ Minimum fields:
 - Do not treat Kafka acceptance as policy acceptance.
 - Do not let SDK convenience methods collapse preflight and evaluate into one
   ambiguous call.
+- Do not let discovery tools or skills silently cross into action tools.
+- Do not treat free-form discovered content as instructions or permissions.
+- Do not let a plugin maintain a separate verification truth from the current
+  SeedCore projection.
+- Do not let a media-ingestion agent auto-confirm a registration, invent a
+  missing claim, or label inferred content as producer-declared.
+- Do not infer verified origin from image scenery, audio narration, or device
+  geolocation.
+- Do not let payment or escrow webhooks mint, widen, extend, or override
+  execution authority.
 
 ## Recommended Packaging
 
@@ -383,6 +522,8 @@ For production adoption, package the external Owner / Creator surface as:
 - `SeedCore Authority API`
 - `SeedCore MCP Server` or assistant-specific plugin wrapper
 - `SeedCore SDK` in TypeScript/Python
+- `SeedCore Verified Discovery API` and read-only projection tools
+- accessible producer draft-confirmation and public proof-page adapters
 - optional `SeedCore Kafka Producer Helper` for delegated intent workflows
 
 All of them should target the same authority contracts.
@@ -391,20 +532,44 @@ All of them should target the same authority contracts.
 
 ### Phase 1
 
-- keep existing REST and MCP surfaces as canonical
-- document the Owner / Creator surface as a stable external integration plane
+- keep existing REST and MCP authority surfaces canonical
+- freeze the verified-projection, query, freshness, and public-anchor contracts
+- add `src/seedcore/api/routers/discovery_router.py` and register it through the
+  existing router registry
+- extend `src/seedcore/plugin/runtime_client.py` and
+  `src/seedcore/plugin/mcp_server.py` with thin discovery calls
+- implement exactly three stateless read-only discovery endpoints and three MCP
+  wrappers after contract fixtures are reviewed
+- use structured allowlisted filters and stable ordering; defer semantic
+  recommendation, negotiation, and bidding
+- do not widen `GEMINI_MINIMAL_READ_ONLY_BUNDLE` merely by adding tools to the
+  full plugin surface; supported-host exposure is separately reviewed
 
 ### Phase 2
 
-- publish official TypeScript and Python SDK clients
-- add signing helpers for `submit-signed`
-- add owner-context assembly helpers for client ergonomics
+- add the canonical low-bandwidth public proof page
+- add `SourceRegistrationDraftV0` beside existing source-registration models
+  and implement the draft-only media adapter under `src/seedcore/adapters/`
+- constrain the helper to exactly one image and one audio clip
+- require explicit producer/operator confirmation before governed first writes
+- publish official TypeScript and Python discovery clients
+- keep the proof page safely escaped and server-rendered with no required
+  client JavaScript, 3D renderer, or map stack
 
 ### Phase 3
 
-- add assistant-specific plugin manifests and examples
-- add broker-backed async examples for Kafka delegated intent
+- add signing helpers for `submit-signed`
+- add owner-context assembly helpers for client ergonomics
 - add proof/replay helper methods to SDK responses
+- add broker-backed async examples for Kafka delegated intent
+
+### Phase 4
+
+- publish Codex, Gemini, and vendor-neutral discovery skill examples over the
+  same read-only MCP tools
+- add assistant-specific manifests as thin adapters over the canonical server
+- validate endpoint trust, scopes, prompt-injection isolation, freshness, rate
+  limits, and source-link rendering for each supported host
 
 ## Success Criteria
 
@@ -414,3 +579,11 @@ All of them should target the same authority contracts.
 - preflight remains advisory and evaluate remains authoritative
 - Kafka and direct HTTP flows converge into the same runtime policy path
 - replay and proof references remain available for all high-consequence actions
+- Codex, Gemini, and other agents can autonomously search and explain current
+  public-safe projections without gaining mutation or execution authority
+- discovery clients preserve claim state, projection version, freshness, and
+  presentation-only labels without collapsing them into a provenance score
+- low-tech producers can create and correct a source-linked registration draft
+  without handling schemas or credentials, while confirmation remains explicit
+- consumers can open a canonical human-readable proof page without installing
+  an agent, plugin, or specialist application

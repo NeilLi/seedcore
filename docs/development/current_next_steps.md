@@ -48,6 +48,52 @@ implementation remain research references pending commercial-license review.
 Continuous 4D reconstruction, Journey 4Map, blockchain ownership claims, and
 generated missing pixels are out of scope.
 
+### Adjacent Scenario Reference: Local Producers
+
+[`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md)
+is a non-activating expansion reference for agricultural micro-lots, one-of-one
+artisan crafts, regional workshop custody, and read-only tourist discovery.
+It preserves the rare-shoe application as the current focus and proposes only a
+sequenced reuse test: agricultural source-registration fixture, singular
+artisan transfer, workshop custody case, then discovery projection. None of
+those scenarios enters the implementation roadmap without a separate reviewed
+activation decision.
+
+The discovery projection is intentionally agent-native: Codex, Gemini, and
+other AI agents may use SeedCore MCP tools, plugins, skills, or SDKs to search,
+filter, compare, explain, and compose route candidates autonomously. Those
+clients remain thin wrappers over the same read-only projection API. Booking,
+purchase, release, workshop approval, custody transfer, and quarantine changes
+must enter a separate accountable `ActionIntent` and PDP path.
+
+**Revised scope (2026-08-16):** frontier agents are distribution and
+orchestration clients, not a replacement for all SeedCore-owned UX. The staged
+platform slice retains a media-first `SourceRegistrationDraftV0` flow with
+explicit producer/operator confirmation, a canonical low-bandwidth
+`/verify/{public_anchor_ref}` proof page, and operator exception paths. Printed
+QR is a copyable identifier that opens the projection; stronger physical
+presence requires an enrolled challenge-response anchor where policy demands
+it.
+
+The recommended order remains gated: keep RCT/Shopify-shaped checks green;
+freeze the read-only projection contract; implement the smallest discovery
+router and MCP tools; add accessible draft ingestion and public proof; then
+package vendor-neutral host adapters. Local agriculture, artisan, and workshop
+fixtures remain individually reviewed activations. Free public discovery,
+fixed verification/closure fees, and cooperative hosting are commercial
+hypotheses—not committed pricing, settlement semantics, or favorable-policy
+tiers.
+
+**Strict MVP constraint:** the discovery router is stateless and read-only over
+static projections with exactly three endpoints (`/query`, `/projections/{id}`,
+and `/anchors/{ref}`) and three MCP tools (`search`, `get_projection`, and
+`explain_claim_state`). Producer ingestion accepts exactly one image and one
+audio clip into an expiring draft requiring explicit confirmation. Consumer
+proof is safely escaped server-rendered HTML with no required native app,
+client JavaScript, 3D canvas, or map stack. Payment/escrow webhooks may later
+record a flat verification or closure service charge, but never mint or affect
+execution authority.
+
 ## Zero-Trust RCT Expansion Roadmap
 
 SeedCore is building a trust runtime for AI actions in high-consequence

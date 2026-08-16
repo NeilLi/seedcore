@@ -52,6 +52,20 @@ physical-anchor binding, model outputs, PDP authority, and verifier closure
 separate. It explicitly rejects a parallel Journey 4Map / continuous-4D product
 and excludes generative inpainting from forensic evidence.
 
+An adjacent, non-activating reuse reference is
+[`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md).
+It maps the same source-registration and RCT boundaries to agricultural
+micro-lots, one-of-one artisan crafts, regional workshop custody, and a
+read-only tourist discovery projection exposed through vendor-neutral MCP,
+plugin, AI-skill, and SDK adapters for Codex, Gemini, and other agents. It does
+not replace the rare-shoe focus or commit the roadmap to multiple production
+verticals. The revised plan also retains minimum SeedCore-owned access:
+media-first producer drafting with explicit confirmation and a canonical
+human-readable public proof page. Its strict MVP is three read-only discovery
+endpoints, three MCP wrappers, one-image-plus-one-audio draft extraction, and a
+server-rendered proof page; recommendation engines, native apps, 3D/map clients,
+continuous IoT, and custom settlement are deferred.
+
 That means the active docs should be read through one question:
 
 - does this move the dual-approved, scope-bound, replay-verifiable transfer
@@ -131,7 +145,10 @@ Start here for the active spine:
    second, replayable proof last. Read it with the latest application slice,
    [`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md),
    which defines the visual capture, fingerprint, comparison, replay, and
-   generative-exclusion contract.
+   generative-exclusion contract. The adjacent
+   [`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md)
+   tests reuse across batch, singular-artifact, and custody-bound-work shapes
+   without activating new product verticals.
 6. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
    boundary memo for using AP2 as the upstream agent-payment protocol while
    keeping SeedCore focused on custody, evidence, and replay-valid closure.
