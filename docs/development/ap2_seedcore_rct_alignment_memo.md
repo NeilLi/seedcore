@@ -19,6 +19,12 @@ SeedCore proves the paid-for physical transition was authorized, evidenced,
 and replay-valid.
 ```
 
+For the wider agent-native local ecosystem, see
+[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md).
+That architecture treats AP2 and Agentic Commerce Protocol (ACP) as optional
+upstream adapter profiles. This memo remains the AP2-specific authority and
+custody boundary; neither protocol becomes SeedCore execution authority.
+
 This memo records the current product and architecture judgment so future
 commerce work does not blur payment authorization, custody authorization,
 settlement references, physical proof, and legal ownership.
@@ -212,4 +218,3 @@ payment authorization is not custody authority;
 custody authority is not physical proof;
 physical proof is only accepted when replay verification holds.
 ```
-

@@ -2,8 +2,8 @@
 
 ## Status: Architectural Reference with Execution Update
 
-- **Version:** 1.2.0
-- **Last updated:** 2026-06-20
+- **Version:** 1.3.0
+- **Last updated:** 2026-08-17
 - **Context:** This document represents the "North Star" of the SeedCore architecture: a zero-trust autonomous environment where physical actions are converted into replay-verifiable digital truth.
 
 ---
@@ -261,6 +261,38 @@ North-star implication:
 
 - every machine-verifiable truth should also have a human-legible, read-only
 proof path
+
+### 5.3 Agent-Native Local Ecosystems
+
+The same trust slice now has a sovereign bootstrap direction for an agent-native
+local ecosystem. SeedCore first operates a city foundation for land/sites,
+built assets, roads/paths, utilities, facilities, environment, construction,
+incidents, and temporal twin state; above it sit the subject/service registry,
+public-safe projections, discovery, producer tooling, ordinary service ledger,
+and deterministic provider simulators. Frontier agents compose discovery
+and route candidates over those contracts. Live partner systems replace the
+simulators later, one boundary at a time.
+
+The city or regional platform is a distribution and federation layer around
+SeedCore, not a larger PDP:
+
+- relevance, availability, commercial acceptance, policy admission, physical
+  execution, and verifier closure remain distinct states;
+- public discovery and presentation clients stay read-only;
+- a consequential local action enters the same accountable `ActionIntent` ->
+  PDP -> scoped `ExecutionToken` -> evidence -> verifier path;
+- spatial indexes, commerce protocols, agent registries, and immersive media
+  remain replaceable adapters and never become authority sources.
+
+The full architecture and evidence-gated adoption plan is
+[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md).
+The owner-operated starting topology and delivery contract is
+[`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md).
+The city-domain, construction, and infrastructure contract is
+[`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md).
+This does not change the current rare-shoe RCT authority priority or activate a
+generic marketplace, real payment rail, licensed transport operation, or
+city-scale spatial platform.
 
 ---
 

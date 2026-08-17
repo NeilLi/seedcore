@@ -136,6 +136,9 @@ Documentation = "https://github.com/NeilLi/seedcore#readme"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+seedcore = ["fixtures/*.json"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]

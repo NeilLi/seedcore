@@ -1,0 +1,330 @@
+{
+  "contract_version": "seedcore.reference_district.v0",
+  "district_ref": "fixture:district-01",
+  "runtime_profile": "bootstrap_sim",
+  "source_posture": "FIXTURE",
+  "as_of": "2026-08-17T00:00:00Z",
+  "features": {
+    "parcels": [
+      "parcel:01:workshop",
+      "parcel:02:visitor",
+      "parcel:03:farm",
+      "parcel:04:depot",
+      "parcel:05:private"
+    ],
+    "buildings": [
+      "building:01:north_workshop",
+      "building:02:visitor_center",
+      "building:03:storage_depot"
+    ],
+    "roads": [
+      "road:01:main_st",
+      "road:02:depot_access"
+    ],
+    "utilities": [
+      "water_segment:01:main_feed"
+    ],
+    "workshops": [
+      "subject:artisan:som_wood"
+    ]
+  },
+  "feature_records": [
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:parcel:01:workshop",
+      "local_ref": "parcel:01:workshop",
+      "feature_kind": "parcel",
+      "name": "Workshop Parcel",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "NOT_APPLICABLE",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, 0.0],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "properties": {"use": "commercial_fixture", "boundary_posture": "approximate_fixture"}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:parcel:02:visitor",
+      "local_ref": "parcel:02:visitor",
+      "feature_kind": "parcel",
+      "name": "Visitor Parcel",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "NOT_APPLICABLE",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.001, 0.0],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "properties": {"use": "public_access_fixture", "boundary_posture": "approximate_fixture"}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:parcel:03:farm",
+      "local_ref": "parcel:03:farm",
+      "feature_kind": "parcel",
+      "name": "Agricultural Micro-Lot",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "DECLARED",
+      "operational_state": "NOT_APPLICABLE",
+      "trust_state": "DECLARED",
+      "source_posture": "OWNER_DECLARED",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, -0.001],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "properties": {"use": "agricultural_fixture", "claim_state": "declared_not_verified"}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:parcel:04:depot",
+      "local_ref": "parcel:04:depot",
+      "feature_kind": "parcel",
+      "name": "Controlled Depot Parcel",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "OPERATIONAL",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "OPERATOR",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, 0.001],
+        "crs": "EPSG:4326",
+        "precision_class": "fixture_exact",
+        "source_posture": "FIXTURE",
+        "visibility": "PROTECTED_INFRASTRUCTURE"
+      },
+      "properties": {"use": "controlled_access_fixture", "public_geometry": false}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:parcel:05:private",
+      "local_ref": "parcel:05:private",
+      "feature_kind": "parcel",
+      "name": "Adjacent Private Parcel",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "NOT_OBSERVED",
+      "operational_state": "NOT_APPLICABLE",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "OPERATOR",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.002, 0.001],
+        "crs": "EPSG:4326",
+        "precision_class": "fixture_exact",
+        "source_posture": "FIXTURE",
+        "visibility": "PROTECTED_INFRASTRUCTURE"
+      },
+      "properties": {"use": "wrong_zone_negative_fixture", "public_geometry": false}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:building:01:north_workshop",
+      "local_ref": "building:01:north_workshop",
+      "feature_kind": "building",
+      "name": "Som Artisan Workshop",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "AVAILABLE",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, 0.0001],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "public_anchor_ref": "fixture:district-01:anchor:workshop",
+      "properties": {"facility_role": "workshop", "accepts_governed_custody": true}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:building:02:visitor_center",
+      "local_ref": "building:02:visitor_center",
+      "feature_kind": "building",
+      "name": "Visitor Center",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "AVAILABLE",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.001, 0.0001],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "public_anchor_ref": "fixture:district-01:anchor:visitor-center",
+      "properties": {"facility_role": "visitor_center", "public_qr_lookup": true}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:building:03:storage_depot",
+      "local_ref": "building:03:storage_depot",
+      "feature_kind": "building",
+      "name": "Storage Depot",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "OPERATIONAL",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "OPERATOR",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, 0.0011],
+        "crs": "EPSG:4326",
+        "precision_class": "fixture_exact",
+        "source_posture": "FIXTURE",
+        "visibility": "PROTECTED_INFRASTRUCTURE"
+      },
+      "properties": {"facility_role": "controlled_storage", "public_geometry": false}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:road:01:main_st",
+      "local_ref": "road:01:main_st",
+      "feature_kind": "road",
+      "name": "Main Workshop Path",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "NOT_APPLICABLE",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "AVAILABLE",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0005, 0.0],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "properties": {"route_role": "workshop_to_visitor", "direction": "bidirectional"}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:road:02:depot_access",
+      "local_ref": "road:02:depot_access",
+      "feature_kind": "road",
+      "name": "Depot Access Path",
+      "lifecycle_state": "UNDER_MAINTENANCE",
+      "administrative_state": "NOT_APPLICABLE",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "CLOSED",
+      "trust_state": "FIXTURE",
+      "source_posture": "FIXTURE",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.001, 0.001],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "properties": {"incident_ref": "fixture:district-01:incident:road-02-repair", "closure_reason": "fixture_repair"}
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:water_segment:01:main_feed",
+      "local_ref": "water_segment:01:main_feed",
+      "feature_kind": "water_segment",
+      "name": "Workshop Main Water Feed",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "OBSERVED_PRESENT",
+      "operational_state": "OPERATIONAL",
+      "trust_state": "FIXTURE",
+      "source_posture": "SIMULATED_PROVIDER",
+      "visibility": "PROTECTED_INFRASTRUCTURE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, 0.0006],
+        "crs": "EPSG:4326",
+        "precision_class": "fixture_exact",
+        "source_posture": "SIMULATED_PROVIDER",
+        "visibility": "PROTECTED_INFRASTRUCTURE"
+      },
+      "properties": {
+        "isolation_point_ref": "sim:utility:water:valve:01",
+        "zone_ref": "fixture:district-01:zone:water-main",
+        "simulation_only": true
+      }
+    },
+    {
+      "contract_version": "seedcore.city_feature.v0",
+      "feature_ref": "fixture:district-01:subject:artisan:som_wood",
+      "local_ref": "subject:artisan:som_wood",
+      "feature_kind": "workshop",
+      "name": "Som Woodcraft Service",
+      "lifecycle_state": "OPERATIONAL",
+      "administrative_state": "FIXTURE_ONLY",
+      "physical_state": "DECLARED",
+      "operational_state": "AVAILABLE",
+      "trust_state": "DECLARED",
+      "source_posture": "OWNER_DECLARED",
+      "visibility": "PUBLIC_COARSE",
+      "geometry": {
+        "geometry_type": "Point",
+        "coordinates": [0.0, 0.0001],
+        "crs": "EPSG:4326",
+        "precision_class": "public_coarse",
+        "source_posture": "FIXTURE",
+        "visibility": "PUBLIC_COARSE"
+      },
+      "public_anchor_ref": "fixture:district-01:anchor:som-wood",
+      "properties": {"service_kind": "artisan_woodcraft", "profile_is_authority": false}
+    }
+  ],
+  "relationships": [
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:b01-p01", "relationship_kind": "LOCATED_IN", "from_feature_ref": "fixture:district-01:building:01:north_workshop", "to_feature_ref": "fixture:district-01:parcel:01:workshop", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:b02-p02", "relationship_kind": "LOCATED_IN", "from_feature_ref": "fixture:district-01:building:02:visitor_center", "to_feature_ref": "fixture:district-01:parcel:02:visitor", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:b03-p04", "relationship_kind": "LOCATED_IN", "from_feature_ref": "fixture:district-01:building:03:storage_depot", "to_feature_ref": "fixture:district-01:parcel:04:depot", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:w01-b01", "relationship_kind": "LOCATED_IN", "from_feature_ref": "fixture:district-01:subject:artisan:som_wood", "to_feature_ref": "fixture:district-01:building:01:north_workshop", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:b01-w01", "relationship_kind": "HOSTS", "from_feature_ref": "fixture:district-01:building:01:north_workshop", "to_feature_ref": "fixture:district-01:subject:artisan:som_wood", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:r01-p01", "relationship_kind": "CONNECTS", "from_feature_ref": "fixture:district-01:road:01:main_st", "to_feature_ref": "fixture:district-01:parcel:01:workshop", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:r01-p02", "relationship_kind": "CONNECTS", "from_feature_ref": "fixture:district-01:road:01:main_st", "to_feature_ref": "fixture:district-01:parcel:02:visitor", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:r02-p04", "relationship_kind": "CONNECTS", "from_feature_ref": "fixture:district-01:road:02:depot_access", "to_feature_ref": "fixture:district-01:parcel:04:depot", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:r02-p05", "relationship_kind": "CONNECTS", "from_feature_ref": "fixture:district-01:road:02:depot_access", "to_feature_ref": "fixture:district-01:parcel:05:private", "source_posture": "FIXTURE"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:water-b01", "relationship_kind": "SERVES", "from_feature_ref": "fixture:district-01:water_segment:01:main_feed", "to_feature_ref": "fixture:district-01:building:01:north_workshop", "source_posture": "SIMULATED_PROVIDER"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:water-b02", "relationship_kind": "SERVES", "from_feature_ref": "fixture:district-01:water_segment:01:main_feed", "to_feature_ref": "fixture:district-01:building:02:visitor_center", "source_posture": "SIMULATED_PROVIDER"},
+    {"contract_version": "seedcore.city_relationship.v0", "relationship_ref": "fixture:district-01:relationship:w01-r01", "relationship_kind": "ACCESS_VIA", "from_feature_ref": "fixture:district-01:subject:artisan:som_wood", "to_feature_ref": "fixture:district-01:road:01:main_st", "source_posture": "FIXTURE"}
+  ]
+}

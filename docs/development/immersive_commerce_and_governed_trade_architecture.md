@@ -2,7 +2,7 @@
 
 Date: 2026-08-05  
 Status: Product-portfolio architecture and delivery plan  
-Related tracks: [`tourist_design_studio_delivery_schedule.md`](tourist_design_studio_delivery_schedule.md), [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md), and [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
+Related tracks: [`tourist_design_studio_delivery_schedule.md`](tourist_design_studio_delivery_schedule.md), [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md), [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), and [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
 
 ## 1. Decision
 
@@ -20,6 +20,11 @@ tracks:
 They may share brand, visual language, non-sensitive product knowledge, and a
 long-term partner narrative. They do **not** share an authorization hot path,
 customer data store, checkout system, or deployment boundary by default.
+
+The agent-native digital-city architecture uses this same separation at a
+larger ecosystem scale. Maps, discovery, merchant service profiles, commerce,
+logistics, and immersive media remain surrounding planes; only an explicitly
+classified governed action enters the SeedCore trust path.
 
 ```text
 Immersive customer experience             Governed trade execution

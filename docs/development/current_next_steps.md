@@ -13,6 +13,86 @@ The goal is not to describe a perfect future state all at once. The goal is to
 define the next 12-18 months in a way that is ambitious, believable, and
 product-relevant.
 
+## Strategic Direction Review (2026-08-17, Agent-Native Digital City)
+
+**Accepted as an active sovereign-bootstrap direction; the bounded in-memory
+fixture and read-only REST discovery slice are implemented.** The ecosystem
+architecture is documented in
+[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md),
+and the solo-first implementation contract is
+[`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md).
+The underlying city-domain and construction contract is
+[`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md).
+
+The useful direction is to make SeedCore the trust slice of an agent-native
+local ecosystem: frontier agents and ordinary web clients can discover
+public-safe producer projections; producers can create corrected, confirmed
+registration drafts through accessible media intake; and only named
+high-consequence actions cross into the existing `ActionIntent` -> PDP ->
+`ExecutionToken` -> evidence -> verifier path.
+
+The first topology is now owner-operated rather than partner-dependent.
+SeedCore builds a modular city kernel over the existing host stack. The lower
+foundation represents spatial identity, land/sites, buildings/spaces,
+roads/paths, utility topology, facilities, environment, observations,
+construction projects, work packages, incidents, and temporal twin state. The
+service layer adds producer/service registry, projection/discovery, ordinary
+availability/reservations, producer confirmation, public proof, and
+deterministic provider simulators. Live sources replace fixtures and simulators
+later through versioned adapters.
+
+The review explicitly rejects treating the full city platform as the PDP. It
+separates six states that must remain legible and independently sourced:
+
+```text
+relevant -> available -> commercially accepted -> policy-admitted
+-> physically attempted -> verifier-closed
+```
+
+It also replaces "instant autonomous merchant agent from a voice note" with an
+expiring draft, explicit producer correction/confirmation, a versioned service
+profile, and attenuated delegation. H3, MapLibre, ACP, AP2, A2A, GS1 Digital
+Link, Godot, 3D, and ride/logistics integrations remain optional technology or
+adapter candidates, not authority sources or committed dependencies.
+
+The immediate city order is now active at the documentation/implementation-plan
+level. It deliberately prevents digital-twin feature creep:
+
+1. **C1a — implemented and focused-test verified:** `CityFeatureV0`,
+   `GeometryEnvelopeV0`, the five state axes, a three-table
+   storage contract, and one packaged JSON fixture containing five parcels,
+   three buildings, two road/path segments, one water line, and one workshop.
+   The current implementation is in-memory; the three-table migration is C1b;
+2. **Implemented:** enforce `fixture:district-01:*` / `sim:*` ids and
+   `SEEDCORE_CITY_RUNTIME_PROFILE=bootstrap_sim` at startup, typed PDP context
+   boundaries for the fixture read API. PDP-context and verifier enforcement
+   remain part of C3; simulated closure will be `SIMULATION_ONLY`;
+3. **C2 REST — implemented and focused-test verified:** strict discovery query,
+   projection, and anchor endpoints with public/protected redaction and
+   pure-Python Haversine radius filtering. Producer projections, proof page,
+   confirmed intake, service lifecycle, and MCP wrappers remain pending;
+4. add one ordinary reservation flow and deterministic provider simulators;
+5. **C3 — pilot execution:** map one simulated water/facility isolation and one
+   trade/custody action into the existing Agent Action Gateway, audit, replay,
+   and verifier spine;
+6. add PostGIS, H3, OGC, IFC/BIM, map, or larger topology components only after
+   a measured requirement and after C1-C3 pass;
+7. replace fixtures and simulators with standards-based/live adapters one at a
+   time.
+
+The city schema does not duplicate or add city columns to `tasks`,
+`source_registrations`, `tracking_events`, or `governed_execution_audit`.
+Tasks use `domain="city_foundation"`; provenance and governed audit remain in
+their existing canonical stores; foundation tables are not ambient PDP/PKG
+cache inputs.
+
+Rare-shoe RCT remains the must-win authority-bearing application while the city
+kernel is built. The foundation track does not claim legal cadastre, permits,
+engineering certification, utility control, emergency dispatch, or a real
+construction safety case. No global marketplace, real escrow/payment rail,
+licensed transport service, super-app integration, generated-media pipeline,
+or new production vertical is implied by the bootstrap.
+
 ## Latest Application Focus (2026-08-14, Rare-Shoe RCT Visual Evidence Adapter v0)
 
 **Accepted as the latest RCT application plan; implementation remains staged.**

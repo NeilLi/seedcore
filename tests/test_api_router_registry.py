@@ -10,6 +10,7 @@ def test_active_router_specs_preserve_mount_order():
         ("Tasks", "tasks_router"),
         ("Replay", "replay_router"),
         ("Agent Actions", "agent_actions_router"),
+        ("Discovery", "discovery_router"),
         ("Source Registrations", "source_registrations_router"),
         ("Tracking Events", "tracking_events_router"),
         ("Identity", "identity_router"),

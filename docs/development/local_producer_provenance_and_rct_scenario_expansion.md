@@ -32,6 +32,15 @@ wedge. These scenarios are reuse references and staged pilot candidates. They
 must not displace the rare-shoe contract, verification, hardware-anchor, and
 replay work already in progress.
 
+The ecosystem synthesis is
+[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md).
+The solo-first starting topology is
+[`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md).
+SeedCore now intends to build the initial modular city kernel and deterministic
+provider simulators directly. This document remains the owner of the strict
+local-producer contracts; it does not itself expand into a global city map,
+marketplace, real payment rail, licensed logistics network, or spatial platform.
+
 ## Product Positioning
 
 The reusable product narrative is:
@@ -1593,6 +1602,8 @@ This scenario expansion is ready to influence implementation only when:
 ## Related SeedCore Docs
 
 - [`README.md`](README.md)
+- [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
+- [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
 - [`current_next_steps.md`](current_next_steps.md)
 - [`source_registration_architecture.md`](source_registration_architecture.md)
 - [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)

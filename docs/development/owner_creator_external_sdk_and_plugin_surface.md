@@ -9,6 +9,18 @@ draft flow. Discovery remains non-authoritative, and draft extraction requires
 explicit producer or admitted-operator confirmation before governed first
 writes.
 
+The broader ecosystem placement is defined in
+[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md).
+That architecture keeps this API/MCP/SDK surface canonical while placing maps,
+commerce, logistics, agent registries, and spatial experiences in replaceable
+surrounding planes.
+
+The first implementation is owner-operated rather than partner-dependent. See
+[`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
+for the modular city kernel, closed-world fixtures, deterministic provider
+simulators, and staged replacement with live adapters. Owning the bootstrap
+stack does not permit plugin or SDK clients to bypass runtime authority.
+
 The goal is to let external assistants, plugins, skills, and traditional SDK
 clients manage:
 

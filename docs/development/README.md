@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-08-14
+Date: 2026-08-17
 Status: Canonical entrypoint for `docs/development/`
 
 This page is the "read this first" map for the development docs. It organizes
@@ -37,6 +37,22 @@ Canonical north-star references:
 - [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
   - canonical explanation of why SeedCore is a trust runtime rather than a
     traditional cybersecurity product
+- [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
+  - strategic ecosystem architecture for agent-native local discovery,
+    producer/service agents, commerce/logistics adapters, spatial experiences,
+    and governed physical action; it keeps SeedCore as the trust slice and does
+    not activate a global city marketplace
+- [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
+  - active solo-first implementation direction for building the initial city
+    kernel directly as a modular monolith with a closed-world dataset and
+    deterministic provider simulators; the in-memory reference fixture and
+    read-only REST discovery slice are implemented
+- [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md)
+  - active lower-layer city-domain contract for spatial identity, land, built
+    assets, roads, utility topology, facilities, environment, construction,
+    operations, observations, and temporal twin settlement; implementation
+    starts with one lightweight three-table, five-parcel fixture rather than a
+    GIS/BIM platform
 
 ## 2. Current Program Center (Commerce Fulfillment Wedge)
 
@@ -73,6 +89,30 @@ citations, consent, synthetic-media disclosure, and withdrawal on source
 staleness; and starts with text plus existing still/audio only. Generated reels,
 voice cloning, live personas, AR, and 3D remain post-MVP presentation research
 and never become evidence or execution authority.
+
+The higher-level platform synthesis is
+[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md).
+It accepts agent-native city distribution while correcting the original
+monolithic-PDP shape: discovery, matching, merchant service profiles, payment,
+logistics, maps, and 3D remain explicit surrounding planes. The SeedCore PDP
+stays narrow, synchronous, deterministic, and limited to named governed action
+classes.
+
+The owner-operated starting topology is
+[`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md).
+It activates a solo-first implementation direction: build the subject/service
+registry, projections, discovery, ordinary reservation state, producer/proof
+surfaces, and deterministic provider simulators on top of a real city-domain
+foundation. That foundation is defined in
+[`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md):
+land/sites, built assets, roads/paths, utility networks, public facilities,
+environment, projects, work packages, incidents, observations, and temporal
+twin state. The first code handoff is intentionally smaller: three foundation
+tables, five parcels, three buildings, two road/path segments, one water line,
+one workshop, and no PostGIS/OGC/BIM prerequisite. It does not activate a
+global marketplace, legal cadastre, permit authority, utility control center,
+real payment/escrow service, licensed transport operation, or new production
+vertical.
 
 That means the active docs should be read through one question:
 
@@ -292,6 +332,22 @@ Start here for the active spine:
    sandboxes/testbeds, agent-network science, identity/reputation/commitment
    infrastructure, and population oversight gaps without reframing SeedCore as
    a generic multi-agent platform or marketplace.
+33. [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md) -
+   architecture and adoption-gate synthesis for a future agent-native local
+   ecosystem. It separates relevance, availability, commerce, claim state,
+   execution authority, and verifier closure; reuses the strict local-producer
+   projection and ingestion contracts; and keeps city-scale mapping, payment,
+   logistics, agent registries, and immersive media outside the PDP.
+34. [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md) -
+   solo-first implementation contract for a SeedCore-owned modular city kernel,
+   closed-world reference dataset, provider simulators, candidate code/data
+   boundaries, delivery slices, operations, verification, and bootstrap
+   acceptance criteria.
+35. [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md) -
+   city-foundation domain and construction contract for feature identity,
+   spatial/temporal state, land, built assets, road and utility topology,
+   facilities, observations, projects, work packages, incidents, governed
+   infrastructure transitions, and a solo-operable reference district.
 
 ### Bounded Tourist Design Studio incubation track
 
@@ -350,6 +406,7 @@ This table is the shortest answer to "what stage are we in?"
 | 14. Optional sandbox substrates | Evaluate stronger isolation providers for untrusted code, eval fan-out, and self-healing rehearsal while preserving PDP/token/verifier authority | CubeSandbox integration sketch drafted as a pilot-only provider boundary; not a core hot-path dependency | [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md), [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) |
 | 15. Multi-agent safety research alignment | Map funded research directions to SeedCore's RCT testbed, infrastructure, network metrics, and population oversight gaps | Strategy memo drafted; implementation remains future work and must preserve PDP/token/evidence/replay/verifier boundaries | [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md), [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) |
 | 16. Tourist Journey AI+VR experience | Build toward an agent-readable, Godot-based tourist and kids/family entertainment journey without weakening the RCT boundary | Initial product/technical plan drafted; first journey slice requires hard headset/device, content, and supervision gates | [`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md), [`immersive_commerce_and_governed_trade_architecture.md`](immersive_commerce_and_governed_trade_architecture.md) |
+| 17. Agent-native digital city bootstrap | Construct a founder-operated city foundation and service kernel with land/built/network/facility/project twin state, public-safe projections, producer onboarding, agent distribution, ordinary coordination, deterministic provider simulators, and governed infrastructure plus trade/custody actions | Active implementation direction. The strict in-memory 5-3-2-1-1 fixture, public redaction, runtime-profile gate, Haversine discovery, and three REST reads are implemented and focused-test verified; persistence, MCP, service flows, and governed city actions remain pending. This is not municipal/utility authority, and rare-shoe RCT remains the authority-bearing product center | [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md), [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md), [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md), [`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md) |
 
 ## 4. What Is Done
 
@@ -428,7 +485,7 @@ Primary proof docs:
 
 ## 5. Current Status
 
-As of **2026-06-29**, the project is in **Q2 operational closure -> Q3 bounded
+As of **2026-08-17**, the project is in **Q2 operational closure -> Q3 bounded
 agent integration**, still on one wedge:
 
 - The **June stack triage is now applied**: staged authz-graph rollout,
@@ -486,6 +543,13 @@ agent integration**, still on one wedge:
   become active, and advisory outputs can expose false-safe signals for review
   but cannot alter PDP decisions, mint tokens, update evidence, or clear
   quarantine.
+- The **agent-native digital city** direction now has a sovereign bootstrap
+  implementation contract. SeedCore initially owns the modular city foundation,
+  service kernel, and deterministic provider simulators, then replaces them
+  with live adapters one boundary at a time. Design, observed, operational,
+  official/external, trust, relevance, availability, payment, policy admission,
+  physical execution, and verifier closure remain distinct even when one
+  founder operates every bootstrap module.
 
 Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
 
@@ -631,6 +695,16 @@ Primary planning docs:
 - [`language_evolution_map.md`](language_evolution_map.md)
 - [`rust_workspace_proposal.md`](rust_workspace_proposal.md)
 - [`persistent_twin_service_track.md`](persistent_twin_service_track.md)
+- [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
+  — long-range city-ecosystem synthesis and promotion gates; surrounding
+  discovery, commerce, logistics, maps, and spatial media remain replaceable
+  adapters around the SeedCore trust slice
+- [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
+  — active founder-operated starting topology, modular-monolith boundaries,
+  closed-world fixtures, simulators, delivery slices, and definition of done
+- [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md)
+  — foundation feature model, construction/maintenance lifecycle, protected
+  infrastructure data posture, reference district, and twin-settlement gates
 
 ### Sidecar or lower-priority research tracks
 
@@ -693,6 +767,15 @@ there is a strong reason. Prefer this ownership split:
   kernels, gated by ADR 0011
 - `north_star_autonomous_trade_environment.md` = final ambition and long-range
   architecture reference
+- `agent_native_digital_city_platform.md` = strategic city-ecosystem synthesis,
+  plane/authority taxonomy, and evidence-gated adoption conditions; it does not
+  own live execution order or detailed local-producer contracts
+- `sovereign_digital_city_bootstrap_plan.md` = solo-first city implementation
+  topology, module/data boundaries, simulator contracts, delivery slices,
+  local operations, and bootstrap acceptance criteria
+- `sovereign_city_foundations_and_infrastructure.md` = city-foundation domain,
+  construction and maintenance lifecycle, network topology, temporal twin,
+  infrastructure action, and foundation acceptance contract
 - `local_kafka_streams_schedule.md` = local Kafka transport rollout (intent,
   telemetry, policy outcomes) aligned to the north-star cluster table
 - `tourist_design_studio_delivery_schedule.md` = bounded one-venue Tourist

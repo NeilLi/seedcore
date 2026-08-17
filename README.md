@@ -48,6 +48,7 @@ Important boundaries:
 - Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff in that topology still depends on capturing runtime audit rows there.
 - The rare-shoe RCT dynamic NFC simulation lane is implemented and workspace-verified: deterministic fixture evidence covers happy path, replay / clone, stale scan, wrong asset, tamper, and incomplete payload cases without making mock NFC an authority source.
 - The first immutable policy-anchor slice is implemented: AI-origin authz graph inputs fail closed unless accompanied by a co-signed promotion receipt bound to the exact graph version and snapshot hash. The current slice validates receipt structure and graph binding; full KMS/key-registry signature verification remains a follow-on hardening step.
+- The agent-native digital-city direction now has an active sovereign-bootstrap plan and its first bounded code slice: a packaged five-parcel/three-building fixture, strict feature/geometry/relationship models, public/protected redaction, and read-only discovery using pure-Python Haversine filtering under `bootstrap_sim`. Persistence, MCP, and governed city actions remain pending. Larger land, built-asset, road, utility, facility, environment, project, incident, and temporal-twin capabilities are evidence-gated extensions—not a GIS/BIM program. This is not an activated municipality, utility-control platform, or global marketplace; the rare-shoe RCT workflow remains the must-win authority-bearing application.
 
 Read the current execution docs:
 
@@ -56,6 +57,13 @@ Read the current execution docs:
 - [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
 - [Kube topology validation Q2 signoff](docs/development/kube_topology_validation_q2_signoff.md)
 - [Rare-shoe RCT demo spec](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
+
+Long-range ecosystem references:
+
+- [Agent-native digital city platform architecture](docs/development/agent_native_digital_city_platform.md)
+- [Sovereign digital city bootstrap plan](docs/development/sovereign_digital_city_bootstrap_plan.md)
+- [Sovereign city foundations and infrastructure](docs/development/sovereign_city_foundations_and_infrastructure.md)
+- [Local producer provenance and RCT scenario expansion](docs/development/local_producer_provenance_and_rct_scenario_expansion.md)
 
 ## Trust Runtime, Not Traditional Cybersecurity
 
