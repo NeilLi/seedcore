@@ -1,7 +1,7 @@
 # Sovereign Digital City Bootstrap Plan
 
-Date: 2026-08-17
-Status: Active implementation direction; in-memory reference fixture and read-only REST discovery implemented, persistence/MCP/governed action pending
+Date: 2026-08-20
+Status: Reference fixture, C1b persistence with isolated PostgreSQL schema-restore/reseed verification, and read-only REST discovery implemented; MCP and governed action pending
 Owner posture: SeedCore constructs and operates the initial digital-city infrastructure directly
 
 ## 1. Decision
@@ -45,11 +45,18 @@ Implemented bootstrap checkpoint:
 - deterministic public/protected fixture loading and lookup;
 - registered read-only discovery query, projection, and anchor endpoints;
 - pure-Python Haversine radius filtering and distance ordering;
-- fail-closed `bootstrap_sim` request gating and focused tests.
+- fail-closed `bootstrap_sim` request gating and focused tests;
+- a three-table `seedcore_city_foundation` migration, explicit PostgreSQL
+  repository, transactional fixture seeding, strict hydration parity, and
+  fixture-or-Postgres storage selection with no configured-path fallback; and
+- isolated PostgreSQL 17 verification of clean migration, scoped read/write
+  grants, seed/reload, schema-only dump/restore followed by reseed/reload
+  parity, and unchanged discovery responses.
 
-Not yet implemented: PostgreSQL foundation persistence, producer projection
-composition, proof-page rendering, MCP wrappers, reservations, simulated
-infrastructure execution, or C3 governed-transition proof.
+Not yet implemented or promoted: producer projection composition, proof-page
+rendering, MCP wrappers, reservations, simulated infrastructure execution, or
+C3 governed-transition proof. PostgreSQL selection also remains explicit and
+review-gated rather than the bootstrap default.
 
 ## 2. What Sovereign Means
 

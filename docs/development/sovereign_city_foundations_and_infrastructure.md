@@ -1,7 +1,7 @@
 # Sovereign City Foundations And Infrastructure
 
-Date: 2026-08-17
-Status: Active foundation-domain contract; in-memory 5-3-2-1-1 fixture and read-only REST discovery implemented, persistence/MCP/governed action pending
+Date: 2026-08-20
+Status: C1a fixture, C1b persistence, isolated PostgreSQL schema-restore/reseed round-trip, and read-only REST discovery verified; MCP and governed action pending
 Owner posture: SeedCore constructs the first digital representation and operating substrate directly
 
 ## 1. Decision
@@ -866,11 +866,36 @@ Implemented:
 the envelope only after the persistence gate. No PostGIS, H3, OGC, IFC, BIM,
 tile, graph, telemetry platform, or database dependency is introduced in C1a.
 
-### Change C1b: Foundation persistence — pending
+### Change C1b: Foundation persistence — implemented and locally verified
 
-Add the three-table `seedcore_city_foundation` migration only after the
-in-memory contract is reviewed. The migration, grants, backup/restore, and
-projection-rebuild tests remain required before database-backed discovery.
+Implemented:
+
+- `deploy/migrations/137_city_foundation.sql` creates exactly
+  `city_features`, `city_feature_geometries`, and
+  `city_feature_relationships` under `seedcore_city_foundation`, with fixture
+  namespace/runtime checks, current-geometry uniqueness, relationship foreign
+  keys, indexes, and separate read/write roles;
+- `src/seedcore/services/city_foundation_repository.py` provides explicit,
+  transactional replace/read behavior and strict `ReferenceDistrictV0`
+  hydration;
+- `SEEDCORE_CITY_FOUNDATION_STORAGE=fixture|postgres` selects the storage
+  boundary. Unknown values fail closed, and an explicitly selected PostgreSQL
+  path never falls back to the packaged fixture;
+- `persist_reference_district()` seeds only the reviewed fixture and requires
+  full model parity after reload; and
+- `scripts/host/verify_city_foundation_persistence.py` performs an explicit
+  PostgreSQL seed/reload/public-projection verification under
+  `SEEDCORE_CITY_RUNTIME_PROFILE=bootstrap_sim`; mutation requires the explicit
+  `--seed` flag, while the default mode is read-only parity verification.
+
+Focused migration-shape, serialization/hydration parity, explicit seeding,
+timezone normalization, and storage-profile failure tests are implemented in
+`tests/test_city_foundation_persistence.py`. On 2026-08-20, an isolated local
+PostgreSQL 17 run verified clean migration, read/write grants, transactional
+seed/reload, schema-only dump/restore followed by reseed/reload parity, and the
+unchanged query/projection/anchor API with eight public rows. PostgreSQL remains
+an explicit opt-in storage profile until this change receives human review;
+there is no automatic migration, seeding, or fixture fallback.
 
 ### Change C2: Read-only discovery and MCP parity — REST implemented, MCP pending
 
@@ -911,9 +936,10 @@ produce normal policy, token/non-allow, attempt, evidence, replay, verifier,
 and quarantine artifacts, with the infrastructure result additionally marked
 `SIMULATION_ONLY`.
 
-[`current_next_steps.md`](current_next_steps.md) records the C1-C3 order. C1a
-and the REST portion of C2 are implemented and focused-test verified. C1b,
-MCP parity, and C3 still require implementation and review.
+[`current_next_steps.md`](current_next_steps.md) records the C1-C3 order. C1a,
+C1b, and the REST portion of C2 are implemented and focused-test plus isolated
+PostgreSQL verified. C1b promotion, MCP parity, and C3 still require review and
+closure.
 
 ## 12. APIs And Agent Surfaces
 

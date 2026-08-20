@@ -1,7 +1,7 @@
 # Rare-Shoe RCT Visual Evidence Adapter v0
 
-Date: 2026-08-14
-Status: Latest application plan; contract and pilot design, not yet a production implementation
+Date: 2026-08-20
+Status: V0 contracts and deterministic V1 replay fixtures implemented; capture pipeline, benchmark, and gateway/verifier integration pending
 
 ## Purpose
 
@@ -187,26 +187,31 @@ SeedCore issues capture_session_id + one-time nonce + expected asset/workflow
   -> raw media is sealed before derived processing begins
 ```
 
-The binding should include at least:
+The implemented `seedcore.visual_capture_binding.v0` payload contains exactly:
 
 ```text
-capture_binding_hash = sha256(
-  contract_version
-  + capture_session_id
-  + asset_id
-  + workflow_join_key
-  + capture_phase
-  + server_nonce_hash
-  + raw_capture_manifest_hash
-  + nfc_proof_ref_or_null
-  + authorized_device_ref
-  + observed_at
-)
+binding_version
+capture_session_id
+capture_phase
+asset_id
+workflow_join_key
+authorized_device_ref
+observed_at
+server_nonce_hash
+client_data_hash
+raw_manifest_sha256
+physical_anchor_required
+nfc_proof_ref
 ```
 
-Canonical serialization and versioning are required. A client-supplied hash is
-not trusted until the server reconstructs and verifies it from the admitted
-fields.
+The binding hash is SHA-256 over UTF-8 JSON with lexicographically sorted keys,
+no insignificant whitespace, and timezone-aware timestamps normalized to
+second precision with `Z` for UTC. Comparison records use the same canonical
+serialization after excluding `payload_sha256` and `signer_ref`. Runtime hash
+values must use `sha256:` followed by 64 lowercase hexadecimal characters; the
+short values in the illustrative sketches below are intentionally abbreviated.
+A client-supplied hash is not trusted until the server reconstructs and verifies
+it from the recorded fields.
 
 Co-binding narrows replay and substitution opportunities, but it does not prove
 physical co-location by itself. The policy profile may additionally require a
@@ -236,7 +241,17 @@ raw artifacts, bindings, versions, or quality metadata are missing. That
 failure does not automatically mean the shoe is counterfeit; it means the
 evidence is insufficient for the requested policy path.
 
-## Contract Sketch
+## Implemented Contract
+
+The strict models live in
+[`src/seedcore/models/visual_evidence.py`](../../src/seedcore/models/visual_evidence.py).
+Deterministic offline replay lives in
+[`src/seedcore/services/visual_evidence_replay.py`](../../src/seedcore/services/visual_evidence_replay.py).
+Replay validates exact recorded hashes, bindings, admitted profiles, freshness,
+raw retention, client integrity, NFC disposition, and quality for both the
+registration baseline and later observation. It also validates comparison
+outcome semantics and independent non-visual authority without rerunning SAM 2,
+COLMAP, or another model.
 
 ### VisualEvidenceObservationV0
 
@@ -454,21 +469,36 @@ rollback, and commercial license have been reviewed.
 
 ## Implementation Slices
 
-### Slice V0: Contract Freeze
+### Slice V0: Contract Freeze — implemented
 
-- land `VisualEvidenceObservationV0` and `VisualEvidenceComparisonV0` schemas
-- freeze capture phases, outcome taxonomy, and reason codes
-- define canonical serialization and capture-binding hash construction
-- define raw/derived artifact retention and redaction rules
-- add schema and hash-vector tests
+- implemented strict `VisualEvidenceObservationV0`,
+  `VisualEvidenceComparisonV0`, replay-context, and replay-result schemas;
+- frozen capture phases, outcome taxonomy, evidence dispositions, and reason
+  codes;
+- implemented canonical serialization, capture-binding hashes, and comparison
+  payload hashes;
+- retained raw/derived artifact separation and an explicit
+  `generative_fill_used` contamination gate; and
+- added strict-schema, timezone, canonical hash-vector, and authority-effect
+  tests in `tests/test_visual_evidence_contracts.py`.
 
-### Slice V1: Deterministic Fixtures
+### Slice V1: Deterministic Fixtures — contract matrix implemented
 
-- add happy-path and all negative fixture payloads
-- extend the rare-shoe replay bundle with visual evidence refs
-- add verifier tests for asset/workflow/session binding
-- prove `MATCH` cannot bypass delegation, approval, token, or quarantine gates
-- prove replay works without rerunning SAM 2 or COLMAP
+Implemented in `tests/fixtures/visual_evidence_v0/cases.json`:
+
+- one happy-path match plus all fourteen negative/review cases from the fixture
+  plan;
+- deterministic asset, workflow, session, raw-manifest, freshness, NFC,
+  quality, profile, generative-contamination, mismatch, condition-drift, and
+  non-visual-authority validation;
+- proof that `MATCH` always returns `authority_effect="none"` and
+  `action_authorized=false`; and
+- replay of recorded artifacts without rerunning SAM 2 or COLMAP.
+
+Still pending in V1: materialize the frozen refs into the canonical rare-shoe
+runtime replay bundle and integrate the same validator through the existing
+`RESULT_VERIFIER` path. That work remains pre-shadow and cannot introduce a
+parallel verifier.
 
 ### Slice V2: Offline Capture And Processing Spike
 

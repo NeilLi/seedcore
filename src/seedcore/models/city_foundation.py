@@ -12,12 +12,17 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
-CITY_FEATURE_CONTRACT_VERSION = "seedcore.city_feature.v0"
-CITY_RELATIONSHIP_CONTRACT_VERSION = "seedcore.city_relationship.v0"
-REFERENCE_DISTRICT_CONTRACT_VERSION = "seedcore.reference_district.v0"
-REFERENCE_DISTRICT_REF = "fixture:district-01"
-REFERENCE_DISTRICT_RUNTIME_PROFILE = "bootstrap_sim"
+CITY_FEATURE_CONTRACT_VERSION: Literal["seedcore.city_feature.v0"] = (
+    "seedcore.city_feature.v0"
+)
+CITY_RELATIONSHIP_CONTRACT_VERSION: Literal["seedcore.city_relationship.v0"] = (
+    "seedcore.city_relationship.v0"
+)
+REFERENCE_DISTRICT_CONTRACT_VERSION: Literal["seedcore.reference_district.v0"] = (
+    "seedcore.reference_district.v0"
+)
+REFERENCE_DISTRICT_REF: Literal["fixture:district-01"] = "fixture:district-01"
+REFERENCE_DISTRICT_RUNTIME_PROFILE: Literal["bootstrap_sim"] = "bootstrap_sim"
 
 
 class CityFeatureKind(str, Enum):
@@ -115,7 +120,9 @@ class CityFeatureV0(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    contract_version: Literal["seedcore.city_feature.v0"] = CITY_FEATURE_CONTRACT_VERSION
+    contract_version: Literal["seedcore.city_feature.v0"] = (
+        CITY_FEATURE_CONTRACT_VERSION
+    )
     feature_ref: str
     local_ref: str
     feature_kind: CityFeatureKind
@@ -149,8 +156,12 @@ class CityFeatureV0(BaseModel):
     @field_validator("public_anchor_ref")
     @classmethod
     def validate_public_anchor_ref(cls, value: str | None) -> str | None:
-        if value is not None and not value.startswith(f"{REFERENCE_DISTRICT_REF}:anchor:"):
-            raise ValueError("public_anchor_ref must use the district fixture namespace")
+        if value is not None and not value.startswith(
+            f"{REFERENCE_DISTRICT_REF}:anchor:"
+        ):
+            raise ValueError(
+                "public_anchor_ref must use the district fixture namespace"
+            )
         return value
 
 
@@ -161,7 +172,9 @@ class CityFeatureRelationshipV0(BaseModel):
         CITY_RELATIONSHIP_CONTRACT_VERSION
     )
     relationship_ref: str
-    relationship_kind: Literal["LOCATED_IN", "CONNECTS", "SERVES", "HOSTS", "ACCESS_VIA"]
+    relationship_kind: Literal[
+        "LOCATED_IN", "CONNECTS", "SERVES", "HOSTS", "ACCESS_VIA"
+    ]
     from_feature_ref: str
     to_feature_ref: str
     source_posture: CitySourcePosture = CitySourcePosture.FIXTURE
@@ -170,7 +183,9 @@ class CityFeatureRelationshipV0(BaseModel):
     @classmethod
     def require_fixture_ref(cls, value: str) -> str:
         if not value.startswith(f"{REFERENCE_DISTRICT_REF}:"):
-            raise ValueError("relationship refs and endpoints must use the district namespace")
+            raise ValueError(
+                "relationship refs and endpoints must use the district namespace"
+            )
         return value
 
 
@@ -193,8 +208,12 @@ class ReferenceFeatureInventoryV0(BaseModel):
             len(self.workshops),
         )
         if counts != (5, 3, 2, 1, 1):
-            raise ValueError(f"reference district must use the 5-3-2-1-1 profile, got {counts}")
-        refs = self.parcels + self.buildings + self.roads + self.utilities + self.workshops
+            raise ValueError(
+                f"reference district must use the 5-3-2-1-1 profile, got {counts}"
+            )
+        refs = (
+            self.parcels + self.buildings + self.roads + self.utilities + self.workshops
+        )
         if len(set(refs)) != len(refs):
             raise ValueError("reference district local refs must be unique")
         return self
@@ -227,16 +246,22 @@ class ReferenceDistrictV0(BaseModel):
         if set(record_local_refs) != inventory_refs:
             missing = sorted(inventory_refs - set(record_local_refs))
             extra = sorted(set(record_local_refs) - inventory_refs)
-            raise ValueError(f"fixture inventory mismatch: missing={missing}, extra={extra}")
+            raise ValueError(
+                f"fixture inventory mismatch: missing={missing}, extra={extra}"
+            )
         if len(record_local_refs) != len(set(record_local_refs)):
             raise ValueError("feature record local refs must be unique")
 
         feature_refs = {record.feature_ref for record in self.feature_records}
         for relationship in self.relationships:
             if relationship.from_feature_ref not in feature_refs:
-                raise ValueError(f"unknown relationship source {relationship.from_feature_ref}")
+                raise ValueError(
+                    f"unknown relationship source {relationship.from_feature_ref}"
+                )
             if relationship.to_feature_ref not in feature_refs:
-                raise ValueError(f"unknown relationship target {relationship.to_feature_ref}")
+                raise ValueError(
+                    f"unknown relationship target {relationship.to_feature_ref}"
+                )
         return self
 
 

@@ -1,0 +1,267 @@
+{
+  "contract_version": "seedcore.visual_evidence_fixture_manifest.v0",
+  "baseline_observation": {
+    "contract_version": "seedcore.visual_evidence_observation.v0",
+    "evidence_id": "visual-evidence:shoe-001:registration:001",
+    "capture_session_id": "capture-session:registration:001",
+    "capture_phase": "registration",
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "workflow_join_key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authorized_device_ref": "device:ios:capture-001",
+    "observed_at": "2026-08-20T10:00:00Z",
+    "server_nonce_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "capture_binding_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "client_integrity": {
+      "profile": "apple_app_attest:v0",
+      "assertion_ref": "attest-assertion:registration:001",
+      "client_data_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "verifier_disposition": "verified"
+    },
+    "physical_anchor_ref": {
+      "required": true,
+      "nfc_proof_ref": "nfc-proof:registration:001",
+      "binding_disposition": "verified"
+    },
+    "raw_capture_manifest": {
+      "artifact_ref": "archive://visual/shoe-001/registration/001/raw",
+      "payload_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "frame_count": 180,
+      "raw_preserved": true,
+      "c2pa_manifest_ref": "c2pa:manifest:registration:001"
+    },
+    "capture_quality": {
+      "profile_ref": "visual-capture-profile:rare-shoe-v0",
+      "coverage_disposition": "pass",
+      "blur_disposition": "pass",
+      "scale_disposition": "pass",
+      "calibration_disposition": "pass",
+      "quality_metrics_ref": "artifact://visual-quality/registration/001",
+      "missing_regions": []
+    },
+    "processing": {
+      "segmentation_profile": "sam2:pinned-v0",
+      "reconstruction_profile": "colmap:pinned-v0",
+      "generative_fill_used": false,
+      "derived_manifest_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fingerprint": {
+      "fingerprint_profile_ref": "shoe-spatial-fingerprint:v0",
+      "spatial_fingerprint_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "descriptor_artifact_ref": "artifact://visual-descriptors/registration/001",
+      "geometry_artifact_ref": "artifact://visual-geometry/registration/001"
+    },
+    "signer_ref": "signer:visual-evidence-adapter-001"
+  },
+  "observed_observation": {
+    "contract_version": "seedcore.visual_evidence_observation.v0",
+    "evidence_id": "visual-evidence:shoe-001:delivery:001",
+    "capture_session_id": "capture-session:delivery:001",
+    "capture_phase": "delivery",
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "workflow_join_key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authorized_device_ref": "device:ios:capture-001",
+    "observed_at": "2026-08-20T10:10:00Z",
+    "server_nonce_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "capture_binding_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "client_integrity": {
+      "profile": "apple_app_attest:v0",
+      "assertion_ref": "attest-assertion:delivery:001",
+      "client_data_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "verifier_disposition": "verified"
+    },
+    "physical_anchor_ref": {
+      "required": true,
+      "nfc_proof_ref": "nfc-proof:delivery:001",
+      "binding_disposition": "verified"
+    },
+    "raw_capture_manifest": {
+      "artifact_ref": "archive://visual/shoe-001/delivery/001/raw",
+      "payload_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "frame_count": 180,
+      "raw_preserved": true,
+      "c2pa_manifest_ref": "c2pa:manifest:delivery:001"
+    },
+    "capture_quality": {
+      "profile_ref": "visual-capture-profile:rare-shoe-v0",
+      "coverage_disposition": "pass",
+      "blur_disposition": "pass",
+      "scale_disposition": "pass",
+      "calibration_disposition": "pass",
+      "quality_metrics_ref": "artifact://visual-quality/delivery/001",
+      "missing_regions": []
+    },
+    "processing": {
+      "segmentation_profile": "sam2:pinned-v0",
+      "reconstruction_profile": "colmap:pinned-v0",
+      "generative_fill_used": false,
+      "derived_manifest_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "fingerprint": {
+      "fingerprint_profile_ref": "shoe-spatial-fingerprint:v0",
+      "spatial_fingerprint_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "descriptor_artifact_ref": "artifact://visual-descriptors/delivery/001",
+      "geometry_artifact_ref": "artifact://visual-geometry/delivery/001"
+    },
+    "signer_ref": "signer:visual-evidence-adapter-001"
+  },
+  "comparison": {
+    "contract_version": "seedcore.visual_evidence_comparison.v0",
+    "comparison_id": "visual-comparison:shoe-001:delivery:001",
+    "asset_id": "asset:shoe:player-exclusive-001",
+    "workflow_join_key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseline_evidence_ref": "visual-evidence:shoe-001:registration:001",
+    "observed_evidence_ref": "visual-evidence:shoe-001:delivery:001",
+    "comparison_profile_ref": "shoe-visual-comparison:v0",
+    "outcome": "MATCH",
+    "confidence_summary": {
+      "score": 0.97,
+      "calibration_profile_ref": "shoe-visual-calibration:v0",
+      "threshold_profile_ref": "policy:rare-shoe-visual-thresholds:v0"
+    },
+    "quality_disposition": "sufficient",
+    "condition_delta_ref": "artifact://condition-delta/001",
+    "reason_codes": [],
+    "payload_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "signer_ref": "signer:visual-evidence-adapter-001"
+  },
+  "context": {
+    "expected_asset_id": "asset:shoe:player-exclusive-001",
+    "expected_workflow_join_key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "evaluated_at": "2026-08-20T10:11:00Z",
+    "max_capture_age_seconds": 3600,
+    "admitted_capture_profiles": ["visual-capture-profile:rare-shoe-v0"],
+    "admitted_segmentation_profiles": ["sam2:pinned-v0"],
+    "admitted_reconstruction_profiles": ["colmap:pinned-v0"],
+    "admitted_fingerprint_profiles": ["shoe-spatial-fingerprint:v0"],
+    "admitted_comparison_profiles": ["shoe-visual-comparison:v0"],
+    "admitted_calibration_profiles": ["shoe-visual-calibration:v0"],
+    "admitted_threshold_profiles": ["policy:rare-shoe-visual-thresholds:v0"],
+    "non_visual_authority_valid": true,
+    "non_visual_reason_codes": []
+  },
+  "cases": [
+    {
+      "case_id": "happy_match",
+      "expected_disposition": "accepted",
+      "expected_reason_codes": []
+    },
+    {
+      "case_id": "substituted_shoe",
+      "comparison_patch": {
+        "outcome": "MISMATCH",
+        "confidence_summary": {"score": 0.12},
+        "reason_codes": ["SPATIAL_FINGERPRINT_MISMATCH"]
+      },
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["SPATIAL_FINGERPRINT_MISMATCH"]
+    },
+    {
+      "case_id": "same_model_different_pair",
+      "comparison_patch": {
+        "outcome": "MISMATCH",
+        "confidence_summary": {"score": 0.44},
+        "reason_codes": ["SPATIAL_FINGERPRINT_MISMATCH"]
+      },
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["SPATIAL_FINGERPRINT_MISMATCH"]
+    },
+    {
+      "case_id": "sole_region_omitted",
+      "observed_patch": {
+        "capture_quality": {"coverage_disposition": "fail", "missing_regions": ["sole", "heel"]}
+      },
+      "comparison_patch": {
+        "outcome": "INSUFFICIENT_COVERAGE",
+        "quality_disposition": "insufficient",
+        "reason_codes": ["VISUAL_CAPTURE_INSUFFICIENT_COVERAGE"]
+      },
+      "expected_disposition": "review_required",
+      "expected_reason_codes": ["VISUAL_CAPTURE_INSUFFICIENT_COVERAGE"]
+    },
+    {
+      "case_id": "motion_blur",
+      "observed_patch": {"capture_quality": {"blur_disposition": "fail"}},
+      "comparison_patch": {
+        "outcome": "INSUFFICIENT_COVERAGE",
+        "quality_disposition": "insufficient",
+        "reason_codes": ["VISUAL_CAPTURE_INSUFFICIENT_COVERAGE"]
+      },
+      "expected_disposition": "review_required",
+      "expected_reason_codes": ["VISUAL_CAPTURE_INSUFFICIENT_COVERAGE"]
+    },
+    {
+      "case_id": "manifest_changed_after_binding",
+      "observed_patch": {
+        "raw_capture_manifest": {"payload_sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666"}
+      },
+      "preserve_capture_binding": true,
+      "expected_disposition": "deny",
+      "expected_reason_codes": ["VISUAL_CAPTURE_BINDING_INVALID"]
+    },
+    {
+      "case_id": "cross_asset_replay",
+      "observed_patch": {"asset_id": "asset:shoe:other-pair-002"},
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["CROSS_ASSET_REPLAY"]
+    },
+    {
+      "case_id": "stale_capture",
+      "context_patch": {"evaluated_at": "2026-08-20T12:00:00Z"},
+      "expected_disposition": "deny",
+      "expected_reason_codes": ["TELEMETRY_STALE"]
+    },
+    {
+      "case_id": "invalid_dynamic_nfc",
+      "observed_patch": {"physical_anchor_ref": {"binding_disposition": "invalid"}},
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["DYNAMIC_NFC_PROOF_INVALID"]
+    },
+    {
+      "case_id": "segmentation_mask_anomaly",
+      "comparison_patch": {
+        "outcome": "ANOMALY_FLAGGED",
+        "quality_disposition": "anomalous",
+        "reason_codes": ["VISUAL_CAPTURE_INSUFFICIENT_COVERAGE"]
+      },
+      "expected_disposition": "review_required",
+      "expected_reason_codes": ["VISUAL_CAPTURE_INSUFFICIENT_COVERAGE"]
+    },
+    {
+      "case_id": "missing_raw_archive",
+      "observed_patch": {"raw_capture_manifest": {"raw_preserved": false}},
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["VISUAL_RAW_CAPTURE_MISSING"]
+    },
+    {
+      "case_id": "unadmitted_pipeline_profile",
+      "observed_patch": {"processing": {"segmentation_profile": "sam2:unreviewed"}},
+      "expected_disposition": "deny",
+      "expected_reason_codes": ["VISUAL_PIPELINE_PROFILE_NOT_ADMITTED"]
+    },
+    {
+      "case_id": "generative_frame_contamination",
+      "observed_patch": {"processing": {"generative_fill_used": true}},
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["VISUAL_GENERATIVE_TRANSFORM_DETECTED"]
+    },
+    {
+      "case_id": "condition_drift",
+      "comparison_patch": {
+        "outcome": "MISMATCH",
+        "confidence_summary": {"score": 0.73},
+        "reason_codes": ["CONDITION_DRIFT_DETECTED"]
+      },
+      "expected_disposition": "quarantine",
+      "expected_reason_codes": ["CONDITION_DRIFT_DETECTED"]
+    },
+    {
+      "case_id": "visual_match_with_expired_approval",
+      "context_patch": {
+        "non_visual_authority_valid": false,
+        "non_visual_reason_codes": ["APPROVAL_ENVELOPE_EXPIRED"]
+      },
+      "expected_disposition": "deny",
+      "expected_reason_codes": ["APPROVAL_ENVELOPE_EXPIRED"]
+    }
+  ]
+}

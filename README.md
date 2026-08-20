@@ -47,23 +47,33 @@ Important boundaries:
 - Host-mode local runtime verification is green end-to-end for the RCT wedge: the Agent Action Gateway can generate a replayable runtime audit row, the verification API can read queue/detail/replay/runbook views from it, and the productized verification surface protocol passes locally.
 - Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff in that topology still depends on capturing runtime audit rows there.
 - The rare-shoe RCT dynamic NFC simulation lane is implemented and workspace-verified: deterministic fixture evidence covers happy path, replay / clone, stale scan, wrong asset, tamper, and incomplete payload cases without making mock NFC an authority source.
+- The rare-shoe static visual-evidence contract is now frozen in strict Pydantic models with canonical capture/comparison hashes and a deterministic 15-case replay matrix. A visual `MATCH` remains evidence-only and always reports no authority effect; live capture, model benchmarking, gateway materialization, and `RESULT_VERIFIER` integration remain pending.
 - The first immutable policy-anchor slice is implemented: AI-origin authz graph inputs fail closed unless accompanied by a co-signed promotion receipt bound to the exact graph version and snapshot hash. The current slice validates receipt structure and graph binding; full KMS/key-registry signature verification remains a follow-on hardening step.
-- The agent-native digital-city direction now has an active sovereign-bootstrap plan and its first bounded code slice: a packaged five-parcel/three-building fixture, strict feature/geometry/relationship models, public/protected redaction, and read-only discovery using pure-Python Haversine filtering under `bootstrap_sim`. Persistence, MCP, and governed city actions remain pending. Larger land, built-asset, road, utility, facility, environment, project, incident, and temporal-twin capabilities are evidence-gated extensions—not a GIS/BIM program. This is not an activated municipality, utility-control platform, or global marketplace; the rare-shoe RCT workflow remains the must-win authority-bearing application.
+- The agent-native digital-city direction now has an active sovereign-bootstrap plan, a packaged five-parcel/three-building fixture, strict feature/geometry/relationship models, a three-table PostgreSQL migration and repository boundary, public/protected redaction, and read-only discovery using pure-Python Haversine filtering under `bootstrap_sim`. An isolated PostgreSQL 17 run verified clean migration, scoped roles, seed/reload, schema-only dump/restore followed by reseed/reload parity, and unchanged discovery responses. PostgreSQL remains explicit and review-gated; MCP and governed city actions remain pending. Larger land, built-asset, road, utility, facility, environment, project, incident, and temporal-twin capabilities are evidence-gated extensions—not a GIS/BIM program. This is not an activated municipality, utility-control platform, or global marketplace; the rare-shoe RCT workflow remains the must-win authority-bearing application.
 
 Read the current execution docs:
 
-- [Development docs index](docs/development/README.md)
+- [Application directions](docs/development/application_directions.md)
 - [Current next steps](docs/development/current_next_steps.md)
+- [Development docs index](docs/development/README.md)
+- [Policy gate matrix](docs/development/policy_gate_matrix.md)
 - [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
-- [Kube topology validation Q2 signoff](docs/development/kube_topology_validation_q2_signoff.md)
 - [Rare-shoe RCT demo spec](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
 
-Long-range ecosystem references:
+The application map keeps the current directions in one portfolio:
 
-- [Agent-native digital city platform architecture](docs/development/agent_native_digital_city_platform.md)
-- [Sovereign digital city bootstrap plan](docs/development/sovereign_digital_city_bootstrap_plan.md)
-- [Sovereign city foundations and infrastructure](docs/development/sovereign_city_foundations_and_infrastructure.md)
-- [Local producer provenance and RCT scenario expansion](docs/development/local_producer_provenance_and_rct_scenario_expansion.md)
+```text
+authority track:  rare-shoe governed custody proof
+foundation track: sovereign city discovery -> local producer public proof
+presentation:     grounded, consented stories beside typed claim state
+
+high-consequence actions from any track
+  -> Agent Action Gateway -> PDP -> ExecutionToken -> evidence -> verifier
+```
+
+This is one trust-runtime portfolio, not five independent products. Discovery,
+storytelling, city state, and ordinary coordination do not inherit execution
+authority.
 
 ## Trust Runtime, Not Traditional Cybersecurity
 

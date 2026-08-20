@@ -1,797 +1,221 @@
 # SeedCore Development Docs
 
-Date: 2026-08-17
+Date: 2026-08-20
 Status: Canonical entrypoint for `docs/development/`
 
-This page is the "read this first" map for the development docs. It organizes
-the directory around one progression:
+SeedCore is a trust runtime for high-consequence AI actions. These documents
+are organized around the product path from application intent to admitted
+execution and replayable closure.
 
 ```text
-final ambition -> current wedge -> what is done -> current status -> next work
+application intent
+  -> accountable Agent
+  -> ActionIntent
+  -> PDP decision
+  -> scoped ExecutionToken
+  -> actuator
+  -> evidence and RESULT_VERIFIER closure
 ```
 
-## 1. Final Ambition
+AI, memory, retrieval, discovery, simulation, creative content, and learning may
+propose or explain. None of them becomes execution authority by itself.
 
-SeedCore's long-range ambition is to become the **trust slice** for
-high-consequence autonomous work, especially commerce workflows where economic
-intent (order, quote, value) must stay bound to physical custody, scoped
-execution, and replayable proof. Humans and agents propose actions; SeedCore
-decides what is admissible under pinned policy and delegated authority; physical
-systems emit evidence; and the runtime preserves a forensic chain that can
-survive adversarial review.
+## Start Here
 
-Canonical north-star references:
+| Question | Canonical document |
+| --- | --- |
+| What applications are active, adjacent, or deferred? | [`application_directions.md`](application_directions.md) |
+| What should be built next? | [`current_next_steps.md`](current_next_steps.md) |
+| What is the product and trust-runtime category? | [`../../README.md`](../../README.md), [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md) |
+| What are the non-bypassable gates? | [`policy_gate_matrix.md`](policy_gate_matrix.md) |
+| How is the adaptive flywheel kept non-authoritative? | [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md) |
 
-- [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
-  (local Kafka rollout plan: [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
-- [`seedcore_north_star_architecture_v1.2.0.pdf`](assets/seedcore_north_star_architecture_v1.2.0.pdf)
-  - visual companion deck; the Markdown North Star remains canonical
-- [`SeedCore_Commerce_Partner_Government_Reference.pptx`](assets/SeedCore_Commerce_Partner_Government_Reference.pptx)
-  - partner and government reference deck for the Tourist Design Studio, staged kids' DIY/spatial experience, and governed trade boundaries
-- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
-  - market-signal memo for why local autonomous applications, RTX Spark /
-    DGX-class compute, and frontier agents accelerate the need for governed
-    execution without becoming authority sources
-- [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
-- [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
-- [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
-  - canonical explanation of why SeedCore is a trust runtime rather than a
-    traditional cybersecurity product
+## Application Portfolio
+
+The current portfolio has one authority-bearing commercial wedge and bounded
+expansion tracks around it.
+
+| Direction | Role | Current posture |
+| --- | --- | --- |
+| Rare-shoe Restricted Custody Transfer | Must-win governed execution product | Runtime/proof baseline plus strict visual schemas, canonical hashes, and deterministic replay fixtures implemented; benchmark and runtime integration remain |
+| Local producer discovery and proof | Adjacent provenance and public-proof application | Read-only discovery, confirmed intake, MCP, and proof-page slice defined; production verticals require separate activation |
+| Grounded producer storytelling | Presentation sidecar | Source-cited text and existing consented still/audio only; generated media remains deferred and non-evidentiary |
+| Sovereign agent-native city bootstrap | Foundation and discovery track | Closed-world fixture, three-table persistence with isolated PostgreSQL schema-restore/reseed parity, and read-only REST discovery verified under `bootstrap_sim`; review and service flows precede governed actions |
+
+Read the portfolio decision, dependencies, and promotion gates in
+[`application_directions.md`](application_directions.md).
+
+### Rare-Shoe RCT
+
+- [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)
+  — the commercial custody-handoff scene.
+- [`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md)
+  — raw-capture, fingerprint, comparison, and generative-exclusion contract.
+- [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md)
+  — deterministic dynamic-NFC simulation and negative cases.
+- [`second_hand_luxury_trade_evolution.md`](second_hand_luxury_trade_evolution.md)
+  — non-activating reuse reference for broader luxury trade.
+
+### Local Producers And Public Proof
+
+- [`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md)
+  — producer provenance, read-only discovery, accessible intake, public proof,
+  and grounded creative sidecar.
+- [`source_registration_architecture.md`](source_registration_architecture.md)
+  — canonical source-registration boundary.
+- [`owner_creator_external_sdk_and_plugin_surface.md`](owner_creator_external_sdk_and_plugin_surface.md)
+  — vendor-neutral external distribution and adapter boundary.
+
+### Sovereign City Bootstrap
+
 - [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
-  - strategic ecosystem architecture for agent-native local discovery,
-    producer/service agents, commerce/logistics adapters, spatial experiences,
-    and governed physical action; it keeps SeedCore as the trust slice and does
-    not activate a global city marketplace
+  — long-range ecosystem and plane separation.
 - [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
-  - active solo-first implementation direction for building the initial city
-    kernel directly as a modular monolith with a closed-world dataset and
-    deterministic provider simulators; the in-memory reference fixture and
-    read-only REST discovery slice are implemented
+  — founder-operated topology, delivery slices, simulators, and acceptance
+  gates.
 - [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md)
-  - active lower-layer city-domain contract for spatial identity, land, built
-    assets, roads, utility topology, facilities, environment, construction,
-    operations, observations, and temporal twin settlement; implementation
-    starts with one lightweight three-table, five-parcel fixture rather than a
-    GIS/BIM platform
+  — city-domain, construction, network, facility, observation, incident, and
+  temporal-twin contract.
 
-## 2. Current Program Center (Commerce Fulfillment Wedge)
+### Incubation, Not Current Product Center
 
-The current product wedge is **Agent-Governed Restricted Custody Transfer**:
-the governed handshake between a digital transaction and a physical custody
-transition. It is not generic robotics and not a broad trust platform.
+- [`tourist_design_studio_pilot_design.md`](tourist_design_studio_pilot_design.md)
+- [`tourist_design_studio_delivery_schedule.md`](tourist_design_studio_delivery_schedule.md)
+- [`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md)
+- [`immersive_commerce_and_governed_trade_architecture.md`](immersive_commerce_and_governed_trade_architecture.md)
 
-The latest application plan is
-[`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md):
-a static visual-evidence sidecar for comparing the registered rare shoe with
-handoff and delivery observations. It keeps raw media, capture integrity,
-physical-anchor binding, model outputs, PDP authority, and verifier closure
-separate. It explicitly rejects a parallel Journey 4Map / continuous-4D product
-and excludes generative inpainting from forensic evidence.
+These experience tracks remain bounded presentation or pilot research. They do
+not supersede RCT, make a marketplace active, or turn XR/3D output into
+evidence or authority.
 
-An adjacent, non-activating reuse reference is
-[`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md).
-It maps the same source-registration and RCT boundaries to agricultural
-micro-lots, one-of-one artisan crafts, regional workshop custody, and a
-read-only tourist discovery projection exposed through vendor-neutral MCP,
-plugin, AI-skill, and SDK adapters for Codex, Gemini, and other agents. It does
-not replace the rare-shoe focus or commit the roadmap to multiple production
-verticals. The revised plan also retains minimum SeedCore-owned access:
-media-first producer drafting with explicit confirmation and a canonical
-human-readable public proof page. Its strict MVP is three read-only discovery
-endpoints, three MCP wrappers, one-image-plus-one-audio draft extraction, and a
-server-rendered proof page; recommendation engines, native apps, 3D/map clients,
-continuous IoT, and custom settlement are deferred.
+## Trust Runtime Contracts
 
-The same reference now defines a grounded creative sidecar for funny, rich
-producer storytelling. It keeps `Artisan Story & Lore`, producer-declared
-detail, and verified claims as separate typed regions; requires source
-citations, consent, synthetic-media disclosure, and withdrawal on source
-staleness; and starts with text plus existing still/audio only. Generated reels,
-voice cloning, live personas, AR, and 3D remain post-MVP presentation research
-and never become evidence or execution authority.
+### Intent, Accountability, And Delegation
 
-The higher-level platform synthesis is
-[`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md).
-It accepts agent-native city distribution while correcting the original
-monolithic-PDP shape: discovery, matching, merchant service profiles, payment,
-logistics, maps, and 3D remain explicit surrounding planes. The SeedCore PDP
-stays narrow, synchronous, deterministic, and limited to named governed action
-classes.
-
-The owner-operated starting topology is
-[`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md).
-It activates a solo-first implementation direction: build the subject/service
-registry, projections, discovery, ordinary reservation state, producer/proof
-surfaces, and deterministic provider simulators on top of a real city-domain
-foundation. That foundation is defined in
-[`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md):
-land/sites, built assets, roads/paths, utility networks, public facilities,
-environment, projects, work packages, incidents, observations, and temporal
-twin state. The first code handoff is intentionally smaller: three foundation
-tables, five parcels, three buildings, two road/path segments, one water line,
-one workshop, and no PostGIS/OGC/BIM prerequisite. It does not activate a
-global marketplace, legal cadastre, permit authority, utility control center,
-real payment/escrow service, licensed transport operation, or new production
-vertical.
-
-That means the active docs should be read through one question:
-
-- does this move the dual-approved, scope-bound, replay-verifiable transfer
-  workflow closer to a pilotable commerce trust product (economic identity +
-  physical scope + policy + proof in one chain)?
-
-**Commerce integration spine (repo, not aspirational):**
-
-- Narrow **Shopify-Sandbox-shaped** mapping into gateway asset and fingerprint
-  fields (`product_ref`, `quote_ref`, `declared_value_usd`,
-  `forensic_context.fingerprint_components.economic_hash`):
-  [`src/seedcore/adapters/shopify_sandbox_commerce_adapter.py`](../../src/seedcore/adapters/shopify_sandbox_commerce_adapter.py)
-- Reference evaluate path that composes strict `seedcore.agent_action_gateway.v1`
-  payloads from simplified inputs (including optional commerce transaction):
-  [`src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py`](../../src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py)
-- External contract and MCP evaluate surface:
-  [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md),
-  [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md)
-- AP2 / payment-protocol boundary and alignment memo:
-  [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
-- Strategic delegation thesis and frontier alignment:
-  [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
-- Recursive delegation control-plane architecture:
-  [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md)
-- Execution-token lifecycle and capability hardening:
-  [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
-- Legible local advisory memory:
-  [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
-
-**Architecture posture for the supporting ecosystem:**
-
-The PDP remains internal, synchronous, deterministic, and stateless at decision
-time. The infrastructure around it should evolve in these specific directions:
-
-- Sufficient context is a hard precondition for execution authority, not a
-  retrieval-confidence score. Before `allow`, the request package must be
-  schema-complete, cryptographically verifiable where policy requires it,
-  causally fresh, SLA-compliant, and replay-bound through evidence such as
-  `state_binding_hash`.
-- Signed Context Envelopes and caveat-style attenuation, informed by Biscuit and
-  Macaroons, push cryptographically verifiable context into requests instead of
-  making the PDP perform hot-path user-attribute lookups.
-- Causality tokens, informed by SpiceDB `ZedToken` and Zanzibar zookie
-  semantics, let a request demand context at least as fresh as the user's last
-  relevant action, closing "New Enemy" and "Ghost Resource" races.
-- Signed mutation receipts sharpen those causality tokens into replayable
-  watermarks: the PDP may evaluate only after the receipt signature, scope,
-  session binding, token epoch, and local-view watermark prove the request is at
-  least as fresh as the admitted upstream mutation.
-- CDC-backed subscribed local views, informed by Debezium-style architectures,
-  keep approval, custody, delegation, resource, and edge state near the PDP for
-  synchronous low-latency reads.
-- Zanzibar-style external graph PDPs stay future-facing only. They may matter
-  for massive relationship scale, but the current wedge keeps the default hot
-  path compiled, near-local, and focused on restricted custody, evidence, and
-  execution-token semantics.
-- Authorization graph engine upgrades are benchmark-gated by
-  [ADR 0011](../architecture/adr/adr-0011-benchmark-gated-authz-graph-engine-evolution.md):
-  tuple import/export and structural benchmarks come before path flattening,
-  Ray hot-path promotion, CSR/CSC layouts, or Rust/PyO3 graph kernels.
-
-Start here for the active spine:
-
-1. [`current_next_steps.md`](current_next_steps.md) - what is done now, current
-   status, and immediate execution order.
-2. [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md) - stage
-   goals, workstreams, sequencing, and canonical positioning.
-3. [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) - current
-   verification/operator product surface and contract-level UX behavior (including the Section 4.1 operator legibility layer with queue signals, replay verdict, and the deterministic + optional LLM copilot API).
-4. [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md) -
-   "Visualize It" development step for an advanced forensic replay UI that
-   makes execution steps, policy snapshots, telemetry hashes, signer chains,
-   and timeline reproduction inspectable without adding new authority.
-5. [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md) -
-   collectible rare-shoe transfer as a commercial vertical scene on the same
-   RCT contract: authentication registration first, bounded custody authority
-   second, replayable proof last. Read it with the latest application slice,
-   [`rare_shoe_rct_visual_evidence_adapter_v0.md`](rare_shoe_rct_visual_evidence_adapter_v0.md),
-   which defines the visual capture, fingerprint, comparison, replay, and
-   generative-exclusion contract. The adjacent
-   [`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md)
-   tests reuse across batch, singular-artifact, and custody-bound-work shapes
-   without activating new product verticals.
-6. [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md) -
-   boundary memo for using AP2 as the upstream agent-payment protocol while
-   keeping SeedCore focused on custody, evidence, and replay-valid closure.
-7. [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md) -
-   technical memo for turning customer business rules into executable,
-   testable Policy Knowledge Graphs that compile into PDP rules, authority
-   constraints, evidence requirements, reason codes, and replay fixtures.
-8. [`policy_governed_rag_research_adoption_review.md`](policy_governed_rag_research_adoption_review.md) -
-   adoption review for policy-governed RAG research. Use it with ADR 0008, ADR
-   0009, and the RAG trace contract when turning document or memory retrieval
-   into signed, replayable, side-channel-safe evidence without making RAG,
-   receipts, or model-selected citations authority-bearing.
-9. [`kg_rag_research_reference.md`](kg_rag_research_reference.md) -
-   KG / GraphRAG research reference for efficient graph retrieval,
-   path-centric evidence, agentic graph query tools, and graph foundation
-   models. Use it as roadmap input for governed retrieval only; graph-derived
-   context, paths, Cypher answers, and inferred KG edges remain non-authority
-   until promoted through PDP, evidence, verifier, and replay boundaries.
-10. [`zero_cold_start_policy_evolution_ultra.md`](zero_cold_start_policy_evolution_ultra.md) -
-   ULTRA design reference mapping inductive relational reasoning into future
-   zero-cold-start policy analysis. Treats link predictions as
-   non-authoritative policy package, fixture, or diagnostic proposals that must
-   still pass review, schema validation, fixture testing, snapshot compilation,
-   PDP, token, evidence, and verifier boundaries.
-11. [`gated_action_dx_layer.md`](gated_action_dx_layer.md) - lightweight DX spec
-   for declaring governed action boundaries without making developers or coding
-   agents manually wire PDP calls, execution tokens, evidence bundles, verifier
-   outcomes, and replay proof chains. **MVP implemented and targeted-test
-   validated:** the SDK surface (`src/seedcore/sdk/gated_action.py`) provides
-   `@gated_action`, `using_evaluator`, `set_executor`, and `GovernedResult` for
-   RCT shadow and guarded enforce flows; the MCP helper
-   `seedcore.agent_action.check_policy` exposes explicit-authority preflight
-   checks; and `src/seedcore/sdk/schema_exporter.py` exports path-qualified
-   gated-action manifests for PDP/PKG scaffolding.
-12. [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md) -
-   harness guardrail for the energy flywheel: deterministic gates, circuit
-   breaker posture, legible cycle artifacts, and the rule that adaptive tuning
-   never becomes execution authority.
-13. [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) -
-   staged schedule for turning AI-system eval discipline into SeedCore-native
-   regression fixtures across decision, policy, forensic, and agent-governance
-   behavior without making eval tooling an authority source.
-14. [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) -
-   bounded governance-learning plan for Window G/H-K: strict
-   `GovernanceLearningSampleV1` records, deterministic teacher labels,
-   conservative advisory students, isolated live-shadow advisory telemetry, and
-   future XGBoost/HALT/refinement/simulation work that remains non-authoritative.
-15. [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md) -
-   shadow-only contract for using statistical model audits, including
-   Regularized f-Divergence Kernel Tests, as promotion and review evidence
-   without changing PDP, `ExecutionToken`, replay, or `RESULT_VERIFIER`
-   authority.
-16. [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md) -
-   implementation contract for making hardware-bound signer identity, signed
-   telemetry, asset anchors, zone evidence, and verifier replay central to
-   physical execution proof.
-17. [`physical_telemetry_processing_contract.md`](physical_telemetry_processing_contract.md) -
-   development contract for turning multi-rate embodied telemetry into
-   replay-grade physical episode traces, alignment quality gates, digital-twin
-   parity checks, and LeRobot-compatible sidecar exports without making data
-   processing an authority source.
-18. [`virtual_nfc_simulation_plan.md`](virtual_nfc_simulation_plan.md) -
-   implemented simulation-first dynamic NFC challenge-response fixture lane for
-   rare-shoe RCT, including fail-closed replay, stale-scan, wrong-asset, and
-   tamper-state outcomes without treating mock NFC evidence as authority.
-19. [`persistent_counter_ledger_plan.md`](persistent_counter_ledger_plan.md) -
-   implementation track for the explicit, anchor-scoped monotonic NFC counter
-   ledger that prevents replay across workflows without making the pure NFC
-   verifier instantiate storage.
-20. [`kms_ntag_transition_plan.md`](kms_ntag_transition_plan.md) -
-   staged transition plan for KMS-backed NTAG 424 DNA verification as a
-   profile-specific shadow adapter before any production hardware enforcement.
-21. [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md) -
-   staged stress schedule for establishing freshness-SLA metrics across RCT
-   fixtures, Jetson prototype edge, IGX/T5000 trusted edge, and robotics
-   handoff environments without treating Spark/DGX workstations as physical
-   closure authority.
-   - Read with ADR 0001's sufficient-context rule: stale local views, missing
-     signed envelopes, missing required fields, and missing `state_binding_hash`
-     inputs are fail-closed authorization conditions, not retriable LLM context
-     gaps.
-22. [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md) -
-   strategic memo connecting SeedCore's implemented delegation path to
-   cryptographic multi-hop authority, WIMSE-style agent identity, AIP/Biscuit
-   capability attenuation, ReBAC graph paths, SCITT-style evidence, and
-   hardware-backed intent.
-23. [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md) -
-   control-plane memo for recursive agent delegation: root context anchoring,
-   signed agent identity/capability credentials, per-hop attenuation, visible
-   tool calls, out-of-band approval, child-run closure, and replayable
-   delegation lineage.
-24. [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md) -
-   lifecycle memo for `ExecutionToken` as a short-lived deterministic
-   capability artifact, including mint/withhold semantics, TTL bounding,
-   constraint freezing, delegated subtokens, replay, quarantine, and candidate
-   hardening with DPoP, RATS, Macaroons/Biscuit, IEEC, and outbox reliability.
-25. [`legible_local_memory_vault.md`](legible_local_memory_vault.md) -
-   development memo for an Obsidian-compatible Markdown memory vault that makes
-   advisory memory, admitted facts, rejected claims, and operator notes readable
-   and editable without making memory an authority source.
-26. [`persistent_twin_settlement_real_world_ai_operations.md`](persistent_twin_settlement_real_world_ai_operations.md) -
-   distilled reference for persistent twin settlement as a real-world AI
-   reliability pattern: pluggable settlement protocols, proof-vector
-   accumulation, append-only compensation, and cryptographic integrity for
-   evidence.
-27. [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) -
-   sandbox hardening and verifier bridge strategy: subprocess-first, PyO3-ready
-   verifier bridge architecture, and phased container runtime sandboxing rollout.
-28. [`second_hand_luxury_trade_evolution.md`](second_hand_luxury_trade_evolution.md) -
-   sidecar vertical reference for mapping the Restricted Custody Transfer (RCT)
-   runtime baseline to high-value second-hand luxury trading without changing
-   the current authority path.
-29. [`agency_agents_prompt_framework_sketch.md`](agency_agents_prompt_framework_sketch.md) -
-   sidecar design sketch for adapting the msitarzewski/agency-agents prompt
-   profile pattern to SeedCore role legibility. Treat it as advisory prompt
-   structure only; prompt profiles do not admit actions, mint tokens, mutate
-   custody state, or close verifier evidence.
-30. [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md) -
-   dependency investigation sketch for using TencentCloud/CubeSandbox as an
-   optional isolated execution provider. Treat CubeSandbox as a sandbox
-   substrate and evidence source only; it does not admit actions, mint
-   `ExecutionToken`s, clear quarantine, or replace replay / RESULT_VERIFIER
-   closure.
-31. [`edge_central_trust_trade_architecture.md`](edge_central_trust_trade_architecture.md) -
-   sidecar architecture sketch for a future Edge-Hub trust loop across
-   hardware-anchored edge evidence, SeedCore PDP/token gating, replay, and
-   TrustPage projections. Treat it as strategy/reference only; edge nodes do
-   not admit actions, mint tokens, clear quarantine, or replace
-   `RESULT_VERIFIER` closure.
-32. [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md) -
-   strategy memo mapping the 2026 multi-agent safety research call to
-   SeedCore's current RCT trust-runtime implementation. Use it to compare
-   sandboxes/testbeds, agent-network science, identity/reputation/commitment
-   infrastructure, and population oversight gaps without reframing SeedCore as
-   a generic multi-agent platform or marketplace.
-33. [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md) -
-   architecture and adoption-gate synthesis for a future agent-native local
-   ecosystem. It separates relevance, availability, commerce, claim state,
-   execution authority, and verifier closure; reuses the strict local-producer
-   projection and ingestion contracts; and keeps city-scale mapping, payment,
-   logistics, agent registries, and immersive media outside the PDP.
-34. [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md) -
-   solo-first implementation contract for a SeedCore-owned modular city kernel,
-   closed-world reference dataset, provider simulators, candidate code/data
-   boundaries, delivery slices, operations, verification, and bootstrap
-   acceptance criteria.
-35. [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md) -
-   city-foundation domain and construction contract for feature identity,
-   spatial/temporal state, land, built assets, road and utility topology,
-   facilities, observations, projects, work packages, incidents, governed
-   infrastructure transitions, and a solo-operable reference district.
-
-### Bounded Tourist Design Studio incubation track
-
-[`tourist_design_studio_pilot_design.md`](tourist_design_studio_pilot_design.md)
-and [`tourist_design_studio_delivery_schedule.md`](tourist_design_studio_delivery_schedule.md)
-describe a separate B2B2C destination-souvenir pilot: one venue, one
-printable T-shirt, constrained co-creation, purchaser phone approval, and one
-fulfillment route. This is an evidence-seeking product-incubation track, not a
-replacement for the active RCT wedge and not an integration of the SeedCore
-PDP, `ExecutionToken`, custody, or replay runtime into consumer checkout.
-
-The delivery schedule owns the pilot timeline, build/release gates, metrics,
-and partner decisions. Promote it into the product center only after Phase 0
-partner discovery and the closed pilot have explicit commercial and
-operational evidence.
-
-[`immersive_commerce_and_governed_trade_architecture.md`](immersive_commerce_and_governed_trade_architecture.md)
-defines the portfolio-level relationship: immersive customer experiences may
-advance from 2D to browser 3D, AR, and private venue installations, while
-rare-shoe agentic trade stays on the existing RCT path of typed intent, PDP
-admission, scoped token, custody evidence, and replay closure. The two tracks
-have separate data and authority boundaries; immersive UI and AI proposals
-never become trade or custody authority.
-
-For the planned AI-agent-first Tourist Journey AI+VR experience, use
-[`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md).
-It records Godot as the preferred engine candidate because its text-oriented
-project/scene files and CLI workflow are legible to coding agents. This is a
-product-experience track across the tourist journey, not merely an engine
-sidecar; it remains staged alongside the initial printable-souvenir pilot,
-requires real-device validation, and keeps the XR client away from SeedCore
-authority paths and `ExecutionToken`s.
-
-
-
-## 3. Stage Goals And Status Map
-
-This table is the shortest answer to "what stage are we in?"
-
-| Stage | Goal | Current status | Canonical docs |
-| :--- | :--- | :--- | :--- |
-| 0. Runtime substrate | Build the Python/Ray execution and agent foundation | Done baseline | [`archive/historical/project_stage_milestone_summary.md`](archive/historical/project_stage_milestone_summary.md) |
-| 1. Zero-trust execution boundary | Make all high-risk actions tokenized, revocable, and receipt-bound | Materially implemented | [`current_next_steps.md`](current_next_steps.md) |
-| 2. PKG policy and authz graph | Pin decisions to a snapshot and compile a deterministic hot-path graph | Implemented, still being hardened | [`pkg_authz_graph_rfc.md`](pkg_authz_graph_rfc.md), [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md), [`pdp_authz_graph_staging_rollout.md`](pdp_authz_graph_staging_rollout.md), [`authz_graph_engine_evolution_plan.md`](authz_graph_engine_evolution_plan.md) |
-| 3. Replay and proof surface | Expose replayable verification so third parties can inspect outcomes | Implemented | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md), [`productized_verification_surface_protocol.md`](productized_verification_surface_protocol.md) |
-| 4. RCT contract freeze | Lock one must-win workflow, artifact chain, and business-state truth table | Done for Slice 1 | [`archive/historical/killer_demo_execution_spine.md`](archive/historical/killer_demo_execution_spine.md), [`archive/historical/next_killer_demo_contract_freeze.md`](archive/historical/next_killer_demo_contract_freeze.md) |
-| 5. Trust hardening | Prove signer provenance, TPM/KMS policies, and operational drills | Checkpoint crossed, not fully closed | [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md), [`tpm_fleet_rollout_maturity_decision_memo.md`](tpm_fleet_rollout_maturity_decision_memo.md) |
-| 6. Multi-party governance | Make approval envelopes and dual-control workflows authoritative end to end | Partially implemented | [`archive/historical/next_killer_demo_contract_freeze.md`](archive/historical/next_killer_demo_contract_freeze.md), [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md) |
-| 7. Hot-path operability | Promote `shadow -> canary -> enforce` with parity, latency, and rollback evidence | Contract + observability implemented; **remote Kind topology green** for core gates and drills; full **verification API inside cluster** still the open topology milestone | [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md), [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md), [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md), [`kube_topology_validation_q2_signoff.md`](kube_topology_validation_q2_signoff.md) |
-| 8. Verification product surface | Make operator/replay UX contract-driven and legible without weakening proof | Advanced and active; Studio follow-on drafted | [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md), [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md) |
-| 9. Rust proof kernel | Move strict verification and authority-bearing kernels toward deterministic Rust packages | Scaffolded and growing | [`rust_workspace_proposal.md`](rust_workspace_proposal.md), [`language_evolution_map.md`](language_evolution_map.md) |
-| 10. External agent boundary | Expose a stable agent-action gateway and public SDK for developer convenience | **v1 productized + Agent Self-Regulation baseline landed**: `@gated_action` shadow/enforce wrapper, SDK preflight, telemetry checks, thread-local evaluator/executor utilities, explicit-authority MCP `check_policy`, schema exporter scaffolding, reference adapters, and MCP evaluate path | [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md), [`gated_action_dx_layer.md`](gated_action_dx_layer.md) |
-| 11. Sidecar innovation tracks | Keep robotics/VLA/WAM and deep twin research from diluting the commerce RCT story | Sidecar: intake/twin/world-action tracks support the wedge as **upstream evidence**, not a second product center | [`vla_2026_optimizations.md`](vla_2026_optimizations.md), [`world_action_model_architecture_reference.md`](world_action_model_architecture_reference.md), [`source_registration_architecture.md`](source_registration_architecture.md), [`persistent_twin_service_track.md`](persistent_twin_service_track.md) |
-| 12. Governance-aware learning | Introduce distillation, abstention tuning, proof refinement, simulation RL, and statistical model audits as bounded trust-slice components, wired as a four-node governed self-improvement loop (Scenario Generator, Governance Reward Scorer, Governance Learning Sample Store, Advisory Student) over a **typed verdict taxonomy** (`clean_allow` / `clean_deny` / `near_miss_*` / `quarantine` / `escalate` / `verification_mismatch` / `stale_context`) rather than a scalar reward | Window G schema/sample contracts and Window H offline + opt-in live shadow advisory contract implemented; still never authority-bearing | [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md), [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md), [`current_next_steps.md`](current_next_steps.md) |
-| 13. AI-led self-healing | Let assistants diagnose degraded-edge failures, reproduce fixtures, propose scoped patches, run gates, and prepare reviewable promotions | New guarded workstream; no direct production mutation, quarantine clearance, or enforce promotion | [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md), [`current_next_steps.md`](current_next_steps.md) |
-| 14. Optional sandbox substrates | Evaluate stronger isolation providers for untrusted code, eval fan-out, and self-healing rehearsal while preserving PDP/token/verifier authority | CubeSandbox integration sketch drafted as a pilot-only provider boundary; not a core hot-path dependency | [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md), [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md) |
-| 15. Multi-agent safety research alignment | Map funded research directions to SeedCore's RCT testbed, infrastructure, network metrics, and population oversight gaps | Strategy memo drafted; implementation remains future work and must preserve PDP/token/evidence/replay/verifier boundaries | [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md), [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md), [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md) |
-| 16. Tourist Journey AI+VR experience | Build toward an agent-readable, Godot-based tourist and kids/family entertainment journey without weakening the RCT boundary | Initial product/technical plan drafted; first journey slice requires hard headset/device, content, and supervision gates | [`godot_agent_operable_xr_runtime_plan.md`](godot_agent_operable_xr_runtime_plan.md), [`immersive_commerce_and_governed_trade_architecture.md`](immersive_commerce_and_governed_trade_architecture.md) |
-| 17. Agent-native digital city bootstrap | Construct a founder-operated city foundation and service kernel with land/built/network/facility/project twin state, public-safe projections, producer onboarding, agent distribution, ordinary coordination, deterministic provider simulators, and governed infrastructure plus trade/custody actions | Active implementation direction. The strict in-memory 5-3-2-1-1 fixture, public redaction, runtime-profile gate, Haversine discovery, and three REST reads are implemented and focused-test verified; persistence, MCP, service flows, and governed city actions remain pending. This is not municipal/utility authority, and rare-shoe RCT remains the authority-bearing product center | [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md), [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md), [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md), [`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md) |
-
-## 4. What Is Done
-
-Treat these as real repo capabilities, not aspirational roadmap items:
-
-- governed execution baseline with `ActionIntent`, short-lived
-  `ExecutionToken`, HAL enforcement, revocation, and emergency cutoff
-- signed transition receipts, evidence bundles, replay surfaces, and
-  verification workflows
-- Slice 1 Restricted Custody Transfer sign-off bundle and contract freeze
-- Q2 verification namespace and operator/proof surfaces under
-  `/api/v1/verification/*`
-- hot-path promotion semantics, parity evidence persistence, Prometheus status
-  export, and rollback triggers
-- Agent Action Gateway v1 schema hardening, idempotency, **commerce-shaped**
-  field binding (reference + Shopify-sandbox adapters), and MCP evaluate path
-- **Gated Action DX MVP and Agent Self-Regulation surface**: `@gated_action`
-  now supports shadow and guarded enforce mode at
-  `src/seedcore/sdk/gated_action.py`. Enforce mode requires an allow decision
-  with an `ExecutionToken` and a configured executor before business logic can
-  run, preserving fail-closed behavior at the SDK boundary. Targeted tests cover
-  fail-closed evaluator/executor paths, thread-local isolation, telemetry
-  evidence validation, no-execute shadow behavior, and post-execution closure
-  failures.
-- **Explicit-authority MCP policy helper**:
-  `seedcore.agent_action.check_policy` is registered in
-  `src/seedcore/plugin/mcp_server.py` as a high-level preflight helper for
-  agents. It requires caller-provided `buyer_did`, `delegation_id`, and
-  `session_token` or `actor_token`; it no longer fabricates delegation or
-  identity defaults.
-- **Gated action schema scaffolding**:
-  `src/seedcore/sdk/schema_exporter.py` scans `@gated_action` declarations and
-  emits path-qualified manifest IDs, avoiding duplicate function-name
-  collisions when generating PDP/PKG scaffolds.
-- PKG/RCT contract alignment through manifest, taxonomy, decision-graph, and
-  triple-hash replay binding
-- operator console **legibility layer**: case verdict strip, replay verdict,
-  anomaly-first queue (`operator_signals`), deterministic copilot panel, and
-  optional **`GET /api/v1/verification/operator/copilot-brief`** (stored
-  prompts + strict LLM validation with citations / `uncertainty_notes`; see
-  section 4.1 of [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md) and
-  `docs/schemas/operator_copilot_brief_v0.schema.json`)
-- **Fixture-only governed RAG harness**:
-  `src/seedcore/ops/rag/controlled_retriever.py`,
-  `src/seedcore/ops/rag/pdp_callout.py`, and
-  `src/seedcore/ops/rag/harness.py` exercise the current RAG evidence boundary
-  from controlled chunk retrieval through deterministic classification-ceiling
-  policy decisions, allow-only evidence promotion, guarded prompt assembly,
-  strict parser handling, citation-membership validation, and `RAGTrace`
-  creation. This is a local harness, not a production connector, provider-backed
-  generator, semantic verifier, or authority path.
-- **Virtual NFC simulation lane**: `src/seedcore/ops/evidence/nfc_verification.py`
-  now provides a pure deterministic dynamic NFC verifier for fixture evidence;
-  `tests/fixtures/nfc/` covers happy path, replay / clone, stale scan, tamper,
-  wrong asset, and incomplete payload cases; rare-shoe RCT delegates to the
-  helper while preserving compatibility reason codes; and replay materialization
-  exposes redacted NFC verifier metadata without challenge or key material.
-- **Window H live governance advisory shadow contract**:
-  `src/seedcore/ml/ml_service.py` exposes
-  `POST /xgboost/governance/advisory` and
-  `POST /xgboost/governance/train_shadow_student` over conservative and
-  XGBoost `GovernanceShadowStudent` backends. Candidate students are evaluated
-  before activation, rejected artifacts cannot replace the active student, and
-  `src/seedcore/ops/pdp_hot_path.py` can enqueue opt-in best-effort shadow
-  advisory comparisons after the authoritative PDP response is built; and
-  `src/seedcore/ops/governance_learning/shadow_parity_log.py` stores advisory
-  telemetry in a separate `.local-runtime/governance_shadow_advisory` JSONL /
-  SQLite lane. This does not affect PDP disposition, `ExecutionToken`s,
-  obligations, evidence, quarantine, verifier, or compiled-authz parity DBs.
-
-Primary proof docs:
-
-- [`archive/historical/restricted_custody_transfer_demo_signoff_report.md`](archive/historical/restricted_custody_transfer_demo_signoff_report.md)
-- [`current_next_steps.md`](current_next_steps.md)
-- [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
-
-## 5. Current Status
-
-As of **2026-08-17**, the project is in **Q2 operational closure -> Q3 bounded
-agent integration**, still on one wedge:
-
-- The **June stack triage is now applied**: staged authz-graph rollout,
-  RESULT_VERIFIER telemetry gates, Edge Trust Adapter fixtures, evidence
-  causality fields, hot-path transport/crypto benchmarks, counter-ledger
-  acceleration, guarded ingress identity, and retrieval authorization are the
-  month-level hardening priorities. None of these substrate choices bypasses
-  PDP allow, scoped `ExecutionToken`, evidence closure, or verifier acceptance.
-- The **local autonomous application market signal is now explicit**:
-  RTX Spark / DGX-class hardware, Windows local-agent primitives, frontier
-  coding/security agents, and agentic creative suites make asynchronous digital
-  workers more practical in 2026. This strengthens urgency for SeedCore's
-  trust-runtime wedge, but it does not change the authority rule: local agent
-  capability, model output, and application-agent output are proposal,
-  simulation, diagnosis, or evidence substrates, not execution permission.
-- **Commerce RCT** remains the only must-win workflow; docs and code should
-  default to "order/quote/value + physical scope + token + evidence" language.
-- **Collectible rare-shoe transfer** is now the recommended commercial-grade
-  vertical scene for the commerce RCT wedge, because it makes authentication,
-  provenance, high-value policy gates, physical handoff, and replayable proof
-  concrete without changing the underlying runtime category.
-- Host-first and CI gates for verification contracts and degraded-edge drills
-  are implemented; **remote Kind + GCP-style topology** is green for API,
-  Ray, ingress, HAL, hot-path status/metrics, and scripted kube verification
-  (see [`kube_topology_validation_q2_signoff.md`](kube_topology_validation_q2_signoff.md)).
-- A **kube verification lane** is checked in (`deploy/verify-kube-topology.sh`);
-  running the **verification API and full four-screen capture inside the same
-  cluster** (plus optional Kafka) is the next topology milestone—not more
-  feature surface area.
-- `RESULT_VERIFIER` fail-closed enforcement is in production posture for the RCT
-  slice, including source-preserving Rust replay verification and
-  token-specific CRL revocation on terminal mismatch; remaining risk is
-  operational hardening (DB integration tests, multi-worker contention,
-  quarantine runbooks)—see top of [`current_next_steps.md`](current_next_steps.md).
-- The autonomy-ready overlay is now explicit: coding and action agents may use
-  evaluate/preflight, simulation, diagnosis, and patch-proposal loops, but the
-  PDP, verifier, and operator promotion gates remain the only authority path.
-- The latest Agent Self-Regulation implementation has been review-fixed and
-  targeted-test verified: `@gated_action` enforce mode is token/executor gated,
-  MCP `check_policy` requires explicit authority and identity, and the gated
-  action schema exporter preserves duplicate function names with path-qualified
-  action IDs.
-- **CubeSandbox has been evaluated as a dependency candidate** for optional
-  isolated execution. The current judgment is pilot-next as a provider adapter
-  for untrusted code, eval fan-out, and self-healing dry runs, not a core
-  hot-path dependency and not an authority source.
-- The virtual NFC simulation lane for the rare-shoe RCT scene is implemented
-  and workspace-verified. It strengthens physical-presence evidence with
-  deterministic fixture CMAC checks, monotonic counters, freshness, tamper, and
-  wrong-asset coverage while remaining evidence-only and non-authority-bearing.
-- **Window H governance-aware learning** now has both the offline advisory
-  scaffold, an opt-in live shadow advisory contract, and a gated XGBoost shadow
-  backend. Shadow predictions are schema-bounded, explicit-training only, and
-  logged in an isolated advisory telemetry store; rejected candidates cannot
-  become active, and advisory outputs can expose false-safe signals for review
-  but cannot alter PDP decisions, mint tokens, update evidence, or clear
-  quarantine.
-- The **agent-native digital city** direction now has a sovereign bootstrap
-  implementation contract. SeedCore initially owns the modular city foundation,
-  service kernel, and deterministic provider simulators, then replaces them
-  with live adapters one boundary at a time. Design, observed, operational,
-  official/external, trust, relevance, availability, payment, policy admission,
-  physical execution, and verifier closure remain distinct even when one
-  founder operates every bootstrap module.
-
-Use [`current_next_steps.md`](current_next_steps.md) as the live status log.
-
-## 6. Next Plan
-
-Cleanup note: the RCT commerce degraded-edge drill expansion is now complete.
-It is no longer active next-plan work. The shipped coverage is preserved in
-`tests/test_rct_commerce_drill_matrix.py` and enforced by
-`scripts/host/verify_q2_degraded_edge_drill_matrix.sh`: stale graph, PKG
-outage, approval-store outage, approval-resolver fail-closed, Redis bus
-fallback, commerce-adapter HTTP timeout, coordinate tamper, cross-product
-replay injection, and replay-router workflow-key assertions all keep evidence
-tied to `product_ref` / `order_ref` / `quote_ref` / `workflow_join_key`.
-
-Real near-term execution order (commerce-coherent and autonomy-ready):
-
-1. **Apply the June one-month stack triage before expanding roadmap scope.**
-   The current priority is staging authz-graph rollout, RESULT_VERIFIER
-   telemetry gates, Edge Trust Adapter fixtures, evidence causality fields,
-   hot-path transport/crypto benchmarks, explicit counter-ledger acceleration,
-   guarded ingress identity, and two-stage retrieval authorization. These are
-   trust-runtime hardening tasks under the existing PDP, `ExecutionToken`,
-   evidence, replay, and verifier contracts.
-2. **Use the autonomous-application investigation to sharpen Q3 urgency
-   without expanding scope.** Keep
-   [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
-   tied to Agent Self-Regulation, hardware-anchored telemetry, Replay Studio,
-   and AI-led self-healing. The useful read is "applications are becoming
-   autonomous work systems that need governed admission," not "SeedCore should
-   become a general OS agent, creative suite, scientific workbench, or coding
-   department."
-3. **Landed and acceptance-wired: Gated Action DX + Agent Self-Regulation drill**
-   over one RCT path. The SDK supports shadow and guarded enforce modes; MCP
-   `check_policy` exposes explicit-authority preflight; the schema exporter
-   creates path-qualified gated-action manifests; and
-   `scripts/host/verify_agent_self_regulation_drill.sh` captures reviewable
-   replay/evidence refs without live mutation. The deny/quarantine/stale
-   telemetry/out-of-bounds/missing-evidence variants are now enforced through
-   `scripts/host/verify_q2_degraded_edge_drill_matrix.sh`.
-4. **Initial Execution Replay Studio slice landed:** the verification API now
-   composes a read-only `seedcore.execution_replay_studio.v0` payload and the
-   operator console exposes `/studio?workflow_id=...` from the replay page.
-   Next Studio work is artifact-depth hardening: richer policy snapshot fields,
-   telemetry hash verification, signer trust-bundle/revocation checks, and
-   toxic-path fixture coverage
-   ([`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)).
-5. **Close deployment-realistic proof topology**: same cluster runs that already
-   pass hot-path gates **plus** verification API where operator/replay
-   acceptance requires it; treat Kafka as transport follow-on per
-   [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md).
-6. Keep the four-screen verification surface contract-stable while hardening
-   **external-agent** debugging (minimal Gemini read bundle, gateway correlation,
-   commerce adapters)—no parallel "second demo."
-7. Extend Studio across the rare-shoe commercial scene once the fixture-backed
-   generic RCT Studio payload and operator route are stable.
-8. Continue the rare-shoe RCT fixture path as a commercial vertical scene:
-   source-registration artifacts for authentication/provenance, gateway
-   adapter inputs for listing/quote/order/value, the now-implemented virtual
-   NFC/scan evidence lane, hash-bound forensic video proof, and proof-surface
-   checks that keep public proof narrow.
-9. Advance edge telemetry closure and signed forensic-block linkage without
-   reopening frozen projection contracts.
-10. Continue Window H from the implemented gated XGBoost shadow backend toward
-   broader replay-derived evaluation coverage and Window I abstention taxonomy
-   hardening while keeping the advisory student outside the authority path:
-   [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
-11. Define the first AI-led self-healing target around a degraded-edge or
-   telemetry/outbox failure, with the repair loop ending in a reviewable patch
-   and gate evidence rather than direct production mutation.
-12. Convert TPM/KMS signer runbook drills into repeatable operational evidence.
-
-Primary planning docs:
-
-- [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
-- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
-- [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
 - [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
-- [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
-- [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
-- [`edge_telemetry_evidence_closure_draft.md`](edge_telemetry_evidence_closure_draft.md)
-- [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
-- [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
-
-## 7. How To Read The Rest Of This Directory
-
-### Active execution and contracts
-
-- [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
-  — long-range **autonomous trade** architecture (keep RCT as the shipped slice)
-- [`current_next_steps.md`](current_next_steps.md)
-- [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md)
-- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
-  - 2026 market-signal memo for RTX Spark / DGX-class systems, local OS agents,
-    autonomous code/repair agents, creative/scientific application agents, and
-    why SeedCore should accelerate governed execution while rejecting
-    hardware-, model-, or app-output-as-authority
-- [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
-- [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)
-- [`agent_action_gateway_contract.md`](agent_action_gateway_contract.md)
-- [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
-- [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md)
-- [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
+- [`agentic_delegation_control_plane.md`](agentic_delegation_control_plane.md)
+- [`agentic_intent_orchestration_plan.md`](agentic_intent_orchestration_plan.md)
 - [`verifying_delegation_frontier_ai_architectures.md`](verifying_delegation_frontier_ai_architectures.md)
 - [`gated_action_dx_layer.md`](gated_action_dx_layer.md)
-- [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md)
-- [`rare_shoes_collecting_transfer_demo_spec.md`](rare_shoes_collecting_transfer_demo_spec.md)
-- [`pkg_snapshot_rct_alignment_research.md`](pkg_snapshot_rct_alignment_research.md)
-- [`rct_control_posture_env_matrix.md`](rct_control_posture_env_matrix.md) - operator
-  env matrix for `dev/advisory` vs fail-closed `control-rct`
-- [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
-- [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md)
-- [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md)
-- [`hot_path_transport_serialization_spike.md`](hot_path_transport_serialization_spike.md)
-- [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md)
 
-### Historical or frozen references
+The model proposes. An accountable principal constructs the governed intent.
+Delegation must be explicit, attenuated, and replayable.
 
-- [`archive/historical/project_stage_milestone_summary.md`](archive/historical/project_stage_milestone_summary.md)
-- [`archive/historical/killer_demo_execution_spine.md`](archive/historical/killer_demo_execution_spine.md)
-- [`archive/historical/next_killer_demo_contract_freeze.md`](archive/historical/next_killer_demo_contract_freeze.md)
-- [`archive/historical/restricted_custody_transfer_demo_signoff_report.md`](archive/historical/restricted_custody_transfer_demo_signoff_report.md)
-- [`archive/historical/end_to_end_governance_demo_contract.md`](archive/historical/end_to_end_governance_demo_contract.md)
-- [`archive/historical/contract_freeze_zero_trust_terms.md`](archive/historical/contract_freeze_zero_trust_terms.md)
+### Policy And Authorization
 
-### Architecture companion notes
-
-- [`north_star_autonomous_trade_environment.md`](north_star_autonomous_trade_environment.md)
-  (cluster posture includes Kafka; local rollout → [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md))
-- [`seedcore_north_star_architecture_v1.2.0.pdf`](assets/seedcore_north_star_architecture_v1.2.0.pdf)
-  — cleaned visual companion deck for the North Star; not a separate roadmap
-- [`trust_runtime_category_distinction.md`](trust_runtime_category_distinction.md)
-  — category framing reference for external messaging, partner docs, and README
-  language
-- [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md) — phased
-  local broker, topics, and producer order for intent / telemetry / policy outcomes
-- [`memory_module_refactor_spec.md`](memory_module_refactor_spec.md) — draft plan
-  for narrowing `memory/` into explicit working / semantic / incident contracts
-  aligned to the current trust-runtime architecture
-- [`legible_local_memory_vault.md`](legible_local_memory_vault.md) — local-first
-  Markdown vault pattern for human-readable advisory memory, admitted/rejected
-  claim mirrors, and privacy-preserving manual inspection
-- [`seedcore_2027_high_vertical_direction.md`](seedcore_2027_high_vertical_direction.md)
-- [`language_evolution_map.md`](language_evolution_map.md)
-- [`rust_workspace_proposal.md`](rust_workspace_proposal.md)
-- [`persistent_twin_service_track.md`](persistent_twin_service_track.md)
-- [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
-  — long-range city-ecosystem synthesis and promotion gates; surrounding
-  discovery, commerce, logistics, maps, and spatial media remain replaceable
-  adapters around the SeedCore trust slice
-- [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
-  — active founder-operated starting topology, modular-monolith boundaries,
-  closed-world fixtures, simulators, delivery slices, and definition of done
-- [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md)
-  — foundation feature model, construction/maintenance lifecycle, protected
-  infrastructure data posture, reference district, and twin-settlement gates
-
-### Sidecar or lower-priority research tracks
-
-- [`source_registration_architecture.md`](source_registration_architecture.md)
-- [`source_registration_tracking_event_sequence.md`](source_registration_tracking_event_sequence.md)
-- [`source_registration_tracking_event_curl_collection.md`](source_registration_tracking_event_curl_collection.md)
-- [`vla_2026_optimizations.md`](vla_2026_optimizations.md)
-- [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md) — bounded learning plan that converts VLA/distillation ideas into a trust-slice-aligned execution track
-  - Window H status: strict advisory schema, deterministic labeler,
-    replay-derived dataset, conservative and XGBoost shadow students, ML
-    service advisory/train endpoints, isolated shadow telemetry, gated
-    candidate activation, and opt-in PDP shadow hook are implemented.
-- [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md)
-  — shadow-only contract for using statistical distribution tests as
-    model-promotion and review evidence without entering authority-bearing
-    replay or custody paths
-- [`autonomous_verifier_agents_decision_memo.md`](autonomous_verifier_agents_decision_memo.md)
-- [`baseline_task_types_analysis.md`](baseline_task_types_analysis.md)
-- [`agent_capability_skills_relationships.md`](agent_capability_skills_relationships.md)
-- [`agent_capability_skills_quick_reference.md`](agent_capability_skills_quick_reference.md)
-- [`hermes_skill_synthetic_artifact_model.md`](hermes_skill_synthetic_artifact_model.md)
-  - proposed documentation model for representing a Hermes Skill as a SeedCore
-    synthetic artifact while preserving first-class runtime `skill` identity
-- [`nous_instruction_tuning_patterns_for_seedcore.md`](nous_instruction_tuning_patterns_for_seedcore.md)
-  - research note translating Hermes/Nous instruction-tuning patterns into
-    SeedCore-specific post-training workstreams such as contract obedience,
-    tool-call discipline, abstention, and evidence-grounded explanation
-### Local operations and protocol references
-
-- [`HAL_TESTING.md`](HAL_TESTING.md)
-- [`local-macos-8gb.md`](local-macos-8gb.md)
 - [`policy_gate_matrix.md`](policy_gate_matrix.md)
+- [`pkg_authz_graph_rfc.md`](pkg_authz_graph_rfc.md)
+- [`authz_graph_engine_evolution_plan.md`](authz_graph_engine_evolution_plan.md)
+- [`policy_graph_builder_implementation_plan.md`](policy_graph_builder_implementation_plan.md)
+- [`asset_centric_pdp_hot_path_contract.md`](asset_centric_pdp_hot_path_contract.md)
+- [`pdp_authz_graph_staging_rollout.md`](pdp_authz_graph_staging_rollout.md)
+
+The PDP remains synchronous, deterministic, and stateless at decision time.
+Graph, policy, or model upgrades cannot promote themselves into the hot path.
+
+### Execution Authority And Revocation
+
+- [`execution_token_lifecycle_management.md`](execution_token_lifecycle_management.md)
+- [`hot_path_enforcement_promotion_contract.md`](hot_path_enforcement_promotion_contract.md)
+- [`hot_path_shadow_to_enforce_breakdown.md`](hot_path_shadow_to_enforce_breakdown.md)
+- [`rct_control_posture_env_matrix.md`](rct_control_posture_env_matrix.md)
+- [`safety_doctrine_enforcement_plan.md`](safety_doctrine_enforcement_plan.md)
+
+An allow decision is not an ambient permission. Execution requires a fresh,
+scoped, non-revoked token whose constraints survive through the actuator path.
+
+### Evidence, Replay, And Verification
+
 - [`productized_verification_surface_protocol.md`](productized_verification_surface_protocol.md)
-- [`phase0_contract_freeze_manifest.json`](phase0_contract_freeze_manifest.json)
-- [`evidence_bundle_example.json`](evidence_bundle_example.json)
+- [`q2_2026_audit_trail_ui_spec.md`](q2_2026_audit_trail_ui_spec.md)
+- [`execution_replay_studio_development_plan.md`](execution_replay_studio_development_plan.md)
+- [`hardware_anchored_telemetry_mvp_contract.md`](hardware_anchored_telemetry_mvp_contract.md)
+- [`physical_telemetry_processing_contract.md`](physical_telemetry_processing_contract.md)
+- [`edge_telemetry_evidence_closure_draft.md`](edge_telemetry_evidence_closure_draft.md)
+- [`result_verifier_quarantine_remediation_runbook.md`](result_verifier_quarantine_remediation_runbook.md)
 
-### Archived redirect notes
+Evidence must remain bound to the admitted action, inspectable, and replayable.
+Missing or contradictory closure evidence fails closed or enters review or
+quarantine.
 
-- [`archive/README.md`](archive/README.md)
-- [`archive/operator_legibility_mvp.md`](archive/operator_legibility_mvp.md)
-- [`archive/seedcore_positioning_narrative.md`](archive/seedcore_positioning_narrative.md)
+## Delivery And Operations
 
-## 8. Maintenance Rule
+- [`current_next_steps.md`](current_next_steps.md) — active execution order.
+- [`seedcore_2026_execution_plan.md`](seedcore_2026_execution_plan.md) — annual
+  program structure; use current next steps when priorities differ.
+- [`kube_topology_validation_q2_signoff.md`](kube_topology_validation_q2_signoff.md)
+  — topology verification record.
+- [`local-macos-8gb.md`](local-macos-8gb.md) — constrained local environment.
+- [`design_partner_demo_schedule.md`](design_partner_demo_schedule.md) — demo
+  and partner validation schedule.
+- [`freshness_sla_edge_stress_schedule.md`](freshness_sla_edge_stress_schedule.md)
+  — edge freshness and failure testing.
+- [`tpm_fleet_rollout_runbook.md`](tpm_fleet_rollout_runbook.md) — TPM rollout
+  operations.
 
-When changing this directory, avoid creating a second roadmap narrative unless
-there is a strong reason. Prefer this ownership split:
+Repository-level startup and test commands remain in [`../../README.md`](../../README.md).
 
-- `README.md` in this directory = map, stage status, and document ownership
-- `current_next_steps.md` = live status and immediate execution order
-- `seedcore_2026_execution_plan.md` = workstreams, stage goals, and sequencing
-- `q2_2026_audit_trail_ui_spec.md` = product surface and operator UX contract
-  including any non-authoritative dashboard design-token companion
-- `execution_replay_studio_development_plan.md` = advanced read-only forensic
-  replay UI step over the existing verification/replay contracts
-- `policy_graph_builder_implementation_plan.md` = policy-package authoring,
-  structured metadata, customer policy graph templates, and compile/test
-  expectations before PDP promotion
-- `authz_graph_engine_evolution_plan.md` = future-performance schedule for
-  tuple contracts, structural benchmarks, Ray/cache hardening, and native graph
-  kernels, gated by ADR 0011
-- `north_star_autonomous_trade_environment.md` = final ambition and long-range
-  architecture reference
-- `agent_native_digital_city_platform.md` = strategic city-ecosystem synthesis,
-  plane/authority taxonomy, and evidence-gated adoption conditions; it does not
-  own live execution order or detailed local-producer contracts
-- `sovereign_digital_city_bootstrap_plan.md` = solo-first city implementation
-  topology, module/data boundaries, simulator contracts, delivery slices,
-  local operations, and bootstrap acceptance criteria
-- `sovereign_city_foundations_and_infrastructure.md` = city-foundation domain,
-  construction and maintenance lifecycle, network topology, temporal twin,
-  infrastructure action, and foundation acceptance contract
-- `local_kafka_streams_schedule.md` = local Kafka transport rollout (intent,
-  telemetry, policy outcomes) aligned to the north-star cluster table
-- `tourist_design_studio_delivery_schedule.md` = bounded one-venue Tourist
-  Design Studio pilot schedule, release gates, and commercial evidence plan;
-  it remains outside the current RCT authority path
-- `immersive_commerce_and_governed_trade_architecture.md` = portfolio boundary
-  and phased plan for immersive customer experiences alongside governed
-  rare-shoe agentic trade; it keeps XR and AI advisory output out of the RCT
-  authority path
-- `godot_agent_operable_xr_runtime_plan.md` = initial product and feasibility
-  plan for a Godot-based AI+VR tourist journey experience, including journey
-  stages, project invariants, device gates, and the no-authority client
-  boundary
-- operator legibility + copilot API contract = section 4.1 of
-  `q2_2026_audit_trail_ui_spec.md` (keep in sync with
-  `ts/services/verification-api` and operator console)
+## Advisory Learning And Research
 
-If a doc becomes historical, mark it explicitly and point back to one of the
-canonical files above.
+These tracks can create recommendations, diagnostics, fixtures, or promotion
+evidence. They do not alter policy, mint tokens, execute actions, clear
+quarantine, or close evidence by themselves.
+
+### Learning And Evaluation
+
+- [`seedcore_flywheel_harness.md`](seedcore_flywheel_harness.md)
+- [`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md)
+- [`governance_learning_window_g_plan.md`](governance_learning_window_g_plan.md)
+- [`statistical_model_audit_shadow_contract.md`](statistical_model_audit_shadow_contract.md)
+- [`agent_system_eval_schedule.md`](agent_system_eval_schedule.md)
+- [`nous_instruction_tuning_patterns_for_seedcore.md`](nous_instruction_tuning_patterns_for_seedcore.md)
+
+### Retrieval, Memory, And Reasoning
+
+- [`policy_governed_rag_research_adoption_review.md`](policy_governed_rag_research_adoption_review.md)
+- [`kg_rag_research_reference.md`](kg_rag_research_reference.md)
+- [`zero_cold_start_policy_evolution_ultra.md`](zero_cold_start_policy_evolution_ultra.md)
+- [`legible_local_memory_vault.md`](legible_local_memory_vault.md)
+- [`memory_module_refactor_spec.md`](memory_module_refactor_spec.md)
+
+### Multi-Agent, Embodied, And Infrastructure Research
+
+- [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md)
+- [`world_action_model_architecture_reference.md`](world_action_model_architecture_reference.md)
+- [`vla_2026_optimizations.md`](vla_2026_optimizations.md)
+- [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md)
+- [`cubesandbox_dependency_integration_sketch.md`](cubesandbox_dependency_integration_sketch.md)
+- [`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md)
+
+## Protocol And Integration References
+
+- [`ap2_seedcore_rct_alignment_memo.md`](ap2_seedcore_rct_alignment_memo.md)
+- [`kafka_delegated_intent_ingress.md`](kafka_delegated_intent_ingress.md)
+- [`local_kafka_streams_schedule.md`](local_kafka_streams_schedule.md)
+- [`gemini_phase1_quickstart.md`](gemini_phase1_quickstart.md)
+- [`agent_capability_skills_quick_reference.md`](agent_capability_skills_quick_reference.md)
+- [`agent_capability_skills_relationships.md`](agent_capability_skills_relationships.md)
+
+External protocols and clients may carry intent, identity, payment context, or
+tool calls. They remain adapters around the SeedCore authority boundary.
+
+## Archive
+
+Superseded contracts, sign-off records, and historical status summaries live in
+[`archive/README.md`](archive/README.md). A historical document may explain why
+a decision was made, but it is not an active implementation plan unless a
+current canonical document explicitly adopts it.
+
+## Maintenance Rules
+
+1. Keep [`application_directions.md`](application_directions.md) limited to
+   portfolio decisions, track boundaries, dependencies, and promotion gates.
+2. Keep [`current_next_steps.md`](current_next_steps.md) limited to the active
+   queue, exit conditions, and verification commands.
+3. Put durable interfaces and security invariants in contract documents, not
+   status logs.
+4. Move completed chronology and superseded decisions to `archive/` or rely on
+   Git history; do not append indefinite dated updates to the active queue.
+5. Label each new document as active, supporting, research, or historical.
+6. Never describe advisory AI, memory, retrieval, learning, simulation, or
+   presentation as an authority source.

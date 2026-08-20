@@ -13,6 +13,7 @@ Archived redirect notes:
 
 Archived historical/frozen references:
 
+- [`historical/development_status_log_through_2026-08-17.md`](historical/development_status_log_through_2026-08-17.md)
 - [`historical/project_stage_milestone_summary.md`](historical/project_stage_milestone_summary.md)
 - [`historical/killer_demo_execution_spine.md`](historical/killer_demo_execution_spine.md)
 - [`historical/next_killer_demo_contract_freeze.md`](historical/next_killer_demo_contract_freeze.md)
