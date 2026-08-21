@@ -105,12 +105,22 @@ fingerprints, custody evidence, or verifier closure.
 The detailed contract lives inside
 [`local_producer_provenance_and_rct_scenario_expansion.md`](local_producer_provenance_and_rct_scenario_expansion.md).
 
-## Direction 4: Sovereign Agent-Native City Bootstrap
+## Direction 4: AI-Era Journey Digital City And Sovereign Bootstrap
 
-The city direction supplies a founder-operable foundation for local discovery,
-producer and service profiles, ordinary coordination, provider simulation, and
-eventual governed physical action. It is a modular bootstrap around SeedCore's
-trust slice, not an expansion of the PDP into a city platform.
+The city direction supplies a founder-operable foundation and a journey-driven
+experience for local discovery, producer and service profiles, ordinary
+coordination, provider simulation, and eventual governed physical action. It is
+a modular bootstrap around SeedCore's trust slice, not an expansion of the PDP
+into a city platform.
+
+The product goal is an AI-era journey digital city that helps a tourist express
+time, budget, mobility, accessibility, dietary, family, language, and interest
+requirements and quickly receive a small, source-aware, explainable journey in
+an unfamiliar city. Pattaya is the first bounded reference setting. The city
+grows through reviewed SeedCore developer/operator improvements and
+owner-controlled contributions from independent businesses. Tourist demand and
+outcomes may suggest improvements, but they do not become authority or verified
+fact by themselves.
 
 The implemented bounded slice includes:
 
@@ -121,13 +131,16 @@ The implemented bounded slice includes:
 - read-only query, projection, and anchor discovery with pure-Python Haversine
   filtering.
 
-Persistence, MCP distribution, producer/service lifecycle, ordinary
-reservations, and governed city actions remain pending. PostGIS, H3, OGC,
-IFC/BIM, maps, 3D, payments, logistics, and live provider integrations are
-adopted only after a measured need and a reviewed promotion gate.
+PostgreSQL persistence is implemented but awaits operational review and
+promotion. MCP distribution, producer/service lifecycle, ordinary reservations,
+the Pattaya reference journey, and governed city actions remain pending.
+PostGIS, H3, OGC, IFC/BIM, maps, 3D, payments, logistics, and live provider
+integrations are adopted only after a measured need and a reviewed promotion
+gate.
 
 Read:
 
+- [`journey_driven_digital_city_experience.md`](journey_driven_digital_city_experience.md)
 - [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
 - [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
 - [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md)

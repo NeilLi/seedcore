@@ -874,6 +874,11 @@ defined in
 defines the long-range ecosystem planes, protocol posture, risks, and promotion
 gates.
 
+[`journey_driven_digital_city_experience.md`](journey_driven_digital_city_experience.md)
+defines the tourist-demand contract, independent-business participation model,
+visual journey, Pattaya reference pilot, and product measurements above this
+bootstrap.
+
 [`sovereign_city_foundations_and_infrastructure.md`](sovereign_city_foundations_and_infrastructure.md)
 defines what the sovereign city actually contains below commerce: spatial
 identity, land, built assets, networks, facilities, environment, construction,

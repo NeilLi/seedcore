@@ -1127,6 +1127,10 @@ taxonomy, and adoption gates**.
 
 It does not replace the detailed contracts below:
 
+- [`journey_driven_digital_city_experience.md`](journey_driven_digital_city_experience.md)
+  owns tourist outcomes, co-created growth, demand-to-journey matching,
+  independent-business participation, the visual Pattaya reference experience,
+  and product measurements;
 - [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
   owns the solo-first modular-monolith topology, closed-world modules,
   simulator contracts, delivery slices, operations, and bootstrap definition

@@ -122,15 +122,35 @@ Exit condition: agents and web clients can discover and explain public-safe
 claims, but cannot book, buy, release, approve, transfer custody, or clear
 quarantine through a read endpoint.
 
-### 5. Add Ordinary Coordination And Deterministic Providers
+### 5. Build The Pattaya Reference Journey And Add Ordinary Coordination
 
-After C2 is green, add one ordinary reservation lifecycle and deterministic
-payment, logistics, or facility-provider simulators. Ordinary coordination
-must remain separate from policy admission.
+After C2 is green, apply the product contract from
+[`journey_driven_digital_city_experience.md`](journey_driven_digital_city_experience.md)
+to one bounded Pattaya-area fixture or explicitly consented reference journey.
 
-Exit condition: availability and commercial acceptance have explicit states
-and cannot be confused with `policy-admitted`, `physically-attempted`, or
-`verifier-closed` state.
+Work in order:
+
+1. capture a private tourist request with explicit time, budget, mobility,
+   accessibility, dietary, family, language, and interest constraints;
+2. return a small journey over three to five eligible business profiles with
+   source, freshness, requirement-fit reasons, unmet constraints, and a
+   deterministic fallback;
+3. render the journey as low-bandwidth proof cards plus one illustrated 2D
+   reference area before introducing 3D or city-scale map infrastructure;
+4. measure time to first usable journey, hard-constraint satisfaction,
+   source/freshness coverage, and owner correction without using those metrics
+   as authority inputs; and
+5. add one ordinary reservation lifecycle and deterministic payment, logistics,
+   or facility-provider simulator.
+
+Ordinary coordination must remain separate from policy admission. No live
+Pattaya fact is current merely because it appears in a fixture, generated
+journey, or owner-unconfirmed draft.
+
+Exit condition: the reference journey visibly satisfies or discloses every hard
+constraint, stale or unavailable stops produce a bounded fallback, and
+availability and commercial acceptance cannot be confused with
+`policy-admitted`, `physically-attempted`, or `verifier-closed` state.
 
 ### 6. Pilot Two Governed City Actions (C3)
 

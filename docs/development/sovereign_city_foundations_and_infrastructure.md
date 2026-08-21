@@ -1135,6 +1135,10 @@ Primary references:
 
 ## 18. Relationship To Other SeedCore Documents
 
+- [`journey_driven_digital_city_experience.md`](journey_driven_digital_city_experience.md)
+  owns the tourist-demand contract, independent-business growth loop, visual
+  journey experience, Pattaya reference scope, and product measurements above
+  this foundation;
 - [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
   owns the combined solo-first implementation sequence and city service layer;
 - [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)

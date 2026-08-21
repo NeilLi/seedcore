@@ -66,10 +66,13 @@ Read the portfolio decision, dependencies, and promotion gates in
 - [`owner_creator_external_sdk_and_plugin_surface.md`](owner_creator_external_sdk_and_plugin_surface.md)
   — vendor-neutral external distribution and adapter boundary.
 
-### Sovereign City Bootstrap
+### AI-Era Journey Digital City And Sovereign Bootstrap
 
 - [`agent_native_digital_city_platform.md`](agent_native_digital_city_platform.md)
   — long-range ecosystem and plane separation.
+- [`journey_driven_digital_city_experience.md`](journey_driven_digital_city_experience.md)
+  — tourist demand, owner-controlled local-business participation, visual
+  journeys, Pattaya reference scope, and product measurements.
 - [`sovereign_digital_city_bootstrap_plan.md`](sovereign_digital_city_bootstrap_plan.md)
   — founder-operated topology, delivery slices, simulators, and acceptance
   gates.
