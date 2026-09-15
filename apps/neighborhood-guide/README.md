@@ -1,89 +1,117 @@
-# Neighborhood Guide — Blender + Godot local starter
+# SeedCore Digital City — initial spatial application
 
-An isolated, presentation-only Godot 4.7 project for the curated loop:
+The default scene opens directly into **Foundry Lane**, a fictional 3D district.
+It is a local application scaffold for the journey/discovery layer above
+SeedCore: inspect places, ask for a stop, preview a pedestrian route, and follow
+the visitor through the neighborhood.
 
-```text
-question / mood → tag match → optional detour → walk line → POI story
-```
-
-It starts with fictional POIs and primitive geometry so the interaction and
-asset pipeline can be validated before any real neighborhood data or content
-is introduced. It does not call SeedCore services and cannot authorize a
-booking, payment, custody transition, policy decision, or evidence claim.
-
-## Installed local tools
-
-The supported local baseline is:
-
-| Tool | Version | Role |
-| --- | --- | --- |
-| Godot | 4.7.2 | scene composition, route prototype, desktop smoke test |
-| Blender | 5.2.1 LTS | modular source meshes, material baking, GLB export |
-
-Godot is used with the GL Compatibility renderer for fast desktop iteration;
-profile the Mobile renderer on the actual target before making mobile or web
-claims. Keep Godot and any future OpenXR plugins pinned in this document and
-rerun the device gate when they change.
-
-## First run
+## Run
 
 ```bash
 cd /Users/ningli/project/seedcore/apps/neighborhood-guide
+godot --path .
+```
+
+For editing: `godot --path . --editor`, open `scenes/City.tscn`, and press F5.
+Tested with Godot **4.7.2**, GL Compatibility, and Blender **5.2.1 LTS**
+on Apple Silicon. Launches in a 1280 × 800 landscape window.
+
+## Try the application
+
+1. Click a storefront or a place button to open its description.
+2. Search for `coffee`, `handmade textile`, `wood carving`, or `fresh air`.
+3. Turn **Garden detour** on or off before planning a route.
+4. Click **Find a walk** or **Walk here**, then **Start walk**.
+5. Watch the visitor follow sidewalks and a marked crossing. The place card
+   changes at each stop. Pause/resume, replay, or reset the walk.
+
+Right-drag orbits, middle-drag pans, and the wheel zooms. **Reset view** restores
+the district framing. Unknown/empty searches explain that no match exists and
+clear any previous route. Replanning begins at the marked south-side entrance;
+live rerouting from an arbitrary visitor position is not implemented.
+
+## What's implemented
+
+- Editable Blender district and imported GLB: café, textile studio, wood
+  workshop, pocket garden, furniture, lamps, trees, sidewalks, and crossings.
+- Native Godot 3D camera, selectable buildings, and reusable `POIResource`
+  data on `POIAnchor3D` entrance markers.
+- Deterministic interest-tag matching and optional garden stop.
+- AStar3D pedestrian graph, visible route, metric distance, estimated walking
+  time, visitor movement, and arrival interaction.
+- Native Godot controls for search, inspection, and walking state.
+
+## Architecture and extension points
+
+| Surface | File / role |
+| --- | --- |
+| Application scene | `scenes/City.tscn`: imported district, camera, editable POI resources and entrance markers |
+| Application state | `scripts/city.gd`: selection, matching, itinerary, visitor, and interface |
+| Pedestrian network | `scripts/city_routes.gd`: explicit sidewalk graph and two crossings |
+| View | `scripts/city_camera.gd`: orbit, pan, zoom, and reset |
+| Art source | `assets/blender/foundry_lane.blend`: editable objects organized by collection |
+| Engine asset | `assets/environment/foundry_lane.glb`: portable export; no Blender needed to run |
+| Rebuild recipe | `tools/build_district.py`: deterministic metric fixture generation |
+
+Road modules are 4 × 4 m with their top at ground level; sidewalks are 2 × 4 m
+with a 0.15 m curb. Storefront footprints are 4 × 4 m. The textile building adds
+a 3 m upper floor to a 3.5 m ground floor. Source origins are at bottom-center.
+All coordinates are meters; the exporter converts Blender Z-up to Godot Y-up.
+
+The pedestrian network follows sidewalk centerlines and crosses the road only
+at X = ±12 m. It rejects positions off that network. It is an explicit fixture
+graph, **not a baked NavigationMesh or a real-world routing service**. Replace
+or extend it as the district grows. See Godot's official
+[3D navigation overview](https://docs.godotengine.org/en/stable/tutorials/navigation/navigation_introduction_3d.html).
+
+The previous `Landing.tscn` and primitive `Main.tscn` remain as design references;
+neither is the application entry point.
+
+## Blender editing and asset rebuild
+
+Open `assets/blender/foundry_lane.blend` to edit individual buildings, furniture,
+and street modules. Export the environment as GLB with Y-up, modifiers applied,
+and animations/cameras/lights disabled. Lighting is authored in Godot.
+The source folder has `.gdignore`, so the engine imports only the GLB.
+
+The generated model uses 12 shared solid-color materials; it does not yet use
+the planned texture atlas or baked lightmaps. The entire small fixture is one
+GLB for this first scaffold. Individual asset exports can replace it later.
+
+Rebuild from the recipe:
+
+```bash
+blender --background --python tools/build_district.py -- --replace-generated
+godot --headless --path . --editor --quit
+```
+
+**Copy any hand-edited source and export before rebuilding.** The command replaces
+both generated files. Without `--replace-generated` the recipe refuses to
+overwrite them. For meshes, `-col` adds a static concave collision with the
+visible mesh; `-colonly` omits its visible mesh, and `-convcol` requests convex
+collision. These are importer behaviors, not evidence or execution permissions.
+
+## Checks and visual review
+
+```bash
 ./tools/check_environment.sh
 ./tools/validate_project.sh
-godot --path . --editor
+godot --path . --resolution 1440x900 --script res://tools/render_city.gd -- /tmp/seedcore-digital-city.png
 ```
 
-In the editor, open `scenes/Main.tscn` and press **F6** or run the project with
-**F5**. Enter a request such as `quiet artisan coffee and fresh air`, then press
-**Find a walk**. The yellow line is an advisory preview through one nearby
-detour to the best matching fictional POI.
+Validation imports assets, loads the default scene, and checks matching,
+unknown requests, constrained routing, off-network rejection, optional detours,
+start/pause/arrival/reset, place buttons, and building selection volumes.
+The render command saves a real GPU-rendered view of the application itself.
 
-## Blender workflow
+## SeedCore integration boundary
 
-1. Open Blender and create `assets/blender/neighborhood_kit.blend`.
-2. Set Units to Metric, Unit Scale to 1.0, and model in meters.
-3. Snap street, sidewalk, and facade modules to the 2 m grid. Keep origins at
-   module bottoms so placement is predictable.
-4. Name collision proxies with `-col` (for example `facade_cafe-col`) and keep
-   them simple, separate meshes. Do not export them as visible detail.
-5. Use a compact material palette/atlas. Bake AO or soft directional light only
-   when the target profile needs it; preserve the unbaked source in `.blend`.
-6. Export a reviewed selection as `assets/models/<kit-or-landmark>.glb` using
-   the script below or Blender's glTF exporter with embedded textures.
+This is the initial **application layer scaffold**, using fictional local data.
+It does not yet connect to the sovereign-city REST discovery service, real
+businesses, live opening hours, AI-generated answers, booking, or commerce.
 
-From Blender’s **Scripting** workspace, run:
-
-```python
-exec(open("/Users/ningli/project/seedcore/apps/neighborhood-guide/tools/export_selected_glb.py").read())
-```
-
-The exporter writes `assets/models/neighborhood_selection.glb`. Rename it to a
-meaningful reviewed asset name before committing. Import `.glb` files into
-`scenes/` as small reusable instances; do not use a giant single city scene.
-
-## Project shape
-
-```text
-assets/blender/     Blender source files and notes
-assets/models/      reviewed GLB exports
-data/               future POI/catalog resources
-scenes/             composed Godot scenes
-scripts/            route, POI, and presentation behavior
-tools/              deterministic local checks and Blender export helper
-```
-
-`NavigationRegion3D` is present in the starter scene as the navigation boundary.
-After sidewalk geometry exists, assign/bake a pedestrian navmesh in Godot with
-approximately a 0.35 m agent radius and 20° maximum slope. The starter route
-renderer intentionally uses an explicit advisory waypoint sequence until that
-navmesh is baked.
-
-## Asset and content boundary
-
-All models, generated geometry, story copy, routes, audio, and camera output
-are presentation artifacts. For real POIs, use only reviewed public-safe
-projections and attach source/consent/freshness in the canonical discovery
-service. This project must consume a narrow read-only projection if it later
-displays verified status; it must never receive an `ExecutionToken` or use
-scene state as authority or evidence.
+The next integration point is a narrow read-only adapter that supplies reviewed
+public POI projections with stable IDs, source references, consent, and freshness.
+Godot selection, routes, and local scene state remain presentation and discovery.
+Consequential actions stay in SeedCore's accountable-agent → PDP →
+ExecutionToken → actuator → evidence/verifier workflow.
