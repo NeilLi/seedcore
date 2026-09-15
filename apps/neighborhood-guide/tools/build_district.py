@@ -97,6 +97,9 @@ for index, (x, h, color, title) in enumerate([
     (0, 6.5, "coral", "02 • Textile studio"),
     (8, 3.5, "sage", "03 • Wood workshop"),
 ]):
+    # The detailed café is a separately editable GLB instance in City.tscn.
+    if index == 0:
+        continue
     active = collection(title)
     box("Storefront-col", (x, h / 2, -4), (4, h, 4), color, 0.09)
     box("Flat parapet roof", (x, h + 0.22, -4), (4.3, 0.44, 4.3), "white", 0.06)
@@ -106,9 +109,6 @@ for index, (x, h, color, title) in enumerate([
     box("Door 1m x 2.1m", (x + 1.15, 1.2, -1.955), (1.0, 2.1, 0.10), "pine")
     box("Door handle", (x + 1.42, 1.2, -1.85), (0.05, 0.32, 0.07), "gold")
     box("Storefront sign backing", (x, 2.95, -1.86), (3.4, 0.45, 0.15), "pine")
-    if index == 0:
-        for stripe in range(8):
-            box("Cafe striped awning", (x - 1.75 + stripe * 0.5, 2.6, -1.4), (0.5, 0.14, 1.3), "coral" if stripe % 2 else "white")
     if index == 1:
         for offset in (-1.1, 1.1):
             box("Upper floor window", (x + offset, 4.9, -1.95), (0.9, 1.2, 0.10), "gold", 0.12)
@@ -124,14 +124,8 @@ for index, (x, h, color, title) in enumerate([
 
 active = collection("04 • Courtyard and street furniture")
 box("Pocket park", (-15, 0.12, -3), (5, 0.24, 6), "pavement", 0.1)
-for x, z in [(-16, -5), (-14, -5), (-16, -1), (-4, -4), (4, -4), (15, -5), (-15, 8.8), (15, 8.8), (-6, 8.8), (6, 8.8)]:
+for x, z in [(-16, -5), (-14, -5), (-16, -1), (4, -4), (15, -5), (-15, 8.8), (15, 8.8), (-6, 8.8), (6, 8.8)]:
     tree(x, z)
-for x, z in [(-10.9, -3.2), (-10.9, -5.3)]:
-    cylinder("Bistro table", (x, 0.9, z), 0.52, 0.12, "wood")
-    cylinder("Table leg", (x, 0.5, z), 0.06, 0.8, "pine")
-    for dz in (-0.8, 0.8):
-        cylinder("Cafe stool", (x, 0.52, z + dz), 0.24, 0.12, "coral")
-        cylinder("Stool leg", (x, 0.3, z + dz), 0.06, 0.45, "pine")
 for x in (-14, -4, 4, 14):
     cylinder("Streetlamp 3.8m", (x, 1.95, 7.1), 0.055, 3.8, "pine")
     box("Lantern", (x, 3.8, 7.1), (0.38, 0.48, 0.38), "gold", 0.04)

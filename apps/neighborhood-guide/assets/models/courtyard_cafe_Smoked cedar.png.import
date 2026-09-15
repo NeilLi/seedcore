@@ -1,0 +1,43 @@
+[remap]
+
+importer="texture"
+type="CompressedTexture2D"
+uid="uid://btw8hxsdeap0g"
+path="res://.godot/imported/courtyard_cafe_Smoked cedar.png-f949c5936c3b8f61777e7bfbc70e2288.ctex"
+metadata={
+"vram_texture": false
+}
+generator_parameters={
+"md5": "416678989e1460c9c5fa1497bf023b70"
+}
+
+[deps]
+
+source_file="res://assets/models/courtyard_cafe_Smoked cedar.png"
+dest_files=["res://.godot/imported/courtyard_cafe_Smoked cedar.png-f949c5936c3b8f61777e7bfbc70e2288.ctex"]
+
+[params]
+
+compress/mode=0
+compress/high_quality=false
+compress/lossy_quality=0.7
+compress/uastc_level=0
+compress/rdo_quality_loss=0.0
+compress/hdr_compression=1
+compress/normal_map=0
+compress/channel_pack=0
+mipmaps/generate=true
+mipmaps/limit=-1
+roughness/mode=0
+roughness/src_normal=""
+process/channel_remap/red=0
+process/channel_remap/green=1
+process/channel_remap/blue=2
+process/channel_remap/alpha=3
+process/fix_alpha_border=true
+process/premult_alpha=false
+process/normal_map_invert_y=false
+process/hdr_as_srgb=false
+process/hdr_clamp_exposure=false
+process/size_limit=0
+detect_3d/compress_to=1

@@ -28,8 +28,15 @@ var walk_button: Button
 var detour_toggle: CheckButton
 var inspect_button: Button
 var poi_buttons: Array[Button] = []
+var cafe_roof: Node3D
+var cafe_controls: HBoxContainer
+var roof_button: Button
+var place_labels: Array[Label3D] = []
 
 func _ready() -> void:
+	cafe_roof = $CafeBuilding.find_child("CafeRoof", true, false) as Node3D
+	if cafe_roof == null:
+		push_error("Café GLB is missing the CafeRoof group; rebuild it with tools/build_cafe.py.")
 	for child in $POIAnchors.get_children():
 		anchors.append(child as POIAnchor3D)
 	_build_lighting()
@@ -72,11 +79,14 @@ func _build_markers() -> void:
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = false
 		add_child(label)
+		place_labels.append(label)
 		label.position = Vector3(anchor.position.x, 4.5, -4)
 		if anchor.poi.id == "textile":
 			label.position.y = 7.7
 		if anchor.poi.id == "garden":
 			label.position = Vector3(-15, 4.7, -3)
+		if anchor.poi.id == "cafe":
+			label.position = Vector3(-8, 4.8, -5)
 		# A dedicated selection volume is independent of asset mesh names.
 		var body := StaticBody3D.new()
 		body.collision_layer = 2
@@ -87,12 +97,16 @@ func _build_markers() -> void:
 		bounds.size = Vector3(4.6, 4, 5.6)
 		if anchor.poi.id == "textile":
 			bounds.size.y = 7
+		if anchor.poi.id == "cafe":
+			bounds.size = Vector3(6.4, 4.2, 6.4)
 		shape.shape = bounds
 		body.add_child(shape)
 		add_child(body)
 		body.position = Vector3(anchor.position.x, bounds.size.y * 0.5, -3)
 		if anchor.poi.id == "garden":
 			body.position.x = -15
+		if anchor.poi.id == "cafe":
+			body.position.z = -5
 	var circle := CylinderMesh.new()
 	circle.top_radius = 0.65
 	circle.bottom_radius = 0.65
@@ -158,7 +172,7 @@ func _build_interface() -> void:
 	var brand := _label(header_row, "SEEDCORE  /  DIGITAL CITY", 22)
 	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_label(header_row, "FOUNDRY LANE     •     Fictional district", 16, MUTED)
-	_button(header_row, "Reset view", func() -> void: $Camera.reset_view())
+	_button(header_row, "District view", show_district)
 	var query_panel := _panel(ui, Vector2(24, 108), Vector2(760, 216))
 	var query_box := VBoxContainer.new()
 	query_panel.add_child(query_box)
@@ -174,7 +188,7 @@ func _build_interface() -> void:
 	search.text_submitted.connect(find_walk)
 	_button(query_row, "Find a walk  →", func() -> void: find_walk(search.text))
 	status_label = _label(query_box, "", 14, MUTED)
-	var side := _panel(ui, Vector2(-322, 232), Vector2(-24, 645), Control.PRESET_TOP_RIGHT)
+	var side := _panel(ui, Vector2(-322, 180), Vector2(-24, 645), Control.PRESET_TOP_RIGHT)
 	var details := VBoxContainer.new()
 	details.add_theme_constant_override("separation", 11)
 	side.add_child(details)
@@ -190,6 +204,10 @@ func _build_interface() -> void:
 	story_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	story_label.custom_minimum_size = Vector2(254, 98)
 	inspect_button = _button(details, "Walk here  →", func() -> void: plan_walk(selected))
+	cafe_controls = HBoxContainer.new()
+	details.add_child(cafe_controls)
+	_button(cafe_controls, "View café", focus_cafe)
+	roof_button = _button(cafe_controls, "Roof off", toggle_cafe_roof)
 	var footer := _panel(ui, Vector2(24, -152), Vector2(-24, -24), Control.PRESET_BOTTOM_WIDE)
 	var footer_box := VBoxContainer.new()
 	footer_box.add_theme_constant_override("separation", 10)
@@ -214,12 +232,34 @@ func _build_interface() -> void:
 
 func select_place(anchor: POIAnchor3D) -> void:
 	selected = anchor
+	cafe_controls.visible = anchor.poi.id == "cafe"
 	title_label.text = anchor.poi.display_name
 	category_label.text = ("COURTYARD" if anchor.poi.category == "green_spot" else anchor.poi.category.to_upper()) + "  /  DEMO PLACE"
 	story_label.text = anchor.poi.story_snippet
 	highlight.position = anchor.position + Vector3(0, 0.035, 0)
 	for index in poi_buttons.size():
 		poi_buttons[index].add_theme_stylebox_override("normal", _style(GOLD if anchors[index] == selected else Color("e8ecdf"), 8))
+
+func focus_cafe() -> void:
+	$Camera.focus_cafe(cafe_roof != null and not cafe_roof.visible)
+	for label in place_labels:
+		label.visible = false
+	status_label.text = "Komorebi café • Drag to orbit; switch the roof off to look inside."
+
+func toggle_cafe_roof() -> void:
+	if cafe_roof == null:
+		return
+	cafe_roof.visible = not cafe_roof.visible
+	roof_button.text = "Roof off" if cafe_roof.visible else "Roof on"
+	focus_cafe()
+
+func show_district() -> void:
+	$Camera.reset_view()
+	for label in place_labels:
+		label.visible = true
+	if cafe_roof != null:
+		cafe_roof.visible = true
+		roof_button.text = "Roof off"
 
 func match_place(query: String) -> POIAnchor3D:
 	var regex := RegEx.new()
