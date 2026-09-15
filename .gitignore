@@ -22,6 +22,9 @@ env/
 # OS
 .DS_Store
 
+# Godot editor cache and imported resources (source scenes and assets are tracked)
+apps/neighborhood-guide/.godot/
+
 # Local presentation build and QA artifacts
 .tmp/
 *.pptx.inspect.ndjson
