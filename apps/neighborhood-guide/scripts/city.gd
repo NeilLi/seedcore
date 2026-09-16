@@ -47,6 +47,24 @@ func _ready() -> void:
 	_build_interface()
 	select_place(anchors[0])
 	status_label.text = "Explore the district or ask for a place to begin."
+	_apply_entrance()
+
+func _apply_entrance() -> void:
+	var entry: String = str(get_tree().root.get_meta("neighborhood_entry", "explore"))
+	get_tree().root.remove_meta("neighborhood_entry")
+	if entry in ["textile", "wood"]:
+		search.text = entry
+		for anchor in anchors:
+			if anchor.poi.id == entry:
+				select_place(anchor)
+				plan_walk(anchor)
+				break
+	elif entry == "guide":
+		status_label.text = "Your local guide: try coffee, textile, wood, or garden."
+		search.call_deferred("grab_focus")
+
+func go_home() -> void:
+	get_tree().change_scene_to_file("res://scenes/Landing.tscn")
 
 func _build_lighting() -> void:
 	var environment := Environment.new()
@@ -171,7 +189,8 @@ func _build_interface() -> void:
 	header_row.add_theme_constant_override("separation", 22)
 	var brand := _label(header_row, "SEEDCORE  /  DIGITAL CITY", 22)
 	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_label(header_row, "FOUNDRY LANE     •     Fictional district", 16, MUTED)
+	_label(header_row, "FOUNDRY LANE  •  Local preview", 14, MUTED)
+	_button(header_row, "Home", go_home)
 	_button(header_row, "District view", show_district)
 	var query_panel := _panel(ui, Vector2(24, 108), Vector2(760, 216))
 	var query_box := VBoxContainer.new()

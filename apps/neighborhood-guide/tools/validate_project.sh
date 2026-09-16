@@ -15,8 +15,9 @@ log_file="$log_dir/godot-validation.log"
 "$godot_bin" --headless --path "$project_root" --editor --quit 2>&1 | tee "$log_file"
 "$godot_bin" --headless --path "$project_root" --quit-after 5 2>&1 | tee -a "$log_file"
 "$godot_bin" --headless --path "$project_root" --script res://tools/test_city.gd 2>&1 | tee -a "$log_file"
+"$godot_bin" --headless --path "$project_root" --script res://tools/test_entrance.gd 2>&1 | tee -a "$log_file"
 if rg -q 'SCRIPT ERROR:|Parse Error:|Compile Error:|^ERROR:' "$log_file"; then
 	echo "Godot reported a project error; see output above." >&2
 	exit 1
 fi
-echo "Godot project parsed, loaded the district, and passed city interaction checks."
+echo "Godot project parsed, loaded the entrance and district, and passed city and navigation interaction checks."

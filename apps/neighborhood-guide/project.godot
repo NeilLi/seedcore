@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="SeedCore • Digital City"
-run/main_scene="res://scenes/City.tscn"
+run/main_scene="res://scenes/Landing.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display]
