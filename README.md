@@ -3,291 +3,248 @@
 [![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-## Governed Execution and Trust Runtime for Autonomous Systems
+SeedCore is an application studio building experiences for places, journeys,
+and real things. The public story starts at [seedcore.ai](https://seedcore.ai/):
+five application worlds make the work legible before the runtime details begin.
 
-Agent frameworks decide **what to do**. Prompt guardrails control **what is said**. SeedCore controls **what is allowed to execute**.
+This repository contains the application prototypes, governed execution
+runtime, proof surfaces, and development contracts behind that story. The next
+stage is application layers: experiences people can explore, ask, preview, and
+use while the trust boundary underneath remains explicit.
 
-SeedCore is a zero-trust execution and proof runtime for high-consequence autonomous workflows. It sits between advisory AI intent and real-world execution, then checks identity, delegation, policy scope, asset state, policy or graph mutation provenance, hardware or custody boundaries, and evidence requirements before execution authority can exist.
+## Start with the applications
 
-Unlike a model guardrail, tool-calling wrapper, or heuristic security detector, SeedCore is a deterministic execution gate:
+The website presents one portfolio rather than five unrelated products:
 
-- rejects ambient or implicit authority
-- mints short-lived, scoped `ExecutionToken`s only after policy admits an `ActionIntent`
-- preserves signed receipts, transition evidence, and replayable bundles for post-hoc verification
+| Application world | The experience | Current repository connection |
+| --- | --- | --- |
+| **Digital City** | Ask for a nearby café, maker, garden, or small detour and turn the answer into a walk. | `apps/neighborhood-guide` — working Godot prototype with a Blender-rendered entrance and Foundry Lane district. |
+| **Tourist Design Studio** | Turn a favorite detail from a trip into a souvenir a visitor can preview and help design. | Website interaction and application contracts; delivery notes in `docs/development/tourist_design_studio_*`. |
+| **Family Journey** | Follow a story, find a clue, and make the destination part of the shared adventure. | Journey and city contracts in `docs/development/journey_driven_digital_city_experience.md`. |
+| **Craft & Collectibles** | Discover handmade pieces and treasured finds with maker stories, materials, care, and provenance. | Restricted Custody Transfer and local-producer proof contracts in `docs/development/`. |
+| **Robot Moments** | Let a friendly tabletop robot guide a small activity while people choose what happens next. | Presentation and robotics direction; no robot output is an authority source. |
 
-The core principle is simple:
+The application layer may discover, explain, visualize, recommend, collect
+preferences, and preview an ordinary experience. It may not authorize its own
+actions. Booking, payment, custody movement, policy changes, deployment,
+quarantine clearance, and other high-consequence mutations remain governed
+actions.
 
-```text
-AI intent should not automatically become execution authority.
-The model can propose. The Agent is accountable. The PDP decides.
-The actuator executes. The evidence closes the loop.
+## The application-layer contract
+
+SeedCore separates the part a person experiences from the part that grants
+execution authority:
+
+```
+person / operator
+  -> application layer
+       discover • ask • plan • preview • tell a story
+  -> accountable Agent
+  -> ActionIntent
+  -> Policy Decision Point (PDP)
+  -> scoped ExecutionToken or PolicyDeny
+  -> actuator / provider
+  -> evidence bundle and transition receipt
+  -> replay / RESULT_VERIFIER
+  -> verified, rejected, review, or quarantine
 ```
 
-## What SeedCore Protects Against
+Application output is advisory or presentational until a named action enters
+the Agent Action Gateway and passes the PDP. A memory, model suggestion,
+retrieved fact, generated story, route, simulation, or flywheel adjustment does
+not become authority merely because an application displays it.
 
-SeedCore is designed for systems where autonomous agents must not be able to turn diagnosis, planning, local state, or self-healing output into authority by themselves. In the current runtime, that means protecting against:
+| Application layers do | The trust runtime decides |
+| --- | --- |
+| Discover places, people, objects, and stories | Whether a proposed action is admissible |
+| Match a request to a small journey or route | Which principal, scope, and policy apply |
+| Preview a design, itinerary, handoff, or interaction | Whether a bounded `ExecutionToken` may be minted |
+| Show source, freshness, claim state, and uncertainty | Whether revocation, evidence, and context checks pass |
+| Ask for confirmation and operator correction | Whether execution closes with replayable proof |
 
-- self-approval of policy or authorization graph changes
-- mutation of the rules that govern the agent's next execution token
-- bypass through local cache, filesystem, or stale active graph state
-- high-impact execution without a scoped `ExecutionToken`
-- policy or infrastructure drift that is not tied to replayable evidence
-- custody, commerce, deployment, or quarantine actions without forensic closure
+This is a trust runtime, not a traditional cybersecurity detector. It governs
+execution inside an environment and produces proof of what happened afterward.
 
-## Current Status
+## The first application entrance: Digital City
 
-SeedCore already has an implemented and contract-tested baseline for the trust-runtime slice: Agent Action Gateway v1, `ExecutionToken` lifecycle, stateless PDP evaluation, active authorization graph checks, evidence bundles, replay verification, Rust proof-kernel paths, and a coordinator-embedded `RESULT_VERIFIER` for Restricted Custody Transfer (RCT) enforcement.
+`apps/neighborhood-guide` is the current end-to-end application slice. It opens
+to a 2D navigation entrance, then leads into a small interactive 3D district:
 
-The current product focus is narrower and deliberately commercial: package that baseline into an **Agent-Governed Restricted Custody Transfer** workflow, with a collectible rare-shoe custody handoff as the first legible vertical scene.
+- the entrance is an original orthographic Blender render with five destination
+  cards and four scene hotspots;
+- **Explore**, **Makers**, **Craft**, and **Your guide** markers lead to the
+  corresponding local experience;
+- the district supports place selection, tag-based matching, garden detours,
+  pedestrian route previews, visitor movement, pause/resume, replay, and reset;
+- route and place state are presentation and discovery state only; no route
+  starts a booking, payment, custody action, or external write.
 
-Important boundaries:
+Run it locally:
 
-- The rare-shoe scene is an active verticalization of the existing RCT runtime, not a sneaker marketplace.
-- SeedCore proves governed custody movement and evidence integrity; it does not assert legal ownership transfer in v0.
-- Host-mode local runtime verification is green end-to-end for the RCT wedge: the Agent Action Gateway can generate a replayable runtime audit row, the verification API can read queue/detail/replay/runbook views from it, and the productized verification surface protocol passes locally.
-- Remote Kind/Kubernetes hot-path validation is green for API, Ray, HAL, ingress, Redis resilience, and hot-path observability. Full live verification-surface signoff in that topology still depends on capturing runtime audit rows there.
-- The rare-shoe RCT dynamic NFC simulation lane is implemented and workspace-verified: deterministic fixture evidence covers happy path, replay / clone, stale scan, wrong asset, tamper, and incomplete payload cases without making mock NFC an authority source.
-- The rare-shoe static visual-evidence contract is now frozen in strict Pydantic models with canonical capture/comparison hashes and a deterministic 15-case replay matrix. A visual `MATCH` remains evidence-only and always reports no authority effect; live capture, model benchmarking, gateway materialization, and `RESULT_VERIFIER` integration remain pending.
-- The first immutable policy-anchor slice is implemented: AI-origin authz graph inputs fail closed unless accompanied by a co-signed promotion receipt bound to the exact graph version and snapshot hash. The current slice validates receipt structure and graph binding; full KMS/key-registry signature verification remains a follow-on hardening step.
-- The agent-native digital-city direction now has an active sovereign-bootstrap plan, a packaged five-parcel/three-building fixture, strict feature/geometry/relationship models, a three-table PostgreSQL migration and repository boundary, public/protected redaction, and read-only discovery using pure-Python Haversine filtering under `bootstrap_sim`. An isolated PostgreSQL 17 run verified clean migration, scoped roles, seed/reload, schema-only dump/restore followed by reseed/reload parity, and unchanged discovery responses. PostgreSQL remains explicit and review-gated; MCP and governed city actions remain pending. Larger land, built-asset, road, utility, facility, environment, project, incident, and temporal-twin capabilities are evidence-gated extensions—not a GIS/BIM program. This is not an activated municipality, utility-control platform, or global marketplace; the rare-shoe RCT workflow remains the must-win authority-bearing application.
-
-Read the current execution docs:
-
-- [Application directions](docs/development/application_directions.md)
-- [Current next steps](docs/development/current_next_steps.md)
-- [Development docs index](docs/development/README.md)
-- [Policy gate matrix](docs/development/policy_gate_matrix.md)
-- [2026 execution plan](docs/development/seedcore_2026_execution_plan.md)
-- [Rare-shoe RCT demo spec](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
-
-The application map keeps the current directions in one portfolio:
-
-```text
-authority track:  rare-shoe governed custody proof
-foundation track: sovereign city discovery -> local producer public proof
-presentation:     grounded, consented stories beside typed claim state
-
-high-consequence actions from any track
-  -> Agent Action Gateway -> PDP -> ExecutionToken -> evidence -> verifier
+```bash
+cd apps/neighborhood-guide
+godot --path .
 ```
 
-This is one trust-runtime portfolio, not five independent products. Discovery,
-storytelling, city state, and ordinary coordination do not inherit execution
+The editable scene is
+[the Blender entrance source](apps/neighborhood-guide/assets/blender/neighborhood_entrance.blend).
+The app image is
+[the rendered entrance](apps/neighborhood-guide/assets/illustrations/entrance_render.png).
+To re-render after editing the Blender source:
+
+```bash
+cd apps/neighborhood-guide
+blender --background assets/blender/neighborhood_entrance.blend --python tools/render_entrance_blender.py
+godot --headless --path . --editor --quit
+```
+
+Read the application-specific guide in
+[apps/neighborhood-guide/README.md](apps/neighborhood-guide/README.md).
+
+## Runtime foundation beneath the apps
+
+The application portfolio is built on a deterministic execution and proof
+runtime for high-consequence workflows. Its current baseline includes:
+
+- Agent Action Gateway v1 and stateless PDP evaluation;
+- active authorization-graph checks and AI-origin mutation gates;
+- short-lived, scoped, revocable `ExecutionTokens`;
+- replayable evidence bundles, signed receipts, and transition evidence;
+- coordinator-embedded `RESULT_VERIFIER` with fail-closed mismatch handling;
+- Rust proof-kernel paths and TypeScript verification surfaces; and
+- read-only city discovery, public/protected redaction, and local-producer
+  provenance contracts.
+
+The first authority-bearing vertical remains Agent-Governed Restricted Custody
+Transfer (RCT), currently expressed through the collectible rare-shoe custody
+handoff. The broader application layers make discovery, storytelling, and
+ordinary coordination useful around that trust spine without inheriting its
 authority.
 
-## Trust Runtime, Not Traditional Cybersecurity
+## Repository map
 
-SeedCore uses zero-trust language, but it is not primarily a perimeter-defense product. Traditional cybersecurity protects environments by detecting threats, hardening boundaries, or blocking suspicious behavior. SeedCore governs execution **inside** an environment: it decides whether a proposed action is admissible, issues bounded authority when policy allows it, and produces proof explaining what happened afterward.
-
-```text
-Cybersecurity protects the environment.
-SeedCore governs execution within it.
-```
-
-| Feature | Traditional cybersecurity | SeedCore Trust Runtime |
-| --- | --- | --- |
-| Primary goal | Detect threats, reduce attack success, harden perimeters | Govern admissible action and produce replayable proof |
-| Primary question | "Is this malicious or suspicious?" | "Is this action admissible under policy and authority?" |
-| Decision core | Heuristic, anomaly-based, or signature-driven | Synchronous, stateless Policy Decision Point (PDP) |
-| Runtime output | Alerts, blocks, detections, logs | Signed tokens, transition receipts, forensic bundles |
-| Success metric | Breaches prevented or detected | Cryptographic verifiability and replayability of state transitions |
-
-For the canonical category framing, see [Trust Runtime Category Distinction](docs/development/trust_runtime_category_distinction.md).
-
-## Commercial Wedge: Restricted Custody Transfer
-
-The must-win product wedge is **Agent-Governed Restricted Custody Transfer (RCT)**: a governed path where digital transaction identity is bound to physical custody, scope, and evidence before SeedCore issues execution authority.
-
-The current commerce-shaped integration maps Shopify-Sandbox-style fields into the gateway and proof surface:
-
-```text
-product_ref + order_ref + quote_ref + declared_value_usd + economic_hash
-```
-
-The first commercial scene is **Collectible Rare-Shoe Custody Handoff**. Rare shoes make the trust failures obvious: counterfeit risk, stale authentication, swapped assets, condition drift, replay attacks, and opaque custody. The same proof pattern is relevant to luxury logistics, regulated parts, lab samples, robotics handoff, and other high-value physical workflows.
-
-```text
-Seller / consignor
-  -> Authenticator signs provenance, condition, and NFC/scan evidence
-  -> Buyer or buyer agent expresses intent
-  -> SeedCore PDP evaluates authority, policy, scope, and evidence
-  -> Courier or edge operator receives bounded execution authority
-  -> RESULT_VERIFIER replays the chain and closes or quarantines the case
-```
-
-Commercial actors stay explicit:
-
-- **Seller / consignor** submits the physical asset for registration and sale.
-- **Authenticator** provides authentication, condition grade, and evidence refs.
-- **Marketplace / listing partner** provides `product_ref`, `quote_ref`, `order_ref`, and value context.
-- **Buyer and buyer agent** express commercial intent, but cannot authorize custody alone.
-- **Courier / edge operator** executes only inside scoped, time-bounded authority.
-- **Verifier** replays the evidence chain and surfaces verified, rejected, review, or quarantine outcomes.
-
-## Implemented Runtime Capabilities
-
-SeedCore's current baseline includes the technical primitives needed for governed execution:
-
-- **Stateless PDP and compiled authz graph**: deterministic evaluation of `ActionIntent` against policy, OPA/WASM support, and ReBAC graph paths.
-- **AI-origin graph mutation gate**: active and explicitly supplied compiled authz graph inputs are checked for AI-origin provenance; un-co-signed or incorrectly bound graph promotions fall back to the pinned path and emit a `trust_alert` for replay and audit surfaces.
-- **Short-lived `ExecutionToken`s**: bounded capability artifacts with TTL, frozen constraints, execution preconditions, Redis CRL revocation, and local development fallbacks.
-- **Coordinator-embedded `RESULT_VERIFIER`**: a background runtime that polls `digital_twin_event_journal`, persists verifier jobs and outcomes, reuses the replay path, calls the Rust proof kernel, and fail-closes RCT state on terminal mismatch.
-- **Replayable evidence bundles**: policy receipts, execution tokens, transition receipts, telemetry refs, and source-preserving replay bundles for independent verification.
-- **Hardware-anchored telemetry path**: signed transition receipts and telemetry envelopes, with TPM/KMS-backed signing posture for attested deployments and software-backed signing for local development.
-- **Virtual NFC simulation verifier**: deterministic dynamic NFC challenge-response fixtures for the rare-shoe RCT lane, bridged into replay-visible evidence metadata while redacting raw UID, challenge, CMAC, and key material from public projections.
-- **Operator-readable verification surface**: versioned `/api/v1/verification/*` endpoints plus TypeScript UI surfaces for queue, audit trail, asset forensics, replay, and runbook lookup.
-
-Key architecture references:
-
-- [Architecture overview](docs/architecture/overview/architecture.md)
-- [Agent Action Gateway contract](docs/development/agent_action_gateway_contract.md)
-- [Agentic delegation control plane](docs/development/agentic_delegation_control_plane.md)
-- [ExecutionToken lifecycle management](docs/development/execution_token_lifecycle_management.md)
-- [Policy gate matrix](docs/development/policy_gate_matrix.md)
-- [Hardware-anchored telemetry MVP contract](docs/development/hardware_anchored_telemetry_mvp_contract.md)
-- [ADR 0011: Benchmark-Gated Authorization Graph Engine Evolution](docs/architecture/adr/adr-0011-benchmark-gated-authz-graph-engine-evolution.md)
-- [Authz graph engine evolution plan](docs/development/authz_graph_engine_evolution_plan.md)
-- [ADR 0004: Coordinator-Embedded RESULT_VERIFIER](docs/architecture/adr/adr-0004-result-verifier-runtime.md)
-- [ADR 0005: Replayable Evidence for Governed State Transitions](docs/architecture/adr/adr-0005-replayable-evidence-governed-state-transitions.md)
-
-## Operator Verification Console
-
-SeedCore exposes a four-screen TypeScript operator surface backed by the verification API. The goal is to make cryptographic and policy outcomes legible without weakening the proof boundary.
-
-| Screen | Purpose | Backing surface |
-| --- | --- | --- |
-| Screen 1: Anomaly-first queue | Filter by status and prefixes such as `envelope:`, `approval:`, and `request:` | `/api/v1/verification/transfers/queue`, operator `/queue` |
-| Screen 2: Side-by-side audit trail | Compare transaction request, PDP authority, and physical closure | `/api/v1/verification/transfers/review` and audit-trail endpoints |
-| Screen 3: Asset forensics | Inspect custody state, telemetry refs, signer provenance, and transition receipts | `/api/v1/verification/assets/forensics` |
-| Screen 4: Replay and verification | Show replay detail, failure reasons, and runbook lookup links | `/api/v1/verification/workflows/{workflow_id}/verification-detail`, `/replay`, `/runbook/lookup` |
-
-The operator console also provides a deterministic legibility layer: case verdicts, trust-gap counts, missing prerequisites, and runbook links derived from structured verification payloads.
-
-## Architecture at a Glance
-
-SeedCore is designed as a distributed execution fabric rather than a single-model application.
-
-| Layer | Role |
+| Path | Role |
 | --- | --- |
-| Ray Serve and Ray Actors | Long-lived accountable actors, service orchestration, and distributed runtime behavior |
-| Postgres | Durable audit rows, verifier jobs, evidence state, and transaction records |
-| Redis | Token revocation, emergency cutoff propagation, and hot-path runtime support |
-| Neo4j | Graph-backed policy and authorization relationships |
-| Rust `seedcore-verify` | Offline and embedded proof-kernel verification paths |
-| TypeScript verification apps | Operator console, proof surface, and verification API |
+| `apps/neighborhood-guide` | Godot application layer, Blender source, 2D entrance, 3D district, and local interaction checks |
+| `src/seedcore` | Python runtime, PDP-facing APIs, gateway, discovery, custody, evidence, and coordinator services |
+| `rust` | Offline and embedded proof-kernel implementation plus transfer fixtures |
+| `ts/apps` and `ts/packages` | Verification API, operator console, proof surface, and typed contracts |
+| `tests` | Runtime, discovery, evidence, replay, custody, and application contract tests |
+| `docs/development` | Active application directions, contracts, promotion gates, and current queue |
+| `docs/architecture` | Architecture decisions and runtime topology |
+| `scripts/host` | Focused host verification and operational checks |
 
-The governed state transition is:
+The public website is maintained as the application-facing companion project at
+[seedcore.ai](https://seedcore.ai/). Its five-scene narrative is the product
+entry point; this repository supplies the prototypes and governed foundation.
 
-```text
-Event -> AI advisory plan -> Agent -> ActionIntent -> PDP
-  -> ExecutionToken or PolicyDeny
-  -> Actuator / edge path
-  -> EvidenceBundle and transition receipts
-  -> Replay / RESULT_VERIFIER
-  -> verified, rejected, review_required, or quarantined state
-```
+## Development paths
 
-## Quick Start
+### Run the host-mode runtime
 
-### Host-Mode Local Runtime
-
-For macOS or laptop development, use the host-mode helpers in [deploy/local/README.md](deploy/local/README.md). They avoid the full Kind/Kubernetes footprint and are the best path for routine bring-up.
-
-Prerequisites:
-
-- PostgreSQL 17
-- Redis
-- Python virtual environment with project dependencies installed
-
-Typical startup:
+For macOS or laptop development, use the host-mode helpers in
+[deploy/local/README.md](deploy/local/README.md):
 
 ```bash
 brew services start postgresql@17
 brew services start redis
-
 PGUSER=$(whoami) bash deploy/local/init-full-db-direct.sh
-
 bash deploy/local/run-api.sh
 bash deploy/local/run-hal.sh
 bash deploy/local/run-task-stack.sh start
 ```
 
-Local endpoints:
+The usual local endpoints are API ingress at `http://127.0.0.1:8002`, HAL at
+`http://127.0.0.1:8003`, and Ray Serve at `http://127.0.0.1:8000`.
 
-- API ingress: `http://127.0.0.1:8002`
-- HAL bridge: `http://127.0.0.1:8003`
-- Ray Serve / actor apps: `http://127.0.0.1:8000`
-- Live API docs: `http://127.0.0.1:8002/docs`
+### Run the proof and operator surfaces
 
-Focused host verification:
+```bash
+cargo test --workspace --no-default-features --manifest-path rust/Cargo.toml
+cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
+npm --prefix ts install
+npm --prefix ts run typecheck
+npm --prefix ts run build
+```
+
+Transfer-proof example:
+
+```bash
+cargo run -q --manifest-path rust/Cargo.toml -p seedcore-verify -- summarize-transfer --dir rust/fixtures/transfers/allow_case
+```
+
+### Add an application surface
+
+Start with the smallest coherent person-facing loop:
+
+1. define the person, moment, and ordinary outcome;
+2. use reviewed fixtures or public-safe projections with source and freshness;
+3. keep routes, recommendations, stories, simulations, and previews advisory;
+4. add operator correction and visible uncertainty where claims can change;
+5. introduce a named governed action only after its `ActionIntent`, PDP policy,
+   token constraints, evidence, replay, and verifier behavior are specified; and
+6. promote production, secrets, custody closure, quarantine clearance, and
+   policy changes only through human review or an explicit policy gate.
+
+The active sequence is maintained in
+[docs/development/current_next_steps.md](docs/development/current_next_steps.md).
+The portfolio decisions and boundaries are in
+[docs/development/application_directions.md](docs/development/application_directions.md).
+
+## Verification
+
+Start with the repository gates named in [AGENTS.md](AGENTS.md):
 
 ```bash
 bash scripts/host/verify_authz_graph_rfc_phases.sh
 bash scripts/host/verify_q2_verification_contracts.sh
 ```
 
-### Kind + Kubernetes
-
-Prerequisites: `kubectl`, `kind`, `helm`, Docker, `envsubst` (macOS: `gettext`), and enough local resources for the cluster.
+For the Digital City application:
 
 ```bash
-cp docker/env.example docker/.env
-./deploy/deploy-all.sh
-./deploy/port-forward.sh
+cd apps/neighborhood-guide
+./tools/check_environment.sh
+./tools/validate_project.sh
 ```
 
-Useful deployment flags include `--skip-build`, `--skip-hal`, `--skip-ingress`, `--worker-replicas N`, and `--deploy-verification-api`.
-
-Verify the core runtime after port-forwarding:
+For focused Python, TypeScript, and Rust checks:
 
 ```bash
-curl http://localhost:8002/health
-curl http://localhost:8002/readyz
-curl http://localhost:8002/api/v1/pdp/hot-path/status
-curl http://localhost:8002/api/v1/pdp/hot-path/metrics
-```
-
-### Rust Proof Kernel and TypeScript Surfaces
-
-```bash
-cargo test --workspace --no-default-features --manifest-path rust/Cargo.toml
-cargo build -p seedcore-verify --manifest-path rust/Cargo.toml
-
-npm --prefix ts install
+pytest tests/test_flywheel_harness.py tests/test_energy.py -q
 npm --prefix ts run typecheck
-npm --prefix ts run build
-
-npm --prefix ts run serve:verification-api    # http://127.0.0.1:7071
-npm --prefix ts run serve:proof-surface       # http://127.0.0.1:7072
-npm --prefix ts run serve:operator-console    # http://127.0.0.1:7073
-```
-
-Offline transfer proof example:
-
-```bash
-cargo run -q --manifest-path rust/Cargo.toml -p seedcore-verify -- \
-  summarize-transfer --dir rust/fixtures/transfers/allow_case
-```
-
-### Gemini CLI Extension
-
-SeedCore ships a Gemini CLI extension scaffold that exposes read-only `seedcore.*` MCP tools. Bring up the runtime first, then install the extension:
-
-```bash
-gemini extensions install .
-```
-
-Confirm tools with `/extensions list`. For details, see [GEMINI.md](GEMINI.md), [gemini-tools.md](skills/using-seedcore/references/gemini-tools.md), and [gemini-troubleshooting.md](skills/using-seedcore/references/gemini-troubleshooting.md).
-
-## Testing
-
-```bash
-.venv/bin/pytest
-npm --prefix ts run test
 cargo test --workspace --no-default-features --manifest-path rust/Cargo.toml
 ```
 
-The CI workflow is defined in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).
+When a deterministic gate fails repeatedly, stop autonomous iteration and
+surface the verifier output and runbook evidence for review.
+
+## Boundaries and non-goals
+
+The application portfolio is not a generic coding-agent harness, marketplace,
+super app, municipal authority, utility-control platform, or traditional
+cybersecurity product. This repository does not activate a global marketplace,
+legal cadastre, emergency dispatch system, licensed transport operation, or
+real escrow rail.
+
+Do not make memory, retrieval, model output, generated media, discovery,
+simulation, route planning, or flywheel feedback an authority source. Do not
+introduce a governed mutation without an accountable principal, explicit PDP
+decision, scoped and non-revoked token, actuator evidence, and verifier closure.
+
+## Further reading
+
+- [Public application studio](https://seedcore.ai/)
+- [Development map](docs/development/README.md)
+- [Application directions](docs/development/application_directions.md)
+- [Current next steps](docs/development/current_next_steps.md)
+- [Policy gate matrix](docs/development/policy_gate_matrix.md)
+- [Trust-runtime category distinction](docs/development/trust_runtime_category_distinction.md)
+- [Architecture overview](docs/architecture/overview/architecture.md)
+- [Agent Action Gateway contract](docs/development/agent_action_gateway_contract.md)
+- [ExecutionToken lifecycle](docs/development/execution_token_lifecycle_management.md)
+- [Rare-shoe RCT demo specification](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
+- [Flywheel harness](docs/development/seedcore_flywheel_harness.md)
 
 ## License
 
