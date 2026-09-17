@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-04-07
 - Scope: Restricted Custody Transfer (RCT) trust slice; post-decision verification and enforcement
-- Related: [ADR 0001](./adr-0001-pdp-hot-path.md) (PDP remains stateless at decision time; this ADR covers **after-the-fact** verification), [Architecture Overview](../overview/architecture.md), [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md)
+- Related: [ADR 0001](./adr-0001-pdp-hot-path.md) (PDP remains stateless at decision time; this ADR covers **after-the-fact** verification), [Architecture Overview](../overview/architecture.md), [SeedCore 2026 Execution Plan](../../development/strategy/seedcore_2026_execution_plan.md)
 
 ## Context
 

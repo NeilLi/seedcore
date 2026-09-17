@@ -2,7 +2,7 @@
 
 This workspace is the first concrete scaffold for the Rust control and proof
 kernel described in
-[docs/development/rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/rust_workspace_proposal.md).
+[docs/development/infrastructure/rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/infrastructure/rust_workspace_proposal.md).
 
 Current state:
 

@@ -26,8 +26,8 @@ Use this skill for the shadow-to-enforce workflow.
 - Do not recommend enforcement if parity mismatches are non-zero.
 - Treat stale or unavailable authz graph state as a blocker.
 - Keep the discussion aligned with:
-  - `docs/development/hot_path_shadow_to_enforce_breakdown.md`
-  - `docs/development/hot_path_enforcement_promotion_contract.md`
+  - `docs/development/trust-runtime/hot_path_shadow_to_enforce_breakdown.md`
+  - `docs/development/trust-runtime/hot_path_enforcement_promotion_contract.md`
 
 ## Fallback local commands
 

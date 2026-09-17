@@ -308,5 +308,5 @@ provenance were all captured on 2026-03-30.**
 
 - [current_next_steps.md](../../current_next_steps.md)
 - [killer_demo_execution_spine.md](killer_demo_execution_spine.md)
-- [productized_verification_surface_protocol.md](../../productized_verification_surface_protocol.md)
+- [productized_verification_surface_protocol.md](../../evidence/productized_verification_surface_protocol.md)
 - [phase0_contract_freeze_manifest.json](../../phase0_contract_freeze_manifest.json)

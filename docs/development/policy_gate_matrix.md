@@ -25,7 +25,7 @@ This guarantees the execution layer receives the exact same cryptographic bounds
 
 For the full lifecycle view of intake, preflight, minting, TTL bounding,
 delegated subtokens, execution binding, replay, and quarantine, see
-`docs/development/execution_token_lifecycle_management.md`.
+`docs/development/trust-runtime/execution_token_lifecycle_management.md`.
 
 ## Delegation And Owner Authority Gates
 
@@ -51,7 +51,7 @@ Implementation anchors:
 - `src/seedcore/coordinator/core/governance.py::_evaluate_owner_delegation_policy`
 - `src/seedcore/coordinator/core/governance.py::_delegation_scope_allows`
 - `src/seedcore/api/routers/agent_actions_router.py::_resolve_owner_twin_snapshot_for_payload`
-- `docs/development/verifying_delegation_frontier_ai_architectures.md`
+- `docs/development/trust-runtime/verifying_delegation_frontier_ai_architectures.md`
 
 ## Context Sufficiency Gates
 
@@ -75,8 +75,8 @@ remote fan-out, LLM reasoning, or best-effort fallback.
 Implementation anchors:
 
 - `docs/architecture/adr/adr-0001-pdp-hot-path.md`
-- `docs/development/asset_centric_pdp_hot_path_contract.md`
-- `docs/development/freshness_sla_edge_stress_schedule.md`
+- `docs/development/trust-runtime/asset_centric_pdp_hot_path_contract.md`
+- `docs/development/operations/freshness_sla_edge_stress_schedule.md`
 
 Signed mutation receipts and local watermarks are the concrete SeedCore
 extension of Zanzibar-style zookie semantics. A client-supplied token can demand
@@ -104,4 +104,4 @@ before becoming enforce-mode requirements.
 
 Architecture anchor:
 
-- `docs/development/agentic_delegation_control_plane.md`
+- `docs/development/trust-runtime/agentic_delegation_control_plane.md`

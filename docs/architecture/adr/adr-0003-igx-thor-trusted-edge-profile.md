@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-04-06
 - Scope: SeedCore physical execution plane for industrial, medical, and robotics edge nodes that cross the governed custody boundary
-- Related: [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](./adr-0001-pdp-hot-path.md), [Architecture Overview](../overview/architecture.md), [Zero-Trust Custody and Digital-Twin Runtime](../overview/zero_trust_custody_digital_twin_runtime.md), [Current Next Steps](../../development/current_next_steps.md), [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md), [Agent Action Gateway Contract](../../development/agent_action_gateway_contract.md), [Draft: signed edge telemetry and twin settlement](../../development/edge_telemetry_evidence_closure_draft.md), [SeedCore 2027 Significant Direction](../../development/seedcore_2027_high_vertical_direction.md)
+- Related: [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](./adr-0001-pdp-hot-path.md), [Architecture Overview](../overview/architecture.md), [Zero-Trust Custody and Digital-Twin Runtime](../overview/zero_trust_custody_digital_twin_runtime.md), [Current Next Steps](../../development/current_next_steps.md), [SeedCore 2026 Execution Plan](../../development/strategy/seedcore_2026_execution_plan.md), [Agent Action Gateway Contract](../../development/trust-runtime/agent_action_gateway_contract.md), [Draft: signed edge telemetry and twin settlement](../../development/evidence/edge_telemetry_evidence_closure_draft.md), [SeedCore 2027 Significant Direction](../../development/strategy/seedcore_2027_high_vertical_direction.md)
 
 ## Context
 
@@ -310,8 +310,8 @@ Internal:
 
 - [README](../../../README.md)
 - [Current Next Steps](../../development/current_next_steps.md)
-- [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md)
-- [Agent Action Gateway Contract](../../development/agent_action_gateway_contract.md)
-- [Draft: signed edge telemetry and twin settlement](../../development/edge_telemetry_evidence_closure_draft.md)
-- [TPM Fleet Rollout Maturity Decision Memo](../../development/tpm_fleet_rollout_maturity_decision_memo.md)
-- [SeedCore 2027 Significant Direction](../../development/seedcore_2027_high_vertical_direction.md)
+- [SeedCore 2026 Execution Plan](../../development/strategy/seedcore_2026_execution_plan.md)
+- [Agent Action Gateway Contract](../../development/trust-runtime/agent_action_gateway_contract.md)
+- [Draft: signed edge telemetry and twin settlement](../../development/evidence/edge_telemetry_evidence_closure_draft.md)
+- [TPM Fleet Rollout Maturity Decision Memo](../../development/infrastructure/tpm_fleet_rollout_maturity_decision_memo.md)
+- [SeedCore 2027 Significant Direction](../../development/strategy/seedcore_2027_high_vertical_direction.md)

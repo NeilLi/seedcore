@@ -38,7 +38,7 @@ These scripts are intentionally separate from the main `deploy/` entrypoints bec
 
 ## Local Kafka (optional streams)
 
-For intent / telemetry / policy-outcome transport parity with production posture, see `docs/development/local_kafka_streams_schedule.md`.
+For intent / telemetry / policy-outcome transport parity with production posture, see `docs/development/integrations/local_kafka_streams_schedule.md`.
 
 Bring up a single KRaft broker:
 
@@ -94,7 +94,7 @@ bash scripts/host/verify_kafka_readyz_gate.sh
 
 External assistant Kafka contract:
 
-- See [kafka_delegated_intent_ingress.md](/Users/ningli/project/seedcore/docs/development/kafka_delegated_intent_ingress.md)
+- See [kafka_delegated_intent_ingress.md](/Users/ningli/project/seedcore/docs/development/integrations/kafka_delegated_intent_ingress.md)
 
 ## Restart Sequence
 

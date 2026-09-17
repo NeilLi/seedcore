@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-05-17
 - Scope: Authorization and leakage boundary for SeedCore-governed Enterprise RAG
-- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0008](./adr-0008-enterprise-rag-governed-evidence-acquisition.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md), [Policy-Governed RAG Research Adoption Review](../../development/policy_governed_rag_research_adoption_review.md)
+- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0008](./adr-0008-enterprise-rag-governed-evidence-acquisition.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md), [Policy-Governed RAG Research Adoption Review](../../development/learning/policy_governed_rag_research_adoption_review.md)
 
 ## Context
 

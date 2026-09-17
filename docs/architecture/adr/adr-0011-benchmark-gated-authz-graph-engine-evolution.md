@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-06-17
 - Scope: Future evolution of SeedCore's compiled authorization graph engine. Does not change PDP authority, `ExecutionToken` minting, active PKG snapshot semantics, evidence closure, or RESULT_VERIFIER behavior.
-- Related: [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](./adr-0001-pdp-hot-path.md), [ADR 0006: Split RESULT_VERIFIER Into a Dedicated Process on Measurable Triggers](./adr-0006-result-verifier-deployment-split-trigger.md), [Authorization PKG RFC](../../development/pkg_authz_graph_rfc.md), [Authz Graph Engine Evolution Plan](../../development/authz_graph_engine_evolution_plan.md), [PDP Authz Graph Staging Rollout](../../development/pdp_authz_graph_staging_rollout.md)
+- Related: [ADR 0001: Keep the PDP Stateless and Synchronous at Decision Time](./adr-0001-pdp-hot-path.md), [ADR 0006: Split RESULT_VERIFIER Into a Dedicated Process on Measurable Triggers](./adr-0006-result-verifier-deployment-split-trigger.md), [Authorization PKG RFC](../../development/trust-runtime/pkg_authz_graph_rfc.md), [Authz Graph Engine Evolution Plan](../../development/trust-runtime/authz_graph_engine_evolution_plan.md), [PDP Authz Graph Staging Rollout](../../development/operations/pdp_authz_graph_staging_rollout.md)
 
 ## Context
 

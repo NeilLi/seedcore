@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-05-17
 - Scope: High-consequence physical execution, signed edge telemetry, hardware-bound evidence, and verifier replay
-- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0003](./adr-0003-igx-thor-trusted-edge-profile.md), [ADR 0004](./adr-0004-result-verifier-runtime.md), [ADR 0005](./adr-0005-replayable-evidence-governed-state-transitions.md), [Agent Action Gateway Contract](../../development/agent_action_gateway_contract.md), [Hardware-Anchored Telemetry MVP Contract](../../development/hardware_anchored_telemetry_mvp_contract.md)
+- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0003](./adr-0003-igx-thor-trusted-edge-profile.md), [ADR 0004](./adr-0004-result-verifier-runtime.md), [ADR 0005](./adr-0005-replayable-evidence-governed-state-transitions.md), [Agent Action Gateway Contract](../../development/trust-runtime/agent_action_gateway_contract.md), [Hardware-Anchored Telemetry MVP Contract](../../development/evidence/hardware_anchored_telemetry_mvp_contract.md)
 
 ## Context
 

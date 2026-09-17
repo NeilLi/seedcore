@@ -6,7 +6,7 @@ reuses the same router, models, and business logic as the monolithic
 here is wiring a lifespan and a readiness probe that match the gateway's
 external-facing responsibilities.
 
-See `docs/development/agent_action_gateway_contract.md` §"Rollout Plan" for
+See `docs/development/trust-runtime/agent_action_gateway_contract.md` §"Rollout Plan" for
 why this split exists.
 """
 

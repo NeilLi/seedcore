@@ -34,7 +34,7 @@ The application stance is deliberately split into two tracks:
 
 ## Source References
 
-- [Agent Action Gateway Contract v1](../development/agent_action_gateway_contract.md)
-- [Rare-Shoe RCT Demo Spec](../development/rare_shoes_collecting_transfer_demo_spec.md)
+- [Agent Action Gateway Contract v1](../development/trust-runtime/agent_action_gateway_contract.md)
+- [Rare-Shoe RCT Demo Spec](../development/applications/rct/rare_shoes_collecting_transfer_demo_spec.md)
 - [Current Next Steps](../development/current_next_steps.md)
-- [SeedCore 2026 Execution Plan](../development/seedcore_2026_execution_plan.md)
+- [SeedCore 2026 Execution Plan](../development/strategy/seedcore_2026_execution_plan.md)

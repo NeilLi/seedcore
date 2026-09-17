@@ -8,7 +8,7 @@ It supersedes the older "contract freeze only" framing. The frozen contract shap
 
 Live status and execution ordering remain in:
 - [current_next_steps.md](../../current_next_steps.md)
-- [seedcore_2026_execution_plan.md](../../seedcore_2026_execution_plan.md)
+- [seedcore_2026_execution_plan.md](../../strategy/seedcore_2026_execution_plan.md)
 
 ## Objective
 
@@ -173,8 +173,8 @@ The next killer demo is done when:
 
 - [current_next_steps.md](../../current_next_steps.md)
 - [killer_demo_execution_spine.md](killer_demo_execution_spine.md)
-- [design_partner_demo_schedule.md](../../design_partner_demo_schedule.md)
-- [seedcore_2026_execution_plan.md](../../seedcore_2026_execution_plan.md)
+- [design_partner_demo_schedule.md](../../operations/design_partner_demo_schedule.md)
+- [seedcore_2026_execution_plan.md](../../strategy/seedcore_2026_execution_plan.md)
 - [contract_freeze_zero_trust_terms.md](contract_freeze_zero_trust_terms.md)
 - [end_to_end_governance_demo_contract.md](end_to_end_governance_demo_contract.md)
-- [pkg_authz_graph_rfc.md](../../pkg_authz_graph_rfc.md)
+- [pkg_authz_graph_rfc.md](../../trust-runtime/pkg_authz_graph_rfc.md)

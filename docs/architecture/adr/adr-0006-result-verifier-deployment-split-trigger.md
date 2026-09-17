@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-04-20
 - Scope: Deployment shape of the RESULT_VERIFIER runtime. Does not change its verification logic, DAO schema, twin mutation semantics, or its failure taxonomy.
-- Related: [ADR 0004: Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](./adr-0004-result-verifier-runtime.md) (this ADR tightens ADR 0004's "If coordinator CPU or isolation becomes an issue" clause into a measurable contract), [ADR 0003: Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](./adr-0003-igx-thor-trusted-edge-profile.md), [SeedCore Proof Kernel PyO3 Bridge Decision Memo](../../development/seedcore_proof_pyo3_bridge_decision_memo.md)
+- Related: [ADR 0004: Coordinator-Embedded RESULT_VERIFIER With Journal Polling and Fail-Closed Twin Mutation](./adr-0004-result-verifier-runtime.md) (this ADR tightens ADR 0004's "If coordinator CPU or isolation becomes an issue" clause into a measurable contract), [ADR 0003: Adopt an IGX Thor Trusted Edge Profile for High-Regulation SeedCore Deployments](./adr-0003-igx-thor-trusted-edge-profile.md), [SeedCore Proof Kernel PyO3 Bridge Decision Memo](../../development/infrastructure/seedcore_proof_pyo3_bridge_decision_memo.md)
 
 ## Context
 

@@ -383,7 +383,7 @@ def _log_gateway_decision(
     """Emit a single structured log line per gateway evaluate decision.
 
     Field set is the observability contract from
-    `docs/development/agent_action_gateway_contract.md §Observability Requirements`.
+    `docs/development/trust-runtime/agent_action_gateway_contract.md §Observability Requirements`.
     """
 
     try:

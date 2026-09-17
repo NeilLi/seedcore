@@ -8,9 +8,16 @@ and real things. The public story starts at [seedcore.ai](https://seedcore.ai/):
 five application worlds make the work legible before the runtime details begin.
 
 This repository contains the application prototypes, governed execution
-runtime, proof surfaces, and development contracts behind that story. The next
-stage is application layers: experiences people can explore, ask, preview, and
-use while the trust boundary underneath remains explicit.
+runtime, proof surfaces, and development contracts behind that story. Its
+application layers let people explore, ask, preview, and use experiences while
+the trust boundary underneath remains explicit.
+
+The next development stage focuses on **Microduck and robotics integration**:
+simulation, bounded agent-to-robot intent, physical telemetry, and replayable
+execution proof. Start with the
+[robotics development map](docs/development/robotics/README.md) and
+[active queue](docs/development/current_next_steps.md). Existing application
+prototypes remain available; their expansion is deferred behind this focus.
 
 ## Start with the applications
 
@@ -19,10 +26,10 @@ The website presents one portfolio rather than five unrelated products:
 | Application world | The experience | Current repository connection |
 | --- | --- | --- |
 | **Digital City** | Ask for a nearby café, maker, garden, or small detour and turn the answer into a walk. | `apps/neighborhood-guide` — working Godot prototype with a Blender-rendered entrance and Foundry Lane district. |
-| **Tourist Design Studio** | Turn a favorite detail from a trip into a souvenir a visitor can preview and help design. | Website interaction and application contracts; delivery notes in `docs/development/tourist_design_studio_*`. |
-| **Family Journey** | Follow a story, find a clue, and make the destination part of the shared adventure. | Journey and city contracts in `docs/development/journey_driven_digital_city_experience.md`. |
+| **Tourist Design Studio** | Turn a favorite detail from a trip into a souvenir a visitor can preview and help design. | Website interaction and application contracts; [experience references](docs/development/applications/experiences/README.md). |
+| **Family Journey** | Follow a story, find a clue, and make the destination part of the shared adventure. | Journey and city contracts in `docs/development/applications/city/journey_driven_digital_city_experience.md`. |
 | **Craft & Collectibles** | Discover handmade pieces and treasured finds with maker stories, materials, care, and provenance. | Restricted Custody Transfer and local-producer proof contracts in `docs/development/`. |
-| **Robot Moments** | Let a friendly tabletop robot guide a small activity while people choose what happens next. | Presentation and robotics direction; no robot output is an authority source. |
+| **Robot Moments** | Let a friendly tabletop robot guide a small activity while people choose what happens next. | [Microduck integration](docs/development/robotics/microduck_integration_plan.md) is the next-stage robotics focus; robot output does not grant authority. |
 
 The application layer may discover, explain, visualize, recommend, collect
 preferences, and preview an ordinary experience. It may not authorize its own
@@ -241,9 +248,9 @@ decision, scoped and non-revoked token, actuator evidence, and verifier closure.
 - [Policy gate matrix](docs/development/policy_gate_matrix.md)
 - [Trust-runtime category distinction](docs/development/trust_runtime_category_distinction.md)
 - [Architecture overview](docs/architecture/overview/architecture.md)
-- [Agent Action Gateway contract](docs/development/agent_action_gateway_contract.md)
-- [ExecutionToken lifecycle](docs/development/execution_token_lifecycle_management.md)
-- [Rare-shoe RCT demo specification](docs/development/rare_shoes_collecting_transfer_demo_spec.md)
+- [Agent Action Gateway contract](docs/development/trust-runtime/agent_action_gateway_contract.md)
+- [ExecutionToken lifecycle](docs/development/trust-runtime/execution_token_lifecycle_management.md)
+- [Rare-shoe RCT demo specification](docs/development/applications/rct/rare_shoes_collecting_transfer_demo_spec.md)
 - [Flywheel harness](docs/development/seedcore_flywheel_harness.md)
 
 ## License

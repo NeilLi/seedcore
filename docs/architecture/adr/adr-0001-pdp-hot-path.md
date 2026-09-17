@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-04-02
 - Scope: SeedCore policy decision path for Restricted Custody Transfer and related governed actions
-- Related: [Architecture Overview](../overview/architecture.md), [Asset-Centric PDP Hot Path Contract](../../development/asset_centric_pdp_hot_path_contract.md), [SeedCore 2026 Execution Plan](../../development/seedcore_2026_execution_plan.md), [PDP Architecture Research Synthesis](../../references/pdp-architecture-research-synthesis.md)
+- Related: [Architecture Overview](../overview/architecture.md), [Asset-Centric PDP Hot Path Contract](../../development/trust-runtime/asset_centric_pdp_hot_path_contract.md), [SeedCore 2026 Execution Plan](../../development/strategy/seedcore_2026_execution_plan.md), [PDP Architecture Research Synthesis](../../references/pdp-architecture-research-synthesis.md)
 
 ## Context
 

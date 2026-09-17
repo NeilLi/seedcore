@@ -274,14 +274,14 @@ Recommended documentation changes:
 
 Recommended future code/docs targets:
 
-- `docs/development/asset_centric_pdp_hot_path_contract.md`
+- `docs/development/trust-runtime/asset_centric_pdp_hot_path_contract.md`
   - add explicit no-decision-cache language
   - add optional causality-token request field
   - add compiled-context freshness fields to response checks
-- `docs/development/policy_graph_builder_implementation_plan.md`
+- `docs/development/trust-runtime/policy_graph_builder_implementation_plan.md`
   - add template-linked policy pattern as a design inspiration
   - keep generated policy drafts advisory until deterministic preflight passes
-- `docs/development/hot_path_enforcement_promotion_contract.md`
+- `docs/development/trust-runtime/hot_path_enforcement_promotion_contract.md`
   - keep fail-closed as mandatory for high-consequence enforce mode
   - make any fail-open canary language explicitly out of scope
 - future context supply-chain RFC

@@ -12,7 +12,7 @@ Historical note:
 
 - this is a milestone summary, not the active planning source of truth
 - use [current_next_steps.md](../../current_next_steps.md)
-  and [seedcore_2026_execution_plan.md](../../seedcore_2026_execution_plan.md)
+  and [seedcore_2026_execution_plan.md](../../strategy/seedcore_2026_execution_plan.md)
   for live planning and status
 
 It is not a marketing roadmap.
@@ -53,16 +53,16 @@ SeedCore is best understood today as a three-layer system:
 3. TypeScript verification and product surfaces
 
 That split is intentional. It is described in
-[`language_evolution_map.md`](../../language_evolution_map.md) and already reflected
+[`language_evolution_map.md`](../../infrastructure/language_evolution_map.md) and already reflected
 in the repo layout:
 
-- Python runtime: [src/seedcore](../../../src/seedcore)
-- Rust kernel workspace: [rust](../../../rust)
-- TypeScript trust/product workspace: [ts](../../../ts)
+- Python runtime: [src/seedcore](../../../../src/seedcore)
+- Rust kernel workspace: [rust](../../../../rust)
+- TypeScript trust/product workspace: [ts](../../../../ts)
 
 The project is no longer just a cognitive-agent architecture. It is a governed
 execution and verification runtime, anchored to the
-[`north_star_autonomous_trade_environment.md`](../../north_star_autonomous_trade_environment.md).
+[`north_star_autonomous_trade_environment.md`](../../strategy/north_star_autonomous_trade_environment.md).
 The current must-win workflow is best read in commerce terms:
 economic intent bound to physical custody and replayable proof.
 
@@ -86,7 +86,7 @@ What this stage achieved:
   agent behaviors, memory, ML, digital twin support, and service orchestration
 - a real FastAPI entrypoint with router registration, DB initialization, and
   PKG manager bootstrap in
-  [main.py](../../../src/seedcore/main.py)
+  [main.py](../../../../src/seedcore/main.py)
 - broad subsystem coverage across:
   - agents
   - cognitive
@@ -120,7 +120,7 @@ Status: materially implemented
 What this stage achieved:
 
 - `ActionIntent` as the accountable authorization request in
-  [action_intent.py](../../../src/seedcore/models/action_intent.py)
+  [action_intent.py](../../../../src/seedcore/models/action_intent.py)
 - short-lived execution tokens and deny-by-default policy gating
 - HAL-side token validation, revocation, and emergency cutoff controls
 - evidence bundles and transition receipts for custody-bearing execution
@@ -129,12 +129,12 @@ What this stage achieved:
 
 Repo evidence:
 
-- [README.md](../../../README.md)
-- [evidence_bundle.py](../../../src/seedcore/models/evidence_bundle.py)
-- [governance_audit.py](../../../src/seedcore/models/governance_audit.py)
-- [test_external_surface_verification.py](../../../tests/test_external_surface_verification.py)
-- [test_transition_receipts.py](../../../tests/test_transition_receipts.py)
-- [test_evidence_signing_verification.py](../../../tests/test_evidence_signing_verification.py)
+- [README.md](../../../../README.md)
+- [evidence_bundle.py](../../../../src/seedcore/models/evidence_bundle.py)
+- [governance_audit.py](../../../../src/seedcore/models/governance_audit.py)
+- [test_external_surface_verification.py](../../../../tests/test_external_surface_verification.py)
+- [test_transition_receipts.py](../../../../tests/test_transition_receipts.py)
+- [test_evidence_signing_verification.py](../../../../tests/test_evidence_signing_verification.py)
 
 Why it matters:
 
@@ -166,12 +166,12 @@ What this stage achieved:
 
 Repo evidence:
 
-- [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
-- [src/seedcore/ops/pkg](../../../src/seedcore/ops/pkg)
-- [test_pkg_authz_graph.py](../../../tests/test_pkg_authz_graph.py)
-- [test_pkg_authz_graph_manager.py](../../../tests/test_pkg_authz_graph_manager.py)
-- [test_authz_parity_service.py](../../../tests/test_authz_parity_service.py)
-- [pdp_authz_graph_staging_rollout.md](../../pdp_authz_graph_staging_rollout.md)
+- [pkg_router.py](../../../../src/seedcore/api/routers/pkg_router.py)
+- [src/seedcore/ops/pkg](../../../../src/seedcore/ops/pkg)
+- [test_pkg_authz_graph.py](../../../../tests/test_pkg_authz_graph.py)
+- [test_pkg_authz_graph_manager.py](../../../../tests/test_pkg_authz_graph_manager.py)
+- [test_authz_parity_service.py](../../../../tests/test_authz_parity_service.py)
+- [pdp_authz_graph_staging_rollout.md](../../operations/pdp_authz_graph_staging_rollout.md)
 
 Why it matters:
 
@@ -205,10 +205,10 @@ What this stage achieved:
 
 Repo evidence:
 
-- [replay_router.py](../../../src/seedcore/api/routers/replay_router.py)
-- [test_replay_router.py](../../../tests/test_replay_router.py)
-- [test_end_to_end_product_verification.py](../../../tests/test_end_to_end_product_verification.py)
-- [verify_end_to_end_product.sh](../../../scripts/host/verify_end_to_end_product.sh)
+- [replay_router.py](../../../../src/seedcore/api/routers/replay_router.py)
+- [test_replay_router.py](../../../../tests/test_replay_router.py)
+- [test_end_to_end_product_verification.py](../../../../tests/test_end_to_end_product_verification.py)
+- [verify_end_to_end_product.sh](../../../../scripts/host/verify_end_to_end_product.sh)
 
 Why it matters:
 
@@ -239,8 +239,8 @@ Repo evidence:
 - [killer_demo_execution_spine.md](killer_demo_execution_spine.md)
 - [next_killer_demo_contract_freeze.md](next_killer_demo_contract_freeze.md)
 - [phase0_contract_freeze_manifest.json](../../phase0_contract_freeze_manifest.json)
-- [verify_phase0_contract_freeze.py](../../../scripts/tools/verify_phase0_contract_freeze.py)
-- [test_phase0_contract_freeze.py](../../../tests/test_phase0_contract_freeze.py)
+- [verify_phase0_contract_freeze.py](../../../../scripts/tools/verify_phase0_contract_freeze.py)
+- [test_phase0_contract_freeze.py](../../../../tests/test_phase0_contract_freeze.py)
 
 Why it matters:
 
@@ -268,10 +268,10 @@ What this stage achieved:
 Repo evidence:
 
 - [current_next_steps.md](../../current_next_steps.md)
-- [tpm_fleet_rollout_runbook.md](../../tpm_fleet_rollout_runbook.md)
-- [rust/fixtures/receipts](../../../rust/fixtures/receipts)
-- [verify_evidence_signing.sh](../../../scripts/host/verify_evidence_signing.sh)
-- [verify_zero_trust_pdp_contract.sh](../../../scripts/host/verify_zero_trust_pdp_contract.sh)
+- [tpm_fleet_rollout_runbook.md](../../operations/tpm_fleet_rollout_runbook.md)
+- [rust/fixtures/receipts](../../../../rust/fixtures/receipts)
+- [verify_evidence_signing.sh](../../../../scripts/host/verify_evidence_signing.sh)
+- [verify_zero_trust_pdp_contract.sh](../../../../scripts/host/verify_zero_trust_pdp_contract.sh)
 
 Why it matters:
 
@@ -305,9 +305,9 @@ What this stage achieved:
 Repo evidence:
 
 - [next_killer_demo_contract_freeze.md](next_killer_demo_contract_freeze.md)
-- [rust/fixtures/transfers/escalate_break_glass](../../../rust/fixtures/transfers/escalate_break_glass)
-- [rust/fixtures/transfers/deny_missing_approval](../../../rust/fixtures/transfers/deny_missing_approval)
-- [rust/fixtures/approval_envelopes](../../../rust/fixtures/approval_envelopes)
+- [rust/fixtures/transfers/escalate_break_glass](../../../../rust/fixtures/transfers/escalate_break_glass)
+- [rust/fixtures/transfers/deny_missing_approval](../../../../rust/fixtures/transfers/deny_missing_approval)
+- [rust/fixtures/approval_envelopes](../../../../rust/fixtures/approval_envelopes)
 
 Why it matters:
 
@@ -348,11 +348,11 @@ What this stage achieved:
 
 Repo evidence:
 
-- [asset_centric_pdp_hot_path_contract.md](asset_centric_pdp_hot_path_contract.md)
-- [pdp_hot_path.py](../../../src/seedcore/models/pdp_hot_path.py)
-- [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py)
-- [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
-- [test_pdp_hot_path_router.py](../../../tests/test_pdp_hot_path_router.py)
+- [asset_centric_pdp_hot_path_contract.md](../../trust-runtime/asset_centric_pdp_hot_path_contract.md)
+- [pdp_hot_path.py](../../../../src/seedcore/models/pdp_hot_path.py)
+- [pdp_hot_path.py](../../../../src/seedcore/ops/pdp_hot_path.py)
+- [pkg_router.py](../../../../src/seedcore/api/routers/pkg_router.py)
+- [test_pdp_hot_path_router.py](../../../../tests/test_pdp_hot_path_router.py)
 
 Why it matters:
 
@@ -388,13 +388,13 @@ What this stage achieved:
 
 Repo evidence:
 
-- [ts/services/verification-api/src/server.ts](../../../ts/services/verification-api/src/server.ts)
-- [ts/services/verification-api/src/transferSources.ts](../../../ts/services/verification-api/src/transferSources.ts)
-- [ts/packages/contracts/src/trustContracts.ts](../../../ts/packages/contracts/src/trustContracts.ts)
-- [ts/apps/operator-console/src/ui.ts](../../../ts/apps/operator-console/src/ui.ts)
-- [ts/apps/proof-surface/src/server.ts](../../../ts/apps/proof-surface/src/server.ts)
-- [productized_verification_surface_protocol.md](../../productized_verification_surface_protocol.md)
-- [verify_productized_surface.sh](../../../scripts/host/verify_productized_surface.sh)
+- [ts/services/verification-api/src/server.ts](../../../../ts/services/verification-api/src/server.ts)
+- [ts/services/verification-api/src/transferSources.ts](../../../../ts/services/verification-api/src/transferSources.ts)
+- [ts/packages/contracts/src/trustContracts.ts](../../../../ts/packages/contracts/src/trustContracts.ts)
+- [ts/apps/operator-console/src/ui.ts](../../../../ts/apps/operator-console/src/ui.ts)
+- [ts/apps/proof-surface/src/server.ts](../../../../ts/apps/proof-surface/src/server.ts)
+- [productized_verification_surface_protocol.md](../../evidence/productized_verification_surface_protocol.md)
+- [verify_productized_surface.sh](../../../../scripts/host/verify_productized_surface.sh)
 
 Why it matters:
 
@@ -429,10 +429,10 @@ What this stage achieved:
 
 Repo evidence:
 
-- [rust/Cargo.toml](../../../rust/Cargo.toml)
-- [rust/README.md](../../../rust/README.md)
-- [rust_workspace_proposal.md](../../../rust_workspace_proposal.md)
-- [language_evolution_map.md](../../language_evolution_map.md)
+- [rust/Cargo.toml](../../../../rust/Cargo.toml)
+- [rust/README.md](../../../../rust/README.md)
+- [rust_workspace_proposal.md](../../infrastructure/rust_workspace_proposal.md)
+- [language_evolution_map.md](../../infrastructure/language_evolution_map.md)
 
 Why it matters:
 
@@ -463,10 +463,10 @@ What this stage achieved:
 
 Repo evidence:
 
-- [protocol_adoption_2026.md](../architecture/overview/protocol_adoption_2026.md)
-- [shopify_sandbox_commerce_adapter.py](../../../src/seedcore/adapters/shopify_sandbox_commerce_adapter.py)
-- [rct_agent_action_gateway_reference_adapter.py](../../../src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py)
-- [agent_action_gateway_contract.md](agent_action_gateway_contract.md)
+- [protocol_adoption_2026.md](../../../architecture/overview/protocol_adoption_2026.md)
+- [shopify_sandbox_commerce_adapter.py](../../../../src/seedcore/adapters/shopify_sandbox_commerce_adapter.py)
+- [rct_agent_action_gateway_reference_adapter.py](../../../../src/seedcore/adapters/rct_agent_action_gateway_reference_adapter.py)
+- [agent_action_gateway_contract.md](../../trust-runtime/agent_action_gateway_contract.md)
 
 Why it matters:
 
@@ -490,7 +490,7 @@ What this stage achieved:
 
 Repo evidence:
 
-- [vla_2026_optimizations.md](vla_2026_optimizations.md)
+- [vla_2026_optimizations.md](../../robotics/vla_2026_optimizations.md)
 
 Why it matters:
 

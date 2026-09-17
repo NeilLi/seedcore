@@ -36,7 +36,7 @@ SeedCore trust runtime: evaluates, scopes, revokes, verifies, and proves.
 ```
 
 For the current research memo, see
-[`rtx_spark_autonomous_era_investigation.md`](rtx_spark_autonomous_era_investigation.md).
+[`infrastructure/rtx_spark_autonomous_era_investigation.md`](infrastructure/rtx_spark_autonomous_era_investigation.md).
 
 ## Why SeedCore Is A Trust Runtime
 

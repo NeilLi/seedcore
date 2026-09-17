@@ -3,7 +3,7 @@
 LANE_1_TARGETS = {
     "convergence_p99_max_ms": 1.0,
     "sample_count": 1000,
-    "source_reference": "docs/development/freshness_sla_edge_stress_schedule.md:72",
+    "source_reference": "docs/development/operations/freshness_sla_edge_stress_schedule.md:72",
 }
 
 __all__ = ["LANE_1_TARGETS"]

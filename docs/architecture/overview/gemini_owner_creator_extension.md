@@ -212,4 +212,4 @@ Exit:
 
 For concrete Phase 1 usage examples, see:
 
-- [Gemini Owner/Creator Phase 1 Quickstart](../../development/gemini_phase1_quickstart.md)
+- [Gemini Owner/Creator Phase 1 Quickstart](../../development/integrations/gemini_phase1_quickstart.md)

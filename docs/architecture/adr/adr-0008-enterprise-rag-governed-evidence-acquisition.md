@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-05-17
 - Scope: Enterprise document and knowledge retrieval as SeedCore-governed evidence
-- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0004](./adr-0004-result-verifier-runtime.md), [ADR 0005](./adr-0005-replayable-evidence-governed-state-transitions.md), [Agent Action Gateway Contract](../../development/agent_action_gateway_contract.md), [Q2 Audit Trail UI Spec](../../development/q2_2026_audit_trail_ui_spec.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md), [Policy-Governed RAG Research Adoption Review](../../development/policy_governed_rag_research_adoption_review.md)
+- Related: [ADR 0001](./adr-0001-pdp-hot-path.md), [ADR 0004](./adr-0004-result-verifier-runtime.md), [ADR 0005](./adr-0005-replayable-evidence-governed-state-transitions.md), [Agent Action Gateway Contract](../../development/trust-runtime/agent_action_gateway_contract.md), [Q2 Audit Trail UI Spec](../../development/evidence/q2_2026_audit_trail_ui_spec.md), [RAG Evidence Bundle and Trace Contract](../contracts/rag_evidence_bundle_trace_contract.md), [Policy-Governed RAG Research Adoption Review](../../development/learning/policy_governed_rag_research_adoption_review.md)
 
 ## Context
 
