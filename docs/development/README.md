@@ -184,6 +184,7 @@ quarantine, or close evidence by themselves.
 ### Multi-Agent, Embodied, And Infrastructure Research
 
 - [`multi_agent_safety_research_alignment.md`](multi_agent_safety_research_alignment.md)
+- [`microduck_architecture_study.md`](microduck_architecture_study.md)
 - [`world_action_model_architecture_reference.md`](world_action_model_architecture_reference.md)
 - [`vla_2026_optimizations.md`](vla_2026_optimizations.md)
 - [`gvisor_and_sandbox_hardening_strategy.md`](gvisor_and_sandbox_hardening_strategy.md)
