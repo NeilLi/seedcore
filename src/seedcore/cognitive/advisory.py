@@ -24,6 +24,17 @@ class CognitiveAdvisoryContractBuilder:
     """
 
     @staticmethod
+    def robot_team_planner(propose):
+        """Bind a configured cognitive JSON adapter to the non-authoritative skill schema.
+
+        Use a separate adapter/persona per agent. No execution tools, endpoint
+        selection, fallback controller, or authority are added by this wrapper.
+        """
+        from seedcore.robotics.cognitive import RobotCognitivePlanner
+
+        return RobotCognitivePlanner(propose)
+
+    @staticmethod
     def clamp01(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
 

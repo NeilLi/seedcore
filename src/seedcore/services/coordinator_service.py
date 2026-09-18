@@ -1069,6 +1069,48 @@ class Coordinator:
                     )
             return envelope
 
+    def create_robot_team_runtime(self, mission, planners, *, verify, halt):
+        """Trusted in-process composition hook; deliberately not an HTTP endpoint.
+
+        Reserve the mission in its Organ first. Supply authenticated verifier and
+        admitted revocation/stop adapters. Keep a single coordinator owner per
+        physical endpoint; this local registry is NOT a distributed lease.
+        Failed runtimes remain reserved until operator reconciliation/restart.
+        """
+        from seedcore.robotics.contracts import TeamMission
+        from seedcore.robotics.coordinator import RobotTeamCoordinator
+
+        team = TeamMission.model_validate(mission)
+        runtimes = getattr(self, "_robot_team_runtimes", {})
+        if team.mission_id in runtimes:
+            raise ValueError("robot mission runtime already exists")
+        for runtime in runtimes.values():
+            for key in ("agent_id", "robot_id", "endpoint_id"):
+                if {getattr(b, key) for b in runtime.mission.bindings} & {
+                    getattr(b, key) for b in team.bindings
+                }:
+                    raise ValueError(f"{key} already owned by a robot runtime")
+
+        async def dispatch(task):
+            # In-process entry avoids client RPC/HTTP fallback replay on uncertainty.
+            return await self.route_and_execute(task.model_dump(mode="json"))
+
+        runtime = RobotTeamCoordinator(team, planners, dispatch=dispatch, verify=verify, halt=halt)
+        runtimes[team.mission_id] = runtime
+        self._robot_team_runtimes = runtimes
+        return runtime
+
+    def release_robot_team_runtime_after_reconciliation(self, mission_id: str) -> None:
+        """Trusted operator hook, after evidence settlement and session revocation.
+
+        Release the Organ reservation separately. No success/failure path invokes
+        this automatically, and a retained reference to the old runtime stays halted.
+        """
+        runtime = self._robot_team_runtimes[mission_id]
+        if runtime.is_running or not runtime.halted:
+            raise ValueError("halt and reconcile the mission before releasing its runtime")
+        del self._robot_team_runtimes[mission_id]
+
     async def _finalize_ad_hoc_route_task_record(
         self,
         task_id: str,

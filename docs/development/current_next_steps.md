@@ -8,6 +8,12 @@ and replayable evidence. The [portfolio decision](application_directions.md)
 sets priorities; the [integration plan](robotics/microduck_integration_plan.md)
 defines the boundary. These milestones are planned, not completed integration.
 
+The [multi-robot team layer](robotics/multi_robot_team_architecture.md) now provides
+organ reservations, independent cognitive proposals, bounded agent tasks and
+coordinator round/verification barriers. Connect it to admitted Microduck
+execution and evidence adapters after M1–M3; local contract tests do not complete
+those milestones.
+
 ## Execution Order
 
 | Stage | Deliverable | Exit condition |

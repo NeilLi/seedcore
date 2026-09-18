@@ -8,6 +8,7 @@ ledger before implementing a driver or selecting a learned policy.
 
 | Document | Role |
 | --- | --- |
+| [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |
 | [Microduck architecture study](microduck_architecture_study.md) | Daemons, bus ownership, intent and control |
 | [Microduck RL study](microduck_rl_study.md) | Observations, rewards, transfer, evaluation |

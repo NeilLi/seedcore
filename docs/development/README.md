@@ -40,6 +40,8 @@ here does not promote it to an implemented feature.
 3. [Microduck architecture](robotics/microduck_architecture_study.md): onboard boundaries.
 4. [Microduck RL](robotics/microduck_rl_study.md): actor inputs, rewards, transfer, attachment corrections.
 5. [Microduck integration plan](robotics/microduck_integration_plan.md): adapter and evidence work.
+   [Multi-robot team architecture](robotics/multi_robot_team_architecture.md) describes
+   the implemented coordination layer for cooperative work and competitive play.
 6. [Policy gates](policy_gate_matrix.md), [token lifecycle](trust-runtime/execution_token_lifecycle_management.md),
    and [physical telemetry](evidence/physical_telemetry_processing_contract.md): shared requirements.
 

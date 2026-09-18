@@ -279,6 +279,9 @@ class Organ:
         # 3. Internal State
         self.agents: Dict[str, AgentHandle] = {}
         self.agent_info: Dict[str, Dict[str, Any]] = {}
+        from seedcore.robotics.roster import RobotTeamRoster
+
+        self.robot_teams = RobotTeamRoster(organ_id)
 
         # 4. Lazy Resource Containers
         self._tool_handler: Optional[Any] = None
@@ -674,6 +677,7 @@ class Organ:
             agent_id: Agent ID to remove
             force_kill_by_name: If True, also try to kill Ray actor by name (useful when handle is stale)
         """
+        self.robot_teams.assert_agent_removable(agent_id)
         logger.info(f"[{self.organ_id}] Removing agent {agent_id}...")
         self.agent_info.pop(agent_id, None)
         agent_handle = self.agents.pop(agent_id, None)
@@ -842,6 +846,18 @@ class Organ:
     async def get_agent_handle(self, agent_id: str) -> Optional[AgentHandle]:
         """Returns the handle for a specific agent."""
         return self.agents.get(agent_id)
+
+    async def reserve_robot_team(self, mission: Dict[str, Any]) -> Dict[str, Any]:
+        """Trusted control-plane setup, not a model-callable execution tool."""
+        from seedcore.robotics.contracts import TeamMission
+
+        team = TeamMission.model_validate(mission)
+        self.robot_teams.reserve(team, set(self.agents))
+        return self.robot_teams.get(team.mission_id).model_dump(mode="json")
+
+    async def release_robot_team_after_reconciliation(self, mission_id: str) -> None:
+        """Operator lifecycle hook: first settle evidence and revoke all sessions."""
+        self.robot_teams.release_after_reconciliation(mission_id)
 
     async def get_agent_handles(self) -> Dict[str, AgentHandle]:
         """

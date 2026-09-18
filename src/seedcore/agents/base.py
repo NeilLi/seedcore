@@ -1637,6 +1637,21 @@ class BaseAgent:
     # ============================================================================
     # Generic task execution (routing-aware, RBAC-enforced)
     # ============================================================================
+    def prepare_robot_action(self, *, mission, observation, proposal, round_id: str):
+        """Local proposal packaging only; caller must submit through Coordinator/PDP."""
+        from seedcore.robotics.agent import prepare_robot_task
+        from seedcore.robotics.contracts import TeamMission, TeamObservation, RobotProposal
+
+        team = TeamMission.model_validate(mission)
+        binding = next((b for b in team.bindings if b.agent_id == self.agent_id), None)
+        if binding is None or binding.organ_id != self.organ_id:
+            raise ValueError("agent is not assigned to this robot team")
+        return prepare_robot_task(
+            agent_id=self.agent_id, binding=binding, mission=team,
+            observation=TeamObservation.model_validate(observation),
+            proposal=RobotProposal.model_validate(proposal), round_id=round_id,
+        ).model_dump(mode="json")
+
     async def execute_task(self, task) -> Dict[str, Any]:
         """
         Normalize inbound task payloads and orchestrate tool execution with RBAC.
@@ -1715,6 +1730,19 @@ class BaseAgent:
         )
 
         # --- 0) Fast guardrails & Routing Constraints ----------------------------
+
+        # Team affinity is a hard constraint, not a load-balancing hint. This
+        # supplements (never replaces) tool RBAC and HAL token/revocation checks.
+        if "robot_command" in task_dict.get("params", {}):
+            from seedcore.robotics.agent import validate_robot_assignment
+
+            try:
+                validate_robot_assignment(task_dict, self.agent_id, now=self._now_ts())
+            except (ValueError, TypeError, KeyError):
+                return self._reject_result(
+                    tv, reason="robot_assignment_or_governance_invalid",
+                    started_ts=started_ts, started_monotonic=started_monotonic,
+                )
 
         my_spec = str(getattr(self.specialization, "value", self.specialization))
 
