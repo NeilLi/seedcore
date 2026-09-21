@@ -1,6 +1,6 @@
 # Microduck Architecture Study
 
-Date: 2026-09-17
+Date: 2026-09-21
 Status: Supporting study; upstream architecture informs the planned integration
 
 Adapted from the [supplied architecture study](sources/microduck_architecture_user_supplied.md).
@@ -68,6 +68,26 @@ covers the layout and export checks.
 
 Distinguish the number of physical servos, the action-vector size, and the
 subset moved by a specific behavior. These are different quantities.
+
+The supplied [RL infographic](sources/microduck_rl_architecture_user_supplied.md)
+describes an approximately 25 cm, 800 g robot, consistent with the pinned
+[RL overview](https://github.com/pollen-robotics/microduck_rl/blob/cb70b792312d559a4da09064d92009079671815f/README.md).
+Its “14 actuators” label represents the policy-controlled set: five joints per
+leg and four neck/head joints. The studied physical runtime adds the mouth,
+making 15 servo slots. These counts must remain distinct in adapter metadata.
+
+The 13 policy command values comprise twist (3), neck/head angles (4), and body
+pose slots (6); the head block is not a quaternion. Slot presence does not
+prove a given policy responds to every component. The
+[RL study](microduck_rl_study.md#actor-observation-and-action-contract) records
+the pinned runtime's unused body components and task-dependent training behavior.
+
+The diagram's PPO/critic and parallel physics belong to offline training. On
+the robot, ONNX actor inference feeds the local control path. Shared tensor
+dimensions facilitate policy reuse, but policy transitions still require
+compatible offsets/scales, valid starting state and reviewed handover/reset
+behavior. Do not treat “hot-swappable” as permission to change an active
+SeedCore session's artifact or scope.
 
 ## Safety And Client Control
 

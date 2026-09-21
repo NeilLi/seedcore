@@ -261,6 +261,7 @@ decision, scoped and non-revoked token, actuator evidence, and verifier closure.
 - [Physical AI strategy](docs/development/robotics/physical_ai_strategy.md)
 - [Robot execution contract proposal](docs/development/robotics/robot_execution_contract.md)
 - [Governed skill package proposal](docs/development/robotics/robot_skill_contract.md)
+- [Microduck RL architecture and sim2real study](docs/development/robotics/microduck_rl_study.md)
 - [Public application studio](https://seedcore.ai/)
 - [Development map](docs/development/README.md)
 - [Application directions](docs/development/application_directions.md)

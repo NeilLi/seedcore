@@ -64,6 +64,14 @@ Resolve base-height targets from the model rather than overall robot height.
 Measure sensor alignment rather than assuming one bus transaction samples all
 devices simultaneously.
 
+Include the [RL architecture study's](microduck_rl_study.md) concrete contract:
+48 observation/history values plus 13 command values, 14 policy actions versus
+15 physical runtime servo slots, command-component semantics, home/action
+scales, actuator parameters, backlash variant and collision-model digest.
+Record policy period separately from simulation timestep/decimation and actual
+training environment count. The supplied diagram's 4,096 environments and
+training-note angular speeds are not deployment requirements or motion limits.
+
 ## M1: Read-Only Adapter And Simulation
 
 Use explicit profiles for protocol fixtures, the daemon with fake I/O, MuJoCo
@@ -73,6 +81,12 @@ Missing hardware fails the requested hardware profile.
 Capture health/state first. Check malformed responses, disconnect/reconnect,
 stale timestamps and non-finite values. Compare frozen observations and ONNX
 outputs against the training reference within a declared numeric tolerance.
+
+Golden cases must distinguish angular velocity from projected gravity, preserve
+head-command order, account for unused body-command slots and exclude passive
+backlash/wheel joints from the policy action set. Validate embedded observation
+normalization through the supported export path. Matching only the 61/14 tensor
+dimensions cannot detect swapped signals or incompatible home/action scales.
 
 The generic SeedCore simulator can test authority plumbing. Microduck
 locomotion acceptance requires the selected Microduck model/runtime pair.
@@ -200,6 +214,13 @@ proxies and observation mismatch.
 Training produces candidates. Evaluation does not install a policy or admit
 motion. Promotion validates compatibility, retains the previous artifact for
 rollback, and binds the selected version to later execution evidence.
+
+For behavior families, record task-specific reward/curriculum settings and
+collision/contact models; evaluate starting postures, policy handovers, previous
+action/reset state, interruption and rollback as well as steady-state scores.
+Walking, recovery, kicking and rolling require separate acceptance evidence.
+The infographic's bow illustration does not establish a ready-to-use bow
+artifact. Shared observations do not authorize arbitrary live policy switching.
 
 ## Completion Evidence
 

@@ -22,9 +22,10 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |
 | [Microduck architecture study](microduck_architecture_study.md) | Daemons, bus ownership, intent and control |
-| [Microduck RL study](microduck_rl_study.md) | Observations, rewards, transfer, evaluation |
+| [Microduck RL study](microduck_rl_study.md) | Training/deployment flow, 61/14 interface, BAM/backlash, reward design, model variants and policy handover |
 | [Microduck source ledger](microduck_source_ledger.md) | Pinned sources, discrepancies, unresolved facts |
 | [Supplied studies](sources/README.md) | Original user material with provenance |
+| [RL architecture infographic](sources/microduck_rl_architecture_user_supplied.md) | Preserved image, panel reading map and claim qualifications |
 | [HAL bridge testing](HAL_TESTING.md) | Earlier Reachy simulation guide; not Microduck bring-up |
 | [Reachy demo runbook](reachy_mini_seedcore_demo_runbook_20260414.md) | Dated demo and trust-boundary presentation reference |
 | [World Action Model reference](world_action_model_architecture_reference.md) | Related research |
