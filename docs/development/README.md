@@ -1,13 +1,25 @@
 # SeedCore Development Docs
 
-Date: 2026-09-17
-Status: Canonical development map; Microduck and robotics integration are the next-stage focus
+Date: 2026-09-21
+Status: Canonical development map; physical AI runtime, Microduck reference integration
 
-Microduck is the primary integration target for the next stage of SeedCore.
-The work connects remote agent intent, local robot control, and replayable
-execution evidence through the existing trust runtime.
+SeedCore is developing a **trust runtime for physical AI**, with small robots
+as the first integration focus and Microduck as the reference target. The
+reusable unit is a governed skill attempt: accountable intent, bounded
+authority, local enforcement and evidence of the outcome.
 
-Start with the [active queue](current_next_steps.md), the
+The team-facing product work starts with people's needs: help a customer choose
+suitable hardware, implement a useful function, and operate it with support.
+The [customer delivery model](robotics/robot_solution_delivery.md) connects that
+service to the runtime. Customer discovery and engineering run alongside each
+other; a hardware trial must satisfy both acceptance tracks.
+
+For the founder-led delivery process, use the
+[service operating plan](robotics/robot_service_operating_plan.md): one supported
+profile and live pilot initially, with explicit scope, support and expansion gates.
+
+Start with the [physical AI strategy](robotics/physical_ai_strategy.md), the
+[active queue](current_next_steps.md), the
 [Microduck integration plan](robotics/microduck_integration_plan.md), and the
 [robotics reading map](robotics/README.md). The
 [portfolio decision](application_directions.md) explains what is active,
@@ -17,7 +29,7 @@ maintained, or deferred.
 
 | Area | Purpose | Next-stage posture |
 | --- | --- | --- |
-| [Robotics](robotics/README.md) | Microduck architecture, RL, simulator and hardware integration; Reachy and WAM/VLA references | Primary focus |
+| [Robotics](robotics/README.md) | Customer solution delivery, reusable runtime contracts, Microduck integration and supporting research | Primary focus |
 | [Trust runtime](trust-runtime/README.md) | Accountability, intent admission, PDP, tokens, revocation | Shared foundation |
 | [Evidence](evidence/README.md) | Telemetry, receipts, replay, verifier closure, persistent twins | Build the Microduck evidence path |
 | [Learning](learning/README.md) | Evaluation, flywheel, memory, retrieval, advisory agents | Supporting research |
@@ -35,10 +47,10 @@ here does not promote it to an implemented feature.
 
 ## Reading Order
 
-1. [Current next steps](current_next_steps.md): execution order and exit conditions.
-2. [Application directions](application_directions.md): the Microduck focus decision.
-3. [Microduck architecture](robotics/microduck_architecture_study.md): onboard boundaries.
-4. [Microduck RL](robotics/microduck_rl_study.md): actor inputs, rewards, transfer, attachment corrections.
+1. [Physical AI strategy](robotics/physical_ai_strategy.md) and [customer delivery model](robotics/robot_solution_delivery.md): customer needs, product thesis, adoption tests and claim limits.
+2. [Current next steps](current_next_steps.md) and [application directions](application_directions.md): sequence and portfolio decision.
+3. [Robot execution proposal](robotics/robot_execution_contract.md) and [skill package proposal](robotics/robot_skill_contract.md): intended reusable contracts; not shipped schemas.
+4. [Microduck architecture](robotics/microduck_architecture_study.md) and [RL study](robotics/microduck_rl_study.md): onboard boundaries, policy inputs and pinned-source corrections.
 5. [Microduck integration plan](robotics/microduck_integration_plan.md): adapter and evidence work.
    [Multi-robot team architecture](robotics/multi_robot_team_architecture.md) describes
    the implemented coordination layer for cooperative work and competitive play.
@@ -65,6 +77,11 @@ For scheduling, use this map, the portfolio decision, and the active queue
 before older annual plans or application schedules. Durable contracts and ADRs
 retain their authority within their scope; changing priority does not waive
 their gates.
+
+Robotics documents marked **proposed** add design requirements, not implemented
+token fields or permission grants. Admission, local control and evidence closure
+have separate deadlines. A passing software contract test does not establish
+hardware readiness, sensor truth or physical safety certification.
 
 ## Maintenance
 

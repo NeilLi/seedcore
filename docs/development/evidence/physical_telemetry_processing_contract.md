@@ -1,6 +1,6 @@
 # Physical Telemetry Processing Contract
 
-Date: 2026-06-29
+Date: 2026-06-29; robotics scope clarification: 2026-09-20
 Status: Development contract for replay-grade embodied telemetry processing
 
 ## Purpose
@@ -15,13 +15,27 @@ training sidecars without changing the authority boundary:
 model or agent proposes
 PDP decides
 ExecutionToken scopes the admitted attempt
-edge / HAL telemetry proves physical closure
+edge / HAL telemetry supplies evidence for physical closure
 replay / RESULT_VERIFIER accepts, rejects, reviews, or quarantines
 ```
 
 High-rate sensor processing, temporal alignment, digital-twin parity, semantic
 trimming, or dataset export can improve evidence quality. They must not become
 execution authority by themselves.
+
+For the Microduck pilot, apply the proposed
+[robot execution and evidence contract](../robotics/robot_execution_contract.md).
+Signed streams establish integrity and provenance under their capture/key
+assumptions; they do not establish sensor truth. Replay can validate captured
+records, but cannot reconstruct missing observations. Distinguish command
+acknowledgement, observed interruption and successful physical completion.
+
+Select only the streams required by the admitted skill and capture profile.
+Raw camera/audio recording needs explicit collection, access, retention and
+export permissions; the sensor inventory below is not a requirement to capture
+every modality. Archive-preservation rules apply within that reviewed retention
+policy. Record deletion/redaction and its effect on later verification rather
+than implying indefinite retention or complete reconstruction.
 
 ## Current Baseline
 

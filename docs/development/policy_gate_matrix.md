@@ -2,6 +2,14 @@
 
 This document freezes the expected behavior of the Policy Decision Point (PDP) boundary when evaluating an `ActionIntent` for a governed action (e.g., `RELEASE`).
 
+For the planned robotics extension, read the
+[robot execution contract proposal](robotics/robot_execution_contract.md).
+Robot session, physical-envelope and skill-package requirements are proposed
+additions; they do not change the frozen matrix, constraint keys or deny codes
+below. Version and verify any implementation change across the existing token
+and replay contracts before promotion. PDP admission does not replace local
+controller safety or prove physical task completion.
+
 The PDP enforces an explicit, synchronous, and non-LLM-driven evaluation path. Decisions are mathematically deterministic based on the provided intent and registered evidence.
 
 ## Evaluation Rules

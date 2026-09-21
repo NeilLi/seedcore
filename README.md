@@ -3,147 +3,164 @@
 [![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-SeedCore is an application studio building experiences for places, journeys,
-and real things. The public story starts at [seedcore.ai](https://seedcore.ai/):
-five application worlds make the work legible before the runtime details begin.
+**A trust runtime for physical AI.**
 
-This repository contains the application prototypes, governed execution
-runtime, proof surfaces, and development contracts behind that story. Its
-application layers let people explore, ask, preview, and use experiences while
-the trust boundary underneath remains explicit.
+SeedCore's team aims to help people identify what they want a small robot to
+do, choose suitable hardware, and build and support the functions they need.
+The trust runtime is the technical foundation for delivering those solutions.
 
-The next development stage focuses on **Microduck and robotics integration**:
-simulation, bounded agent-to-robot intent, physical telemetry, and replayable
-execution proof. Start with the
-[robotics development map](docs/development/robotics/README.md) and
-[active queue](docs/development/current_next_steps.md). Existing application
-prototypes remain available; their expansion is deferred behind this focus.
+SeedCore governs whether an AI agent may act, issues bounded execution
+authority, and verifies evidence of the attempt. The current focus is small
+robots, with **Microduck as the first integration target**.
 
-## Start with the applications
+Models provide plans and personalities. SeedCore connects those proposals to
+accountable agents, explicit permissions, revocable execution and an evidence
+trail. The robot's onboard controller retains control of its motors and local
+safety behavior.
 
-The website presents one portfolio rather than five unrelated products:
+**Current status:** the repository contains the governance and proof foundation,
+HAL interfaces, generic simulation and local multi-robot orchestration contracts.
+The Microduck adapter, bounded motion sessions and hardware acceptance are
+planned work. This is not a claim of production readiness or certified physical
+safety.
 
-| Application world | The experience | Current repository connection |
-| --- | --- | --- |
-| **Digital City** | Ask for a nearby café, maker, garden, or small detour and turn the answer into a walk. | `apps/neighborhood-guide` — working Godot prototype with a Blender-rendered entrance and Foundry Lane district. |
-| **Tourist Design Studio** | Turn a favorite detail from a trip into a souvenir a visitor can preview and help design. | Website interaction and application contracts; [experience references](docs/development/applications/experiences/README.md). |
-| **Family Journey** | Follow a story, find a clue, and make the destination part of the shared adventure. | Journey and city contracts in `docs/development/applications/city/journey_driven_digital_city_experience.md`. |
-| **Craft & Collectibles** | Discover handmade pieces and treasured finds with maker stories, materials, care, and provenance. | Restricted Custody Transfer and local-producer proof contracts in `docs/development/`. |
-| **Robot Moments** | Let a friendly tabletop robot guide a small activity while people choose what happens next. | [Microduck integration](docs/development/robotics/microduck_integration_plan.md) is the next-stage robotics focus; robot output does not grant authority. |
+Start with the [physical AI strategy](docs/development/robotics/physical_ai_strategy.md),
+[development map](docs/development/README.md) and
+[active integration queue](docs/development/current_next_steps.md).
 
-The application layer may discover, explain, visualize, recommend, collect
-preferences, and preview an ordinary experience. It may not authorize its own
-actions. Booking, payment, custody movement, policy changes, deployment,
-quarantine clearance, and other high-consequence mutations remain governed
-actions.
+## Why small robots
 
-## The application-layer contract
+As more people build robot behaviors, an application needs to answer more than
+“can the model generate a command?” It needs to identify who permitted the
+attempt, constrain its duration and capabilities, handle interruption, and
+explain the observed outcome.
 
-SeedCore separates the part a person experiences from the part that grants
-execution authority:
+The customer starts with a need: an engaging exhibit, a personal robot routine,
+or help presenting something in a studio or shop. SeedCore's proposed service
+is to clarify the job, compare hardware, implement a bounded function, validate
+it with the user, and provide ongoing support. Initial trials target activities
+an adult can supervise. Customer demand and delivery economics need validation.
 
+Internally, the reusable unit is a **governed skill attempt** across robot bodies
+and AI models. Robotics developers and hardware partners help deliver these
+solutions. Microduck is the first engineering reference; each customer's need
+determines which body fits. Read the
+[customer delivery model](docs/development/robotics/robot_solution_delivery.md).
+
+## How it fits
+
+```text
+application / model proposes
+  -> accountable Agent creates ActionIntent
+  -> Policy Decision Point (PDP) allows or denies
+  -> short-lived, scoped, revocable ExecutionToken
+  -> robot execution boundary validates authority and command limits
+  -> onboard controller attempts the action; local safety may refuse or stop
+  -> action-bound telemetry and receipts
+  -> replay / RESULT_VERIFIER closes or rejects the evidence
 ```
-person / operator
-  -> application layer
-       discover • ask • plan • preview • tell a story
-  -> accountable Agent
-  -> ActionIntent
-  -> Policy Decision Point (PDP)
-  -> scoped ExecutionToken or PolicyDeny
-  -> actuator / provider
-  -> evidence bundle and transition receipt
-  -> replay / RESULT_VERIFIER
-  -> verified, rejected, review, or quarantine
-```
 
-Application output is advisory or presentational until a named action enters
-the Agent Action Gateway and passes the PDP. A memory, model suggestion,
-retrieved fact, generated story, route, simulation, or flywheel adjustment does
-not become authority merely because an application displays it.
+Admission, local enforcement and evidence closure have different deadlines.
+Network policy calls and evidence upload stay outside the balance/control loop.
+A local stop must remain effective when the planner or network is unavailable;
+resuming requires valid authority. These are robotics integration requirements,
+not claims that the pending adapter already enforces them.
 
-| Application layers do | The trust runtime decides |
+| Layer | Owns |
 | --- | --- |
-| Discover places, people, objects, and stories | Whether a proposed action is admissible |
-| Match a request to a small journey or route | Which principal, scope, and policy apply |
-| Preview a design, itinerary, handoff, or interaction | Whether a bounded `ExecutionToken` may be minted |
-| Show source, freshness, claim state, and uncertainty | Whether revocation, evidence, and context checks pass |
-| Ask for confirmation and operator correction | Whether execution closes with replayable proof |
+| Application, persona and AI planner | Interaction and proposed intent |
+| SeedCore Agent and PDP | Accountability, delegation and bounded authorization |
+| SeedCore edge execution boundary | Token/session validation, command bounds and revocation enforcement |
+| Native robot runtime | Motor control, balance, local interlocks and physical response |
+| Evidence pipeline and RESULT_VERIFIER | Authenticated records, closure checks and replay |
 
-This is a trust runtime, not a traditional cybersecurity detector. It governs
-execution inside an environment and produces proof of what happened afterward.
+A token establishes permission under policy; it cannot guarantee physical safety.
+An actuator acknowledgement does not prove task completion. Signed telemetry
+establishes provenance and integrity under its capture/key assumptions, not
+sensor truth. Read the proposed
+[robot execution contract](docs/development/robotics/robot_execution_contract.md)
+for timing, partitions, recovery and evidence limits.
 
-## The first application entrance: Digital City
+## What exists and what comes next
 
-`apps/neighborhood-guide` is the current end-to-end application slice. It opens
-to a 2D navigation entrance, then leads into a small interactive 3D district:
+| Surface | Repository status | Evidence or next gate |
+| --- | --- | --- |
+| Agent Action Gateway, PDP, tokens and revocation | Implemented foundation | [Policy gates](docs/development/policy_gate_matrix.md) and existing regression suites |
+| Receipts, telemetry closure, Rust proof kernel and TypeScript proof surfaces | Implemented foundation | Existing custody and verifier fixtures; robotics capture/closure still needs integration |
+| HAL, Reachy drivers and generic robot simulator | Existing integration surfaces | [Robotics map](docs/development/robotics/README.md); not a Microduck dynamics model |
+| Multi-robot proposals, reservations and closure barriers | Implemented local orchestration | [Team architecture](docs/development/robotics/multi_robot_team_architecture.md); in-memory ownership, live adapters pending |
+| Microduck driver and bounded motion session | Planned, M0–M3 | Pinned runtime/profile, admission, local interruption and action-bound evidence |
+| Supervised Microduck hardware | Planned, M4 | Measured limits and repeatable allowed/denied/interrupted cases |
+| Portable skill packages and studio | Proposed follow-on | [Skill contract](docs/development/robotics/robot_skill_contract.md); enforcement before distribution |
 
-- the entrance is an original orthographic Blender render with five destination
-  cards and four scene hotspots;
-- **Explore**, **Makers**, **Craft**, and **Your guide** markers lead to the
-  corresponding local experience;
-- the district supports place selection, tag-based matching, garden detours,
-  pedestrian route previews, visitor movement, pause/resume, replay, and reset;
-- route and place state are presentation and discovery state only; no route
-  starts a booking, payment, custody action, or external write.
+Repository code and local tests establish only their stated scope. They do not
+prove all command paths are governed on a deployed robot. The existing HAL has
+configurable development behavior; a robotics deployment must close alternate
+paths and enforce the reviewed profile before claiming coverage.
 
-Run it locally:
+## First demonstration
+
+An agent proposes a short bounded move in a supervised test area, followed by
+a stop. The operator can inspect the request, granted limits, observed motion
+and verifier outcome. The same demonstration must show denial, expired or
+revoked authority, lost command input and missing evidence.
+
+The sequence is: pin the runtime and policy, establish read-only simulation,
+admit one bounded session, close its evidence, then measure the behavior on
+supervised hardware. Learning produces candidate policies; it does not authorize
+installation or motion. See the
+[Microduck plan](docs/development/robotics/microduck_integration_plan.md).
+
+You can inspect the existing team proposal layer without a robot or model API:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/robotics/plan_team_demo.py --scenario football
+PYTHONPATH=src .venv/bin/python scripts/robotics/plan_team_demo.py --scenario work
+PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_robot_team_runtime.py
+```
+
+These commands assume the repository Python environment is installed. The demos
+print proposed tasks using fixtures; they do not mint tokens, move robots or
+prove a successful physical match.
+
+## Existing applications and regression foundation
+
+Restricted Custody Transfer (RCT), including the rare-shoe handoff, remains a
+reference for delegated authority, receipts, revocation and replay regressions.
+Robotics reuses that foundation while adding continuous local enforcement and
+interrupted or uncertain physical outcomes.
+
+The [public application studio](https://seedcore.ai/) presents city, travel,
+family, craft and robot experiences. Those experiences can showcase the runtime.
+Their expansion is deferred behind the current robotics integration.
+
+The existing [Digital City prototype](apps/neighborhood-guide/README.md) remains
+available with its Blender entrance, Godot district, route previews and local
+interaction checks:
 
 ```bash
 cd apps/neighborhood-guide
 godot --path .
 ```
 
-The editable scene is
-[the Blender entrance source](apps/neighborhood-guide/assets/blender/neighborhood_entrance.blend).
-The app image is
-[the rendered entrance](apps/neighborhood-guide/assets/illustrations/entrance_render.png).
-To re-render after editing the Blender source:
-
-```bash
-cd apps/neighborhood-guide
-blender --background assets/blender/neighborhood_entrance.blend --python tools/render_entrance_blender.py
-godot --headless --path . --editor --quit
-```
-
-Read the application-specific guide in
-[apps/neighborhood-guide/README.md](apps/neighborhood-guide/README.md).
-
-## Runtime foundation beneath the apps
-
-The application portfolio is built on a deterministic execution and proof
-runtime for high-consequence workflows. Its current baseline includes:
-
-- Agent Action Gateway v1 and stateless PDP evaluation;
-- active authorization-graph checks and AI-origin mutation gates;
-- short-lived, scoped, revocable `ExecutionTokens`;
-- replayable evidence bundles, signed receipts, and transition evidence;
-- coordinator-embedded `RESULT_VERIFIER` with fail-closed mismatch handling;
-- Rust proof-kernel paths and TypeScript verification surfaces; and
-- read-only city discovery, public/protected redaction, and local-producer
-  provenance contracts.
-
-The first authority-bearing vertical remains Agent-Governed Restricted Custody
-Transfer (RCT), currently expressed through the collectible rare-shoe custody
-handoff. The broader application layers make discovery, storytelling, and
-ordinary coordination useful around that trust spine without inheriting its
-authority.
+Its discovery and route previews do not authorize bookings, payments or custody
+movement. See [application directions](docs/development/application_directions.md)
+for maintained and deferred work.
 
 ## Repository map
 
 | Path | Role |
 | --- | --- |
-| `apps/neighborhood-guide` | Godot application layer, Blender source, 2D entrance, 3D district, and local interaction checks |
+| `src/seedcore/robotics` | Team proposals, robot bindings, reservations and closure barriers |
+| `src/seedcore/hal` | Driver interfaces, actuator admission, simulation and revocation |
+| `apps/neighborhood-guide` | Existing Godot and Blender application prototype |
 | `src/seedcore` | Python runtime, PDP-facing APIs, gateway, discovery, custody, evidence, and coordinator services |
 | `rust` | Offline and embedded proof-kernel implementation plus transfer fixtures |
 | `ts/apps` and `ts/packages` | Verification API, operator console, proof surface, and typed contracts |
 | `tests` | Runtime, discovery, evidence, replay, custody, and application contract tests |
-| `docs/development` | Active application directions, contracts, promotion gates, and current queue |
+| `docs/development` | Robotics strategy, integration plans, shared contracts and current queue |
 | `docs/architecture` | Architecture decisions and runtime topology |
 | `scripts/host` | Focused host verification and operational checks |
-
-The public website is maintained as the application-facing companion project at
-[seedcore.ai](https://seedcore.ai/). Its five-scene narrative is the product
-entry point; this repository supplies the prototypes and governed foundation.
 
 ## Development paths
 
@@ -180,7 +197,7 @@ Transfer-proof example:
 cargo run -q --manifest-path rust/Cargo.toml -p seedcore-verify -- summarize-transfer --dir rust/fixtures/transfers/allow_case
 ```
 
-### Add an application surface
+### Add a governed skill or application
 
 Start with the smallest coherent person-facing loop:
 
@@ -228,11 +245,11 @@ surface the verifier output and runbook evidence for review.
 
 ## Boundaries and non-goals
 
-The application portfolio is not a generic coding-agent harness, marketplace,
-super app, municipal authority, utility-control platform, or traditional
-cybersecurity product. This repository does not activate a global marketplace,
-legal cadastre, emergency dispatch system, licensed transport operation, or
-real escrow rail.
+SeedCore focuses on execution authority and evidence. It does not replace a
+robot controller, physics simulator or hardware safety engineering. Unattended
+household operation, child/eldercare use, public skill distribution and additional
+hardware rollouts require work beyond the current pilot. It is not a generic
+coding-agent harness, marketplace or traditional cybersecurity detector.
 
 Do not make memory, retrieval, model output, generated media, discovery,
 simulation, route planning, or flywheel feedback an authority source. Do not
@@ -241,6 +258,9 @@ decision, scoped and non-revoked token, actuator evidence, and verifier closure.
 
 ## Further reading
 
+- [Physical AI strategy](docs/development/robotics/physical_ai_strategy.md)
+- [Robot execution contract proposal](docs/development/robotics/robot_execution_contract.md)
+- [Governed skill package proposal](docs/development/robotics/robot_skill_contract.md)
 - [Public application studio](https://seedcore.ai/)
 - [Development map](docs/development/README.md)
 - [Application directions](docs/development/application_directions.md)

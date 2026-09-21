@@ -1,6 +1,6 @@
 # Microduck Integration Plan
 
-Date: 2026-09-17
+Date: 2026-09-21
 Status: Active next-stage plan; adapter and hardware integration not implemented
 
 ## Outcome And Scope
@@ -13,6 +13,13 @@ contracts and failure cases are reproducible.
 The [active queue](../current_next_steps.md) owns sequencing. The
 [source ledger](microduck_source_ledger.md) distinguishes supplied claims,
 upstream observations and unresolved facts.
+
+The [physical AI strategy](physical_ai_strategy.md) explains the product role
+of this first integration. Apply the proposed
+[robot execution contract](robot_execution_contract.md) to sessions, local
+interruption and evidence. Version any resulting schema changes explicitly;
+this plan does not introduce a new `TaskExecutionToken` or alter frozen token
+constraints.
 
 ## Runtime Boundaries
 
@@ -78,6 +85,19 @@ motion through legacy/dev bypasses or direct remote socket access. Inventory
 gamepad, BLE, WebRTC and local tools before claiming all remote motion is
 governed.
 
+One candidate is a `MicroduckAdapter` behind an authenticated Unix-domain-socket
+gateway. Select its location and exact RPC mapping after M0. Restrict the native
+socket and motor devices to the reviewed controller/gateway identities; exclude
+untrusted skill processes. Authenticate local callers and bind requests to the
+admitted session rather than treating access to a socket path as permission.
+Check permissions after socket recreation/restart and account for trusted local
+operator paths. A transparent forwarding proxy is insufficient.
+
+The supplied `robot.move`, `robot.do`, `robot.stop` method names, simulator
+socket path and numeric streaming/watchdog limits are unverified integration
+inputs. Confirm them from the selected executable schema and tests. Gateway
+failure must leave the robot's independent local watchdog effective.
+
 Define the session before streaming:
 
 - One token admits one bounded action/session, endpoint, policy identity,
@@ -98,6 +118,13 @@ and replay semantics before implementation. Transport heartbeat alone is
 insufficient: a gateway can stay alive after a planner stops producing intent.
 Track command freshness and action deadline independently.
 
+Define trusted clock/skew handling and a local monotonic deadline that cannot
+be extended by wall-clock rollback. Specify revocation freshness and the maximum
+disconnected authority window: the local robot cannot learn a remote revocation
+instantaneously during a partition. No new remote session is admitted against
+stale authority context. Local stop and watchdog responses remain independent
+of network authorization; remote cancellation uses the admitted halt path.
+
 ## M3: Evidence And Closure
 
 Extend the [physical telemetry contract](../evidence/physical_telemetry_processing_contract.md)
@@ -114,6 +141,14 @@ mismatched or contradictory telemetry cannot become successful closure.
 Simulator receipts remain simulation evidence. Hardware signing claims require
 an enrolled signer and actual captured proof.
 
+Evaluate tiered capture: persist required action/session records and outcome
+observations, with a bounded rolling buffer for additional high-rate detail.
+Specify pre/post-event retention, trigger behavior, sequence gaps and storage
+limits before testing. Anomaly-triggered capture alone cannot satisfy evidence
+requirements for normal completion. A summary hash commits to data but cannot
+reconstruct samples discarded from the buffer. Capture and retention must match
+the agreed privacy profile and required verifier predicates.
+
 ## Acceptance Cases
 
 | Case | Required result |
@@ -129,6 +164,11 @@ an enrolled signer and actual captured proof.
 | Restart/reconnect | No unintended motion or queued-command replay |
 | RPC success without telemetry | No verified completion |
 | Requested hardware unavailable | Explicit failure; no simulator fallback |
+| Clock rollback or expired local deadline | No lifetime extension; local termination and evidence |
+| Revocation context stale during partition | No new admission; active attempt ends by the reviewed local bound |
+| Unsupported workspace/physical constraint | Admission denied; no assumption that a manifest enforces it |
+| Alternate control ingress or development bypass | Rejected/isolated, or explicitly reviewed operator preemption with remote fencing |
+| Evidence buffer unavailable/full | No new admission; active attempt follows the declared local response and cannot falsely close |
 
 These are proposed SeedCore acceptance criteria, not claims that upstream
 already implements every row.
@@ -139,6 +179,11 @@ Select one robot and bounded workspace. Measure command-to-observation latency,
 control timing, stop latency, sensor freshness, battery/thermal behavior and
 communication-loss response. Set numeric limits from measurements and the
 reviewed hardware profile.
+
+Measure cancellation/revocation propagation, local response initiation and
+observed cessation of motion separately. A quick stop RPC response does not
+establish physical stopping time or distance. The attachment's timing examples
+are not accepted hardware limits.
 
 Begin with read-only capture and reviewed posture conditions, then short
 low-speed movement. Record operator supervision, local stop control, versions

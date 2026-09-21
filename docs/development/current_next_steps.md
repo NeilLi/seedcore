@@ -1,12 +1,17 @@
 # Current Next Steps
 
-Date: 2026-09-17
+Date: 2026-09-21
 Status: Canonical active execution queue — Microduck and robotics integration
 
 The next stage targets a governed Microduck action with observable execution
 and replayable evidence. The [portfolio decision](application_directions.md)
 sets priorities; the [integration plan](robotics/microduck_integration_plan.md)
 defines the boundary. These milestones are planned, not completed integration.
+
+The [physical AI strategy](robotics/physical_ai_strategy.md) explains the product
+goal. The [robot execution proposal](robotics/robot_execution_contract.md)
+defines reusable session, interruption and evidence requirements; its proposed
+bindings need explicit schema review before implementation.
 
 The [multi-robot team layer](robotics/multi_robot_team_architecture.md) now provides
 organ reservations, independent cognitive proposals, bounded agent tasks and
@@ -42,6 +47,49 @@ upstream policy; training is not a prerequisite for the first adapter.
 - Define command refresh without replaying single-use tokens or extending expiry.
 - Bind state/outcomes to action, endpoint, runtime and policy.
 - Exercise the integration plan's negative cases before declaring completion.
+- Freeze measurable command-age, revocation-freshness, stop-response and
+  evidence-closure limits for the selected profile before acceptance runs.
+- Inventory all command ingress and remove development bypasses from the
+  admitted deployment profile; test token enforcement at the actual boundary.
+- Distinguish task completion, observed interruption and unresolved physical
+  state in the operator timeline and verifier records.
+
+## After The First Integration
+
+Package the accepted skill and its conformance fixtures using the
+[skill proposal](robotics/robot_skill_contract.md). Test reuse with an external
+developer and then a second robot adapter before expanding into a studio or
+fleet product. Record integration effort, reused contracts and body-specific
+changes. These are conditional follow-ons, not new M0–M3 prerequisites.
+
+## Customer Discovery Alongside Engineering
+
+The [service operating plan](robotics/robot_service_operating_plan.md) applies
+the founder-led capacity decision: one active hardware integration and at most
+one live pilot initially. Its S0–S3 business stages run alongside M0–M5 without
+replacing technical acceptance.
+
+Use the [customer delivery model](robotics/robot_solution_delivery.md) to turn
+ordinary requests into one defined function before selecting hardware:
+
+- Prepare a need brief: intended user, current workaround, setting, budget,
+  permissions, supervision and measurable outcome.
+- Compare candidate bodies against required capabilities and support costs;
+  verify current specifications and availability before making a recommendation.
+- Specify one small function and how the customer will start, stop and recover
+  it. Record limitations and a non-robot alternative where appropriate.
+- Agree customer acceptance criteria and trial/support scope. Evaluate usefulness
+  and repeat use separately from runtime authorization and evidence closure.
+- Classify requested work as configuration, supported integration or research;
+  set an effort/spending cap and next decision before committing to implementation.
+- Name the support owner, vendor/repair route, expected support hours and rollback
+  procedure before a customer trial. Count founder delivery and support time.
+
+Discovery materials can be prepared now; contacting prospective customers is
+a separate activity requiring authorization. Customer hardware trials require
+both an accepted need/function brief and completed engineering gates for the
+selected robot and environment. A second adapter should serve a validated need.
+M5 remains learning/promotion; skill packaging is a follow-on, not a renumbered M5.
 
 ## Hardware And Learning
 

@@ -1,17 +1,28 @@
 # Application Directions
 
-Date: 2026-09-17
+Date: 2026-09-21
 Status: Canonical next-stage portfolio decision
 
-The next development stage focuses on **Microduck and related robotics
-integration**. The immediate outcome is one observable robot action whose
+SeedCore's product direction is a **trust runtime for physical AI**, starting
+with small robots. The next development stage focuses on **Microduck as the
+reference integration**. The immediate outcome is one observable robot action whose
 proposal, permission, physical attempt, and result can be explained and
 replayed through SeedCore.
+
+The customer mission is to help people define a useful robot function, choose
+suitable hardware, and implement and support it. The
+[customer delivery model](robotics/robot_solution_delivery.md) specifies needs
+assessment, selection, customization, acceptance and support. Developers and
+hardware partners help deliver the service; reusable authority, skill and
+evidence contracts are its technical foundation. Microduck is the first
+engineering proof point. Customer discovery can proceed alongside integration;
+hardware delivery remains gated by the selected profile's validation.
 
 ## Portfolio Decision
 
 | Direction | Role now | Next-stage work |
 | --- | --- | --- |
+| Customer solution discovery | Active product work alongside engineering | Need briefs, hardware-fit criteria, bounded function specifications and acceptance plans; demand unvalidated |
 | Microduck | Primary robotics integration target | Contract inventory, simulation, bounded intent adapter, telemetry, failure drills, supervised hardware |
 | Shared trust runtime | Required foundation | Preserve Agent/PDP/token/revocation/evidence boundaries; extend where the robot contract requires it |
 | Robot learning | Supporting experiment lane | Reproduce an upstream policy; evaluate candidates before separately reviewed hardware promotion |

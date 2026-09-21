@@ -1,10 +1,36 @@
 # SeedCore Trust Runtime Category Distinction
 
-Date: 2026-04-09  
+Date: 2026-09-21
 Status: Canonical messaging reference
 
 This document explains how to describe SeedCore clearly without collapsing it
 into the category of a traditional cybersecurity product.
+
+## Current Product Framing
+
+**SeedCore is a trust runtime for physical AI.** Small robots are the current
+integration focus, with Microduck as the reference target. SeedCore governs
+agent authority and evidence; the onboard robot runtime retains motor control
+and local safety responsibilities.
+
+For a customer, describe the team's purpose in ordinary language: **SeedCore
+helps you choose a small robot for a real need, build the functions you want,
+and keep them working within agreed limits.** This is the proposed service
+direction. “Trust runtime for physical AI” names the technical foundation;
+customers need not understand tokens or proof kernels to explain their needs.
+See the [customer delivery model](robotics/robot_solution_delivery.md).
+
+The intended reusable unit is a governed skill attempt: a versioned behavior,
+an accountable principal, bounded permission, enforced execution limits and
+evidence of the observed outcome. The
+[physical AI strategy](robotics/physical_ai_strategy.md) defines first users,
+adoption hypotheses and the path from one integration to a reusable component.
+
+Avoid “guarantees physical safety”, “production-ready robotics” or “deterministic
+reconstruction of everything the robot saw”. Authorization, controller safety,
+sensor assurance and evidence completeness are separate claims. Describe only
+the profile and capture coverage actually validated. The Microduck adapter and
+hardware acceptance remain planned work.
 
 ## Core Distinction
 
@@ -92,8 +118,11 @@ Those controls improve trust and safety, but they are aimed at proving the
 governed state transition, not at replacing firewalls, antivirus, IDS, or EDR
 systems.
 
-The must-win wedge is **proven custody** for high-consequence workflows in
-domains such as logistics, finance, or robotics.
+Proven custody remains the regression and evidence foundation. The current
+engineering entry point is a **bounded, explainable robot skill attempt**.
+The customer entry point is a useful function selected and built around their
+need. Delivery reuses custody's authority and proof patterns while adding local
+deadlines and interrupted outcomes.
 
 ### 4. Policy-driven allow logic, not signature-driven defense
 
@@ -113,7 +142,7 @@ requirements.
 
 | Feature | Traditional Cybersecurity | SeedCore Trust Runtime |
 | :--- | :--- | :--- |
-| Primary goal | Protect the environment, detect threats, reduce attack success | Ensure governed action and produce irrefutable proof |
+| Primary goal | Protect the environment, detect threats, reduce attack success | Govern action and produce verifiable evidence within declared capture and trust assumptions |
 | Output | Alerts, blocks, detections, logs | Signed receipts, transition evidence, forensic bundles |
 | Decision core | Heuristic, anomaly-based, or signature-driven | Stateless, deterministic PDP |
 | Primary question | "Is this malicious or suspicious?" | "Is this action admissible under policy?" |
@@ -123,6 +152,8 @@ requirements.
 
 Prefer:
 
+- "trust runtime for physical AI" for the current robotics focus
+- "governed robot skills" when permission, enforcement and evidence are explicit
 - "trust runtime"
 - "zero-trust execution and proof runtime"
 - "governed admissibility and replayable proof"
@@ -139,6 +170,6 @@ Avoid:
 
 ## Recommended One-Sentence Framing
 
-SeedCore is a trust runtime that governs whether high-consequence actions are
-admissible, issues bounded execution authority when allowed, and produces
-replayable proof of what happened afterward.
+SeedCore is a trust runtime for physical AI that governs which agent may ask
+which robot to act, issues bounded execution authority, and verifies evidence
+of the attempt.
