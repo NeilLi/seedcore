@@ -21,6 +21,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Governed robot skill packages](robot_skill_contract.md) | Proposed packaging, permission, isolation and promotion contract; no loader/studio implemented |
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |
+| [Owner recognition and following](microduck_owner_following_design.md) | Research/proposal: perception, identity, local following, session enforcement and staged acceptance |
 | [Microduck architecture study](microduck_architecture_study.md) | Daemons, bus ownership, intent and control |
 | [Microduck RL study](microduck_rl_study.md) | Training/deployment flow, 61/14 interface, BAM/backlash, reward design, model variants and policy handover |
 | [Microduck source ledger](microduck_source_ledger.md) | Pinned sources, discrepancies, unresolved facts |
