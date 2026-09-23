@@ -34,6 +34,7 @@ maintained, or deferred.
 | [Evidence](evidence/README.md) | Telemetry, receipts, replay, verifier closure, persistent twins | Build the Microduck evidence path |
 | [Learning](learning/README.md) | Evaluation, flywheel, memory, retrieval, advisory agents | Supporting research |
 | [Operations](operations/README.md) | Local environment, rollout, failure drills, remediation | Simulator and supervised hardware bring-up |
+| [Reports](reports/README.md) | Dated test analyses and engineering reports | Supporting reference; claims retain their source and verification status |
 | [Infrastructure](infrastructure/README.md) | Edge architecture, proof kernels, transport, hardware identity | Select work needed by the integration |
 | [Integrations](integrations/README.md) | External agents, SDKs, ingress, capability interfaces | Reuse existing ingress |
 | [Applications](applications/README.md) | RCT, city/producer, journey and creative tracks | RCT regression baseline; other expansion deferred |
