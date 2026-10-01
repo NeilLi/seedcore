@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A tiny robot lab for curious minds. Explore joints, motors and gravity in your browser.">
+  <title>Mini Robot Lab · SeedCore</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="physics.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./index.html"><span class="brand-mark" aria-hidden="true">s</span> seedcore <span class="brand-divider">/</span> mini robot lab</a>
+    <span class="research-label">Early research prototype</span>
+  </header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">A little robot. A big discovery.</p><h1>What will your robot do?</h1><p>Make a prediction, try a move, and see what changes.</p></div><span class="offline">Works offline · no account</span></div>
+    <div class="workspace">
+      <aside class="lesson-panel panel">
+        <p class="eyebrow">01 / Your experiment</p>
+        <label for="lesson">Choose a challenge</label>
+        <select id="lesson"><option value="reach">Reach the star</option><option value="gravity">Let gravity pull</option><option value="heavy">A heavier arm</option></select>
+        <h2 id="lesson-title">Reach the star</h2>
+        <p id="lesson-copy">Two motors work together to move the tip of the arm. Can they reach the star and settle there?</p>
+        <fieldset class="prediction"><legend>What do you predict?</legend><label><input type="radio" name="prediction" value="yes"> It will reach and settle</label><label><input type="radio" name="prediction" value="no"> It won't settle at the star</label><label><input type="radio" name="prediction" value="unsure"> I'm still wondering</label></fieldset>
+        <div class="divider"></div>
+        <label class="slider-label" for="shoulder">Shoulder target <output id="shoulder-value">55°</output></label>
+        <input id="shoulder" type="range" min="-60" max="150" value="55" step="5">
+        <label class="slider-label" for="elbow">Elbow target <output id="elbow-value">-70°</output></label>
+        <input id="elbow" type="range" min="-150" max="150" value="-70" step="5">
+        <label class="slider-label" for="strength">Motor strength <output id="strength-value">16 N·m</output></label>
+        <input id="strength" type="range" min="1" max="20" value="16" step="1">
+        <label class="slider-label" for="mass">Outer arm mass <output id="mass-value">0.7 kg</output></label>
+        <input id="mass" type="range" min="0.2" max="2" value="0.7" step="0.1">
+        <label class="check"><input type="checkbox" id="motors" checked> Motors on</label>
+        <label class="check"><input type="checkbox" id="gravity" checked> Gravity on</label>
+        <p class="small">Changing a setting starts a fresh experiment.</p>
+      </aside>
+      <section class="stage-panel panel" aria-label="Robot experiment">
+        <div class="stage-heading"><span><span class="status-dot"></span> Local physics experiment</span><span id="run-status">Ready</span></div>
+        <canvas id="world" aria-label="A simulated two-joint arm and a star marking its target. Joint measurements are listed below." role="img"></canvas>
+        <div class="stage-legend"><span><i class="legend-dot target-dot"></i> Target</span><span><i class="legend-dot path-dot"></i> Observed path</span><span>2D arm · no collisions</span></div>
+        <div class="transport"><button id="run" class="primary">▶ Try my move</button><button id="pause" disabled>Pause</button><button id="step">One step</button><button id="reset">Reset</button></div>
+        <div class="readouts"><div><span>Simulation time</span><strong id="time">0.00 s</strong></div><div><span>Distance to star</span><strong id="error">—</strong></div><div><span>Tip speed</span><strong id="speed">0.00 m/s</strong></div></div>
+      </section>
+      <aside class="results-panel panel">
+        <p class="eyebrow">02 / Your discovery</p><h2>Watch. Wonder. Try again.</h2>
+        <div id="feedback" class="feedback" aria-live="polite">Choose your prediction, then try the move. You can pause and advance one small step at a time.</div>
+        <div class="observation"><span class="number">1</span><p>The star shows the tip position requested by your two joint targets.</p></div>
+        <div class="observation"><span class="number">2</span><p>The dotted trail shows positions calculated by the physics engine.</p></div>
+        <div class="observation"><span class="number">3</span><p>Try changing just one thing. Does your prediction change?</p></div>
+        <div class="result-actions"><button id="replay" disabled>Replay observations</button><button id="download" disabled>Save experiment</button></div>
+        <details><summary>Peek inside the robot</summary><dl><dt>Shoulder angle</dt><dd id="q1">—</dd><dt>Elbow angle</dt><dd id="q2">—</dd><dt>Mechanical energy</dt><dd id="energy">—</dd></dl><p class="small">A custom two-link dynamics engine calculates gravity, inertia, motor torque and damping. Targets are controller settings, not mechanical joint stops.</p></details>
+        <p class="scope">This is a local research model. It has no connection to a physical robot. Lesson feedback uses measured simulation values and simple rules, with no AI service.</p>
+      </aside>
+    </div>
+    <footer><span>Made for curious beginners</span><span>SeedCore Mini Physics 0.1 · fixed-base arm · SI units</span></footer>
+  </main>
+</body>
+</html>

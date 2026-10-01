@@ -57,6 +57,10 @@ here does not promote it to an implemented feature.
    the implemented coordination layer for cooperative work and competitive play.
 6. [Policy gates](policy_gate_matrix.md), [token lifecycle](trust-runtime/execution_token_lifecycle_management.md),
    and [physical telemetry](evidence/physical_telemetry_processing_contract.md): shared requirements.
+7. [Robot Learning Studio solution](robotics/robot_learning_studio_solution.md):
+   proposed beginner learning experience using Blender, Godot and Microduck
+   simulation, with lessons from the PKG and hotel simulators. Recorded lesson
+   prototypes may accompany M0–M3; live execution follows the integration gates.
 
 ## Authority And Document Precedence
 

@@ -187,6 +187,12 @@ the agreed privacy profile and required verifier predicates.
 These are proposed SeedCore acceptance criteria, not claims that upstream
 already implements every row.
 
+The proposed [Robot Learning Studio](robot_learning_studio_solution.md) turns
+these cases into beginner missions, simulation experiments and evidence replay.
+Its learner-facing stages reuse M0–M3 and do not add a studio prerequisite to
+the adapter. Illustrations, body simulation and hardware retain distinct
+identities and acceptance claims.
+
 ## M4: Supervised Hardware
 
 Select one robot and bounded workspace. Measure command-to-observation latency,
