@@ -1,10 +1,11 @@
-/* Local learning UI; no network, agent API, authority or hardware code. */
+/* Local learning UI; worker computes physics, UI renders recorded snapshots. */
 (() => {
   'use strict';
   const P = globalThis.MiniRobotPhysics;
   const $ = (id) => document.getElementById(id);
   const canvas = $('world'), ctx = canvas.getContext('2d');
   const DT = 1 / 480, TICKS = 2880, SAMPLE_EVERY = 8;
+  const PROTOCOL = 'seedcore.mini-lab.worker.v1';
   const radians = (degrees) => degrees * Math.PI / 180;
   const degrees = (r) => r * 180 / Math.PI;
   const initial = () => P.createState([radians(15), radians(45)]);
@@ -12,6 +13,46 @@
   let settings, model, state, tick = 0, mode = 'ready', samples = [], replayIndex = 0;
   let accumulator = 0, previousTime = null, width = 600, height = 420, revision = 0;
   let lastStatusUpdate = 0, trialPrediction = null;
+  let worker = null, runId = 0, sequence = 0, pending = null, acknowledgementTimer = null;
+
+  function failWorker(message) {
+    clearTimeout(acknowledgementTimer);
+    worker?.terminate(); worker = null; pending = null; mode = 'error';
+    $('feedback').textContent = `Experiment stopped: ${message}`;
+    updateButtons();
+  }
+  function send(type, extra = {}) {
+    pending = ++sequence;
+    clearTimeout(acknowledgementTimer);
+    acknowledgementTimer = setTimeout(() => failWorker('The simulator did not acknowledge the command. Reset to try again.'), 5000);
+    worker.postMessage({ protocol: PROTOCOL, type, runId, revision, sequence, ...extra });
+    updateButtons();
+  }
+  function connectWorker() {
+    if (worker) return true;
+    try {
+      if (location.protocol === 'file:') throw new Error('Open the lab through a local HTTP server; see the README.');
+      worker = new Worker('simulation-worker.js');
+      worker.onerror = () => failWorker('The simulator worker could not run. Reset to try again.');
+      worker.onmessageerror = () => failWorker('The simulator response could not be read.');
+      worker.onmessage = ({ data: message }) => {
+        if (message.protocol !== PROTOCOL || message.runId !== runId || message.revision !== revision) return;
+        if (message.type === 'error' || message.type === 'rejected') { failWorker(message.error); return; }
+        state = message.state; tick = message.tick;
+        samples.push(...message.samples);
+        // A pause can be requested while a previous chunk is in flight. Keep
+        // its samples, but do not show "Paused" before the worker acknowledges.
+        if (pending === null || message.sequence === pending) {
+          clearTimeout(acknowledgementTimer); pending = null;
+          mode = message.status;
+          if (mode === 'complete') conclude();
+        }
+        updateReadouts(); updateButtons(); draw();
+        if (document.hidden && mode === 'running' && pending === null) pause();
+      };
+      return true;
+    } catch (error) { failWorker(error.message); return false; }
+  }
   function readSettings() {
     return { target: [radians(+$('shoulder').value), radians(+$('elbow').value)], strength: +$('strength').value, mass: +$('mass').value, motors: $('motors').checked, gravity: $('gravity').checked };
   }
@@ -25,10 +66,11 @@
     settings = readSettings(); model = P.createModel({ m2: settings.mass, gravity: settings.gravity ? 9.81 : 0 });
     state = initial(); tick = 0; mode = 'ready'; accumulator = 0; samples = []; replayIndex = 0; trialPrediction = null;
     if (newRevision) revision++;
+    runId++;
     $('feedback').textContent = 'Choose your prediction, then try the move. You can pause and advance one small step at a time.';
     updateLabels(); updateReadouts(); updateButtons(); draw();
+    if (connectWorker()) send('reset', { settings });
   }
-  function controller(s) { return settings.motors ? P.motor(model, s, settings.target, settings.strength) : [0, 0]; }
   function measure(s) {
     const tip = P.forward(model, s.q).tip, goal = P.forward(model, settings.target).tip;
     const [q1, q2] = s.q, [v1, v2] = s.velocity;
@@ -36,22 +78,19 @@
     const vy = model.l1 * Math.cos(q1) * v1 + model.l2 * Math.cos(q1 + q2) * (v1 + v2);
     return { distance: Math.hypot(tip[0] - goal[0], tip[1] - goal[1]), speed: Math.hypot(vx, vy) };
   }
-  function capture() { samples.push(P.createState(state.q, state.velocity, state.time)); }
+  function predict() {
+    if (!samples.length) trialPrediction = document.querySelector('input[name=prediction]:checked')?.value || 'unsure';
+  }
   function begin() {
     if (tick >= TICKS || mode === 'replay' || mode === 'replayed' || mode === 'error') reset();
-    if (!samples.length) { trialPrediction = document.querySelector('input[name=prediction]:checked')?.value || 'unsure'; capture(); }
-    mode = 'running'; accumulator = 0; previousTime = null;
+    if (!worker) return;
+    predict();
     $('feedback').textContent = 'Watch the tip and the star. The motors apply torque; gravity and inertia shape the motion.';
-    updateButtons();
+    send('start');
   }
-  function advance() {
-    try {
-      state = P.step(model, state, controller, DT); tick++;
-      if (tick % SAMPLE_EVERY === 0) capture();
-      if (tick >= TICKS) { mode = 'complete'; conclude(); updateButtons(); }
-    } catch (error) {
-      mode = 'error'; $('feedback').textContent = `Experiment stopped: ${error.message}`; updateButtons();
-    }
+  function pause() {
+    if (mode === 'replay') { mode = 'replayed'; updateButtons(); }
+    else if (worker) send('pause');
   }
   function conclude() {
     // Require the entire final half-second window, not one lucky crossing.
@@ -67,15 +106,16 @@
     $('feedback').textContent = text;
   }
   function updateButtons() {
-    $('run').disabled = mode === 'running' || mode === 'replay';
+    const busy = pending !== null;
+    $('run').disabled = busy || mode === 'running' || mode === 'replay';
     $('run').textContent = mode === 'paused' ? '▶ Continue' : tick >= TICKS || mode === 'replayed' ? '▶ Try again' : '▶ Try my move';
-    $('pause').disabled = mode !== 'running' && mode !== 'replay';
-    $('step').disabled = mode === 'running' || mode === 'replay' || tick >= TICKS || mode === 'error' || mode === 'replayed';
-    $('replay').disabled = samples.length < 2 || mode === 'running' || mode === 'replay' || mode === 'error';
-    $('download').disabled = samples.length < 2 || mode === 'running' || mode === 'replay' || mode === 'error';
-    $('run-status').textContent = ({ ready:'Ready', running:'Running', paused:'Paused', complete:'Finished', replay:'Replay · recorded', replayed:'Replay finished', error:'Stopped · error' })[mode];
+    $('pause').disabled = busy || (mode !== 'running' && mode !== 'replay');
+    $('step').disabled = busy || mode === 'running' || mode === 'replay' || tick >= TICKS || mode === 'error' || mode === 'replayed';
+    $('replay').disabled = busy || samples.length < 2 || mode === 'running' || mode === 'replay' || mode === 'error';
+    $('download').disabled = busy || samples.length < 2 || mode === 'running' || mode === 'replay' || mode === 'error';
+    $('run-status').textContent = busy ? 'Updating…' : ({ ready:'Ready', running:'Running', paused:'Paused', complete:'Finished', replay:'Replay · recorded', replayed:'Replay finished', error:'Stopped · error' })[mode];
     // Freeze the submitted prediction during an attempt; settings create a new revision.
-    document.querySelectorAll('input[name=prediction]').forEach((input) => { input.disabled = samples.length > 0; });
+    document.querySelectorAll('input[name=prediction]').forEach((input) => { input.disabled = busy || samples.length > 0; });
   }
   function updateReadouts() {
     const { distance, speed } = measure(state);
@@ -117,10 +157,7 @@
   function frame(now) {
     const elapsed = previousTime === null ? 0 : Math.min((now - previousTime) / 1000, 0.1);
     previousTime = now;
-    if (mode === 'running') {
-      accumulator += elapsed;
-      while (accumulator >= DT && mode === 'running') { advance(); accumulator -= DT; }
-    } else if (mode === 'replay') {
+    if (mode === 'replay') {
       accumulator += elapsed;
       while (accumulator >= DT*SAMPLE_EVERY && mode === 'replay') {
         accumulator -= DT*SAMPLE_EVERY; replayIndex++;
@@ -132,12 +169,12 @@
     draw(); requestAnimationFrame(frame);
   }
   $('run').addEventListener('click',begin);
-  $('pause').addEventListener('click',()=>{mode=mode==='replay'?'replayed':'paused';updateButtons();});
+  $('pause').addEventListener('click',pause);
   $('reset').addEventListener('click',()=>reset());
-  $('step').addEventListener('click',()=>{if(!samples.length){trialPrediction=document.querySelector('input[name=prediction]:checked')?.value||'unsure';capture();}mode='paused';for(let i=0;i<SAMPLE_EVERY && tick<TICKS;i++){advance();if(mode==='error')break;}updateReadouts();updateButtons();draw();});
+  $('step').addEventListener('click',()=>{predict();send('step');});
   $('replay').addEventListener('click',()=>{mode='replay';replayIndex=0;state=samples[0];accumulator=0;previousTime=null;$('feedback').textContent='Replaying recorded observations. No new physics steps or robot commands are being issued.';updateButtons();});
   $('download').addEventListener('click',()=>{
-    const payload={schema:'seedcore.mini-lab.experiment.v1',engine:P.VERSION,source:'local_research_simulation',lesson:$('lesson').value,revision,dt:DT,duration:samples.at(-1).time,complete:tick>=TICKS,prediction:trialPrediction,model,settings,samples,limitations:['planar fixed-base two-link arm','no contacts or joint stops','ideal torque motors','not SeedCore verified execution evidence']};
+    const payload={schema:'seedcore.mini-lab.experiment.v1',engine:P.VERSION,source:'local_research_simulation',lesson:$('lesson').value,runId,revision,workerProtocol:PROTOCOL,dt:DT,duration:samples.at(-1).time,complete:tick>=TICKS,prediction:trialPrediction,model,settings,samples,limitations:['planar fixed-base two-link arm','no contacts or joint stops','ideal torque motors','not SeedCore verified execution evidence']};
     const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download='mini-robot-experiment.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   });
@@ -149,7 +186,7 @@
     [$('lesson-title').textContent,$('lesson-copy').textContent]=copy[lesson];
     document.querySelectorAll('input[name=prediction]').forEach(input=>input.checked=false);reset(true);
   });
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&(mode==='running'||mode==='replay')){mode=mode==='replay'?'replayed':'paused';accumulator=0;updateButtons();}});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&(mode==='running'||mode==='replay')&&pending===null)pause();});
   new ResizeObserver(()=>{const box=canvas.getBoundingClientRect();width=box.width;height=box.height;const ratio=window.devicePixelRatio||1;canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);draw();}).observe(canvas);
   reset();requestAnimationFrame(frame);
 })();

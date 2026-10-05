@@ -2,8 +2,17 @@
 
 Date: 2026-10-05
 
-Status: Proposed engineering plan grounded in the current repository. Only the
-existing planar-arm browser prototype is implemented and tested here.
+Status: Proposed engineering plan grounded in the current repository. The
+planar-arm browser prototype and an initial SIM-1 worker slice are implemented;
+the general engine remains proposed.
+
+Implementation update, 2026-10-05: the existing JS engine now runs in a dedicated
+worker with bounded chunks, run/revision/sequence checks and acknowledged
+pause/reset. The original 12 physics tests, eight worker tests and four UI-boundary
+tests pass. This is
+a partial SIM-1 delivery; compiled model contracts, buffers and performance
+qualification remain outstanding. See the
+[prototype README](../../../apps/mini-robot-simulator/README.md).
 
 ## 1. Decision
 
@@ -29,7 +38,7 @@ for validating SeedCore against an established Microduck simulator.
 
 ## 2. What Exists And What We Can Reuse
 
-Inspection baseline: SeedCore `8ee23e5`, PKG simulator
+Original inspection baseline (before the worker update): SeedCore `8ee23e5`, PKG simulator
 `b0af4e8e202b9c9394586717337106e01428c2b2`, hotel simulator
 `a0fe6d8148b068637692936ff07657f92616a0b1`, and local Isaac Sim
 `2469084bc328710207c6bc4ede32209082a9286c`. Paths below identify inspected
@@ -332,7 +341,8 @@ stages. These are dependency gates, not promised calendar delivery dates.
 | SIM-5 | Independent-instance batches and optional native Python/Gymnasium wrapper | Scalar/batch equivalence, per-instance reset isolation, headless determinism and measured throughput/memory |
 | SIM-6 | Validated robot imports and governed SeedCore simulator bridge | Explicit capabilities, no fixture fallback, denied-token cases and verified/incomplete closure; Microduck claims still satisfy M0–M3 |
 
-The **next implementable slice is SIM-1**, followed immediately by the narrow
+The **next implementation work completes SIM-1**, whose worker slice is noted
+above, followed by the narrow
 native/Wasm port in SIM-2. This keeps the beginner product working while proving
 the owned engine's build and state boundaries before general dynamics expands.
 
@@ -381,15 +391,16 @@ as separate suites. Simulator reward or a tutor's verdict cannot promote a
 controller to hardware. A cross-engine match is useful software evidence; real
 robot fidelity additionally needs calibrated parameters and held-out measurements.
 
-Verification performed for this document:
+Original architecture-inspection verification (before the worker update):
 
 ```bash
 node --test apps/mini-robot-simulator/physics.test.cjs
 ```
 
-Result: 12 passed, 0 failed. Documentation links and whitespace are checked
-separately. No new runtime code, simulator dependency, deployment, external
-project modification or hardware experiment is part of this change.
+Result at that inspection: 12 passed, 0 failed. The subsequent worker slice and
+its additional checks are recorded at the top of this document and in the
+prototype README. Neither change introduces a deployment, external-project
+modification or hardware experiment.
 
 ## 12. Source And Version Notes
 
