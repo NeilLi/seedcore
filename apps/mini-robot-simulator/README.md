@@ -86,11 +86,19 @@ cross-browser qualification and a public deployment remain follow-up work.
 
 ## Next Research Gates
 
-1. Validate learner usability and browser performance for this small model.
-2. Generalize model/state contracts and move scaled simulation into a worker.
-3. Develop and verify tree kinematics and articulated dynamics, with reference comparisons.
-4. Add contact and friction in isolated analytic test cases before walking models.
-5. Evaluate a WebAssembly core, standard model import and Microduck fidelity.
+The [implementation architecture](../../docs/development/robotics/mini_robot_simulator_implementation_plan.md)
+defines the proposed SIM-1–SIM-6 sequence following inspection of SeedCore and
+its related apps on 2026-10-05:
+
+1. Isolate the existing engine in a worker with versioned model/run contracts.
+2. Port the reference model to an owned C++ core with native and Wasm builds.
+3. Develop compiled tree models, articulated dynamics, encoders and a 3D view.
+4. Validate floating bodies, contacts, friction, joint limits and further sensors.
+5. Add independent-instance batches and measure headless throughput.
+6. Qualify robot imports and a separate governed SeedCore simulation bridge.
+
+Learner usability and browser size/performance are checked throughout. These
+are planned capabilities, not features provided by the current prototype.
 
 Each expansion needs independent numerical and behavioral acceptance evidence.
 Reduced coordinates alone do not guarantee contact stability, and a successful

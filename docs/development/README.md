@@ -58,9 +58,12 @@ here does not promote it to an implemented feature.
 6. [Policy gates](policy_gate_matrix.md), [token lifecycle](trust-runtime/execution_token_lifecycle_management.md),
    and [physical telemetry](evidence/physical_telemetry_processing_contract.md): shared requirements.
 7. [Robot Learning Studio solution](robotics/robot_learning_studio_solution.md):
-   proposed beginner learning experience using Blender, Godot and Microduck
-   simulation, with lessons from the PKG and hotel simulators. Recorded lesson
-   prototypes may accompany M0–M3; live execution follows the integration gates.
+   proposed beginner learning experience with lessons from the PKG and hotel
+   simulators. The [mini simulator implementation plan](robotics/mini_robot_simulator_implementation_plan.md)
+   develops the browser/custom-engine direction with a C++/Wasm core, assets,
+   sensors and numerical gates. Blender/Godot remain authoring/reference tools.
+   Local lesson prototypes may accompany M0–M3; live execution follows the
+   integration gates.
 
 ## Authority And Document Precedence
 

@@ -19,7 +19,8 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Service operating plan](robot_service_operating_plan.md) | Founder-led execution: first offer, scope limits, delivery gates, team roles, support and economics |
 | [Robot execution and evidence contract](robot_execution_contract.md) | Proposed reusable boundary: admission, local enforcement, sessions, partitions and evidence limits |
 | [Governed robot skill packages](robot_skill_contract.md) | Proposed packaging, permission, isolation and promotion contract; no loader/studio implemented |
-| [Robot Learning Studio solution](robot_learning_studio_solution.md) | Proposed mission-based Blender/Godot learning workflow, grounded in the PKG and hotel simulators; contracts, evidence, curriculum and staged acceptance |
+| [Robot Learning Studio solution](robot_learning_studio_solution.md) | Proposed mission workflow grounded in the PKG and hotel simulators; browser/custom-engine decision, contracts, evidence and curriculum |
+| [Mini robot simulator implementation architecture](mini_robot_simulator_implementation_plan.md) | Proposed C++/Wasm engine, compiled assets, state, sensors, batches and browser delivery; current-app inspection and SIM-1–SIM-6 acceptance gates |
 | [Mini Robot Lab prototype](../../../apps/mini-robot-simulator/README.md) | Browser-first custom physics research: two-joint planar arm, beginner experiments and numerical tests; no hardware or governed execution connection |
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |

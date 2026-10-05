@@ -19,7 +19,12 @@ For the end-user simulator, this decision supersedes the Godot-first delivery
 choice below. The original Blender/Godot/MuJoCo architecture remains a reference
 for asset authoring and governed integration, while the mission workflow,
 authority boundaries and evidence requirements continue to apply where relevant.
-The custom engine's next numerical research gates are recorded in its README.
+The [mini robot simulator implementation architecture](mini_robot_simulator_implementation_plan.md)
+now specifies the C++/WebAssembly kernel, browser worker, compiled asset schema,
+sensor and batch interfaces, and numerical acceptance sequence. It is the
+engineering plan for the browser product; the Blender/Godot workspace described
+below remains the original reference design. The engine and its new interfaces
+are proposed work beyond the existing planar-arm prototype.
 
 ## 1. Decision And Intended Outcome
 
