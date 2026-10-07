@@ -1,0 +1,138 @@
+{
+  "date": "2026-10-07T06:52:43.833Z",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "hardwareConcurrency": 8,
+  "deviceMemoryGiB": 8,
+  "scope": "Local browser worker/transfer/RAF harness; laptop only. Not full learner UI or release qualification.",
+  "results": [
+    {
+      "lesson": "reach",
+      "stall": false,
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "recipeDigest": "sha256:74c35d087c56d578cd5737d0ea66a6712761b644942534b86786f12c5e6b46ee",
+      "wallMs": 6042.699999988079,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 0,
+      "frameP95Ms": 9.300000000000182,
+      "pauseLatenciesMs": [
+        0.09999999403953552
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 0.7999999821186066,
+        "activeWallMs": 6002.699999988079,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.999550202410901,
+        "bufferWaits": 0,
+        "allocatedBuffers": 3,
+        "maxInFlight": 2
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    },
+    {
+      "lesson": "gravity",
+      "stall": false,
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "recipeDigest": "sha256:20e1b9b67e0e5dc42a9c1bef9773b4990412187cffa1bcbb3e0ec01493ce1d68",
+      "wallMs": 6046.100000023842,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 0,
+      "frameP95Ms": 9.199999999999818,
+      "pauseLatenciesMs": [
+        0.4000000059604645
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 1.300000011920929,
+        "activeWallMs": 6002.5999999940395,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9995668543641019,
+        "bufferWaits": 0,
+        "allocatedBuffers": 3,
+        "maxInFlight": 1
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    },
+    {
+      "lesson": "heavy",
+      "stall": false,
+      "modelDigest": "sha256:397ac00b3acd86f2501c0662f75d5e63e2d8be9c628555c7f85fc5646883bf80",
+      "recipeDigest": "sha256:563a775a64b642415b695db76ac31460adbbb4567150909d6c9bb7db1b69d6d1",
+      "wallMs": 6044.299999982119,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 0,
+      "frameP95Ms": 9.19999999999709,
+      "pauseLatenciesMs": [
+        0.30000001192092896
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 1.2000000178813934,
+        "activeWallMs": 6003.600000023842,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9994003597801606,
+        "bufferWaits": 0,
+        "allocatedBuffers": 3,
+        "maxInFlight": 1
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    },
+    {
+      "lesson": "reach-ui-stall",
+      "stall": true,
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "recipeDigest": "sha256:74c35d087c56d578cd5737d0ea66a6712761b644942534b86786f12c5e6b46ee",
+      "wallMs": 6300.699999988079,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 0,
+      "frameP95Ms": 9.200000000000728,
+      "pauseLatenciesMs": [
+        1.800000011920929
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 1.5999999940395355,
+        "activeWallMs": 6252.700000017881,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9595854590789326,
+        "bufferWaits": 1,
+        "allocatedBuffers": 3,
+        "maxInFlight": 3
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    }
+  ],
+  "passed": true
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Planar model compiler input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "target",
+    "strength",
+    "motors",
+    "mass",
+    "gravity"
+  ],
+  "properties": {
+    "target": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "number",
+        "minimum": -3.141592653589793,
+        "maximum": 3.141592653589793
+      }
+    },
+    "strength": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "motors": {
+      "type": "boolean"
+    },
+    "mass": {
+      "type": "number",
+      "minimum": 0.2,
+      "maximum": 2
+    },
+    "gravity": {
+      "type": "boolean"
+    }
+  }
+}

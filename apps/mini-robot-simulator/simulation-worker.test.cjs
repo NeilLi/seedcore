@@ -5,29 +5,44 @@ const vm = require('node:vm');
 const path = require('node:path');
 const P = require('./physics.js');
 
-const PROTOCOL = 'seedcore.mini-lab.worker.v1';
+const C = require('./sim-contracts.js');
+const { PROTOCOL } = C;
 const settings = { target: [55 * Math.PI / 180, -70 * Math.PI / 180], strength: 16, mass: 0.7, motors: true, gravity: true };
 
 // Run the actual worker entry point with browser-style structured-clone
 // boundaries and a controllable timer queue, so races do not require sleeps.
 function harness() {
   const messages = [], timers = new Map();
-  let timerId = 0, sequence = 0;
+  let timerId = 0, sequence = 0, identity = C.compile(settings);
   const context = vm.createContext({
     onmessage: null,
-    postMessage: message => messages.push(structuredClone(message)),
+    ArrayBuffer, performance,
+    postMessage: (message, transfer = []) => {
+      const copy = structuredClone(message, { transfer });
+      copy.samples = copy.buffer ? C.unpack(copy.buffer, copy.sampleCount) : [];
+      messages.push(copy);
+    },
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id),
-    importScripts: file => vm.runInContext(fs.readFileSync(path.join(__dirname, file), 'utf8'), context),
+    importScripts: (...files) => files.forEach(file => vm.runInContext(fs.readFileSync(path.join(__dirname, file), 'utf8'), context)),
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'simulation-worker.js'), 'utf8'), context);
   return {
     messages, timers,
+    recycle(message) {
+      if (message.buffer?.byteLength) context.onmessage({ data: structuredClone({ protocol: PROTOCOL, type: 'recycle',
+        bufferId: message.bufferId, frameSequence: message.frameSequence, buffer: message.buffer }, { transfer: [message.buffer] }) });
+    },
     send(type, extra = {}) {
-      context.onmessage({ data: structuredClone({ protocol: PROTOCOL, type, runId: 1, revision: 0, sequence: ++sequence, ...extra }) });
+      let next = identity;
+      if (type === 'reset' && C.validSettings(extra.settings)) next = C.compile(extra.settings);
+      context.onmessage({ data: structuredClone({ protocol: PROTOCOL, type, runId: 1, revision: 0, sequence: ++sequence,
+        applicationTick: 0, modelDigest: next.modelDigest, recipeDigest: next.recipeDigest, ...extra }) });
+      if (type === 'reset' && messages.at(-1).type !== 'rejected') identity = next;
       return messages.at(-1);
     },
-    pump() {
+    pump(recycle = true) {
+      if (recycle) for (const message of messages) this.recycle(message);
       const entry = timers.entries().next().value;
       assert.ok(entry, 'expected one scheduled physics chunk');
       timers.delete(entry[0]); entry[1]();
@@ -94,6 +109,7 @@ test('duplicate/out-of-order commands and invalid settings leave active work int
 test('single-step advances eight fixed ticks and does not schedule background work', () => {
   const h = harness(); h.send('reset', { settings });
   const first = h.send('step'); assert.equal(first.tick, 8); assert.equal(first.samples.length, 2);
+  h.recycle(first);
   const second = h.send('step'); assert.equal(second.tick, 16); assert.equal(second.samples.length, 1);
   assert.equal(h.timers.size, 0);
   // Structured-cloned earlier observations cannot be changed by later steps.
@@ -106,4 +122,74 @@ test('running/completed states reject extra start/step commands without extendin
   for (let chunk = 0; chunk < 360; chunk++) h.pump();
   assert.equal(h.send('start').type, 'rejected'); assert.equal(h.send('step').type, 'rejected');
   assert.equal(h.send('pause').status, 'complete'); assert.equal(h.timers.size, 0);
+});
+
+test('a stalled UI exhausts three transfers, remains interruptible and resumes with every observation', () => {
+  const h = harness(); h.send('reset', { settings }); h.send('start');
+  for (let i = 0; i < C.POOL_SIZE; i++) h.pump(false);
+  assert.equal(h.messages.at(-1).tick, 24);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.messages.at(-1).diagnostics.allocatedBuffers, 3);
+  const paused = h.send('pause');
+  assert.equal(paused.appliedTick, 24); assert.equal(paused.status, 'paused');
+  assert.equal(paused.diagnostics.bufferWaits, 1);
+  h.send('start'); assert.equal(h.timers.size, 0);
+  for (const message of h.messages) h.recycle(message);
+  while (h.timers.size) h.pump();
+  const all = h.messages.flatMap(m => m.samples);
+  assert.deepEqual(all.map(s => Math.round(s.time/C.DT)), Array.from({ length: 361 }, (_, i) => i*8));
+  assert.equal(h.messages.at(-1).status, 'complete');
+  assert.equal(h.messages.at(-1).diagnostics.maxInFlight, 3);
+});
+
+test('reset while all buffers are in flight reuses returns from the old run', () => {
+  const h = harness(); h.send('reset', { settings }); h.send('start');
+  for (let i = 0; i < 3; i++) h.pump(false);
+  h.send('reset', { runId: 2, revision: 1, settings });
+  h.send('start', { runId: 2, revision: 1 });
+  assert.equal(h.timers.size, 0);
+  h.recycle(h.messages.find(m => m.buffer));
+  assert.equal(h.timers.size, 1);
+  const next = h.pump(false);
+  assert.equal(next.runId, 2); assert.equal(next.tick, 8);
+  assert.deepEqual(next.samples.map(s => Math.round(s.time/C.DT)), [0,8]);
+});
+
+test('tick-addressed controls apply exactly inside chunks and match a direct trace', () => {
+  const h = harness(), compiled = C.compile(settings);
+  h.send('reset', { settings });
+  const schedule = [
+    { applicationTick: 9, control: { target: [0,0], strength: 2, motors: false } },
+    { applicationTick: 17, control: { target: [-0.2,0.1], strength: 8, motors: true } },
+    { applicationTick: 17, control: { target: [0.3,-0.2], strength: 12, motors: true } },
+  ];
+  for (const input of schedule) assert.equal(h.send('set-control', input).type, 'queued');
+  h.send('start'); for (let i = 0; i < 5; i++) h.pump();
+  const applied = h.messages.filter(m => m.type === 'applied');
+  assert.deepEqual(applied.map(m => m.appliedTick), [9,17,17]);
+  let state = P.createState(compiled.recipe.initial.q), control = compiled.recipe.control;
+  const model = P.createModel(compiled.parameters), direct = [state];
+  for (let tick = 0; tick < 40; tick++) {
+    for (const input of schedule) if (input.applicationTick === tick) control = input.control;
+    state = P.step(model, state, s => control.motors ? P.motor(model,s,control.target,control.strength) : [0,0], C.DT);
+    if ((tick+1)%8 === 0) direct.push(state);
+  }
+  assert.deepEqual(h.messages.flatMap(m => m.samples), direct);
+});
+
+test('late controls, wrong identities, future admin ticks and queue overflow preserve active work', () => {
+  const h = harness(), control = { target: [0,0], strength: 2, motors: false };
+  h.send('reset', { settings }); h.send('start'); h.pump();
+  assert.equal(h.send('set-control', { applicationTick: 7, control }).type, 'rejected');
+  for (const key of ['modelDigest','recipeDigest']) {
+    assert.equal(h.send('pause', { [key]: 'sha256:'+'0'.repeat(64) }).type, 'rejected');
+  }
+  assert.equal(h.send('pause', { applicationTick: 20 }).type, 'rejected');
+  for (let i = 0; i < C.MAX_INPUTS; i++) {
+    assert.equal(h.send('set-control', { applicationTick: 200+i, control }).type, 'queued');
+  }
+  assert.equal(h.send('set-control', { applicationTick: 300, control }).type, 'rejected');
+  assert.equal(h.pump().tick, 16);
+  assert.equal(h.send('reset', { runId: 2, settings, modelDigest: 'sha256:'+'0'.repeat(64) }).type, 'rejected');
+  assert.equal(h.pump().tick, 24);
 });

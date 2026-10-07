@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "none",
+    "strict": true,
+    "lib": ["ES2020", "DOM"],
+    "outFile": "../../apps/mini-robot-simulator/sim-contracts.js",
+    "declaration": true,
+    "removeComments": false
+  },
+  "files": ["src/index.ts"]
+}

@@ -2,10 +2,10 @@
 (() => {
   'use strict';
   const P = globalThis.MiniRobotPhysics;
+  const C = MiniSimContracts;
   const $ = (id) => document.getElementById(id);
   const canvas = $('world'), ctx = canvas.getContext('2d');
-  const DT = 1 / 480, TICKS = 2880, SAMPLE_EVERY = 8;
-  const PROTOCOL = 'seedcore.mini-lab.worker.v1';
+  const { DT, TOTAL_TICKS: TICKS, CHUNK_TICKS: SAMPLE_EVERY, PROTOCOL } = C;
   const radians = (degrees) => degrees * Math.PI / 180;
   const degrees = (r) => r * 180 / Math.PI;
   const initial = () => P.createState([radians(15), radians(45)]);
@@ -14,6 +14,7 @@
   let accumulator = 0, previousTime = null, width = 600, height = 420, revision = 0;
   let lastStatusUpdate = 0, trialPrediction = null;
   let worker = null, runId = 0, sequence = 0, pending = null, acknowledgementTimer = null;
+  let compiled, lastFrameSequence = 0, workerTick = 0, diagnostics = null, appliedInputs = [];
 
   function failWorker(message) {
     clearTimeout(acknowledgementTimer);
@@ -25,7 +26,8 @@
     pending = ++sequence;
     clearTimeout(acknowledgementTimer);
     acknowledgementTimer = setTimeout(() => failWorker('The simulator did not acknowledge the command. Reset to try again.'), 5000);
-    worker.postMessage({ protocol: PROTOCOL, type, runId, revision, sequence, ...extra });
+    worker.postMessage({ protocol: PROTOCOL, type, runId, revision, sequence, applicationTick: workerTick,
+      modelDigest: compiled.modelDigest, recipeDigest: compiled.recipeDigest, ...extra });
     updateButtons();
   }
   function connectWorker() {
@@ -33,13 +35,46 @@
     try {
       if (location.protocol === 'file:') throw new Error('Open the lab through a local HTTP server; see the README.');
       worker = new Worker('simulation-worker.js');
-      worker.onerror = () => failWorker('The simulator worker could not run. Reset to try again.');
-      worker.onmessageerror = () => failWorker('The simulator response could not be read.');
+      const connection = worker;
+      worker.onerror = () => { if (worker === connection) failWorker('The simulator worker could not run. Reset to try again.'); };
+      worker.onmessageerror = () => { if (worker === connection) failWorker('The simulator response could not be read.'); };
       worker.onmessage = ({ data: message }) => {
-        if (message.protocol !== PROTOCOL || message.runId !== runId || message.revision !== revision) return;
-        if (message.type === 'error' || message.type === 'rejected') { failWorker(message.error); return; }
-        state = message.state; tick = message.tick;
-        samples.push(...message.samples);
+        // Even obsolete snapshots must return their ownership to the pool.
+        const current = worker === connection && message?.protocol === PROTOCOL && message.runId === runId &&
+          message.revision === revision && message.modelDigest === compiled.modelDigest && message.recipeDigest === compiled.recipeDigest;
+        const fresh = current && Number.isSafeInteger(message.frameSequence) && message.frameSequence > lastFrameSequence;
+        let incoming = [];
+        try {
+          if (fresh && message.buffer) incoming = C.unpack(message.buffer, message.sampleCount);
+        } catch (error) { if (worker === connection) failWorker(error.message); return; }
+        finally {
+          if (message?.buffer instanceof ArrayBuffer && worker === connection) connection.postMessage({ protocol: PROTOCOL, type: 'recycle',
+            bufferId: message.bufferId, frameSequence: message.frameSequence, buffer: message.buffer }, [message.buffer]);
+        }
+        if (!current) return;
+        if (message.type === 'rejected') { if (message.sequence === pending) failWorker(message.error); return; }
+        if (!fresh) return;
+        if (!Number.isSafeInteger(message.sequence) || message.sequence > sequence ||
+            !Number.isSafeInteger(message.tick) || message.tick < workerTick || message.tick > TICKS) {
+          failWorker('Invalid simulator response sequence or tick.'); return;
+        }
+        lastFrameSequence = message.frameSequence;
+        if (message.type === 'error') { failWorker(message.error); return; }
+        if (!['update','queued','applied'].includes(message.type) ||
+            !['ready','running','paused','complete'].includes(message.status) || !C.validState(message.state, message.tick) ||
+            (message.sampleCount !== 0 && incoming.length !== message.sampleCount)) {
+          failWorker('Invalid simulator snapshot. Reset to try again.'); return;
+        }
+        for (const sample of incoming) {
+          const expectedTick = samples.length*SAMPLE_EVERY;
+          if (Math.round(sample.time/DT) !== expectedTick) { failWorker('Observation coverage is incomplete. Reset to try again.'); return; }
+          samples.push(sample);
+        }
+        state = message.state; tick = workerTick = message.tick; diagnostics = message.diagnostics;
+        if (message.input) appliedInputs.push(message.input);
+        if (message.status === 'complete' && (tick !== TICKS || samples.length !== TICKS/SAMPLE_EVERY+1)) {
+          failWorker('The experiment ended without all observations. Reset to try again.'); return;
+        }
         // A pause can be requested while a previous chunk is in flight. Keep
         // its samples, but do not show "Paused" before the worker acknowledges.
         if (pending === null || message.sequence === pending) {
@@ -63,8 +98,9 @@
     $('mass-value').textContent = `${Number($('mass').value).toFixed(1)} kg`;
   }
   function reset(newRevision = false) {
-    settings = readSettings(); model = P.createModel({ m2: settings.mass, gravity: settings.gravity ? 9.81 : 0 });
+    settings = readSettings(); compiled = C.compile(settings); model = P.createModel(compiled.parameters);
     state = initial(); tick = 0; mode = 'ready'; accumulator = 0; samples = []; replayIndex = 0; trialPrediction = null;
+    workerTick = 0; lastFrameSequence = 0; diagnostics = null; appliedInputs = [];
     if (newRevision) revision++;
     runId++;
     $('feedback').textContent = 'Choose your prediction, then try the move. You can pause and advance one small step at a time.';
@@ -125,6 +161,8 @@
     $('q1').textContent = `${degrees(state.q[0]).toFixed(1)}°`;
     $('q2').textContent = `${degrees(state.q[1]).toFixed(1)}°`;
     $('energy').textContent = `${P.energy(model, state).total.toFixed(2)} J`;
+    $('runtime-detail').textContent = diagnostics?.realtimeRatio < 0.95 && workerTick >= 240
+      ? 'Simulation is running slower than real time. Every physics step and observation is retained.' : '';
   }
   function draw() {
     ctx.clearRect(0, 0, width, height);
@@ -174,7 +212,7 @@
   $('step').addEventListener('click',()=>{predict();send('step');});
   $('replay').addEventListener('click',()=>{mode='replay';replayIndex=0;state=samples[0];accumulator=0;previousTime=null;$('feedback').textContent='Replaying recorded observations. No new physics steps or robot commands are being issued.';updateButtons();});
   $('download').addEventListener('click',()=>{
-    const payload={schema:'seedcore.mini-lab.experiment.v1',engine:P.VERSION,source:'local_research_simulation',lesson:$('lesson').value,runId,revision,workerProtocol:PROTOCOL,dt:DT,duration:samples.at(-1).time,complete:tick>=TICKS,prediction:trialPrediction,model,settings,samples,limitations:['planar fixed-base two-link arm','no contacts or joint stops','ideal torque motors','not SeedCore verified execution evidence']};
+    const payload={schema:'seedcore.mini-lab.experiment.v2',engine:P.VERSION,source:'local_research_simulation',lesson:$('lesson').value,runId,revision,workerProtocol:PROTOCOL,dt:DT,duration:samples.at(-1).time,complete:workerTick>=TICKS&&samples.length===TICKS/SAMPLE_EVERY+1,prediction:trialPrediction,compiled,model,settings,appliedInputs,diagnostics,samples,limitations:['planar fixed-base two-link arm','no contacts or joint stops','ideal torque motors','recorded playback only, not a resumable checkpoint','not SeedCore verified execution evidence']};
     const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download='mini-robot-experiment.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   });

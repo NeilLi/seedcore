@@ -1,6 +1,6 @@
 # SeedCore Mini Robot Lab
 
-Status: Early browser research prototype; initial worker isolation added 2026-10-05.
+Status: Early browser research prototype; local SIM-1 contracts and qualification completed 2026-10-07.
 
 A small learning application with an original two-link physics engine. Learners
 predict a result, adjust joint targets, motor strength or arm mass, run an
@@ -48,34 +48,42 @@ The model has no contact solver, collisions, mechanical joint stops, floating
 base, actuator electrical dynamics, URDF/MJCF importer or Microduck model.
 It is a first research case for a custom engine, not a general robotics engine.
 
-## Worker Boundary: First SIM-1 Slice
+## Worker Boundary: SIM-1
 
-`simulation-worker.js` owns integration and its integer tick. The page uses
-`physics.js` only for initial state, rendering and observation metrics. Each
-worker callback advances eight fixed steps (1/60 simulated second), then yields.
-There is at most one scheduled callback; delayed callbacks slow the experiment
-without enlarging the timestep or skipping simulation ticks. Each run stops at
-2,880 ticks and supplies all 361 observations, including the initial state.
+`simulation-worker.js` owns integration and its integer tick. One callback
+advances eight fixed steps, then yields. Monotonic deadlines compensate chunk
+computation time; delayed work rebases wall pacing without enlarging the step or
+skipping ticks. A six-second experiment records all 361 observations, including
+tick zero. Exactly three reusable transferable buffers bound snapshot memory.
+If the page stops returning buffers, physics waits while pause/reset remain
+acknowledgeable. Old-run buffers are returned without becoming current samples.
 
-Commands use `seedcore.mini-lab.worker.v1` with `type`, `runId`, `revision` and
-`sequence`. `reset` also carries the existing lesson settings. Supported commands
-are `reset`, `start`, `pause` and `step`. A reset needs a strictly newer run ID;
-other commands must match the active run/revision. Accepted command sequences
-increase across resets. Replies identify the command sequence and applied tick,
-with state, new samples and status. Invalid commands leave the worker run intact.
+`packages/mini-sim-contracts` supplies TypeScript source, JSON input/command
+schemas, generated browser bindings and golden model/run fixtures. The narrow
+compiler emits immutable planar descriptors, explicit frames and uniform-rod
+inertias, stable body/joint indices and SHA-256 model and run-recipe identities.
+It supports the existing two-link teaching model, not arbitrary articulations.
 
-The UI waits for command acknowledgements, retains samples already in flight
-during pause, and ignores responses from replaced runs/revisions. A setting
-change or reset cancels the worker timer and clears the previous observations.
-Worker failures or a five-second acknowledgement timeout stop the experiment
-visibly; Reset creates a new worker when necessary. There is no UI-thread
-physics fallback. Hidden-tab pausing happens when the visibility event and
-worker command are processed; browser scheduling is not a hard real-time stop.
+Commands use `seedcore.mini-lab.worker.v2` and bind run ID, model revision,
+sequence, requested application tick and both digests. Reset validates settings
+and identities before replacement. Start/pause/step apply at the next worker
+boundary and acknowledge their actual tick. `set-control` queues exact-tick
+bounded control changes, with a maximum of 32 pending inputs and distinct
+queued/applied acknowledgements. The learner UI continues to reset when a
+setting changes. Replies also carry monotonic frame sequences and load metrics.
 
-This small step keeps JavaScript and structured-cloned messages. TypeScript,
-compiled model schemas/digests, future-tick commands, transferable buffer pools,
-resumable checkpoints and performance qualification remain later work in the
-[implementation plan](../../docs/development/robotics/mini_robot_simulator_implementation_plan.md).
+The UI retains in-flight pause samples, rejects stale identities, duplicate
+frames and incomplete observation coverage, and waits for acknowledgements.
+Worker failures or a five-second acknowledgement timeout stop visibly; Reset
+creates a new worker when needed. Hidden tabs request pause. Browser scheduling
+is not a hard real-time stop. The page has no UI-thread physics fallback.
+
+The [contract documentation](../../packages/mini-sim-contracts/README.md)
+details schemas, tick semantics and buffer ownership. The
+[local qualification report](../../tools/mini-sim/qualification-2026-10-07.md)
+records three lesson traces, a UI stall and pinned laptop/browser measurements.
+Tablet, cross-browser and full release budgets remain unqualified. Checkpoints
+and the native/Wasm engine are SIM-2 work.
 
 ## Learning And Execution Boundaries
 
@@ -98,30 +106,29 @@ Godot and MuJoCo remain useful references and comparison environments.
 
 ## Verify
 
-Developer checks require Node.js, but using the application does not:
+Developer checks require Node.js and the existing locked TypeScript toolchain
+in `ts/node_modules`; learners need neither:
 
 ```bash
-node --test physics.test.cjs simulation-worker.test.cjs app-worker.test.cjs
-node --check physics.js
-node --check app.js
-node --check simulation-worker.js
+# From the repository root:
+node tools/mini-sim/verify.cjs
+# After changing TypeScript contracts:
+npm --prefix packages/mini-sim-contracts run build
 ```
 
-The 12 physics tests cover kinematics, positive-definite inertia, gravity and
-Coriolis energy identities, static equilibrium, energy conservation and
-dissipation, controller convergence, torque limits, timestep refinement,
-repeatability and invalid-input rejection. Eight worker tests exercise the actual
-worker entry point in a Node VM with structured cloning and controlled timers:
-all three lesson trajectories match the direct engine exactly, and pause/resume,
-reset, stale/invalid commands, single stepping and completion preserve run state.
-Four UI-boundary tests cover stale replies, in-flight pause samples,
-acknowledgement timeout/recovery and hidden-tab pausing during a pending start.
-They establish the tested model's scope, not contact dynamics or hardware fidelity.
+The verifier typechecks and confirms generated artifacts, checks syntax and runs
+37 tests: 12 original physics invariants, 12 worker/transfer/tick-input cases,
+nine UI-boundary cases and four compiler/identity/golden-fixture cases. All
+three worker lesson traces equal the direct reference exactly. Exhausted buffer
+pools, reset with outstanding loans, same-tick inputs, stale digests and sequences,
+queue capacity and incomplete completion are tested.
 
-Browser checks for the worker slice: single stepping, pause/resume, normal target
-completion, recorded replay, gravity lesson selection and reset during a run.
-Responsive-device coverage,
-cross-browser qualification and a public deployment remain follow-up work.
+To repeat browser measurements, serve the repository root and open
+`/tools/mini-sim/browser-qualification.html`. The harness reports foreground RAF
+intervals, pause latency, wall pacing, buffer occupancy and exact trace/coverage
+checks. These are local engineering measurements, not hardware fidelity or
+release-device qualification. The learner UI was also checked for single
+step/continue and successful target completion.
 
 ## Next Research Gates
 
@@ -129,7 +136,7 @@ The [implementation architecture](../../docs/development/robotics/mini_robot_sim
 defines the proposed SIM-1–SIM-6 sequence following inspection of SeedCore and
 its related apps on 2026-10-05:
 
-1. Complete SIM-1 contracts and qualification; initial worker isolation and command envelopes are implemented.
+1. SIM-1 is locally implemented and measured; release-device qualification remains open.
 2. Port the reference model to an owned C++ core with native and Wasm builds.
 3. Develop compiled tree models, articulated dynamics, encoders and a 3D view.
 4. Validate floating bodies, contacts, friction, joint limits and further sensors.
@@ -137,7 +144,7 @@ its related apps on 2026-10-05:
 6. Qualify robot imports and a separate governed SeedCore simulation bridge.
 
 Learner usability and browser size/performance are checked throughout. Beyond
-the initial worker slice, these remain planned capabilities.
+SIM-1, these remain planned capabilities.
 
 Each expansion needs independent numerical and behavioral acceptance evidence.
 Reduced coordinates alone do not guarantee contact stability, and a successful

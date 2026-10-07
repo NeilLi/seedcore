@@ -2,17 +2,24 @@
 
 Date: 2026-10-05
 
-Status: Proposed engineering plan grounded in the current repository. The
-planar-arm browser prototype and an initial SIM-1 worker slice are implemented;
-the general engine remains proposed.
+Status: Engineering plan grounded in the current repository. The planar-arm
+browser prototype and local SIM-1 are implemented; SIM-2 and the general engine
+remain proposed.
 
-Implementation update, 2026-10-05: the existing JS engine now runs in a dedicated
-worker with bounded chunks, run/revision/sequence checks and acknowledged
-pause/reset. The original 12 physics tests, eight worker tests and four UI-boundary
-tests pass. This is
-a partial SIM-1 delivery; compiled model contracts, buffers and performance
-qualification remain outstanding. See the
-[prototype README](../../../apps/mini-robot-simulator/README.md).
+Implementation update, 2026-10-07: SIM-1 now has TypeScript-owned v2 contracts,
+a narrow immutable planar model compiler, model/run-recipe SHA-256 identities,
+exact-tick bounded control inputs, three reusable transferable snapshot buffers,
+backpressure, observation-coverage checks and monotonic deadline scheduling.
+All 37 numerical/contract/worker/UI tests pass. The pinned local Chrome/M3 harness
+retains every observation across a 250 ms UI stall and exactly matches all three
+lesson traces to the JS reference. Six simulated seconds take 6.003 seconds of
+active wall time in normal cases, within the declared one-timer-quantum pacing
+tolerance. This is laptop engineering evidence; tablet, cross-browser and full
+release budgets remain open. See the
+[prototype README](../../../apps/mini-robot-simulator/README.md),
+[contract documentation](../../../packages/mini-sim-contracts/README.md) and
+[qualification report](../../../tools/mini-sim/qualification-2026-10-07.md).
+The earlier worker isolation slice was delivered 2026-10-05.
 
 ## 1. Decision
 
@@ -341,12 +348,14 @@ stages. These are dependency gates, not promised calendar delivery dates.
 | SIM-5 | Independent-instance batches and optional native Python/Gymnasium wrapper | Scalar/batch equivalence, per-instance reset isolation, headless determinism and measured throughput/memory |
 | SIM-6 | Validated robot imports and governed SeedCore simulator bridge | Explicit capabilities, no fixture fallback, denied-token cases and verified/incomplete closure; Microduck claims still satisfy M0–M3 |
 
-The **next implementation work completes SIM-1**, whose worker slice is noted
-above, followed by the narrow
-native/Wasm port in SIM-2. This keeps the beginner product working while proving
+The **next implementation work is SIM-2**, the narrow native/Wasm port with
+complete checkpoint/restore. SIM-1 is locally implemented and qualified as noted
+above; broader release-device checks continue alongside later stages. This keeps
+the beginner product working while proving
 the owned engine's build and state boundaries before general dynamics expands.
 
-Proposed repository layout; these paths are not created by this plan:
+Repository layout: the application, contract package, tooling and fixture paths
+now exist. `packages/mini-physics/` remains proposed for SIM-2:
 
 ```text
 apps/mini-robot-simulator/        learner UI, worker adapter, lessons and assets
@@ -397,9 +406,12 @@ Original architecture-inspection verification (before the worker update):
 node --test apps/mini-robot-simulator/physics.test.cjs
 ```
 
-Result at that inspection: 12 passed, 0 failed. The subsequent worker slice and
-its additional checks are recorded at the top of this document and in the
-prototype README. Neither change introduces a deployment, external-project
+Result at that inspection: 12 passed, 0 failed. The subsequent SIM-1 implementation
+and
+its 37 checks and local browser measurements are recorded at the top of this
+document and in the prototype README. Repeat with
+`node tools/mini-sim/verify.cjs` from the repository root. Neither change introduces
+a deployment, external-project
 modification or hardware experiment.
 
 ## 12. Source And Version Notes

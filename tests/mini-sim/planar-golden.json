@@ -1,0 +1,134 @@
+{
+  "compiled": {
+    "descriptor": {
+      "schema": "seedcore.mini-lab.planar-model.v1",
+      "engine": "0.1.0-planar-arm",
+      "profile": "fixed-base-planar-two-link",
+      "source": {
+        "id": "seedcore-uniform-rod-arm-v1",
+        "license": "Apache-2.0",
+        "inertiaRecipe": "uniform-rod-center-mL2-over-12"
+      },
+      "frame": {
+        "units": "SI",
+        "handedness": "right",
+        "up": "Y",
+        "quaternionOrder": "xyzw",
+        "worldZUpEmbedding": "[x,y,z] -> [x,-z,y]"
+      },
+      "parameters": {
+        "l1": 0.75,
+        "l2": 0.6,
+        "m1": 1,
+        "m2": 0.7,
+        "gravity": 9.81,
+        "damping": 0.12
+      },
+      "nq": 2,
+      "nv": 2,
+      "joints": [
+        {
+          "id": "shoulder",
+          "index": 0,
+          "parent": -1,
+          "type": "revolute",
+          "axis": [
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "id": "elbow",
+          "index": 1,
+          "parent": 0,
+          "type": "revolute",
+          "axis": [
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "bodies": [
+        {
+          "id": "inner-arm",
+          "index": 0,
+          "joint": 0,
+          "center": 0.375,
+          "inertia": 0.046875
+        },
+        {
+          "id": "outer-arm",
+          "index": 1,
+          "joint": 1,
+          "center": 0.3,
+          "inertia": 0.021
+        }
+      ],
+      "capabilities": [
+        "smooth-rk4",
+        "ideal-torque",
+        "recorded-playback"
+      ]
+    },
+    "parameters": {
+      "l1": 0.75,
+      "l2": 0.6,
+      "m1": 1,
+      "m2": 0.7,
+      "gravity": 9.81,
+      "damping": 0.12
+    },
+    "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+    "recipe": {
+      "schema": "seedcore.mini-lab.run-recipe.v1",
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "engine": "0.1.0-planar-arm",
+      "controller": "gravity-compensated-pd-24-5-v1",
+      "control": {
+        "target": [
+          0.9599310885968813,
+          -1.2217304763960306
+        ],
+        "strength": 16,
+        "motors": true
+      },
+      "dt": 0.0020833333333333333,
+      "totalTicks": 2880,
+      "samplePeriodTicks": 8,
+      "initial": {
+        "q": [
+          0.2617993877991494,
+          0.7853981633974483
+        ],
+        "velocity": [
+          0,
+          0
+        ]
+      },
+      "rng": "none"
+    },
+    "recipeDigest": "sha256:74c35d087c56d578cd5737d0ea66a6712761b644942534b86786f12c5e6b46ee"
+  },
+  "reset": {
+    "protocol": "seedcore.mini-lab.worker.v2",
+    "type": "reset",
+    "runId": 1,
+    "revision": 0,
+    "sequence": 1,
+    "applicationTick": 0,
+    "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+    "recipeDigest": "sha256:74c35d087c56d578cd5737d0ea66a6712761b644942534b86786f12c5e6b46ee",
+    "settings": {
+      "target": [
+        0.9599310885968813,
+        -1.2217304763960306
+      ],
+      "strength": 16,
+      "mass": 0.7,
+      "motors": true,
+      "gravity": true
+    }
+  }
+}

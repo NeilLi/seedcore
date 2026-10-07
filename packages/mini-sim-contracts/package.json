@@ -1,0 +1,9 @@
+{
+  "name": "@seedcore/mini-sim-contracts",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "build": "node ../../ts/node_modules/typescript/bin/tsc -p .",
+    "typecheck": "node ../../ts/node_modules/typescript/bin/tsc -p . --noEmit"
+  }
+}
