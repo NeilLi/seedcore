@@ -12,6 +12,7 @@ exists.
 
 ## Reports
 
+- [Embodied AI Research Report](embodied_ai_research_report.md) — external literature, model and mini robotics reference, prepared by private local sync and published after review; source claims remain unverified, with synchronization status recorded in the report.
 - [Microduck Simulation and Architecture Report](microduck_simulation_architecture_report.md) — supplied draft; describes the companion Microduck and `microduck_rl` projects and has not been independently verified.
 
 Return to the [development map](../README.md).

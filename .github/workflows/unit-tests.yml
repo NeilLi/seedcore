@@ -13,6 +13,21 @@ on:
         type: boolean
 
 jobs:
+  research-report-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check research report synchronization offline
+        run: python -m unittest discover -s tests -p 'test_*research*.py'
+
   proof-py-bridge:
     runs-on: ubuntu-latest
     timeout-minutes: 20
