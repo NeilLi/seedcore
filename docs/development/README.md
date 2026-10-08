@@ -64,6 +64,9 @@ here does not promote it to an implemented feature.
    sensors and numerical gates. Blender/Godot remain authoring/reference tools.
    Local lesson prototypes may accompany M0–M3; live execution follows the
    integration gates.
+8. [Robot design toolkit assessment](robotics/robot_design_toolkit_assessment.md):
+   accepted CAD-to-MuJoCo recommendations, source qualifications and proposed
+   agent-assisted design workflow; CAD adapters and external imports remain planned.
 
 ## Authority And Document Precedence
 

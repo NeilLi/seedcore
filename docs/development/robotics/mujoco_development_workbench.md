@@ -185,6 +185,11 @@ Verification:
 
 ## Remaining development sequence
 
+The [robot design toolkit assessment](robot_design_toolkit_assessment.md)
+records the accepted recommendation to start with Rhoban/Onshape exports and
+then add FreeCAD/RobotCAD authoring. It defines conversion checks and source
+qualifications for the planned import work below; neither CAD adapter is implemented.
+
 1. **Model packages and imports:** reviewed MJCF/URDF packages with asset hashes,
    limits, sensor contracts and frame checks. Qualify an actual Microduck model
    separately; the primitive builder is not its body model. Add articulated trees,
