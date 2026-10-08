@@ -1,0 +1,150 @@
+{
+  "date": "2026-10-08T07:28:43.968Z",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "hardwareConcurrency": 8,
+  "deviceMemoryGiB": 8,
+  "scope": "Local browser worker/transfer/RAF harness; laptop only. Not full learner UI or release qualification.",
+  "results": [
+    {
+      "lesson": "reach",
+      "stall": false,
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "recipeDigest": "sha256:74c35d087c56d578cd5737d0ea66a6712761b644942534b86786f12c5e6b46ee",
+      "backend": "cpp-wasm",
+      "buildDigest": "f87b9f3c9fd6a1c892fa790b47198a492e8791f28730f749cd7be3d5857cffa5",
+      "traceTolerance": 1e-8,
+      "wallMs": 6059,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 4.649058915617843e-16,
+      "frameP95Ms": 9.099999999999909,
+      "pauseLatenciesMs": [
+        0.4000000059604645
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 7.5,
+        "activeWallMs": 6003.599999964237,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9994003597900828,
+        "bufferWaits": 0,
+        "allocatedBuffers": 3,
+        "maxInFlight": 1
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    },
+    {
+      "lesson": "gravity",
+      "stall": false,
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "recipeDigest": "sha256:20e1b9b67e0e5dc42a9c1bef9773b4990412187cffa1bcbb3e0ec01493ce1d68",
+      "backend": "cpp-wasm",
+      "buildDigest": "f87b9f3c9fd6a1c892fa790b47198a492e8791f28730f749cd7be3d5857cffa5",
+      "traceTolerance": 1e-8,
+      "wallMs": 6041.4000000059605,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 1.5987211554602254e-14,
+      "frameP95Ms": 9,
+      "pauseLatenciesMs": [
+        0.4000000059604645
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 1.800000011920929,
+        "activeWallMs": 6003.0999999940395,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9994836001409201,
+        "bufferWaits": 0,
+        "allocatedBuffers": 3,
+        "maxInFlight": 1
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    },
+    {
+      "lesson": "heavy",
+      "stall": false,
+      "modelDigest": "sha256:397ac00b3acd86f2501c0662f75d5e63e2d8be9c628555c7f85fc5646883bf80",
+      "recipeDigest": "sha256:563a775a64b642415b695db76ac31460adbbb4567150909d6c9bb7db1b69d6d1",
+      "backend": "cpp-wasm",
+      "buildDigest": "f87b9f3c9fd6a1c892fa790b47198a492e8791f28730f749cd7be3d5857cffa5",
+      "traceTolerance": 1e-8,
+      "wallMs": 6057.299999982119,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 3.219646771412954e-14,
+      "frameP95Ms": 9,
+      "pauseLatenciesMs": [
+        0.29999998211860657
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 2.0999999940395355,
+        "activeWallMs": 6002.4000000059605,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9996001599350329,
+        "bufferWaits": 0,
+        "allocatedBuffers": 3,
+        "maxInFlight": 1
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    },
+    {
+      "lesson": "reach-ui-stall",
+      "stall": true,
+      "modelDigest": "sha256:f01f232794c65a3c594fd595a9a4428711d92cfd0ccb36f2a6dfe319351ae915",
+      "recipeDigest": "sha256:74c35d087c56d578cd5737d0ea66a6712761b644942534b86786f12c5e6b46ee",
+      "backend": "cpp-wasm",
+      "buildDigest": "f87b9f3c9fd6a1c892fa790b47198a492e8791f28730f749cd7be3d5857cffa5",
+      "traceTolerance": 1e-8,
+      "wallMs": 6291,
+      "samples": 361,
+      "finalTick": 2880,
+      "maxAbsoluteTraceError": 4.649058915617843e-16,
+      "frameP95Ms": 9.200000000000728,
+      "pauseLatenciesMs": [
+        1.0999999940395355
+      ],
+      "diagnostics": {
+        "chunks": 360,
+        "maxChunkMs": 1.600000023841858,
+        "activeWallMs": 6253.200000017881,
+        "simulatedMs": 6000,
+        "realtimeRatio": 0.9595087315267131,
+        "bufferWaits": 1,
+        "allocatedBuffers": 3,
+        "maxInFlight": 3
+      },
+      "gates": {
+        "frameP95": true,
+        "pauseAcknowledgement": true,
+        "realtime": true,
+        "loadDiagnostic": true,
+        "coverage": true,
+        "trace": true
+      }
+    }
+  ],
+  "passed": true
+}

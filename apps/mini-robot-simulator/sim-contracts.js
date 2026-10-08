@@ -7,6 +7,30 @@ var MiniSimContracts;
     MiniSimContracts.ENGINE = '0.1.0-planar-arm';
     MiniSimContracts.DT = 1 / 480, MiniSimContracts.TOTAL_TICKS = 2880, MiniSimContracts.CHUNK_TICKS = 8;
     MiniSimContracts.POOL_SIZE = 3, MiniSimContracts.BUFFER_BYTES = 2 * 6 * 8, MiniSimContracts.MAX_INPUTS = 32;
+    function validCheckpoint(value, identity, buildDigest) {
+        if (!object(value) || !keys(value, ['schema', 'engine', 'buildDigest', 'modelDigest', 'recipeDigest', 'tick', 'state', 'control', 'started', 'inputs']) ||
+            value.schema !== 'seedcore.mini-lab.checkpoint.v1' || value.engine !== MiniSimContracts.ENGINE || value.buildDigest !== buildDigest ||
+            value.modelDigest !== identity.modelDigest || value.recipeDigest !== identity.recipeDigest ||
+            !Number.isSafeInteger(value.tick) || !bounded(value.tick, 0, MiniSimContracts.TOTAL_TICKS) || value.tick % MiniSimContracts.CHUNK_TICKS !== 0 ||
+            !object(value.state) || !keys(value.state, ['q', 'velocity', 'time']) || !validState(value.state, value.tick) || !validControl(value.control) || typeof value.started !== 'boolean' ||
+            (value.tick > 0 && !value.started) || !Array.isArray(value.inputs) || value.inputs.length > MiniSimContracts.MAX_INPUTS)
+            return false;
+        let previousTick = -1, previousSequence = 0;
+        const sequences = new Set();
+        for (const input of value.inputs) {
+            if (!object(input) || !keys(input, ['sequence', 'applicationTick', 'control']) ||
+                !Number.isSafeInteger(input.sequence) || !bounded(input.sequence, 1, Number.MAX_SAFE_INTEGER) || sequences.has(input.sequence) ||
+                !Number.isSafeInteger(input.applicationTick) || !bounded(input.applicationTick, value.tick, MiniSimContracts.TOTAL_TICKS - 1) ||
+                !validControl(input.control) || input.applicationTick < previousTick ||
+                (input.applicationTick === previousTick && input.sequence <= previousSequence))
+                return false;
+            previousTick = input.applicationTick;
+            previousSequence = input.sequence;
+            sequences.add(input.sequence);
+        }
+        return true;
+    }
+    MiniSimContracts.validCheckpoint = validCheckpoint;
     function object(value) {
         return !!value && typeof value === 'object' && !Array.isArray(value);
     }
@@ -29,9 +53,9 @@ var MiniSimContracts;
     }
     MiniSimContracts.validSettings = validSettings;
     function validEnvelope(value) {
-        return object(value) && ['reset', 'start', 'pause', 'step', 'set-control'].includes(value.type) &&
+        return object(value) && ['reset', 'start', 'pause', 'step', 'set-control', 'checkpoint', 'restore'].includes(value.type) &&
             keys(value, ['protocol', 'type', 'runId', 'revision', 'sequence', 'applicationTick', 'modelDigest', 'recipeDigest',
-                ...(value.type === 'reset' ? ['settings'] : value.type === 'set-control' ? ['control'] : [])]) && value.protocol === MiniSimContracts.PROTOCOL &&
+                ...(value.type === 'reset' ? ['settings'] : value.type === 'set-control' ? ['control'] : value.type === 'restore' ? ['checkpoint'] : [])]) && value.protocol === MiniSimContracts.PROTOCOL &&
             Number.isSafeInteger(value.runId) && value.runId > 0 &&
             Number.isSafeInteger(value.revision) && value.revision >= 0 &&
             Number.isSafeInteger(value.sequence) && value.sequence > 0 &&
@@ -52,6 +76,12 @@ var MiniSimContracts;
     function sha256Ascii(text) {
         if (text.length > 8192 || /[^\x00-\x7f]/.test(text))
             throw new Error('Digest input must be bounded ASCII.');
+        return sha256Bytes(Uint8Array.from(text, character => character.charCodeAt(0)));
+    }
+    MiniSimContracts.sha256Ascii = sha256Ascii;
+    function sha256Bytes(input) {
+        if (!(input instanceof Uint8Array) || input.length > 65536)
+            throw new Error('Binary digest input exceeds 64 KiB.');
         const constants = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
             0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
             0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -60,12 +90,11 @@ var MiniSimContracts;
             0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
             0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
             0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
-        const bytes = new Uint8Array(Math.ceil((text.length + 9) / 64) * 64);
-        for (let i = 0; i < text.length; i++)
-            bytes[i] = text.charCodeAt(i);
-        bytes[text.length] = 128;
+        const bytes = new Uint8Array(Math.ceil((input.length + 9) / 64) * 64);
+        bytes.set(input);
+        bytes[input.length] = 128;
         const data = new DataView(bytes.buffer);
-        data.setUint32(bytes.length - 4, text.length * 8);
+        data.setUint32(bytes.length - 4, input.length * 8);
         const hash = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
         const rotate = (x, n) => (x >>> n) | (x << (32 - n));
         const words = new Int32Array(64);
@@ -93,7 +122,7 @@ var MiniSimContracts;
         }
         return 'sha256:' + hash.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
     }
-    MiniSimContracts.sha256Ascii = sha256Ascii;
+    MiniSimContracts.sha256Bytes = sha256Bytes;
     function freeze(value) {
         if (value && typeof value === 'object') {
             Object.values(value).forEach(freeze);

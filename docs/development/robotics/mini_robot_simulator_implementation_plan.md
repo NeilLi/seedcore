@@ -3,8 +3,8 @@
 Date: 2026-10-05
 
 Status: Engineering plan grounded in the current repository. The planar-arm
-browser prototype and local SIM-1 are implemented; SIM-2 and the general engine
-remain proposed.
+browser prototype, local SIM-1 and the narrow SIM-2 C++/Wasm/checkpoint slice
+are implemented; general dynamics and later stages remain proposed.
 
 Implementation update, 2026-10-07: SIM-1 now has TypeScript-owned v2 contracts,
 a narrow immutable planar model compiler, model/run-recipe SHA-256 identities,
@@ -20,6 +20,20 @@ release budgets remain open. See the
 [contract documentation](../../../packages/mini-sim-contracts/README.md) and
 [qualification report](../../../tools/mini-sim/qualification-2026-10-07.md).
 The earlier worker isolation slice was delivered 2026-10-05.
+
+Implementation update, 2026-10-08: the worker now uses an owned C++17 f64
+WebAssembly core for controlled RK4 integration. Native C++ and Wasm reproduce
+all three 2,880-tick reference traces within 1e-8, with a measured maximum error
+of 3.997e-14 on this Mac. Complete paused-boundary checkpoints bind the actual
+Wasm bytes, model and recipe and preserve state, controls and pending inputs.
+Learners can save progress and resume through a fresh worker run; the existing
+experiment download remains recorded playback. The specialized allocation-free
+C ABI uses caller-owned model/state buffers; general opaque handles are deferred.
+See [core documentation](../../../packages/mini-physics/README.md) and
+[numerical evidence](../../../tools/mini-sim/physics-qualification.json).
+The [SIM-2 browser report](../../../tools/mini-sim/qualification-2026-10-08.md)
+records the local performance pass and an earlier loaded timing miss.
+This does not close the general-engine, real-robot or release-device gates.
 
 ## 1. Decision
 
@@ -348,14 +362,14 @@ stages. These are dependency gates, not promised calendar delivery dates.
 | SIM-5 | Independent-instance batches and optional native Python/Gymnasium wrapper | Scalar/batch equivalence, per-instance reset isolation, headless determinism and measured throughput/memory |
 | SIM-6 | Validated robot imports and governed SeedCore simulator bridge | Explicit capabilities, no fixture fallback, denied-token cases and verified/incomplete closure; Microduck claims still satisfy M0–M3 |
 
-The **next implementation work is SIM-2**, the narrow native/Wasm port with
-complete checkpoint/restore. SIM-1 is locally implemented and qualified as noted
-above; broader release-device checks continue alongside later stages. This keeps
-the beginner product working while proving
-the owned engine's build and state boundaries before general dynamics expands.
+The narrow **SIM-2 port and checkpoint slice is implemented**. Next is SIM-3:
+compiled small-tree dynamics, encoders and a 3D scene, gated by independent
+one-/two-/three-link numerical fixtures. Broader release-device and performance
+checks remain open. General physics expansion must preserve the current lessons
+and the tested build, worker and checkpoint boundaries.
 
 Repository layout: the application, contract package, tooling and fixture paths
-now exist. `packages/mini-physics/` remains proposed for SIM-2:
+now exist, including `packages/mini-physics/` for SIM-2:
 
 ```text
 apps/mini-robot-simulator/        learner UI, worker adapter, lessons and assets

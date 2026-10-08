@@ -1,7 +1,8 @@
 /* Local simulation only. No hardware routes or execution authority. */
 'use strict';
-importScripts('physics.js', 'sim-contracts.js');
+importScripts('physics.js', 'sim-contracts.js', 'physics-worker-loader.js');
 const P = globalThis.MiniRobotPhysics, C = MiniSimContracts;
+const buildDigest = P.BUILD?.sha256 || 'js-reference-v1';
 const { PROTOCOL, DT, TOTAL_TICKS, CHUNK_TICKS } = C;
 if (P.VERSION !== C.ENGINE) throw new Error('Engine/contract version mismatch.');
 let runId = 0, revision = 0, sequence = 0, tick = 0, frameSequence = 0;
@@ -26,7 +27,7 @@ function reply(type = 'update', samples = [], extra = {}) {
   const message = { protocol: PROTOCOL, type, runId, revision, sequence, frameSequence: ++frameSequence,
     modelDigest: compiled.modelDigest, recipeDigest: compiled.recipeDigest,
     applicationTick: lastCommandTick, appliedTick: tick, tick, status, state, sampleCount: samples.length,
-    diagnostics: metrics(), ...extra };
+    diagnostics: metrics(), backend: P.BACKEND || 'js-reference', buildDigest, ...extra };
   if (samples.length) {
     const slot = free.pop();
     C.pack(slot.buffer, samples);
@@ -39,7 +40,7 @@ function reply(type = 'update', samples = [], extra = {}) {
 function applyInputs() {
   while (inputs.length && inputs[0].applicationTick === tick) {
     const input = inputs.shift(); control = input.control;
-    reply('applied', [], { sequence: input.sequence, applicationTick: tick, input });
+    reply('applied', [], { sequence, applicationTick: tick, input });
   }
 }
 function advance() {
@@ -49,7 +50,7 @@ function advance() {
   try {
     for (let i = 0; i < CHUNK_TICKS && tick < TOTAL_TICKS; i++) {
       applyInputs();
-      state = P.step(model, state, s => control.motors ? P.motor(model, s, control.target, control.strength) : [0,0], DT);
+      state = P.stepControlled ? P.stepControlled(model,state,control,DT) : P.step(model, state, s => control.motors ? P.motor(model, s, control.target, control.strength) : [0,0], DT);
       tick++;
     }
     // Tick inputs take effect before integrating that tick's interval.
@@ -110,8 +111,29 @@ onmessage = ({ data: message }) => {
         message.modelDigest !== compiled.modelDigest || message.recipeDigest !== compiled.recipeDigest) {
       throw new Error('Command does not match the current run, revision or digests.');
     }
-    if (!['start','pause','step','set-control'].includes(message.type)) throw new Error('Unknown worker command.');
+    if (!['start','pause','step','set-control','checkpoint','restore'].includes(message.type)) throw new Error('Unknown worker command.');
     if (status === 'error') throw new Error('Reset the failed experiment before continuing.');
+    if (message.type === 'checkpoint' || message.type === 'restore') {
+      if (status === 'running' || message.applicationTick > tick) throw new Error('Pause before saving or restoring progress.');
+      if (message.type === 'checkpoint') {
+        sequence = message.sequence;
+        reply('checkpoint', [], { checkpoint: { schema: 'seedcore.mini-lab.checkpoint.v1', engine: P.VERSION,
+          buildDigest, modelDigest: compiled.modelDigest, recipeDigest: compiled.recipeDigest,
+          tick, state, control, started, inputs } });
+      } else {
+        // Validate completely before mutating. Restore only into a fresh run;
+        // transport sequences/buffers belong to that run, not the saved physics.
+        if (tick !== 0 || started || !C.validCheckpoint(message.checkpoint,compiled,buildDigest) || message.checkpoint.inputs.some(input=>input.sequence>=message.sequence)) throw new Error('Invalid, incompatible checkpoint or non-fresh destination.');
+        const saved = structuredClone(message.checkpoint);
+        const nextState = P.createState(saved.state.q,saved.state.velocity,saved.state.time);
+        state=nextState; tick=saved.tick; control=saved.control; started=saved.started;
+        inputs=saved.inputs; sequence=message.sequence;
+        lastCommandTick=message.applicationTick;
+        status=tick === TOTAL_TICKS ? 'complete' : started ? 'paused' : 'ready';
+        reply('update', [], { sequence: message.sequence });
+      }
+      return;
+    }
     if (message.type === 'set-control') {
       if (!C.validControl(message.control) || message.applicationTick < tick || message.applicationTick >= TOTAL_TICKS ||
           inputs.length >= C.MAX_INPUTS || status === 'complete') throw new Error('Invalid, late or over-capacity tick input.');

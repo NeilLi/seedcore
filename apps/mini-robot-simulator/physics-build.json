@@ -1,0 +1,11 @@
+{
+  "schema": "seedcore.mini-physics.build.v1",
+  "abi": 1,
+  "profile": "planar-rk4-f64",
+  "bytes": 3738,
+  "sha256": "f87b9f3c9fd6a1c892fa790b47198a492e8791f28730f749cd7be3d5857cffa5",
+  "compiler": "Homebrew clang version 23.1.2",
+  "linker": "Homebrew LLD 23.1.2",
+  "math": "host sin/cos; no cross-platform bitwise guarantee",
+  "memoryBytes": 131072
+}

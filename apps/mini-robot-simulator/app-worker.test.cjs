@@ -39,7 +39,7 @@ function page() {
   }
   let timerId = 0;
   vm.runInNewContext(fs.readFileSync(`${__dirname}/app.js`, 'utf8'), {
-    MiniRobotPhysics: P, MiniSimContracts: C, ArrayBuffer, document, Worker, location: { protocol: 'http:' },
+    MiniRobotPhysics: P, MiniSimContracts: C, MiniPhysicsBuild: require('./physics-build.json'), ArrayBuffer, document, Worker, location: { protocol: 'http:' },
     Blob, URL: { createObjectURL: blob => { exports.push(blob); return 'blob:test'; }, revokeObjectURL() {} },
     ResizeObserver: class { observe() {} }, requestAnimationFrame() {},
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; },
@@ -153,4 +153,44 @@ test('v2 export after starting recorded replay preserves completeness and compil
   assert.equal(record.compiled.recipe.modelDigest,record.compiled.modelDigest);
   assert.equal(record.diagnostics.allocatedBuffers,3);
   assert.ok(record.limitations.includes('recorded playback only, not a resumable checkpoint'));
+});
+
+test('saved progress uses the acknowledged worker checkpoint and keeps experiment exports separate',async()=>{
+  const p=page(),w=p.workers[0];w.reply(p.latest());p.click('step');
+  const state=P.createState([.2,.3],[.4,.5],8*C.DT),initial=P.createState([Math.PI/12,Math.PI/4]);
+  w.reply(p.latest(),{tick:8,status:'paused',state,samples:[initial,state]});
+  p.click('save-progress');const request=p.latest();assert.equal(request.type,'checkpoint');
+  assert.equal(p.element('save-progress').disabled,true);
+  const buildDigest=require('./physics-build.json').sha256;
+  const checkpoint={schema:'seedcore.mini-lab.checkpoint.v1',engine:P.VERSION,buildDigest,
+    modelDigest:request.modelDigest,recipeDigest:request.recipeDigest,tick:8,state,control:{target:[55*Math.PI/180,-70*Math.PI/180],strength:16,motors:true},started:true,inputs:[]};
+  w.reply(request,{type:'checkpoint',tick:8,status:'paused',state,checkpoint,buildDigest,backend:'cpp-wasm'});
+  const saved=JSON.parse(await p.exports.at(-1).text());
+  assert.deepEqual(saved.checkpoint,checkpoint);assert.equal(saved.samples.length,2);assert.equal(saved.schema,'seedcore.mini-lab.progress.v1');
+});
+
+test('progress import waits for a fresh reset, restores observation coverage and can continue',async()=>{
+  const p=page(),w=p.workers[0];w.reply(p.latest());
+  const settings={target:[55*Math.PI/180,-70*Math.PI/180],strength:16,mass:.7,motors:true,gravity:true},compiled=C.compile(settings);
+  const state=P.createState([.2,.3],[.4,.5],8*C.DT);
+  const checkpoint={schema:'seedcore.mini-lab.checkpoint.v1',engine:P.VERSION,buildDigest:require('./physics-build.json').sha256,...compiled,
+    tick:8,state,control:compiled.recipe.control,started:true,inputs:[]};
+  delete checkpoint.descriptor;delete checkpoint.parameters;delete checkpoint.recipe;
+  const saved={schema:'seedcore.mini-lab.progress.v1',source:'local_research_simulation',settings,lesson:'reach',prediction:'yes',
+    samples:[P.createState([Math.PI/12,Math.PI/4]),state],appliedInputs:[],checkpoint};
+  const target={files:[{size:1000,text:async()=>JSON.stringify(saved)}],value:'chosen'};
+  await p.element('progress-file').listeners.change({target});
+  assert.equal(p.latest().type,'reset');assert.equal(target.value,'');w.reply(p.latest());
+  const restore=p.latest();assert.equal(restore.type,'restore');assert.equal(restore.applicationTick,0);
+  w.reply(restore,{tick:8,state,status:'paused'});assert.equal(p.element('run-status').textContent,'Paused');
+  assert.equal(p.element('replay').disabled,false);p.click('run');assert.equal(p.latest().type,'start');assert.equal(p.latest().applicationTick,8);
+});
+
+test('invalid progress import leaves the current experiment intact',async()=>{
+  const p=page();p.workers[0].reply(p.latest());const command=p.latest();
+  for(const file of [{size:300000,text:async()=>''},{size:1,text:async()=>'{invalid'},
+    {size:10,text:async()=>JSON.stringify({settings:{}})}]) {
+    await p.element('progress-file').listeners.change({target:{files:[file]}});
+    assert.equal(p.latest(),command);assert.match(p.element('feedback').textContent,/Could not restore progress/);
+  }
 });

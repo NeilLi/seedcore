@@ -76,10 +76,11 @@
               if (tick < C.TOTAL_TICKS) direct = P.step(model,direct,
                 s => settings.motors ? P.motor(model,s,settings.target,settings.strength) : [0,0],C.DT);
             }
-            assert(maxError === 0, 'browser worker diverged from direct reference');
+            assert(maxError < 1e-8, 'browser worker exceeded the 1e-8 reference tolerance');
             frameIntervals.sort((a,b) => a-b);
             const frameP95Ms = frameIntervals[Math.ceil(frameIntervals.length*0.95)-1];
             finish(null, { lesson, stall, modelDigest: compiled.modelDigest, recipeDigest: compiled.recipeDigest,
+              backend: message.backend, buildDigest: message.buildDigest, traceTolerance: 1e-8,
               wallMs: performance.now()-start, samples: samples.length, finalTick: message.tick, maxAbsoluteTraceError: maxError,
               frameP95Ms, pauseLatenciesMs: pauseLatencies, diagnostics: message.diagnostics,
               gates: { frameP95: frameP95Ms <= 33, pauseAcknowledgement: pauseLatencies.every(x => x<=100),

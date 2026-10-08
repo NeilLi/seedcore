@@ -1,6 +1,6 @@
 # SeedCore Mini Robot Lab
 
-Status: Early browser research prototype; local SIM-1 contracts and qualification completed 2026-10-07.
+Status: Early browser research prototype; SIM-1 delivered 2026-10-07 and the narrow SIM-2 C++/Wasm/checkpoint slice delivered 2026-10-08.
 
 A small learning application with an original two-link physics engine. Learners
 predict a result, adjust joint targets, motor strength or arm mass, run an
@@ -25,8 +25,9 @@ previously hosted site is not implemented.
 
 ## Implemented Physics
 
-`physics.js` contains the original dynamics implementation, independent of the
-browser and any external physics library:
+`packages/mini-physics` owns the C++ dynamics used by the browser worker.
+`physics.js` remains the independent reference and UI kinematics helper. Both
+implement this same restricted model:
 
 - planar fixed-base arm with two revolute joints and uniform rigid links;
 - configuration-dependent inertia, Coriolis terms, gravity and viscous damping;
@@ -82,8 +83,9 @@ The [contract documentation](../../packages/mini-sim-contracts/README.md)
 details schemas, tick semantics and buffer ownership. The
 [local qualification report](../../tools/mini-sim/qualification-2026-10-07.md)
 records three lesson traces, a UI stall and pinned laptop/browser measurements.
-Tablet, cross-browser and full release budgets remain unqualified. Checkpoints
-and the native/Wasm engine are SIM-2 work.
+Tablet, cross-browser and full release budgets remain unqualified. The
+[native/Wasm core and checkpoint documentation](../../packages/mini-physics/README.md)
+records SIM-2 build ownership, numerical evidence and resume semantics.
 
 ## Learning And Execution Boundaries
 
@@ -93,7 +95,13 @@ robot execution evidence. Feedback uses deterministic lesson rules and measured
 simulation values, without an AI service. JSON downloads identify their source
 as local research simulation and include model, settings and recorded samples.
 
-Replay reads samples without advancing physics. Editing settings resets the
+Replay reads samples without advancing physics. **Save experiment** exports
+recorded observations. To resume calculating later, pause and choose **Save
+progress**, then use **Resume saved progress** to load that JSON. Saved progress
+requires the same engine build and includes all observations through its tick;
+malformed or incompatible files are rejected. No file is uploaded.
+
+Editing settings resets the
 experiment and invalidates its previous observations. Hiding the browser tab
 pauses the experiment. A future physical-robot connection must use the existing
 Agent/PDP/token/edge/evidence boundary and separate integration acceptance.
@@ -106,8 +114,9 @@ Godot and MuJoCo remain useful references and comparison environments.
 
 ## Verify
 
-Developer checks require Node.js and the existing locked TypeScript toolchain
-in `ts/node_modules`; learners need neither:
+Developer checks require Node.js, Clang and the existing locked TypeScript
+toolchain in `ts/node_modules`; rebuilding Wasm also requires LLVM wasm-ld.
+Learners need none of these:
 
 ```bash
 # From the repository root:
@@ -116,12 +125,14 @@ node tools/mini-sim/verify.cjs
 npm --prefix packages/mini-sim-contracts run build
 ```
 
-The verifier typechecks and confirms generated artifacts, checks syntax and runs
-37 tests: 12 original physics invariants, 12 worker/transfer/tick-input cases,
-nine UI-boundary cases and four compiler/identity/golden-fixture cases. All
-three worker lesson traces equal the direct reference exactly. Exhausted buffer
-pools, reset with outstanding loans, same-tick inputs, stale digests and sequences,
-queue capacity and incomplete completion are tested.
+The verifier checks generated contracts and asset syntax, then runs 45 JS/worker/UI
+checks, 12 invariants against the Wasm adapter and 12 native invariant groups.
+It compares all 2,880 physics ticks of each lesson across JS/native/Wasm with an
+explicit 1e-8 tolerance, checks module/build identity and fixed memory, and tests
+exact checkpoint continuation, invalid restores and learner save/import behavior.
+See [numerical measurements](../../tools/mini-sim/physics-qualification.json).
+The [SIM-2 qualification report](../../tools/mini-sim/qualification-2026-10-08.md)
+records browser timings, the earlier loaded timing miss and end-to-end save/resume.
 
 To repeat browser measurements, serve the repository root and open
 `/tools/mini-sim/browser-qualification.html`. The harness reports foreground RAF
@@ -137,14 +148,14 @@ defines the proposed SIM-1–SIM-6 sequence following inspection of SeedCore and
 its related apps on 2026-10-05:
 
 1. SIM-1 is locally implemented and measured; release-device qualification remains open.
-2. Port the reference model to an owned C++ core with native and Wasm builds.
+2. SIM-2 narrow C++/Wasm and complete checkpoint slice is implemented and numerically checked.
 3. Develop compiled tree models, articulated dynamics, encoders and a 3D view.
 4. Validate floating bodies, contacts, friction, joint limits and further sensors.
 5. Add independent-instance batches and measure headless throughput.
 6. Qualify robot imports and a separate governed SeedCore simulation bridge.
 
-Learner usability and browser size/performance are checked throughout. Beyond
-SIM-1, these remain planned capabilities.
+Learner usability and browser size/performance are checked throughout. SIM-3 through SIM-6 remain planned capabilities. Broader device/performance
+qualification remains open alongside the delivered SIM-2 slice.
 
 Each expansion needs independent numerical and behavioral acceptance evidence.
 Reduced coordinates alone do not guarantee contact stability, and a successful

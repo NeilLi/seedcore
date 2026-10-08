@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const P = require('./physics.js');
+const P = process.env.MINI_TEST_WASM ? require('./physics-wasm.js').create(require('node:fs').readFileSync(`${__dirname}/mini-physics.wasm`),require('./physics-build.json')) : require('./physics.js');
 const close = (a,b,tolerance=1e-8) => assert.ok(Math.abs(a-b)<tolerance, `${a} != ${b} (tolerance ${tolerance})`);
 function simulate(model, state, torque, duration, dt=1/480) {
   for(let i=0;i<Math.round(duration/dt);i++) state=P.step(model,state,torque,dt);

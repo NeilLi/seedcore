@@ -11,12 +11,18 @@ const settings = { target: [55 * Math.PI / 180, -70 * Math.PI / 180], strength: 
 
 // Run the actual worker entry point with browser-style structured-clone
 // boundaries and a controllable timer queue, so races do not require sleeps.
-function harness() {
+function harness(options = {}) {
   const messages = [], timers = new Map();
   let timerId = 0, sequence = 0, identity = C.compile(settings);
   const context = vm.createContext({
     onmessage: null,
-    ArrayBuffer, performance,
+    ArrayBuffer, performance, WebAssembly, structuredClone,
+    XMLHttpRequest: class {
+      open() {} send() {
+        const bytes=options.wasmBytes || fs.readFileSync(path.join(__dirname,'mini-physics.wasm'));
+        this.response=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength); this.status=options.httpStatus ?? 200;
+      }
+    },
     postMessage: (message, transfer = []) => {
       const copy = structuredClone(message, { transfer });
       copy.samples = copy.buffer ? C.unpack(copy.buffer, copy.sampleCount) : [];
@@ -67,7 +73,11 @@ for (const [lesson, changes] of [['reach', {}], ['gravity', { motors: false }], 
     assert.deepEqual(samples[0], state);
     for (let tick = 1; tick <= 2880; tick++) {
       state = P.step(model, state, s => config.motors ? P.motor(model, s, config.target, config.strength) : [0, 0], 1 / 480);
-      if (tick % 8 === 0) assert.deepEqual(samples[tick / 8], state);
+      if (tick % 8 === 0) {
+        const actual=samples[tick/8];
+        for(const key of ['q','velocity']) actual[key].forEach((value,i)=>assert.ok(Math.abs(value-state[key][i])<1e-8, `${lesson} tick ${tick} ${key}`));
+        assert.ok(Math.abs(actual.time-state.time)<1e-12);
+      }
     }
   });
 }
@@ -174,7 +184,9 @@ test('tick-addressed controls apply exactly inside chunks and match a direct tra
     state = P.step(model, state, s => control.motors ? P.motor(model,s,control.target,control.strength) : [0,0], C.DT);
     if ((tick+1)%8 === 0) direct.push(state);
   }
-  assert.deepEqual(h.messages.flatMap(m => m.samples), direct);
+  const actual=h.messages.flatMap(m => m.samples);
+  assert.equal(actual.length,direct.length);
+  actual.forEach((state,i)=>{for(const key of ['q','velocity']) state[key].forEach((v,j)=>assert.ok(Math.abs(v-direct[i][key][j])<1e-8));});
 });
 
 test('late controls, wrong identities, future admin ticks and queue overflow preserve active work', () => {
@@ -192,4 +204,53 @@ test('late controls, wrong identities, future admin ticks and queue overflow pre
   assert.equal(h.pump().tick, 16);
   assert.equal(h.send('reset', { runId: 2, settings, modelDigest: 'sha256:'+'0'.repeat(64) }).type, 'rejected');
   assert.equal(h.pump().tick, 24);
+});
+
+test('checkpoint restore continues exactly with same-tick queued inputs and outstanding transfers',()=>{
+  const h=harness(); h.send('reset',{settings}); h.send('start');
+  const controlA={target:[.4,-.3],strength:9,motors:true},controlB={target:[.2,-.7],strength:6,motors:true};
+  h.send('set-control',{applicationTick:81,control:controlA});
+  h.send('set-control',{applicationTick:81,control:controlB});
+  for(let i=0;i<10;i++) h.pump();
+  h.send('pause'); const saved=h.send('checkpoint').checkpoint;
+  assert.equal(saved.tick,80); assert.equal(saved.inputs.length,2);
+  const old=h.messages.length;
+  h.send('start'); for(let i=10;i<360;i++) h.pump();
+  const uninterrupted=h.messages.slice(old).flatMap(m=>m.samples);
+  const r=harness(); r.send('reset',{settings,runId:2});
+  const restored=r.send('restore',{runId:2,sequence:100,checkpoint:saved});
+  assert.equal(restored.status,'paused'); assert.equal(restored.tick,80);
+  r.send('start',{runId:2,sequence:101});
+  for(let i=10;i<360;i++) r.pump();
+  assert.deepEqual(r.messages.flatMap(m=>m.samples),uninterrupted);
+  assert.equal(r.messages.at(-1).status,'complete');
+});
+
+test('checkpoint validation is atomic and binds build, recipe, tick, controls and queue',()=>{
+  const h=harness();h.send('reset',{settings});h.send('step');
+  const saved=h.send('checkpoint').checkpoint;
+  assert.equal(h.send('restore',{checkpoint:saved}).type,'rejected');
+  h.send('reset',{settings,runId:2});
+  for(const change of [{buildDigest:'different'},{recipeDigest:'sha256:'+'0'.repeat(64)},
+    {tick:9},{state:{...saved.state,velocity:[Infinity,0]}},{control:{...saved.control,strength:0}},
+    {inputs:[{sequence:1,applicationTick:0,control:saved.control}]},{inputs:Array(33).fill({})}]) {
+    assert.equal(h.send('restore',{runId:2,checkpoint:{...saved,...change}}).type,'rejected');
+  }
+  assert.equal(h.send('checkpoint',{runId:2}).checkpoint.tick,0);
+  const restored=h.send('restore',{runId:2,checkpoint:saved});assert.equal(restored.tick,8);
+  assert.equal(h.send('step',{runId:2}).tick,16);
+});
+
+test('saving while running is rejected without interrupting work; tick zero restores its first observation',()=>{
+  const h=harness();h.send('reset',{settings});
+  const saved=h.send('checkpoint').checkpoint;
+  h.send('start');assert.equal(h.send('checkpoint').type,'rejected');assert.equal(h.pump().tick,8);
+  const r=harness();r.send('reset',{settings});r.send('restore',{checkpoint:saved});
+  r.send('step');assert.deepEqual(r.messages.at(-1).samples.map(s=>Math.round(s.time/C.DT)),[0,8]);
+});
+
+test('missing or corrupt Wasm fails initialization without a reference fallback',()=>{
+  assert.throws(()=>harness({httpStatus:404}),/could not load/);
+  const bytes=fs.readFileSync(path.join(__dirname,'mini-physics.wasm'));bytes[bytes.length-1]^=1;
+  assert.throws(()=>harness({wasmBytes:bytes}),/digest mismatch/);
 });

@@ -6,6 +6,7 @@
   <meta name="description" content="A tiny robot lab for curious minds. Explore joints, motors and gravity in your browser.">
   <title>Mini Robot Lab · SeedCore</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="physics-build.js" defer></script>
   <script src="physics.js" defer></script>
   <script src="sim-contracts.js" defer></script>
   <script src="app.js" defer></script>
@@ -51,7 +52,7 @@
         <div class="observation"><span class="number">1</span><p>The star shows the tip position requested by your two joint targets.</p></div>
         <div class="observation"><span class="number">2</span><p>The dotted trail shows positions calculated by the physics engine.</p></div>
         <div class="observation"><span class="number">3</span><p>Try changing just one thing. Does your prediction change?</p></div>
-        <div class="result-actions"><button id="replay" disabled>Replay observations</button><button id="download" disabled>Save experiment</button></div>
+        <div class="result-actions"><button id="replay" disabled>Replay observations</button><button id="download" disabled>Save experiment</button><button id="save-progress">Save progress</button><button id="load-progress">Resume saved progress</button><input id="progress-file" type="file" accept=".json,application/json" hidden aria-label="Choose saved progress"></div>
         <details><summary>Peek inside the robot</summary><dl><dt>Shoulder angle</dt><dd id="q1">—</dd><dt>Elbow angle</dt><dd id="q2">—</dd><dt>Mechanical energy</dt><dd id="energy">—</dd></dl><p id="runtime-detail" class="small"></p><p class="small">A custom two-link dynamics engine calculates gravity, inertia, motor torque and damping. Targets are controller settings, not mechanical joint stops.</p></details>
         <p class="scope">This is a local research model. It has no connection to a physical robot. Lesson feedback uses measured simulation values and simple rules, with no AI service.</p>
       </aside>

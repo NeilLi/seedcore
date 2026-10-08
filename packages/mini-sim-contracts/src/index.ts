@@ -16,8 +16,33 @@ namespace MiniSimContracts {
   }
   export type Command = Envelope & (
     { type: 'reset'; settings: Settings } |
-    { type: 'start' | 'pause' | 'step' } |
+    { type: 'start' | 'pause' | 'step' | 'checkpoint' } |
+    { type: 'restore'; checkpoint: RunCheckpoint } |
     { type: 'set-control'; control: Control });
+  export interface RunCheckpoint extends Identity {
+    schema: 'seedcore.mini-lab.checkpoint.v1'; engine: string; buildDigest: string;
+    tick: number; state: State; control: Control; started: boolean;
+    inputs: AppliedInput[];
+  }
+  export function validCheckpoint(value: unknown, identity: Identity, buildDigest: string): value is RunCheckpoint {
+    if (!object(value) || !keys(value, ['schema','engine','buildDigest','modelDigest','recipeDigest','tick','state','control','started','inputs']) ||
+        value.schema !== 'seedcore.mini-lab.checkpoint.v1' || value.engine !== ENGINE || value.buildDigest !== buildDigest ||
+        value.modelDigest !== identity.modelDigest || value.recipeDigest !== identity.recipeDigest ||
+        !Number.isSafeInteger(value.tick) || !bounded(value.tick,0,TOTAL_TICKS) || value.tick % CHUNK_TICKS !== 0 ||
+        !object(value.state) || !keys(value.state,['q','velocity','time']) || !validState(value.state,value.tick) || !validControl(value.control) || typeof value.started !== 'boolean' ||
+        (value.tick > 0 && !value.started) || !Array.isArray(value.inputs) || value.inputs.length > MAX_INPUTS) return false;
+    let previousTick = -1, previousSequence = 0;
+    const sequences = new Set<number>();
+    for (const input of value.inputs) {
+      if (!object(input) || !keys(input,['sequence','applicationTick','control']) ||
+          !Number.isSafeInteger(input.sequence) || !bounded(input.sequence,1,Number.MAX_SAFE_INTEGER) || sequences.has(input.sequence) ||
+          !Number.isSafeInteger(input.applicationTick) || !bounded(input.applicationTick,value.tick,TOTAL_TICKS-1) ||
+          !validControl(input.control) || input.applicationTick < previousTick ||
+          (input.applicationTick === previousTick && input.sequence <= previousSequence)) return false;
+      previousTick=input.applicationTick; previousSequence=input.sequence; sequences.add(input.sequence);
+    }
+    return true;
+  }
   export interface Recycle {
     protocol: typeof PROTOCOL; type: 'recycle'; bufferId: number; frameSequence: number; buffer: ArrayBuffer;
   }
@@ -30,12 +55,12 @@ namespace MiniSimContracts {
     realtimeRatio: number | null; bufferWaits: number; allocatedBuffers: number; maxInFlight: number;
   }
   export interface Reply extends Identity {
-    protocol: typeof PROTOCOL; type: 'update' | 'error' | 'queued' | 'applied';
+    protocol: typeof PROTOCOL; type: 'update' | 'error' | 'queued' | 'applied' | 'checkpoint';
     runId: number; revision: number; sequence: number; frameSequence: number;
     applicationTick: number; appliedTick: number | null; tick: number;
     status: 'ready' | 'running' | 'paused' | 'complete' | 'error'; state: State;
     sampleCount: number; buffer?: ArrayBuffer; bufferId?: number;
-    diagnostics: Diagnostics; input?: AppliedInput; error?: string;
+    diagnostics: Diagnostics; checkpoint?: RunCheckpoint; backend?: string; buildDigest?: string; input?: AppliedInput; error?: string;
   }
   function object(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -57,9 +82,9 @@ namespace MiniSimContracts {
       bounded(value.mass, 0.2, 2) && typeof value.gravity === 'boolean';
   }
   export function validEnvelope(value: unknown): value is Command {
-    return object(value) && ['reset','start','pause','step','set-control'].includes(value.type as string) &&
+    return object(value) && ['reset','start','pause','step','set-control','checkpoint','restore'].includes(value.type as string) &&
       keys(value, ['protocol','type','runId','revision','sequence','applicationTick','modelDigest','recipeDigest',
-        ...(value.type === 'reset' ? ['settings'] : value.type === 'set-control' ? ['control'] : [])]) && value.protocol === PROTOCOL &&
+        ...(value.type === 'reset' ? ['settings'] : value.type === 'set-control' ? ['control'] : value.type === 'restore' ? ['checkpoint'] : [])]) && value.protocol === PROTOCOL &&
       Number.isSafeInteger(value.runId) && (value.runId as number) > 0 &&
       Number.isSafeInteger(value.revision) && (value.revision as number) >= 0 &&
       Number.isSafeInteger(value.sequence) && (value.sequence as number) > 0 &&
@@ -77,6 +102,10 @@ namespace MiniSimContracts {
   // identity only; browser-created records are not authenticated evidence.
   export function sha256Ascii(text: string): string {
     if (text.length > 8192 || /[^\x00-\x7f]/.test(text)) throw new Error('Digest input must be bounded ASCII.');
+    return sha256Bytes(Uint8Array.from(text, character => character.charCodeAt(0)));
+  }
+  export function sha256Bytes(input: Uint8Array): string {
+    if (!(input instanceof Uint8Array) || input.length > 65536) throw new Error('Binary digest input exceeds 64 KiB.');
     const constants = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
       0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
       0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
@@ -85,11 +114,11 @@ namespace MiniSimContracts {
       0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
       0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
       0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
-    const bytes = new Uint8Array(Math.ceil((text.length + 9) / 64) * 64);
-    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
-    bytes[text.length] = 128;
+    const bytes = new Uint8Array(Math.ceil((input.length + 9) / 64) * 64);
+    bytes.set(input);
+    bytes[input.length] = 128;
     const data = new DataView(bytes.buffer);
-    data.setUint32(bytes.length - 4, text.length * 8);
+    data.setUint32(bytes.length - 4, input.length * 8);
     const hash = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
     const rotate = (x: number, n: number) => (x >>> n) | (x << (32 - n));
     const words = new Int32Array(64);

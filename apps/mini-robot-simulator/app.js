@@ -14,6 +14,8 @@
   let accumulator = 0, previousTime = null, width = 600, height = 420, revision = 0;
   let lastStatusUpdate = 0, trialPrediction = null;
   let worker = null, runId = 0, sequence = 0, pending = null, acknowledgementTimer = null;
+  let pendingRestore = null;
+  let engineBuild = null, backend = null;
   let compiled, lastFrameSequence = 0, workerTick = 0, diagnostics = null, appliedInputs = [];
 
   function failWorker(message) {
@@ -60,7 +62,7 @@
         }
         lastFrameSequence = message.frameSequence;
         if (message.type === 'error') { failWorker(message.error); return; }
-        if (!['update','queued','applied'].includes(message.type) ||
+        if (!['update','queued','applied','checkpoint'].includes(message.type) ||
             !['ready','running','paused','complete'].includes(message.status) || !C.validState(message.state, message.tick) ||
             (message.sampleCount !== 0 && incoming.length !== message.sampleCount)) {
           failWorker('Invalid simulator snapshot. Reset to try again.'); return;
@@ -71,6 +73,7 @@
           samples.push(sample);
         }
         state = message.state; tick = workerTick = message.tick; diagnostics = message.diagnostics;
+        engineBuild = message.buildDigest; backend = message.backend;
         if (message.input) appliedInputs.push(message.input);
         if (message.status === 'complete' && (tick !== TICKS || samples.length !== TICKS/SAMPLE_EVERY+1)) {
           failWorker('The experiment ended without all observations. Reset to try again.'); return;
@@ -81,6 +84,19 @@
           clearTimeout(acknowledgementTimer); pending = null;
           mode = message.status;
           if (mode === 'complete') conclude();
+        }
+        if (message.type === 'checkpoint') {
+          if (!C.validCheckpoint(message.checkpoint,compiled,engineBuild)) { failWorker('Invalid saved progress.'); return; }
+          saveJson({schema:'seedcore.mini-lab.progress.v1', source:'local_research_simulation',settings,
+            lesson:$('lesson').value,prediction:trialPrediction,samples,appliedInputs,checkpoint:message.checkpoint},'mini-robot-progress.json');
+        }
+        if (pendingRestore && message.type === 'update' && message.tick === 0 && pending === null) {
+          const saved = pendingRestore; pendingRestore = null;
+          samples=saved.samples; appliedInputs=saved.appliedInputs; trialPrediction=saved.prediction;
+          document.querySelectorAll('input[name=prediction]').forEach(input=>input.checked=input.value===trialPrediction);
+          sequence=Math.max(sequence,...saved.checkpoint.inputs.map(input=>input.sequence));
+          send('restore',{checkpoint:saved.checkpoint});
+          return;
         }
         updateReadouts(); updateButtons(); draw();
         if (document.hidden && mode === 'running' && pending === null) pause();
@@ -98,6 +114,7 @@
     $('mass-value').textContent = `${Number($('mass').value).toFixed(1)} kg`;
   }
   function reset(newRevision = false) {
+    pendingRestore=null;
     settings = readSettings(); compiled = C.compile(settings); model = P.createModel(compiled.parameters);
     state = initial(); tick = 0; mode = 'ready'; accumulator = 0; samples = []; replayIndex = 0; trialPrediction = null;
     workerTick = 0; lastFrameSequence = 0; diagnostics = null; appliedInputs = [];
@@ -148,6 +165,8 @@
     $('pause').disabled = busy || (mode !== 'running' && mode !== 'replay');
     $('step').disabled = busy || mode === 'running' || mode === 'replay' || tick >= TICKS || mode === 'error' || mode === 'replayed';
     $('replay').disabled = busy || samples.length < 2 || mode === 'running' || mode === 'replay' || mode === 'error';
+    $('save-progress').disabled = busy || !['ready','paused','complete'].includes(mode);
+    $('load-progress').disabled = busy;
     $('download').disabled = busy || samples.length < 2 || mode === 'running' || mode === 'replay' || mode === 'error';
     $('run-status').textContent = busy ? 'Updating…' : ({ ready:'Ready', running:'Running', paused:'Paused', complete:'Finished', replay:'Replay · recorded', replayed:'Replay finished', error:'Stopped · error' })[mode];
     // Freeze the submitted prediction during an attempt; settings create a new revision.
@@ -211,8 +230,40 @@
   $('reset').addEventListener('click',()=>reset());
   $('step').addEventListener('click',()=>{predict();send('step');});
   $('replay').addEventListener('click',()=>{mode='replay';replayIndex=0;state=samples[0];accumulator=0;previousTime=null;$('feedback').textContent='Replaying recorded observations. No new physics steps or robot commands are being issued.';updateButtons();});
+  function saveJson(payload,filename) {
+    const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
+    const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  $('save-progress').addEventListener('click',()=>send('checkpoint'));
+  $('load-progress').addEventListener('click',()=>$('progress-file').click());
+  $('progress-file').addEventListener('change',async event=>{
+    const file=event.target.files?.[0]; if(!file) return;
+    try {
+      if(file.size>256*1024) throw new Error('Progress file is too large.');
+      const saved=JSON.parse(await file.text()), identity=C.compile(saved.settings);
+      if(saved.schema!=='seedcore.mini-lab.progress.v1' || saved.source!=='local_research_simulation' ||
+          !['reach','gravity','heavy'].includes(saved.lesson) || !['yes','no','unsure',null].includes(saved.prediction) ||
+          !C.validCheckpoint(saved.checkpoint,identity,globalThis.MiniPhysicsBuild.sha256) ||
+          !Array.isArray(saved.samples) || saved.samples.length !== (saved.checkpoint.started ? saved.checkpoint.tick/SAMPLE_EVERY+1 : 0) ||
+          !saved.samples.every((sample,i)=>C.validState(sample,i*SAMPLE_EVERY)) || !Array.isArray(saved.appliedInputs) || saved.appliedInputs.length>C.MAX_INPUTS ||
+          !saved.appliedInputs.every(input=>Number.isSafeInteger(input.sequence)&&input.sequence>0&&Number.isSafeInteger(input.applicationTick)&&input.applicationTick>=0&&input.applicationTick<=saved.checkpoint.tick&&C.validControl(input.control))) throw new Error('Progress is incomplete or belongs to a different engine build.');
+      if(saved.samples.length && JSON.stringify(saved.samples.at(-1))!==JSON.stringify(saved.checkpoint.state)) throw new Error('Saved observations do not match the checkpoint.');
+      // Only restore settings the beginner sliders can represent exactly.
+      const angles=saved.settings.target.map(degrees);
+      if(angles[0]<-60-1e-10 || angles[0]>150+1e-10 || angles[1]<-150-1e-10 || angles[1]>150+1e-10 ||
+          saved.settings.target.some((angle,i)=>angle!==radians(5*Math.round(angles[i]/5))) ||
+          !Number.isInteger(saved.settings.strength) || saved.settings.mass!==Math.round(saved.settings.mass*10)/10) throw new Error('Saved settings are outside this lesson’s slider choices.');
+      $('lesson').value=saved.lesson; updateLessonCopy(saved.lesson);
+      $('shoulder').value=degrees(saved.settings.target[0]); $('elbow').value=degrees(saved.settings.target[1]);
+      $('strength').value=saved.settings.strength; $('mass').value=saved.settings.mass;
+      $('motors').checked=saved.settings.motors; $('gravity').checked=saved.settings.gravity;
+      reset(true); pendingRestore=saved;
+      $('feedback').textContent='Restoring saved progress. Continue to calculate the remaining motion.';
+    } catch(error) { $('feedback').textContent=`Could not restore progress: ${error.message}`; }
+    finally { event.target.value=''; }
+  });
   $('download').addEventListener('click',()=>{
-    const payload={schema:'seedcore.mini-lab.experiment.v2',engine:P.VERSION,source:'local_research_simulation',lesson:$('lesson').value,runId,revision,workerProtocol:PROTOCOL,dt:DT,duration:samples.at(-1).time,complete:workerTick>=TICKS&&samples.length===TICKS/SAMPLE_EVERY+1,prediction:trialPrediction,compiled,model,settings,appliedInputs,diagnostics,samples,limitations:['planar fixed-base two-link arm','no contacts or joint stops','ideal torque motors','recorded playback only, not a resumable checkpoint','not SeedCore verified execution evidence']};
+    const payload={schema:'seedcore.mini-lab.experiment.v2',engine:P.VERSION,backend,engineBuild,source:'local_research_simulation',lesson:$('lesson').value,runId,revision,workerProtocol:PROTOCOL,dt:DT,duration:samples.at(-1).time,complete:workerTick>=TICKS&&samples.length===TICKS/SAMPLE_EVERY+1,prediction:trialPrediction,compiled,model,settings,appliedInputs,diagnostics,samples,limitations:['planar fixed-base two-link arm','no contacts or joint stops','ideal torque motors','recorded playback only, not a resumable checkpoint','not SeedCore verified execution evidence']};
     const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download='mini-robot-experiment.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   });
@@ -220,10 +271,13 @@
   $('lesson').addEventListener('change',()=>{
     const lesson=$('lesson').value;
     $('shoulder').value='55';$('elbow').value='-70';$('strength').value=lesson==='heavy'?'5':'16';$('mass').value=lesson==='heavy'?'1.8':'0.7';$('motors').checked=lesson!=='gravity';$('gravity').checked=true;
-    const copy={reach:['Reach the star','Two motors work together to move the tip of the arm. Can they reach the star and settle there?'],gravity:['Let gravity pull','The motors are off. Predict where the arm will go, then watch gravity pull it downward.'],heavy:['A heavier arm','The outer arm is heavier and the motors are weaker. Can the same target still be reached?']};
-    [$('lesson-title').textContent,$('lesson-copy').textContent]=copy[lesson];
+    updateLessonCopy(lesson);
     document.querySelectorAll('input[name=prediction]').forEach(input=>input.checked=false);reset(true);
   });
+  function updateLessonCopy(lesson) {
+    const copy={reach:['Reach the star','Two motors work together to move the tip of the arm. Can they reach the star and settle there?'],gravity:['Let gravity pull','The motors are off. Predict where the arm will go, then watch gravity pull it downward.'],heavy:['A heavier arm','The outer arm is heavier and the motors are weaker. Can the same target still be reached?']};
+    [$('lesson-title').textContent,$('lesson-copy').textContent]=copy[lesson];
+  }
   document.addEventListener('visibilitychange',()=>{if(document.hidden&&(mode==='running'||mode==='replay')&&pending===null)pause();});
   new ResizeObserver(()=>{const box=canvas.getBoundingClientRect();width=box.width;height=box.height;const ratio=window.devicePixelRatio||1;canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);draw();}).observe(canvas);
   reset();requestAnimationFrame(frame);

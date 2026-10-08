@@ -36,11 +36,25 @@ declare namespace MiniSimContracts {
         type: 'reset';
         settings: Settings;
     } | {
-        type: 'start' | 'pause' | 'step';
+        type: 'start' | 'pause' | 'step' | 'checkpoint';
+    } | {
+        type: 'restore';
+        checkpoint: RunCheckpoint;
     } | {
         type: 'set-control';
         control: Control;
     });
+    interface RunCheckpoint extends Identity {
+        schema: 'seedcore.mini-lab.checkpoint.v1';
+        engine: string;
+        buildDigest: string;
+        tick: number;
+        state: State;
+        control: Control;
+        started: boolean;
+        inputs: AppliedInput[];
+    }
+    function validCheckpoint(value: unknown, identity: Identity, buildDigest: string): value is RunCheckpoint;
     interface Recycle {
         protocol: typeof PROTOCOL;
         type: 'recycle';
@@ -71,7 +85,7 @@ declare namespace MiniSimContracts {
     }
     interface Reply extends Identity {
         protocol: typeof PROTOCOL;
-        type: 'update' | 'error' | 'queued' | 'applied';
+        type: 'update' | 'error' | 'queued' | 'applied' | 'checkpoint';
         runId: number;
         revision: number;
         sequence: number;
@@ -85,6 +99,9 @@ declare namespace MiniSimContracts {
         buffer?: ArrayBuffer;
         bufferId?: number;
         diagnostics: Diagnostics;
+        checkpoint?: RunCheckpoint;
+        backend?: string;
+        buildDigest?: string;
         input?: AppliedInput;
         error?: string;
     }
@@ -93,6 +110,7 @@ declare namespace MiniSimContracts {
     function validEnvelope(value: unknown): value is Command;
     function validState(value: unknown, tick: number): value is State;
     function sha256Ascii(text: string): string;
+    function sha256Bytes(input: Uint8Array): string;
     function compile(settings: Settings): {
         descriptor: {
             schema: string;

@@ -48,3 +48,11 @@ test('versioned golden model, recipe and command fixture stays compatible', () =
   assert.equal(C.validEnvelope({ ...golden.reset, applicationTick: 0.5 }), false);
   assert.equal(C.validEnvelope({ ...golden.reset, arbitraryModel: {} }), false);
 });
+
+test('binary SHA-256 binds the Wasm artifact and handles non-ASCII bytes',()=>{
+  const fs=require('node:fs');
+  for(const input of [Uint8Array.from([0,128,255]),new Uint8Array(65536),fs.readFileSync(`${__dirname}/../../apps/mini-robot-simulator/mini-physics.wasm`)]) {
+    assert.equal(C.sha256Bytes(input),'sha256:'+crypto.createHash('sha256').update(input).digest('hex'));
+  }
+  assert.throws(()=>C.sha256Bytes(new Uint8Array(65537)));
+});

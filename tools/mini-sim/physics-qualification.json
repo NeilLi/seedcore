@@ -1,0 +1,41 @@
+{
+  "schema": "seedcore.mini-physics.qualification.v1",
+  "date": "2026-10-08T07:21:30.993Z",
+  "platform": "darwin 25.5.0 arm64",
+  "node": "v22.16.0",
+  "build": {
+    "schema": "seedcore.mini-physics.build.v1",
+    "abi": 1,
+    "profile": "planar-rk4-f64",
+    "bytes": 3738,
+    "sha256": "f87b9f3c9fd6a1c892fa790b47198a492e8791f28730f749cd7be3d5857cffa5",
+    "compiler": "Homebrew clang version 23.1.2",
+    "linker": "Homebrew LLD 23.1.2",
+    "math": "host sin/cos; no cross-platform bitwise guarantee",
+    "memoryBytes": 131072
+  },
+  "tolerance": 1e-8,
+  "units": "radians, rad/s, seconds (maximum over q, velocity, time)",
+  "nativeInvariantGroups": 12,
+  "wasmInvariants": 12,
+  "results": [
+    {
+      "lesson": "reach",
+      "ticks": 2880,
+      "nativeMaxAbsoluteError": 8.881784197001252e-16,
+      "wasmMaxAbsoluteError": 8.881784197001252e-16
+    },
+    {
+      "lesson": "gravity",
+      "ticks": 2880,
+      "nativeMaxAbsoluteError": 2.842170943040401e-14,
+      "wasmMaxAbsoluteError": 2.842170943040401e-14
+    },
+    {
+      "lesson": "heavy",
+      "ticks": 2880,
+      "nativeMaxAbsoluteError": 3.9968028886505635e-14,
+      "wasmMaxAbsoluteError": 2.2315482794965646e-14
+    }
+  ]
+}

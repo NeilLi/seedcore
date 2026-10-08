@@ -16,10 +16,11 @@ try {
       throw new Error(`Generated ${name} is stale. Run npm --prefix packages/mini-sim-contracts run build.`);
     }
   }
-  for (const name of ['physics.js','app.js','simulation-worker.js','sim-contracts.js']) {
+  for (const name of ['physics.js','physics-wasm.js','physics-worker-loader.js','physics-build.js','app.js','simulation-worker.js','sim-contracts.js']) {
     run(['--check',`apps/mini-robot-simulator/${name}`]);
   }
   run(['--check','tools/mini-sim/browser-qualification.js']);
   run(['--test','apps/mini-robot-simulator/physics.test.cjs','apps/mini-robot-simulator/simulation-worker.test.cjs',
     'apps/mini-robot-simulator/app-worker.test.cjs','tests/mini-sim/contracts.test.cjs']);
+  run(['tools/mini-sim/verify-physics.cjs']);
 } finally { fs.rmSync(temp,{ recursive:true,force:true }); }
