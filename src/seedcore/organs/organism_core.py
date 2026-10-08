@@ -961,6 +961,8 @@ class OrganismCore:
             await register_reachy_tools(self.tool_manager)
             # Register YouTube publishing tools
             await register_youtube_tools(self.tool_manager)
+            from seedcore.tools.mujoco_tools import register_mujoco_tools_if_enabled
+            await register_mujoco_tools_if_enabled(self.tool_manager)
         else:
             # Dynamic Sharding Calculation
             # Default: 1 shard per 1000 agents, min 4, max 16
@@ -1010,6 +1012,11 @@ class OrganismCore:
             ]
             registration_tasks.extend(youtube_tasks)
             await asyncio.gather(*registration_tasks, return_exceptions=True)
+            from seedcore.tools.mujoco_tools import register_mujoco_tools_if_enabled
+            # Explicitly enabled physics must surface registration failures.
+            await asyncio.gather(*(
+                register_mujoco_tools_if_enabled(shard) for shard in self.tool_shards
+            ))
 
     # ------------------------------------------------------------------
     #  HELPER: Registries

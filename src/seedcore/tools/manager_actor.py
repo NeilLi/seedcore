@@ -186,6 +186,13 @@ class ToolManagerShard:
     async def register_tool(self, name, tool):
         manager = await self._ensure_manager()
         await manager.register(name, tool)
+
+    async def register_mujoco_tools(self):
+        """Register development-only physics tools on this shard explicitly."""
+        from .mujoco_tools import register_mujoco_tools
+
+        manager = await self._ensure_manager()
+        return await register_mujoco_tools(manager)
     
     async def register_tuya_tools(self):
         """

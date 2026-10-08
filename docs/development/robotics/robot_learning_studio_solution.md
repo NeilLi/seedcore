@@ -6,6 +6,18 @@ Status: Proposed solution and staged implementation specification; studio and Mi
 
 Audience: Product, curriculum, application, runtime and robotics contributors
 
+## General Development Workbench Decision — 2026-10-08
+
+The user selected MuJoCo integration and a general robot-development workbench
+assisted by SeedCore's internal agents. For physical robot development, MuJoCo
+is now the selected physics backend. The
+[MuJoCo workbench](mujoco_development_workbench.md) implements the initial native
+model, experiment, comparison and agent-tool foundation, with broader model
+imports and an interactive browser workspace still planned. This supersedes the
+assumption that the custom educational engine must become the general robotics
+development backend. The existing browser lessons and custom-engine research
+remain available, and the authority/evidence boundaries below still apply.
+
 ## Follow-up Product Decision
 
 On 2026-10-01, the user selected browser delivery without installation and

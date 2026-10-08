@@ -840,6 +840,9 @@ class BaseAgent:
                 # Reachy tools are optional - log but don't fail if HAL is unavailable
                 logger.debug(f"[{self.agent_id}] Could not register Reachy tools in local ToolManager: {e}")
 
+            from seedcore.tools.mujoco_tools import register_mujoco_tools_if_enabled
+            await register_mujoco_tools_if_enabled(self.tool_handler)
+
         await self._ensure_query_tools_registered()
 
     async def _ensure_query_tools_registered(self) -> None:

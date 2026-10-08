@@ -24,6 +24,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Mini Robot Lab prototype](../../../apps/mini-robot-simulator/README.md) | Browser-first custom physics research: two-joint planar arm, beginner experiments and numerical tests; no hardware or governed execution connection |
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [PythonRobotics applicability](pythonrobotics_assessment.md) | Source review and implemented offline planar navigation baseline; advisory only, no hardware connection |
+| [MuJoCo development workbench](mujoco_development_workbench.md) | Implemented native model/experiment foundation and internal agent tools; general imports and browser workspace planned |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |
 | [Owner recognition and following](microduck_owner_following_design.md) | Research/proposal: perception, identity, local following, session enforcement and staged acceptance |
 | [Microduck architecture study](microduck_architecture_study.md) | Daemons, bus ownership, intent and control |
