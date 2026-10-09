@@ -73,6 +73,15 @@ def inspect_robot(robot: RobotSpec) -> dict:
     }
 
 
+def inspect_model_package(manifest_path, *, expected_manifest_sha256=None) -> dict:
+    """Inspect an external package through the offline integrity/parity boundary."""
+    from seedcore.robotics.model_package import load_model_package
+
+    return load_model_package(
+        manifest_path, expected_manifest_sha256=expected_manifest_sha256
+    ).report
+
+
 def run_experiment(spec: ExperimentSpec) -> dict:
     """Each attempt compiles its own model and owns fresh mjData; no shared state."""
     import numpy as np

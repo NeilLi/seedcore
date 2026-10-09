@@ -1,7 +1,7 @@
 # MuJoCo robot development workbench
 
 Date: 2026-10-08
-Status: Implemented native development foundation; general imports and browser workbench planned
+Status: Implemented native development foundation and external package ingestion; browser workbench planned
 
 ## Decision
 
@@ -33,8 +33,9 @@ repository is unnecessary for this integration.
 [versioned package](https://pypi.org/project/mujoco/3.15.0/).
 
 MuJoCo models articulated mechanisms with contact, actuators and sensors. MJCF
-is its native authoring format; its broader importer capabilities do not imply
-that SeedCore has implemented those import workflows.
+is its native authoring format. SeedCore supports a reviewed subset through the
+[versioned model-package loader](model_package_ingestion.md), including native
+URDF import and the pinned Microduck MJCF body.
 [Modeling guide](https://mujoco.readthedocs.io/en/stable/modeling.html),
 [upstream repository](https://github.com/google-deepmind/mujoco).
 
@@ -53,6 +54,7 @@ prototype; the multithreaded build requires cross-origin isolation.
 | Typed drafts | Primitive serial mechanisms with 1–6 hinge links, configurable axes, masses, lengths, damping, ranges and torque limits |
 | Floating base | Box base with a free joint; an empty chain is a falling-body/contact experiment |
 | Model construction | Asset-free MJCF with a floor, bounded motor actuators, encoders, joint velocities, tip position and base IMU sensors |
+| External package inspection | Versioned MJCF/URDF inventory, asset integrity and compiled mass/tree/joint/actuator parity; pinned 14-actuator Microduck reference |
 | Experiments | Passive, constant torque or torque-limited PD position control; configurable initial joint state, timestep and criteria |
 | Bounds | Up to 10,000 steps, 20 simulated seconds and 1,001 trace samples; one active job per tool registration budget |
 | Trace and measurements | Joint state, control, actuator force, synthetic sensors, energy, contact points/pairs, peak joint speed, limit excursions, saturation and final joint error |
@@ -188,12 +190,13 @@ Verification:
 The [robot design toolkit assessment](robot_design_toolkit_assessment.md)
 records the accepted recommendation to start with Rhoban/Onshape exports and
 then add FreeCAD/RobotCAD authoring. It defines conversion checks and source
-qualifications for the planned import work below; neither CAD adapter is implemented.
+qualifications for further import work; neither CAD adapter is implemented.
 
-1. **Model packages and imports:** reviewed MJCF/URDF packages with asset hashes,
-   limits, sensor contracts and frame checks. Qualify an actual Microduck model
-   separately; the primitive builder is not its body model. Add articulated trees,
-   transmissions and actuator calibration where required by the selected robot.
+1. **Model-package experiments and fidelity:** the
+   [ingestion contract](model_package_ingestion.md) now provides asset hashes,
+   limits, articulated trees and pinned Microduck inspection. Add actuator-aware
+   experiment recipes, sensor/frame qualification, further transmissions and
+   measured actuator calibration where required by the selected robot.
 2. **Interactive workspace:** a 3D browser scene, model inspector, conversation,
    experiment comparison and recorded replay. Stream native-engine results first;
    qualify the canonical Wasm worker for local no-install physics where it fits.

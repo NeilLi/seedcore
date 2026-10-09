@@ -24,7 +24,8 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Mini Robot Lab prototype](../../../apps/mini-robot-simulator/README.md) | Browser-first custom physics research: two-joint planar arm, beginner experiments and numerical tests; no hardware or governed execution connection |
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [PythonRobotics applicability](pythonrobotics_assessment.md) | Source review and implemented offline planar navigation baseline; advisory only, no hardware connection |
-| [MuJoCo development workbench](mujoco_development_workbench.md) | Implemented native model/experiment foundation and internal agent tools; general imports and browser workspace planned |
+| [MuJoCo development workbench](mujoco_development_workbench.md) | Implemented native model/experiment foundation, internal agent tools and external package inspection; browser workspace planned |
+| [Model package ingestion](model_package_ingestion.md) | Implemented versioned integrity manifests, MJCF/URDF loader and pinned Microduck model with mass/joint/tree parity checks |
 | [Robot design toolkit assessment](robot_design_toolkit_assessment.md) | Accepted research recommendation: Rhoban/Onshape first, FreeCAD/RobotCAD second; sources, conversion fidelity and proposed CAD-to-MuJoCo integration |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |
 | [Owner recognition and following](microduck_owner_following_design.md) | Research/proposal: perception, identity, local following, session enforcement and staged acceptance |

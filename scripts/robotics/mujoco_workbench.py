@@ -15,6 +15,7 @@ from seedcore.robotics.mujoco_workbench.contracts import (
 from seedcore.robotics.mujoco_workbench.runtime import (
     compare_experiments,
     inspect_robot,
+    inspect_model_package,
     run_experiment,
 )
 
@@ -43,10 +44,15 @@ def example(name: str) -> ExperimentSpec | ComparisonSpec:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("build", "run", "compare"))
+    parser.add_argument(
+        "operation", choices=("build", "run", "compare", "inspect-package")
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--spec", type=Path, help="RobotSpec, ExperimentSpec or ComparisonSpec JSON"
+    )
+    group.add_argument(
+        "--manifest", type=Path, help="Versioned external model-package manifest"
     )
     group.add_argument(
         "--example", choices=("arm", "contact", "comparison"), default="arm"
@@ -57,7 +63,24 @@ def main() -> None:
     parser.add_argument(
         "--mjcf-output", type=Path, help="Write generated model for the native viewer"
     )
+    parser.add_argument(
+        "--manifest-sha256", help="Require an independently pinned manifest digest"
+    )
     args = parser.parse_args()
+    if args.operation == "inspect-package":
+        if not args.manifest or args.mjcf_output:
+            parser.error("inspect-package requires --manifest and does not export MJCF")
+        result = inspect_model_package(
+            args.manifest, expected_manifest_sha256=args.manifest_sha256
+        )
+        payload = json.dumps(result, indent=2, allow_nan=False)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(payload + "\n")
+        print(payload)
+        return
+    if args.manifest or args.manifest_sha256:
+        parser.error("manifest options require inspect-package")
     if args.spec:
         raw = json.loads(args.spec.read_text())
     else:

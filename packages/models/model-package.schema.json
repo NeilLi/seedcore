@@ -1,0 +1,435 @@
+{
+  "$defs": {
+    "ActuatorContract": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "joint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Joint",
+          "type": "string"
+        },
+        "gear": {
+          "maxItems": 6,
+          "minItems": 6,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Gear",
+          "type": "array"
+        },
+        "control_range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Control Range"
+        },
+        "force_range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Force Range"
+        }
+      },
+      "required": [
+        "name",
+        "joint",
+        "gear"
+      ],
+      "title": "ActuatorContract",
+      "type": "object"
+    },
+    "BodyContract": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parent": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Parent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "parent"
+      ],
+      "title": "BodyContract",
+      "type": "object"
+    },
+    "JointContract": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "free",
+            "ball",
+            "slide",
+            "hinge"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Range"
+        }
+      },
+      "required": [
+        "name",
+        "body",
+        "type"
+      ],
+      "title": "JointContract",
+      "type": "object"
+    },
+    "ModelFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 67108864,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "model",
+            "mesh",
+            "texture",
+            "heightfield",
+            "skin",
+            "license",
+            "provenance"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size_bytes",
+        "role"
+      ],
+      "title": "ModelFile",
+      "type": "object"
+    },
+    "ModelParity": {
+      "additionalProperties": false,
+      "properties": {
+        "total_mass_kg": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Total Mass Kg",
+          "type": "number"
+        },
+        "mass_tolerance_kg": {
+          "default": 1e-06,
+          "maximum": 0.01,
+          "minimum": 0,
+          "title": "Mass Tolerance Kg",
+          "type": "number"
+        },
+        "nq": {
+          "maximum": 256,
+          "minimum": 0,
+          "title": "Nq",
+          "type": "integer"
+        },
+        "nv": {
+          "maximum": 256,
+          "minimum": 0,
+          "title": "Nv",
+          "type": "integer"
+        },
+        "timestep_s": {
+          "maximum": 0.005,
+          "minimum": 0.0005,
+          "title": "Timestep S",
+          "type": "number"
+        },
+        "bodies": {
+          "items": {
+            "$ref": "#/$defs/BodyContract"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Bodies",
+          "type": "array"
+        },
+        "joints": {
+          "items": {
+            "$ref": "#/$defs/JointContract"
+          },
+          "maxItems": 128,
+          "title": "Joints",
+          "type": "array"
+        },
+        "actuators": {
+          "items": {
+            "$ref": "#/$defs/ActuatorContract"
+          },
+          "maxItems": 128,
+          "title": "Actuators",
+          "type": "array"
+        }
+      },
+      "required": [
+        "total_mass_kg",
+        "nq",
+        "nv",
+        "timestep_s",
+        "bodies",
+        "joints",
+        "actuators"
+      ],
+      "title": "ModelParity",
+      "type": "object"
+    },
+    "ModelSource": {
+      "additionalProperties": false,
+      "properties": {
+        "repository_url": {
+          "maxLength": 2048,
+          "pattern": "^https://",
+          "title": "Repository Url",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "license": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "License",
+          "type": "string"
+        },
+        "cad_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "pattern": "^https://",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cad Url"
+        },
+        "cad_revision": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cad Revision"
+        },
+        "exporter": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exporter"
+        }
+      },
+      "required": [
+        "repository_url",
+        "revision",
+        "source_path",
+        "license"
+      ],
+      "title": "ModelSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "seedcore.model-package.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "package_id": {
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "title": "Package Id",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$",
+      "title": "Version",
+      "type": "string"
+    },
+    "format": {
+      "enum": [
+        "mjcf",
+        "urdf"
+      ],
+      "title": "Format",
+      "type": "string"
+    },
+    "engine": {
+      "const": "mujoco",
+      "title": "Engine",
+      "type": "string"
+    },
+    "engine_version": {
+      "const": "3.15.0",
+      "title": "Engine Version",
+      "type": "string"
+    },
+    "entrypoint": {
+      "title": "Entrypoint",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/ModelSource"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/ModelFile"
+      },
+      "maxItems": 512,
+      "minItems": 2,
+      "title": "Files",
+      "type": "array"
+    },
+    "parity": {
+      "$ref": "#/$defs/ModelParity"
+    }
+  },
+  "required": [
+    "schema_version",
+    "package_id",
+    "version",
+    "format",
+    "engine",
+    "engine_version",
+    "entrypoint",
+    "source",
+    "files",
+    "parity"
+  ],
+  "title": "ModelPackage",
+  "type": "object"
+}
