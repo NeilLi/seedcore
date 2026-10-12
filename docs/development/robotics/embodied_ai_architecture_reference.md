@@ -101,6 +101,8 @@ every 0.5 seconds; its 20 Hz robots refresh every 0.8 seconds. It uses ten flow
 integration steps. Those results do not support a 10.5 ms full-inference budget
 or fresh visual feedback for every 50 Hz action.
 
+In practice, production mini-robotics does not require a monolithic model to infer in 10.5 ms. Instead, it relies on the **"Slow Brain, Fast Spine"** architecture: high-level policies (ACT / Diffusion / Flow Matching) run at 2–10 Hz on a host laptop, smartphone, or cloud, generating receding-horizon action chunks (30–50 future waypoints), while a lightweight microcontroller Spine (ESP32 / RP2040) executes smooth C++ spline interpolation at 200–500 Hz over standard UART/serial buses. See the [Mini-Robotics Developer Blueprint](mini_robot_developer_blueprint.md) for concrete implementation details.
+
 For each SeedCore profile, specify sensor cadence, observation age, inference
 refresh, action consumption, native control period and authority-enforcement
 deadlines separately. Measure latency distributions and deadline misses under
@@ -288,4 +290,5 @@ This separates SeedCore from industrial robotics stacks: rather than building hi
 - [Microduck integration plan](microduck_integration_plan.md): active milestone gates M0–M5.
 - [Robot execution contract](robot_execution_contract.md): proposed execution, admission, and session contracts.
 - [Mini robot simulator plan](mini_robot_simulator_implementation_plan.md): C++/Wasm browser physics architecture.
+- [Mini-robotics developer blueprint](mini_robot_developer_blueprint.md): concrete $150 BOM, C++ MCU spine pattern, and WebSerial deployment.
 - [MuJoCo development workbench](mujoco_development_workbench.md): native MuJoCo simulation environment and evaluation tools.

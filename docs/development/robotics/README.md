@@ -40,6 +40,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [VLA optimizations](vla_2026_optimizations.md) | Related research |
 | [Embodied AI research report](../reports/embodied_ai_research_report.md) | Archived external literature; timing, benchmark and safety claims require qualification in the architecture reference |
 | [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation: industrial giants vs DIY mini-robotics paradigm shift, "slow brain, fast spine" receding-horizon action chunking, and Microduck milestone focus |
+| [Mini-robotics developer blueprint](mini_robot_developer_blueprint.md) | Concrete implementation guide: $150 BOM, C++ MCU spine watchdog pattern, WebSerial deployment and SeedCore trust tokens |
 
 ## Repository Starting Points
 
