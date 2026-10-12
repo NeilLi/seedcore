@@ -1,5 +1,11 @@
 # SeedCore v2.5+ VLA Configuration - 2026 Optimizations
 
+Review scope (2026-10-12): The embodied AI update below qualifies timing and
+policy-selection guidance only. Earlier configuration and implementation claims
+in this document have not been revalidated by that review. For current robotics
+status and authority boundaries, use the [active queue](../current_next_steps.md)
+and [robot execution contract](robot_execution_contract.md).
+
 ## Review Summary
 
 The SeedCore v2.5+ VLA configuration has been reviewed and optimized based on 2026 robotics best practices and the latest VLA breakthroughs.
@@ -96,11 +102,11 @@ Local Brain → Guardrail (risk >= 0.8) → Remote LLM (GPT-5/Claude-4)
 ## Performance Notes
 
 ### Proprioception Sync Interval
-- **Current**: 0.2s (5Hz) - Sufficient for high-level task execution
-- **Future**: Consider 0.02s (50Hz) for fluid 2026 motion:
-  - Kung Fu movements
-  - Dexterous manipulation
-  - Requires local PC throughput validation
+- **Earlier configuration note:** 0.2s (5 Hz) describes the documented high-level sync interval; it does not establish a measured native motor or policy-inference rate.
+- **Illustrative 50 Hz action target:** A 50 Hz period is 20 ms. The [architecture reference](embodied_ai_architecture_reference.md#2-timing-budgets-require-a-measured-profile) preserves the source's example allocation and its qualification requirements; it is not a SeedCore throughput guarantee or a universal requirement for fluid motion.
+- **Separate timing measurements:** Record sensor cadence, observation age, complete inference latency, chunk refresh, action execution and native control independently. Original π0 reports 73 ms onboard inference and refreshes chunks every 0.5 seconds for its 50 Hz robots ([paper, Appendix A-D](https://arxiv.org/html/2410.24164v1)).
+- **Policy choice:** Compare ACT, diffusion, flow matching and tokenized policies on the selected body and task. Continuous outputs do not guarantee jerk limits or stability; trajectory constraints need explicit validation. Start the Microduck integration with a compatible pinned upstream policy.
+- **Local authority:** Admission stays outside the motor loop. Cached session authority still requires local expiry/duration, command binding/sequence/freshness and revocation-freshness enforcement; refer to the [session contract](robot_execution_contract.md#session-lifecycle-and-time).
 
 ### Model Discovery Interval
 - **Current**: 30s - Well-timed for 2026 HF LeRobot registry frequency
@@ -130,7 +136,7 @@ Local Brain → Guardrail (risk >= 0.8) → Remote LLM (GPT-5/Claude-4)
 
 1. **Implement Isaac Gym Integration**: Create `isaac.gym.validate_action` tool
 2. **Point Cloud Support**: Add depth data processing to `reachy_actuator`
-3. **Performance Tuning**: Test 50Hz proprioception sync if local PC allows
+3. **Performance Tuning**: Qualify separate sensor, inference, action and native-control timing for the selected profile before adopting a frequency target
 4. **GPT-5 Integration**: Update Teacher escalation to use GPT-5 for frontier tasks
 
 ## References
@@ -138,4 +144,6 @@ Local Brain → Guardrail (risk >= 0.8) → Remote LLM (GPT-5/Claude-4)
 - NVIDIA GR00T 1.6: Open-sourced at CES 2026, integrated into LeRobot
 - GeoVLA / 4D-VLA: Point cloud-based VLA models (late 2025 standard)
 - Llama-Guard-3-Robot: Meta's safety guardrail model for robotics
-- Physical Intelligence π0: System 2 (Reasoning) vs. System 1 (Action) paradigm
+- Physical Intelligence π0: [Original model and inference measurements](https://arxiv.org/html/2410.24164v1); distinguish action frequency from chunk refresh
+- Embodied AI Architecture Reference: [`embodied_ai_architecture_reference.md`](embodied_ai_architecture_reference.md)
+- Embodied AI Research Report: [`../reports/embodied_ai_research_report.md`](../reports/embodied_ai_research_report.md)

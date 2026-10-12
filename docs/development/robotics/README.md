@@ -38,6 +38,8 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Reachy demo runbook](reachy_mini_seedcore_demo_runbook_20260414.md) | Dated demo and trust-boundary presentation reference |
 | [World Action Model reference](world_action_model_architecture_reference.md) | Related research |
 | [VLA optimizations](vla_2026_optimizations.md) | Related research |
+| [Embodied AI research report](../reports/embodied_ai_research_report.md) | Archived external literature; timing, benchmark and safety claims require qualification in the architecture reference |
+| [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation and proposed integration guidance: separate control rates, ongoing session checks and measured local limits; no new runtime contracts |
 
 ## Repository Starting Points
 

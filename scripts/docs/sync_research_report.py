@@ -96,7 +96,7 @@ def fetch_document(document_id: str, export_format: str = "md", *, opener=None) 
 def read_export(response) -> str:
     """Validate a successful public or authenticated export before any write."""
     media_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
-    if media_type not in {"text/plain", "text/markdown"}:
+    if media_type not in {"text/plain", "text/markdown", "text/x-markdown"}:
         raise SyncError("Expected a text/Markdown export; refusing HTML, binary or missing Content-Type.")
     declared_length = response.headers.get("Content-Length")
     if declared_length is not None:

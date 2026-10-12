@@ -54,6 +54,13 @@ class ResearchSyncTests(unittest.TestCase):
         self.assertEqual(len(opener.requests), 3)
         self.assertEqual(opener.requests[1][0], "https://docs.google.com/document/export-ready")
 
+    def test_google_x_markdown_export_is_accepted_and_normalized(self):
+        body = "\ufeff# Research\r\n\r\n| Robot |\r\n| --- |\r\n| 鸭 |\r\n"
+        opener = Opener(Response(body.encode("utf-8"), media_type="Text/X-Markdown; charset=utf-8"))
+        content = sync.fetch_document(sync.DOCUMENT_ID, opener=opener)
+        self.assertEqual(content, "# Research\n\n| Robot |\n| --- |\n| 鸭 |\n")
+        self.assertTrue(opener.requests[0][0].endswith("export?format=md"))
+
     def test_authentication_redirect_at_later_hop_is_never_requested(self):
         opener = Opener(Response(status=303, Location="https://doc-test.googleusercontent.com/export"),
                         Response(status=307, Location="https://accounts.google.com/ServiceLogin"))
@@ -94,7 +101,8 @@ class ResearchSyncTests(unittest.TestCase):
                            (b"# Research", None), (b"PK\x00\x01", "application/zip"),
                            (b" \n", "text/plain"), (b"\xff", "text/plain"), (b"report\x00", "text/plain"),
                            (b"<!DOCTYPE html><html>Sign in</html>", "text/plain"),
-                           (b"<!-- comment -->\n<HTML>Sign in</HTML>", "text/markdown")]:
+                           (b"<!-- comment -->\n<HTML>Sign in</HTML>", "text/markdown"),
+                           (b"<!DOCTYPE html><html>Sign in</html>", "text/x-markdown")]:
             with self.subTest(body=body, mime=mime):
                 with self.assertRaises(sync.SyncError):
                     sync.fetch_document(sync.DOCUMENT_ID, opener=Opener(Response(body, media_type=mime)))
