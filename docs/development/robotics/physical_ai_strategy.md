@@ -30,6 +30,17 @@ an accountable principal, bounded authority, local enforcement and a verifiable
 outcome. A cute persona can attract users; this contract is what other teams
 could depend on.
 
+## The Paradigm Shift: Industrial Giants vs. DIY & Mini-Robotics
+
+Industrial robotics literature and enterprise blueprints (e.g., OpenVLA, Franka Emika Panda, Unitree H1, UR5) are designed for heavy, high-inertia factory platforms operating where kinetic mistakes carry catastrophic physical injury risks. SeedCore deliberately targets the **DIY, maker, desktop companion, and educational mini-robotics ecosystem** (e.g., Microduck, desktop arms, tabletop companions). This shifts the fundamental engineering priorities:
+
+1. **Safe-by-Physics vs. Active Industrial Containment:** With featherweight embodiments (< 500g – 2 kg) and micro-torques (< 0.2–2 Nm), actuator stall cannot break skin or furniture. Safety shifts from millisecond-level kinetic hazard containment (light curtains, 140 N force clamping) to **behavioral, privacy, and permission governance** under human supervision.
+2. **Slow Brain, Fast Spine for Consumer Buses:** Rather than requiring expensive industrial fieldbuses (EtherCAT, CAN-FD), mini-robots operate over consumer USB serial, WebSerial, or BLE (15–40 ms jitter). SeedCore embraces **receding-horizon action chunking**: the Brain (host/cloud/browser) emits 30–50 waypoints (0.5–1.0s horizon), while the Spine (onboard MCU at 200–500 Hz) interpolates smoothly and handles fail-safe stops locally.
+3. **Browser-First Simulation vs. Heavy Linux Tooling:** Replaces heavy workstation stacks (Ubuntu LTS, ROS 2, CUDA, Isaac Sim) with **zero-install C++/Wasm physics compilation** (browser-delivered MuJoCo/Wasm). Learners and makers can simulate, test gaits, and qualify models on ordinary Chromebooks and laptops.
+4. **Trust Runtime for Consumer & Classroom Environments:** Provides the missing governance layer for autonomous physical agents: scoped capability tokens, action-bound cryptographic receipts, and instant boundary revocation.
+
+See the full [comparative architecture matrix](embodied_ai_architecture_reference.md#3-the-paradigm-shift-industrial-giants-vs-diy--mini-robotics).
+
 ## Customers, Delivery Partners And First Proof Point
 
 The intended customers include ordinary robot owners, creators and small

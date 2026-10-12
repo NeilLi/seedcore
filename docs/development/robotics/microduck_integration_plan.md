@@ -21,6 +21,14 @@ interruption and evidence. Version any resulting schema changes explicitly;
 this plan does not introduce a new `TaskExecutionToken` or alter frozen token
 constraints.
 
+### Mini-Robotics Architecture Focus Areas
+
+To achieve this proof point within the mini-robotics paradigm (desktop/maker/kid-safe embodiments rather than heavy industrial arms), engineering prioritizes:
+
+1. **Lightweight Kinematic Models (MJCF/URDF for Mini-Bots):** Pinned, versioned models of Microduck in MuJoCo optimized for fast C++/Wasm evaluation and tuned for small-scale physical dynamics (plastic gear backlash, low-friction feet, micro-servo deadbands).
+2. **Command Boundary Integration:** Mapping the SeedCore Trust Runtime (scoped token $\rightarrow$ verified policy check $\rightarrow$ cryptographic receipt) directly to the Microduck serial/BLE command bridge, ensuring the local controller verifies the token before executing motor setpoints.
+3. **Action-Bound Telemetry:** Recording golden observation datasets from the browser simulator and comparing them against physical Microduck execution telemetry to generate reproducible audit receipts. See [Embodied AI Architecture Reference](embodied_ai_architecture_reference.md#8-application-to-seedcores-microduck-milestone).
+
 ## Runtime Boundaries
 
 ```text

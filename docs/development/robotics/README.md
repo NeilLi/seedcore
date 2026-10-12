@@ -39,7 +39,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [World Action Model reference](world_action_model_architecture_reference.md) | Related research |
 | [VLA optimizations](vla_2026_optimizations.md) | Related research |
 | [Embodied AI research report](../reports/embodied_ai_research_report.md) | Archived external literature; timing, benchmark and safety claims require qualification in the architecture reference |
-| [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation and proposed integration guidance: separate control rates, ongoing session checks and measured local limits; no new runtime contracts |
+| [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation: industrial giants vs DIY mini-robotics paradigm shift, "slow brain, fast spine" receding-horizon action chunking, and Microduck milestone focus |
 
 ## Repository Starting Points
 

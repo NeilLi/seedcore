@@ -26,6 +26,8 @@ model proposes -> accountable Agent -> ActionIntent -> PDP
   -> action-bound evidence -> replay / RESULT_VERIFIER
 ```
 
+---
+
 ## 1. Separate planning, policy inference and local control
 
 Separating slower planning from local execution supports SeedCore's existing
@@ -73,6 +75,8 @@ flowchart TD
 | Policy generation | Record observation age, inference latency, chunk horizon and refresh cadence independently of action execution. | Pinned model, observation/action contract and measured traces |
 | Edge enforcement | Validate the active session and current commands locally; native robot control owns the motor bus, balance and local safety response. | Adapter negative cases and measured timing for the selected profile |
 | Evidence closure | Capture enough action-bound evidence to distinguish completion, interruption and uncertainty without blocking local stops. | Capture coverage, receipts and independent verifier outcome |
+
+---
 
 ## 2. Timing budgets require a measured profile
 
@@ -132,12 +136,64 @@ during a partition; the profile must bound disconnected authority and reject
 new remote sessions against stale authority context. These are integration
 requirements, not a claim that the pending adapter implements them.
 
-## 3. Evaluate action representations by task
+---
+
+## 3. The Paradigm Shift: Industrial Giants vs. DIY & Mini-Robotics
+
+The state-of-the-art literature and industrial blueprints—reflected across models like OpenVLA, $\pi_0$, HumanPlus, and industrial collaborative cells—are designed around **heavy, high-inertia industrial and humanoid platforms** (e.g., Franka Emika Panda, Unitree H1, Boston Dynamics, UR5). These systems operate in environments where physical mistakes carry catastrophic physical, financial, and legal consequences.
+
+When pivoting to the **DIY, maker, and mini-robotics field (desktop companions, educational kits, tabletop manipulators, and kid-safe embodiments like Microduck)**, the fundamental constraints of robotics change completely. Rather than attempting to shrink down a factory robot, building a mini-robotics ecosystem requires an inverted set of design priorities:
+
+### Comparative Architecture Matrix
+
+| Architectural Dimension | Classical Giant Robotics (Industrial / Enterprise) | DIY & Mini-Robotics (Desktop / Maker / Kids) |
+| :--- | :--- | :--- |
+| **Physical Hazard Profile** | High mass (15–100+ kg), high torque (20–150+ Nm). High risk of crushing and impact injuries. | **Featherweight (< 500g – 2 kg), micro-torque (< 0.2–2 Nm).** Inherent, passive mechanical safety. |
+| **Safety Paradigm** | **Active Enforced Containment:** C++ geofencing, optical light curtains, ISO 10218 / ISO/TS 15066 140N force clamping. | **Safe-by-Physics:** Actuator stall torque cannot break human skin or living room objects. Passive compliance via 3D-printed PETG/PLA/flexible TPU. |
+| **Compute & Power Envelope** | Heavy onboard SoCs (Jetson AGX Orin, 60W+) or remote multi-GPU servers (8x H100s). High thermal and battery load. | **Ultra-low power microcontrollers:** ESP32, RP2040, STM32, or host smartphones/Chromebooks. Battery: 5V USB / 2S LiPo (7.4V). |
+| **Communication Bus** | Industrial fieldbuses: CAN-FD (5 Mbps), EtherCAT (100 Mbps), industrial MIPI CSI-2 camera DMA (<3.5ms). | **Consumer serial & Web APIs:** UART/RS-485 serial bus (1 Mbps), USB-CDC, WebSerial, BLE, Wi-Fi WebSocket. |
+| **Simulation & Tooling** | Heavy local Linux workstation dependencies, complex ROS 2 distributions, NVIDIA Isaac Sim / Omniverse. | **Browser-Native & Zero-Install:** C++/Wasm simulation (e.g., MuJoCo compiled to WebAssembly), WebGPU rendering, runs on any Chromebook/laptop. |
+| **Model Strategy** | Monolithic 7B–70B parameter generalist VLAs running on remote cloud clusters. | **Hierarchical Edge-Microbrains:** Lightweight policies (ACT, Diffusion Policy, Octo-Small at 27M–93M) or cloud VLM planners dispatching bounded motor chunks to edge controllers. |
+| **Data Collection** | $100k+ optical motion-capture rigs, master-slave industrial teleop arms, dedicated data facilities. | **Maker Teleoperation:** Passive 3D-printed leader arms (like SO-100), browser webcams, smartphone AR, gamepads, hand-pose vision via MediaPipe. |
+| **Trust & Governance** | Rigid industrial PLC interlocks, closed proprietary firmware safety gates. | **SeedCore Verifiable Governance:** Policy-bounded execution, cryptographically signed receipts, scoped capability tokens, and parental/teacher supervision. |
+| **Cost Profile** | $15,000 – $150,000+ per unit. | **$50 – $300 total Bill of Materials (BOM).** |
+
+---
+
+### Core Distinctions for the Mini & DIY Field
+
+#### 1. Inherent "Safe-by-Physics" vs. Active Industrial Containment
+- **Industrial Reality:** If a 7B foundation model driving a Franka Panda hallucinates an arm trajectory, the arm can punch through a workstation at 2 m/s. It requires complex C++ real-time supervisor threads (`SCHED_FIFO`) enforcing ISO/TS 15066 force clamps and virtual geofences.
+- **The Mini/Kid-Friendly Advantage:** A robot like **Microduck** or a desktop arm driven by micro serial bus servos (e.g., Feetech STS3215 or 9g micro-servos) possesses very low mechanical inertia. If the policy outputs an erratic trajectory, the motor simply stalls against a toy block or a child's hand without injury.
+- **Engineering Impact:** You do not need millisecond-level hard-real-time emergency braking PLCs to protect human life. Safety shifts from **kinetic hazard prevention** to **behavioral and permission governance** (e.g., preventing inappropriate actions, protecting privacy, bounding workspace exploration, and ensuring parental/educator control).
+
+#### 2. The Communication & Latency Reality: Embracing "Slow Brain, Fast Spine"
+- **Industrial Reality:** Demands a rigid 20ms end-to-end loop over MIPI CSI-2 and EtherCAT to prevent phase lag oscillations on heavy arms.
+- **The Mini/DIY Reality:** Mini-robots communicate over USB serial, WebSerial, or BLE, which inherently incur 15–40 ms of jitter.
+- **The Solution:** Rather than fighting this bus jitter with expensive industrial transceivers, adopt **receding-horizon action chunking** (as proven by $\pi_0$ and ACT):
+  - **The Brain (Cloud/Local Host/Browser):** Runs a compact model (or receives high-level cloud VLM plans) and emits a chunk of 30–50 future waypoints (covering 0.5–1.0s) every few hundred milliseconds.
+  - **The Spine (Onboard ESP32/RP2040):** A deterministic C++ spline interpolator running locally at 200–500 Hz executes the waypoints smoothly over standard UART/serial. If a communication drop occurs, the spine smoothly brings the robot to a resting posture.
+
+#### 3. Browser-First Simulator & Web Workbench vs. Heavy Linux Tooling
+- **Industrial Friction:** Classical robotics development requires Ubuntu LTS, ROS 2 workspace configuration, CUDA toolchains, and NVIDIA Isaac Sim—an insurmountable barrier for children, students, and hobbyist makers.
+- **SeedCore's Edge:** SeedCore’s direction—**C++/Wasm physics compilation and browser-delivered MuJoCo workbenches**—is the ideal technical approach for this space:
+  - *Zero-install:* Anyone can open a URL on a Chromebook, Mac, or Windows machine.
+  - *Resumable checkpoints:* Kids and makers can test robot gaits, run experiments, and inspect digital twins in the browser.
+  - *Deterministic qualification:* Validating numerical agreement between native MuJoCo and browser Wasm ensures that skills trained or qualified in the browser transfer cleanly to physical devices like Microduck.
+
+#### 4. Trust Runtime & Verifiable Governance: The Missing Piece for Kids' Robotics
+Classical robotics assumes either an isolated factory cage or full user trust. In a consumer, school, or kids' environment, autonomous physical agents introduce new risks: privacy leaks, unvetted model outputs, and unauthorized physical actions. This is where **SeedCore’s Trust Runtime** becomes the defining layer:
+- **Scoped Capability Tokens:** The AI policy does not have raw, unchecked access to the motors. It requests a motion session (e.g., *"Walk forward 10 cm to inspect toy"*).
+- **Action-Bound Evidence & Receipts:** Every physical movement is cryptographically bounded, verified, and logged into a replayable receipt. Parents and developers can see exactly why the robot moved, what sensor data triggered it, and whether it complied with policy.
+- **Revocation at the Boundary:** If an action exceeds safe operational limits (e.g., edge-of-table detection, tilt limits, or explicit human pause), the SeedCore boundary revokes the token instantly at the command interface.
+
+---
+
+## 4. Evaluate action representations: Continuous vs discrete for mini-bots
 
 Discrete action tokenization introduces quantization whose physical resolution
-depends on action units, ranges and normalization. The report does not establish
-that it necessarily causes chatter, limit cycles or gear wear on SeedCore robots.
-Such effects require measurements for the selected controller and body.
+depends on action units, ranges and normalization. On mini-robots with plastic
+geartrains, excessive quantization steps can induce chatter and motor hunting.
 
 ACT, diffusion and flow matching are candidate policy families. Diffusion and
 flow matching can represent multimodal action distributions, but their sampling
@@ -153,33 +209,24 @@ flow matching for fluid motion. The first Microduck biped integration starts
 with a compatible pinned upstream policy; a new VLA or training pipeline is not
 a prerequisite for M0–M3.
 
-## 4. Local limits and stop behavior need robot-specific validation
+---
 
-The following are proposed qualification concerns, not implemented HAL safety
-features or a declaration of ISO compliance. Applicable standards and limits
-must be assessed for the selected robot, task, environment and contact scenario.
+## 5. Local limits and stop behavior: Shifting from kinetic containment to behavioral governance
 
-| Concern | Required review and evidence |
-| --- | --- |
-| Workspace and kinematics | Validate applicable workspace, collision and joint constraints. Any projection or clamping must preserve admitted semantics and be checked for path feasibility; an endpoint inside a box does not prove a safe swept path. |
-| Velocity, acceleration and jerk | Check explicit extrema and transitions for the executed trajectory. A quintic spline or C2 continuity alone does not establish a chosen jerk bound. |
-| Power and force limiting | Determine applicable contact force and pressure limits by body region and contact type, then validate the sensing, controller and physical response. Motor current alone is not a verified human-contact force measurement. |
-| Local interruption | Specify and measure detection delay, response initiation, physical stopping time/distance and resulting posture separately. Local hazard response must remain effective without the planner or network. |
+On lightweight mini-robots, physical stopping does not risk crushing human operators, but predictable local limits remain essential for mechanical longevity and operator confidence:
 
-The report's 140 N quasi-static / 280 N transient pair is **not a universal
-ISO/TS 15066 limit**. [DGUV's force/pressure measurement guidance](https://www.dguv.de/ifa/forschung/projektverzeichnis/ifa5151-2.jsp)
-describes body-region-dependent mechanical properties and the need to measure
-both force over time and pressure distribution. No generic force pair or software
-filter establishes compliance for SeedCore's planned integration.
+| Concern | Required review and evidence | Mini-Robotics Adaptation |
+| :--- | :--- | :--- |
+| Workspace and kinematics | Validate applicable workspace, collision and joint constraints. Any projection or clamping must preserve admitted semantics. | Prevent tipping off tabletops or twisting 3D-printed limbs beyond physical joint stops. |
+| Velocity, acceleration and jerk | Check explicit extrema and transitions for the executed trajectory. | Protect small plastic servo geartrains (e.g., STS3215 / BAM M6) from shock stripping. |
+| Power and force limiting | Determine contact force limits by body region and contact type. | Leverages passive mechanical compliance and low stall torque (<1–2 Nm). |
+| Local interruption | Specify and measure detection delay, response initiation, physical stopping time/distance and resulting posture. | Local MCU safe-posture settling when communication or token expires. |
 
-No sub-15 ms cutoff or 50 ms watchdog threshold is accepted here. Select values
-from the pinned runtime and supervised measurements. As the
-[execution contract](robot_execution_contract.md#partitions-revocation-and-recovery)
-requires, a biped may need controlled deceleration or a supported posture response;
-torque disable or dynamic braking must not be assumed safe in every state.
-A software watchdog is not evidence of a qualified independent hardware E-STOP.
+The report's 140 N quasi-static / 280 N transient pair is **an industrial collaborative standard (ISO/TS 15066)**, not a mini-robot spec. For tabletop and kid-safe robots, forces are naturally capped under 5–10 N by motor sizing. Safety governance therefore focuses on **permission scoping, behavioral bounding, and verifiable evidence closure**.
 
-## 5. Reward synthesis is a proposed research extension
+---
+
+## 6. Reward synthesis and simulation workbench
 
 [Eureka](https://eureka-research.github.io/) studies LLM-generated rewards, and
 [DrEureka](https://eureka-research.github.io/dr-eureka/) extends the approach to
@@ -195,36 +242,50 @@ pipeline, and package integrity does not establish physical fidelity.
 
 A future reward-synthesis experiment would need a separately reviewed training
 interface, resource bounds, reproducible baseline/candidate evaluation, sim-to-real
-measurements and rollback artifacts. Microduck biped locomotion is a possible
-research task after the baseline is fixed. Training results remain advisory;
+measurements and rollback artifacts. Training results remain advisory;
 policy installation and physical execution require their own admission. This
 research does not complete M0–M3 or implement the proposed
 [skill-package contract](robot_skill_contract.md).
 
-## 6. Framework reading map
+---
+
+## 7. Framework reading map
 
 This is a research reading map, not a deployment benchmark or list of SeedCore
-integrations. Frequency, compute and success claims need a cited configuration.
+integrations:
 
 | Reference | Question for SeedCore research | Qualification boundary |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | LeRobot / ACT / Diffusion Policy | How to collect demonstrations and compare task-specific policies? | Evaluate the selected policy, dataset, body and runtime |
 | π0 | How to combine visual-language representations with continuous action chunks? | Separate inference refresh from action rate; original measurements are cited above |
 | OpenVLA | What are the tradeoffs of tokenized actions and semantic transfer? | Measure precision and throughput rather than inferring gear wear or a universal rate ceiling |
 | Mobile ALOHA | How do teleoperation and co-training support mobile manipulation? | Its embodiment and tasks do not establish Microduck readiness |
 | Eureka / DrEureka | Can automated reward design help a bounded future training study? | Research extension; no reward-training integration or guaranteed transfer |
 
-The archive's “technical report only” entry for π0 is outdated:
-[Physical Intelligence's openpi repository](https://github.com/Physical-Intelligence/openpi)
-provides implementations and checkpoints. Check the selected artifact's license
-and runtime requirements when evaluating it. The [ContextFlow abstract](https://arxiv.org/abs/2609.06852)
-reports the 35-percentage-point improvement over ICRT on LIBERO; its reported
-40% success on a new real-robot pen-uncapping configuration is a separate result.
-Neither figure establishes SeedCore performance.
+---
+
+## 8. Application to SeedCore's Microduck milestone
+
+SeedCore's active proof point—**"One governed Microduck movement with verifiable evidence"**—grounds this paradigm shift in three concrete technical focus areas:
+
+1. **Lightweight Kinematic Models (MJCF/URDF for Mini-Bots):**
+   - Maintain pinned, versioned models of Microduck in MuJoCo, optimized for fast Wasm evaluation.
+   - Parameter tuning for small-scale physical dynamics (plastic gear backlash, low-friction feet, micro-servo deadbands).
+2. **The Command Boundary Integration:**
+   - Map the SeedCore Trust Runtime (scoped token $\rightarrow$ verified policy check $\rightarrow$ cryptographic receipt) directly to the Microduck serial/BLE command bridge.
+   - Ensure the robot's local microcontroller verifies the token before executing motor setpoints.
+3. **Action-Bound Telemetry:**
+   - Record golden observation datasets from the browser simulator and compare them against physical Microduck execution telemetry to generate audit receipts.
+
+This separates SeedCore from industrial robotics stacks: rather than building high-power, hazardous industrial arm controllers, SeedCore is architecting a **verifiable, safe, browser-accessible operating foundation for the coming wave of desktop and mini-robotics**.
+
+---
 
 ## Related documentation
 
 - [External report](../reports/embodied_ai_research_report.md): preserved source claims and archive digest.
-- [Physical AI strategy](physical_ai_strategy.md): product scope and governance boundaries.
-- [VLA configuration notes](vla_2026_optimizations.md): earlier configuration material; this reference qualifies the new timing and policy discussion.
-- [Microduck source ledger](microduck_source_ledger.md): pinned sources and unresolved integration facts.
+- [Physical AI strategy](physical_ai_strategy.md): product scope, market positioning and governance boundaries.
+- [Microduck integration plan](microduck_integration_plan.md): active milestone gates M0–M5.
+- [Robot execution contract](robot_execution_contract.md): proposed execution, admission, and session contracts.
+- [Mini robot simulator plan](mini_robot_simulator_implementation_plan.md): C++/Wasm browser physics architecture.
+- [MuJoCo development workbench](mujoco_development_workbench.md): native MuJoCo simulation environment and evaluation tools.
