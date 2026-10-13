@@ -362,11 +362,14 @@ stages. These are dependency gates, not promised calendar delivery dates.
 | SIM-5 | Independent-instance batches and optional native Python/Gymnasium wrapper | Scalar/batch equivalence, per-instance reset isolation, headless determinism and measured throughput/memory |
 | SIM-6 | Validated robot imports and governed SeedCore simulator bridge | Explicit capabilities, no fixture fallback, denied-token cases and verified/incomplete closure; Microduck claims still satisfy M0–M3 |
 
-The narrow **SIM-2 port and checkpoint slice is implemented**. Next is SIM-3:
-compiled small-tree dynamics, encoders and a 3D scene, gated by independent
-one-/two-/three-link numerical fixtures. Broader release-device and performance
-checks remain open. General physics expansion must preserve the current lessons
-and the tested build, worker and checkpoint boundaries.
+The **SIM-2 port and SIM-3 multi-link tree dynamics core are implemented and qualified**.
+SIM-3 delivers:
+- C++ zero-allocation analytical multi-link tree physics kernel (`mini_tree_physics.h`, `mini_tree_physics.cpp`, ABI 2) supporting 1-, 2-, and 3-link chains.
+- Wasm dual-ABI export (`mini-physics.wasm`: exports ABI 1 planar and ABI 2 tree dynamics).
+- Versioned tree model schema (`seedcore.mini-sim.tree-model.v1`) and contracts (`MiniSimContracts.Tree`) with 3D forward kinematics, Jacobian, and buffer packing.
+- 57/57 verified tests passing across Node.js, WebAssembly, and native CMake/CTest: exact numerical agreement with SIM-2 (< 1e-12 error on 2-link), mass matrix symmetry and positive definiteness across poses, energy conservation (< 1e-4 drift over 1000 ticks), potential energy gradient match, and explicit rejection of invalid models.
+
+Broader release-device checks and SIM-4 contact/sensor extensions remain open. General physics expansion continues to preserve the current lessons and tested build, worker, and checkpoint boundaries.
 
 Repository layout: the application, contract package, tooling and fixture paths
 now exist, including `packages/mini-physics/` for SIM-2:

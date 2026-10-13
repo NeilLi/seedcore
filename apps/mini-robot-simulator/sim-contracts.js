@@ -182,3 +182,127 @@ var MiniSimContracts;
 })(MiniSimContracts || (MiniSimContracts = {}));
 if (typeof module !== 'undefined')
     module.exports = MiniSimContracts;
+// SIM-3 Kinematic Tree Contracts & Compiler
+// Multi-link serial chains (1-link, 2-link, 3-link), forward kinematics 3D points, and Wasm buffer packing.
+var MiniSimContracts;
+(function (MiniSimContracts) {
+    let Tree;
+    (function (Tree) {
+        Tree.SCHEMA = 'seedcore.mini-sim.tree-model.v1';
+        Tree.PROTOCOL = 'seedcore.mini-lab.worker.v3';
+        function validateTreeModel(m) {
+            if (!m || typeof m !== 'object' || Array.isArray(m))
+                return false;
+            const model = m;
+            if (typeof model.modelId !== 'string' || model.modelId.length === 0 || model.modelId.length > 64)
+                return false;
+            if (!Number.isInteger(model.numLinks) || model.numLinks < 1 || model.numLinks > 3)
+                return false;
+            if (!Array.isArray(model.links) || model.links.length !== model.numLinks)
+                return false;
+            if (typeof model.gravity !== 'number' || !Number.isFinite(model.gravity) || model.gravity < 0 || model.gravity > 50)
+                return false;
+            for (const link of model.links) {
+                if (!link || typeof link !== 'object')
+                    return false;
+                if (typeof link.name !== 'string' || link.name.length === 0)
+                    return false;
+                if (typeof link.length !== 'number' || !Number.isFinite(link.length) || link.length <= 0 || link.length > 10)
+                    return false;
+                if (typeof link.mass !== 'number' || !Number.isFinite(link.mass) || link.mass <= 0 || link.mass > 100)
+                    return false;
+                if (typeof link.com !== 'number' || !Number.isFinite(link.com) || link.com < 0 || link.com > link.length)
+                    return false;
+                if (typeof link.inertia !== 'number' || !Number.isFinite(link.inertia) || link.inertia <= 0 || link.inertia > 100)
+                    return false;
+                if (typeof link.damping !== 'number' || !Number.isFinite(link.damping) || link.damping < 0 || link.damping > 100)
+                    return false;
+                if (link.jointLimits) {
+                    if (!Array.isArray(link.jointLimits) || link.jointLimits.length !== 2)
+                        return false;
+                    if (!Number.isFinite(link.jointLimits[0]) || !Number.isFinite(link.jointLimits[1]) || link.jointLimits[0] >= link.jointLimits[1])
+                        return false;
+                }
+            }
+            return true;
+        }
+        Tree.validateTreeModel = validateTreeModel;
+        function compileTreeModel(input) {
+            if (!validateTreeModel(input)) {
+                throw new Error('Invalid TreeModel input');
+            }
+            const canonical = {
+                schema: Tree.SCHEMA,
+                modelId: input.modelId,
+                numLinks: input.numLinks,
+                links: input.links.map(l => ({
+                    name: l.name,
+                    length: Number(l.length.toFixed(8)),
+                    mass: Number(l.mass.toFixed(8)),
+                    com: Number(l.com.toFixed(8)),
+                    inertia: Number(l.inertia.toFixed(8)),
+                    damping: Number(l.damping.toFixed(8)),
+                    jointLimits: l.jointLimits ? [Number(l.jointLimits[0].toFixed(8)), Number(l.jointLimits[1].toFixed(8))] : undefined
+                })),
+                gravity: Number(input.gravity.toFixed(8)),
+                encoders: input.encoders || ['joint_pos', 'joint_vel', 'tip_pos', 'energy']
+            };
+            const canonicalJson = JSON.stringify(canonical);
+            const modelDigest = MiniSimContracts.sha256Ascii(canonicalJson);
+            return Object.freeze({
+                schema: Tree.SCHEMA,
+                modelId: input.modelId,
+                modelDigest,
+                numLinks: input.numLinks,
+                nq: input.numLinks,
+                nv: input.numLinks,
+                links: Object.freeze(canonical.links.map(l => Object.freeze(l))),
+                gravity: canonical.gravity,
+                encoders: Object.freeze([...canonical.encoders])
+            });
+        }
+        Tree.compileTreeModel = compileTreeModel;
+        function forwardKinematics3D(model, q) {
+            if (q.length < model.numLinks)
+                throw new Error('q dimension mismatch');
+            const joints = [];
+            let phi = 0;
+            let x = 0;
+            let y = 0;
+            const origin = { x: 0, y: 0, z: 0 };
+            for (let i = 0; i < model.numLinks; i++) {
+                phi += q[i];
+                x += model.links[i].length * Math.cos(phi);
+                y += model.links[i].length * Math.sin(phi);
+                joints.push({ x, y, z: 0 });
+            }
+            const tip = joints[joints.length - 1];
+            return { origin, joints, tip };
+        }
+        Tree.forwardKinematics3D = forwardKinematics3D;
+        function packTreeBuffer(model, q, v, t, tau, dt, target, tauMax, motors) {
+            const buf = new Float64Array(64);
+            buf[0] = model.numLinks;
+            for (let i = 0; i < model.numLinks; i++) {
+                buf[1 + i] = model.links[i].length;
+                buf[4 + i] = model.links[i].mass;
+                buf[7 + i] = model.links[i].com;
+                buf[10 + i] = model.links[i].inertia;
+                buf[13 + i] = model.links[i].damping;
+            }
+            buf[16] = model.gravity;
+            for (let i = 0; i < model.numLinks; i++) {
+                buf[17 + i] = q[i] || 0;
+                buf[20 + i] = v[i] || 0;
+                buf[24 + i] = tau[i] || 0;
+                buf[28 + i] = target[i] || 0;
+            }
+            buf[23] = t;
+            buf[27] = dt;
+            buf[31] = tauMax;
+            buf[32] = motors ? 1.0 : 0.0;
+            return buf;
+        }
+        Tree.packTreeBuffer = packTreeBuffer;
+    })(Tree = MiniSimContracts.Tree || (MiniSimContracts.Tree = {}));
+})(MiniSimContracts || (MiniSimContracts = {}));

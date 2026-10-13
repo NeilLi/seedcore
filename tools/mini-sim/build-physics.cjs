@@ -11,11 +11,17 @@ function run(exe,args) {
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'mini-physics-build-'));
 try {
   const object=path.join(temp,'physics.o');
+  const treeObject=path.join(temp,'tree_physics.o');
   run(cxx,['--target=wasm32-unknown-unknown','-std=c++17','-O2','-ffp-contract=off','-fno-fast-math',
     '-fno-exceptions','-fno-rtti','-fno-builtin','-nostdlib','-Ipackages/mini-physics/include',
     '-c','packages/mini-physics/src/mini_physics.cpp','-o',object]);
-  run(linker,[object,'--no-entry','--allow-undefined','--export=mini_abi','--export=mini_eval',
-    '--export=mini_scratch','--export-memory','--initial-memory=131072','--max-memory=131072',
+  run(cxx,['--target=wasm32-unknown-unknown','-std=c++17','-O2','-ffp-contract=off','-fno-fast-math',
+    '-fno-exceptions','-fno-rtti','-fno-builtin','-nostdlib','-Ipackages/mini-physics/include',
+    '-c','packages/mini-physics/src/mini_tree_physics.cpp','-o',treeObject]);
+  run(linker,[object,treeObject,'--no-entry','--allow-undefined',
+    '--export=mini_abi','--export=mini_eval','--export=mini_scratch',
+    '--export=mini_tree_abi','--export=mini_tree_eval','--export=mini_tree_scratch',
+    '--export-memory','--initial-memory=131072','--max-memory=131072',
     '--strip-all','-o','apps/mini-robot-simulator/mini-physics.wasm']);
   const bytes=fs.readFileSync(path.join(root,'apps/mini-robot-simulator/mini-physics.wasm'));
   const module=new WebAssembly.Module(bytes);

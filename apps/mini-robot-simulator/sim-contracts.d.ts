@@ -186,3 +186,51 @@ declare namespace MiniSimContracts {
 declare const module: {
     exports: unknown;
 } | undefined;
+declare namespace MiniSimContracts {
+    namespace Tree {
+        const SCHEMA = "seedcore.mini-sim.tree-model.v1";
+        const PROTOCOL = "seedcore.mini-lab.worker.v3";
+        interface TreeLink {
+            name: string;
+            length: number;
+            mass: number;
+            com: number;
+            inertia: number;
+            damping: number;
+            jointLimits?: [number, number];
+        }
+        interface TreeModelInput {
+            schema?: typeof SCHEMA;
+            modelId: string;
+            numLinks: number;
+            links: TreeLink[];
+            gravity: number;
+            encoders?: Array<'joint_pos' | 'joint_vel' | 'tip_pos' | 'energy'>;
+        }
+        interface CompiledTreeModel {
+            schema: typeof SCHEMA;
+            modelId: string;
+            modelDigest: string;
+            numLinks: number;
+            nq: number;
+            nv: number;
+            links: ReadonlyArray<Readonly<TreeLink>>;
+            gravity: number;
+            encoders: ReadonlyArray<string>;
+        }
+        interface Point3D {
+            x: number;
+            y: number;
+            z: number;
+        }
+        interface TreePose3D {
+            origin: Point3D;
+            joints: Point3D[];
+            tip: Point3D;
+        }
+        function validateTreeModel(m: unknown): m is TreeModelInput;
+        function compileTreeModel(input: TreeModelInput): CompiledTreeModel;
+        function forwardKinematics3D(model: CompiledTreeModel, q: number[]): TreePose3D;
+        function packTreeBuffer(model: CompiledTreeModel, q: number[], v: number[], t: number, tau: number[], dt: number, target: number[], tauMax: number, motors: boolean): Float64Array;
+    }
+}

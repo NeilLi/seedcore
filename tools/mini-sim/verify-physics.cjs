@@ -19,6 +19,10 @@ try {
   run(cxx,[...common,'packages/mini-physics/src/native_cli.cpp','-o',cli]);
   run(cxx,[...common,'packages/mini-physics/src/native_tests.cpp','-o',invariants]);
   console.log(run(invariants,[]).trim());
+  const tree_common=['-std=c++17','-O2','-ffp-contract=off','-fno-fast-math','-Ipackages/mini-physics/include','packages/mini-physics/src/mini_physics.cpp','packages/mini-physics/src/mini_tree_physics.cpp'];
+  const tree_invariants=path.join(temp,'tree_invariants');
+  run(cxx,[...tree_common,'packages/mini-physics/src/tree_native_tests.cpp','-o',tree_invariants]);
+  console.log(run(tree_invariants,[]).trim());
   run(process.execPath,['--test','apps/mini-robot-simulator/physics.test.cjs'],{env:{...process.env,MINI_TEST_WASM:'1'}});
   const results=[];
   for(const [lesson,mass,strength,motors] of [['reach',.7,16,true],['gravity',.7,16,false],['heavy',1.8,5,true]]) {
@@ -41,6 +45,8 @@ try {
   const module=new WebAssembly.Module(bytes),e=new WebAssembly.Instance(module,{env:{sin:Math.sin,cos:Math.cos}}).exports;
   const b=new Float64Array(e.memory.buffer,e.mini_scratch(),32);b.fill(0);b[20]=123;
   assert.equal(e.mini_eval(0,e.mini_scratch(),31),1);assert.equal(b[20],123);
+  assert.equal(e.mini_tree_abi(),2);
+  assert.equal(e.mini_tree_eval(0,e.mini_tree_scratch(),63),1);
   assert.equal(e.memory.buffer.byteLength,131072);assert.throws(()=>e.memory.grow(1));
   const report={schema:'seedcore.mini-physics.qualification.v1',date:new Date().toISOString(),platform:`${os.platform()} ${os.release()} ${os.arch()}`,node:process.version,build,
     tolerance:1e-8,units:'radians, rad/s, seconds (maximum over q, velocity, time)',nativeInvariantGroups:12,wasmInvariants:12,results};
