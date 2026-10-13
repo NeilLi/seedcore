@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="3D Kinematic Tree Studio powered by SeedCore Wasm ABI 2 dynamics engine.">
+  <title>3D Tree Studio (SIM-3) · SeedCore Mini Robot Lab</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="physics-build.js" defer></script>
+  <script src="sim-contracts.js" defer></script>
+  <script src="tree-physics-wasm.js" defer></script>
+  <script src="tree-lab.js" defer></script>
+  <script src="tree-lab-ui.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./tree-lab.html"><span class="brand-mark" aria-hidden="true">s</span> seedcore <span class="brand-divider">/</span> mini robot lab</a>
+    <nav class="nav-links">
+      <a href="./index.html" class="nav-link">2D Lessons</a>
+      <a href="./tree-lab.html" class="nav-link active">3D Tree Studio (SIM-3)</a>
+    </nav>
+    <span class="research-label">SIM-3 Wasm Core (ABI 2)</span>
+  </header>
+  <main>
+    <div class="intro">
+      <div>
+        <p class="eyebrow">SIM-3 / Multi-link dynamics</p>
+        <h1>3D Kinematic Tree Studio</h1>
+        <p>Explore nonlinear articulated chains in 3D: 1-link pendulum, 2-link arm, and 3-link robot manipulator.</p>
+      </div>
+      <span class="offline">Zero-install C++/Wasm · runs locally</span>
+    </div>
+
+    <div class="workspace">
+      <!-- 1. Left Panel: Model and Controller Setup -->
+      <aside class="lesson-panel panel">
+        <p class="eyebrow">01 / Model & Controller</p>
+        <label for="model-select">Select Kinematic Model</label>
+        <select id="model-select">
+          <option value="3-link" selected>3-Link Articulated Manipulator</option>
+          <option value="2-link">2-Link Serial Arm</option>
+          <option value="1-link">1-Link Nonlinear Pendulum</option>
+        </select>
+
+        <h2>Joint Targets</h2>
+        <div id="joint-sliders">
+          <!-- Dynamically populated joint sliders -->
+        </div>
+
+        <div class="divider"></div>
+
+        <label class="slider-label" for="damping">Viscous Damping <output id="damping-val">0.08</output></label>
+        <input id="damping" type="range" min="0" max="0.5" value="0.08" step="0.01">
+
+        <label class="check"><input type="checkbox" id="motors" checked> Motors Active (PD)</label>
+        <label class="check"><input type="checkbox" id="gravity" checked> Gravity (9.81 m/s²)</label>
+
+        <p class="small">The C++ Wasm kernel computes full analytical equations of motion at 480 Hz.</p>
+      </aside>
+
+      <!-- 2. Middle Panel: 3D Stage Viewport -->
+      <section class="stage-panel panel" aria-label="3D Robot Stage">
+        <div class="stage-heading">
+          <span><span class="status-dot"></span> 3D Articulated Viewport</span>
+          <span id="run-status">Initializing Wasm...</span>
+        </div>
+
+        <canvas id="viewport3d" role="img" aria-label="Interactive 3D view of the articulated robot arm"></canvas>
+
+        <div class="stage-legend">
+          <span><i class="legend-dot target-dot"></i> Target Star</span>
+          <span><i class="legend-dot path-dot"></i> 3D End-Effector Trail</span>
+          <span>Camera: Drag to Orbit · Scroll to Zoom</span>
+        </div>
+
+        <div class="transport">
+          <button id="run" class="primary" disabled>▶ Run Dynamics</button>
+          <button id="step" disabled>Step (8 ticks)</button>
+          <button id="reset">Reset</button>
+          <button id="reset-cam">Reset Camera</button>
+        </div>
+
+        <div class="readouts">
+          <div><span>Simulation Time</span><strong id="time-val">0.00 s</strong></div>
+          <div><span>Tip Position (X, Y, Z)</span><strong id="tip-coords"><span id="tip-x-val">0.00</span>, <span id="tip-y-val">0.00</span>, <span id="tip-z-val">0.00</span></strong></div>
+          <div><span>Tip Speed</span><strong id="tip-speed-val">0.00 m/s</strong></div>
+        </div>
+      </section>
+
+      <!-- 3. Right Panel: Analytical Diagnostics & Math -->
+      <aside class="results-panel panel">
+        <p class="eyebrow">02 / Physics Diagnostics</p>
+        <h2>Analytical State</h2>
+
+        <table class="inspector-table">
+          <thead>
+            <tr><th>Joint</th><th>Angle (q)</th><th>Velocity (v)</th><th>Target</th></tr>
+          </thead>
+          <tbody id="joint-table-body">
+            <!-- Dynamically populated joint rows -->
+          </tbody>
+        </table>
+
+        <div class="divider"></div>
+
+        <h2>Mechanical Energy</h2>
+        <dl>
+          <dt>Kinetic Energy (K)</dt><dd id="energy-k">—</dd>
+          <dt>Potential Energy (U)</dt><dd id="energy-u">—</dd>
+          <dt>Total Energy (E)</dt><dd id="energy-tot">—</dd>
+        </dl>
+
+        <div class="divider"></div>
+
+        <details open>
+          <summary>Mass Matrix M(q)</summary>
+          <table class="matrix-table" id="mass-matrix-table">
+            <!-- Dynamically populated mass matrix -->
+          </table>
+        </details>
+
+        <details open>
+          <summary>End-Effector Jacobian J(q)</summary>
+          <table class="matrix-table" id="jacobian-table">
+            <!-- Dynamically populated Jacobian rows -->
+          </table>
+        </details>
+
+        <div class="divider"></div>
+
+        <p class="small"><strong>Model Digest:</strong> <span id="model-digest-badge" class="digest-badge">—</span></p>
+
+        <div class="result-actions">
+          <button id="export-json">Export Experiment (JSON)</button>
+        </div>
+
+        <p class="scope">Zero-allocation C++ physics with Cramer matrix inversion and RK4 integration running in WebAssembly.</p>
+      </aside>
+    </div>
+
+    <footer>
+      <span>SeedCore Mini Physics 0.2 · SIM-3 General Tree Engine · Wasm ABI 2</span>
+      <span>Fixed-base revolute chains · SI units · WebAssembly f64</span>
+    </footer>
+  </main>
+</body>
+</html>

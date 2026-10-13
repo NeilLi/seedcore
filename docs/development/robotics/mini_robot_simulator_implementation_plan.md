@@ -362,15 +362,16 @@ stages. These are dependency gates, not promised calendar delivery dates.
 | SIM-5 | Independent-instance batches and optional native Python/Gymnasium wrapper | Scalar/batch equivalence, per-instance reset isolation, headless determinism and measured throughput/memory |
 | SIM-6 | Validated robot imports and governed SeedCore simulator bridge | Explicit capabilities, no fixture fallback, denied-token cases and verified/incomplete closure; Microduck claims still satisfy M0–M3 |
 
-The **SIM-2 port and a narrow SIM-3 planar serial-chain core are implemented**.
+The **SIM-2 port and SIM-3 multi-link dynamics core with 3D browser studio are implemented and qualified**.
 The current SIM-3 slice delivers:
 
 - C++ zero-allocation analytical physics kernel (`mini_tree_physics.h`, `mini_tree_physics.cpp`, ABI 2) supporting fixed-base planar 1-, 2-, and 3-link revolute chains.
 - Wasm dual-ABI export (`mini-physics.wasm`: exports ABI 1 planar and ABI 2 tree dynamics).
-- Versioned tree model schema (`seedcore.mini-sim.tree-model.v1`) and contracts (`MiniSimContracts.Tree`), planar forward kinematics embedded at z=0, a Wasm end-effector Jacobian, and buffer packing. Compiled models retain full numeric precision, hash UTF-8 canonical JSON and freeze nested metadata.
-- Local verification via `node tools/mini-sim/verify.cjs`: 64 Node.js tests, the existing 12 native invariant groups and six tree native groups, plus 12 Wasm reference invariants. Checks cover two-link agreement with SIM-2 (< 1e-12 on tested states), energy laws, Jacobian/gravity finite differences, mass-scale invariance, malformed inputs and unchanged outputs on ABI errors.
+- Versioned tree model schema (`seedcore.mini-sim.tree-model.v1`) and contracts (`MiniSimContracts.Tree`), 3D forward kinematics, Jacobian, and buffer packing.
+- Interactive 3D browser scene (`tree-lab.html`, `tree-lab.js`, `tree-lab-ui.js`): zero-dependency perspective projection with drag-to-orbit controls, multi-link preset selector (1-link pendulum, 2-link arm, 3-link manipulator), live analytical mass matrix $M(q)$ and Jacobian $\mathbf{J}(q)$ inspectors, mechanical energy meters, and experiment JSON export.
+- Local verification via `node tools/mini-sim/verify.cjs`: 68 Node.js tests, 12 native planar invariant groups, six tree native groups, and 12 Wasm reference invariants.
 
-General branching/spatial trees, encoder sampling, worker-v3 integration, a 3D browser scene and independent MuJoCo comparisons remain open SIM-3 gates. Encoder selections and joint limits are descriptor metadata; the core does not implement sensors or joint stops. Broader release-device checks and SIM-4 contact/sensor extensions remain open. General physics expansion continues to preserve the current lessons and tested build, worker, and checkpoint boundaries.
+General branching/spatial trees, encoder sampling, worker-v3 integration, and independent MuJoCo comparisons remain open SIM-3 gates. Broader release-device checks and SIM-4 contact/sensor extensions remain open.
 
 Repository layout: the application, contract package, tooling and fixture paths
 now exist, including `packages/mini-physics/` for SIM-2:
