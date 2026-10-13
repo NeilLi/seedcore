@@ -7,3 +7,15 @@
 .matrix-table{border-collapse:collapse;margin:6px 0 12px;font-family:monospace;font-size:11px;background:#f8faf6;border:1px solid var(--line);border-radius:6px}.matrix-table td{padding:4px 8px;text-align:right;border:1px solid #e7efe5}
 .inspector-table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:11px}.inspector-table th,.inspector-table td{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line)}.inspector-table th{color:var(--muted);font-weight:600}
 .slider-group{margin-bottom:12px}.digest-badge{font-family:monospace;font-size:11px;background:#eaf2e8;padding:3px 7px;border-radius:6px;color:var(--teal);word-break:break-all}
+
+/* Studio controls remain usable on narrow screens and with touch/keyboard input. */
+.topbar{flex-wrap:wrap}.nav-links{flex-wrap:wrap}
+.tree-studio .panel{min-width:0}
+#viewport3d{touch-action:none;cursor:grab}
+#viewport3d:focus-visible{outline:3px solid var(--focus);outline-offset:-3px}
+#tip-coords span{display:inline;font:inherit;color:inherit}
+.error-message{color:#9b3025;font-size:12px;padding:0 18px;overflow-wrap:anywhere}
+.error-message:empty{display:none}
+.tree-studio .inspector-table th,.tree-studio .inspector-table td{padding:5px 3px}
+.tree-studio .inspector-table td{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+@media(max-width:650px){.nav-links{width:100%}.nav-link{flex:1;text-align:center}.tree-studio .stage-legend{font-size:10px}}

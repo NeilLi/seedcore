@@ -12,167 +12,153 @@
 
   let lab = null;
   let wasmEngine = null;
+  let loading = false, failed = false;
+  let lastDiagnostics = null;
   let width = 600, height = 440;
 
+  function setTransport(status) {
+    $('run-status').textContent = status;
+    $('run').textContent = lab.isRunning ? '⏸ Pause' : '▶ Run Dynamics';
+    for (const id of ['run', 'step', 'export-json', 'model-select', 'damping', 'gravity', 'motors']) {
+      $(id).disabled = loading || failed || !wasmEngine;
+    }
+    for (let i = 0; i < lab.model.numLinks; i++) $(`q-target-${i}`).disabled = loading || failed || !wasmEngine;
+    $('reset').disabled = loading;
+    $('reset').textContent = !loading && !wasmEngine ? 'Retry loading' : 'Reset';
+  }
+
+  function stopWithError(err) {
+    failed = true;
+    lab.isRunning = false;
+    $('error-message').textContent = `${err.message}. Use ${wasmEngine ? 'Reset' : 'Retry loading'} to recover.`;
+    setTransport('Stopped · error');
+  }
+
+  function guarded(action) {
+    if (!wasmEngine || failed || loading) return;
+    try { action(); } catch (err) { stopWithError(err); }
+  }
+
   async function initWasm() {
+    if (loading) return;
+    loading = true; failed = false;
+    $('error-message').textContent = '';
+    setTransport('Loading physics…');
     try {
-      $('run-status').textContent = 'Loading Wasm...';
       const res = await fetch('mini-physics.wasm');
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching mini-physics.wasm`);
       const bytes = await res.arrayBuffer();
-      const digest = C.sha256Bytes(new Uint8Array(bytes));
-      if (digest !== 'sha256:' + MiniPhysicsBuild.sha256) {
+      if (C.sha256Bytes(new Uint8Array(bytes)) !== 'sha256:' + MiniPhysicsBuild.sha256) {
         throw new Error('Physics Wasm digest mismatch');
       }
       wasmEngine = MiniTreePhysicsWasm.create(bytes, MiniPhysicsBuild);
       lab.setWasmEngine(wasmEngine);
-      $('run-status').textContent = 'Ready (Wasm ABI 2)';
-      $('run').disabled = false;
-      $('step').disabled = false;
+      loading = false;
       updateUI();
+      setTransport('Ready');
     } catch (err) {
-      $('run-status').textContent = `Wasm Error: ${err.message}`;
-      console.error(err);
+      loading = false; wasmEngine = null; lab.setWasmEngine(null);
+      stopWithError(err);
     }
   }
 
   function setupControls() {
     lab = MiniTreeLab.createTreeLab({ defaultModel: '3-link' });
 
-    // Model Selector
-    $('model-select').addEventListener('change', e => {
+    $('model-select').addEventListener('change', e => guarded(() => {
       lab.setModel(e.target.value);
-      buildJointSliders();
-      updateUI();
-    });
-
-    // Transport buttons
-    $('run').addEventListener('click', () => {
+      buildJointSliders(); updateUI(); setTransport('Ready · model reset');
+    }));
+    $('run').addEventListener('click', () => guarded(() => {
+      if (document.hidden) return;
       lab.isRunning = !lab.isRunning;
-      $('run').textContent = lab.isRunning ? '⏸ Pause' : '▶ Run Dynamics';
-      $('run-status').textContent = lab.isRunning ? 'Running (480 Hz)' : 'Paused';
-    });
-
-    $('step').addEventListener('click', () => {
-      if (lab.isRunning) lab.isRunning = false;
-      $('run').textContent = '▶ Run Dynamics';
-      $('run-status').textContent = 'Stepped';
-      for (let i = 0; i < 8; i++) lab.step(1 / 480);
+      if (lab.isRunning) lab.advanceFrame(performance.now());
       updateUI();
-    });
-
-    $('reset').addEventListener('click', () => {
+      setTransport(lab.isRunning ? 'Running' : 'Paused');
+    }));
+    $('step').addEventListener('click', () => guarded(() => {
       lab.isRunning = false;
-      $('run').textContent = '▶ Run Dynamics';
-      $('run-status').textContent = 'Ready';
-      lab.reset(false);
-      buildJointSliders();
-      updateUI();
+      for (let i = 0; i < 8; i++) lab.step();
+      updateUI(); setTransport('Paused · stepped 8 ticks');
+    }));
+    $('reset').addEventListener('click', () => {
+      if (loading) return;
+      if (!wasmEngine) { initWasm(); return; }
+      try {
+        lab.reset(); failed = false;
+        $('error-message').textContent = '';
+        buildJointSliders(); updateUI(); setTransport('Ready');
+      } catch (err) { stopWithError(err); }
     });
-
     $('reset-cam').addEventListener('click', () => {
-      lab.camera.yaw = 0.55;
-      lab.camera.pitch = 0.35;
-      lab.camera.distance = 3.2;
+      Object.assign(lab.camera, { yaw: 0.55, pitch: 0.35, distance: 3.2 });
     });
-
-    // Motors & Gravity
-    $('motors').addEventListener('change', e => {
-      lab.motors = e.target.checked;
-    });
-
-    $('gravity').addEventListener('change', e => {
+    $('motors').addEventListener('change', e => guarded(() => { lab.motors = e.target.checked; }));
+    $('gravity').addEventListener('change', e => guarded(() => {
       lab.gravityOn = e.target.checked;
-      updateUI();
-    });
-
-    // Damping
-    $('damping').addEventListener('input', e => {
-      lab.damping = parseFloat(e.target.value);
+      updateUI(); setTransport('Ready · gravity reset');
+    }));
+    $('damping').addEventListener('input', e => guarded(() => {
+      lab.damping = Number(e.target.value);
       $('damping-val').textContent = lab.damping.toFixed(2);
-    });
-
-    // Export JSON
-    $('export-json').addEventListener('click', () => {
-      const diag = lab.getDiagnostics();
-      const payload = {
-        schema: 'seedcore.mini-sim.tree-experiment.v1',
-        modelId: lab.model.modelId,
-        modelDigest: lab.model.modelDigest,
-        numLinks: lab.model.numLinks,
-        time: lab.t,
-        state: { q: lab.q, v: lab.v },
-        target: lab.target,
-        energy: diag?.energy,
-        jacobian: diag?.jacobian,
-        date: new Date().toISOString()
-      };
+      updateUI(); setTransport('Ready · damping reset');
+    }));
+    document.addEventListener('visibilitychange', () => guarded(() => {
+      if (document.hidden && lab.isRunning) {
+        lab.isRunning = false;
+        updateUI();
+        setTransport('Paused · tab hidden');
+      }
+    }));
+    $('export-json').addEventListener('click', () => guarded(() => {
+      const payload = lab.exportSnapshot();
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `tree-experiment-${lab.model.modelId}.json`;
+      a.download = `tree-state-${lab.model.modelId}.json`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
-
+    }));
     setupOrbitControls();
     buildJointSliders();
   }
 
   function setupOrbitControls() {
-    let isDragging = false;
-    let lastX = 0, lastY = 0;
-
-    canvas.addEventListener('mousedown', e => {
-      isDragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
+    let pointer = null, lastX = 0, lastY = 0;
+    canvas.addEventListener('pointerdown', e => {
+      if (pointer !== null || e.button !== 0) return;
+      pointer = e.pointerId; lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(pointer);
       canvas.style.cursor = 'grabbing';
     });
-
-    window.addEventListener('mouseup', () => {
-      isDragging = false;
-      canvas.style.cursor = 'grab';
+    canvas.addEventListener('pointermove', e => {
+      if (e.pointerId !== pointer) return;
+      lab.camera.yaw += (e.clientX - lastX) * 0.008;
+      lab.camera.pitch = Math.max(-0.25, Math.min(1.4, lab.camera.pitch + (e.clientY - lastY) * 0.008));
+      lastX = e.clientX; lastY = e.clientY;
     });
-
-    window.addEventListener('mousemove', e => {
-      if (!isDragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-
-      lab.camera.yaw += dx * 0.008;
-      lab.camera.pitch = Math.max(-0.25, Math.min(1.4, lab.camera.pitch + dy * 0.008));
-    });
-
-    // Touch orbit support
-    canvas.addEventListener('touchstart', e => {
-      if (e.touches.length === 1) {
-        isDragging = true;
-        lastX = e.touches[0].clientX;
-        lastY = e.touches[0].clientY;
-      }
-    }, { passive: true });
-
-    window.addEventListener('touchend', () => { isDragging = false; });
-
-    canvas.addEventListener('touchmove', e => {
-      if (!isDragging || e.touches.length !== 1) return;
-      const dx = e.touches[0].clientX - lastX;
-      const dy = e.touches[0].clientY - lastY;
-      lastX = e.touches[0].clientX;
-      lastY = e.touches[0].clientY;
-
-      lab.camera.yaw += dx * 0.008;
-      lab.camera.pitch = Math.max(-0.25, Math.min(1.4, lab.camera.pitch + dy * 0.008));
-    }, { passive: true });
-
+    const stopDrag = e => {
+      if (e.pointerId !== pointer) return;
+      if (canvas.hasPointerCapture(pointer)) canvas.releasePointerCapture(pointer);
+      pointer = null; canvas.style.cursor = 'grab';
+    };
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(event, stopDrag);
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
-      lab.camera.distance = Math.max(1.2, Math.min(6.5, lab.camera.distance + e.deltaY * 0.003));
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? height : 1;
+      lab.camera.distance = Math.max(1.2, Math.min(6.5, lab.camera.distance + e.deltaY * unit * 0.003));
     }, { passive: false });
+    canvas.addEventListener('keydown', e => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-'].includes(e.key)) return;
+      e.preventDefault();
+      if (e.key === 'ArrowLeft') lab.camera.yaw -= 0.1;
+      if (e.key === 'ArrowRight') lab.camera.yaw += 0.1;
+      if (e.key === 'ArrowUp') lab.camera.pitch = Math.max(-0.25, lab.camera.pitch - 0.1);
+      if (e.key === 'ArrowDown') lab.camera.pitch = Math.min(1.4, lab.camera.pitch + 0.1);
+      if (e.key === '+' || e.key === '=') lab.camera.distance = Math.max(1.2, lab.camera.distance - 0.2);
+      if (e.key === '-') lab.camera.distance = Math.min(6.5, lab.camera.distance + 0.2);
+    });
   }
 
   function buildJointSliders() {
@@ -186,6 +172,7 @@
 
       const label = document.createElement('label');
       label.className = 'slider-label';
+      label.htmlFor = `q-target-${i}`;
       label.innerHTML = `<span>Joint ${i} target</span><output id="q-target-${i}-val">${Math.round(degrees(lab.target[i]))}°</output>`;
 
       const input = document.createElement('input');
@@ -196,11 +183,12 @@
       input.value = Math.round(degrees(lab.target[i])).toString();
       input.id = `q-target-${i}`;
 
-      input.addEventListener('input', e => {
+      input.addEventListener('input', e => guarded(() => {
         const degVal = parseInt(e.target.value, 10);
-        lab.target[i] = radians(degVal);
+        const target = lab.target; target[i] = radians(degVal); lab.target = target;
         $(`q-target-${i}-val`).textContent = `${degVal}°`;
-      });
+        updateUI();
+      }));
 
       wrap.appendChild(label);
       wrap.appendChild(input);
@@ -208,9 +196,9 @@
     }
   }
 
-  function updateUI() {
-    const diag = lab.getDiagnostics();
+  function updateUI(diag = lab.getDiagnostics()) {
     if (!diag) return;
+    lastDiagnostics = diag;
 
     $('time-val').textContent = `${lab.t.toFixed(2)} s`;
     $('tip-x-val').textContent = diag.pose.tip.x.toFixed(3);
@@ -222,8 +210,8 @@
     const J = diag.jacobian;
     let vx = 0, vy = 0;
     for (let i = 0; i < n; i++) {
-      vx += J.Jx[i] * lab.v[i];
-      vy += J.Jy[i] * lab.v[i];
+      vx += J.Jx[i] * diag.v[i];
+      vy += J.Jy[i] * diag.v[i];
     }
     const speed = Math.sqrt(vx * vx + vy * vy);
     $('tip-speed-val').textContent = `${speed.toFixed(2)} m/s`;
@@ -234,7 +222,8 @@
     $('energy-tot').textContent = `${diag.energy.total.toFixed(3)} J`;
 
     // Model digest badge
-    $('model-digest-badge').textContent = lab.model.modelDigest.slice(0, 15) + '...';
+    $('model-digest-badge').textContent = lab.model.modelDigest.slice(0, 19) + '…';
+    $('model-digest-badge').title = lab.model.modelDigest;
 
     // Joint table
     const tableBody = $('joint-table-body');
@@ -242,9 +231,9 @@
     for (let i = 0; i < n; i++) {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td><strong>q${i}</strong> (${lab.model.links[i].name})</td>
-        <td>${degrees(lab.q[i]).toFixed(1)}° (${lab.q[i].toFixed(2)} rad)</td>
-        <td>${lab.v[i].toFixed(2)} rad/s</td>
+        <td title="${lab.model.links[i].name}"><strong>q${i}</strong></td>
+        <td title="${diag.q[i].toFixed(4)} rad">${degrees(diag.q[i]).toFixed(1)}°</td>
+        <td>${diag.v[i].toFixed(2)} rad/s</td>
         <td>${degrees(lab.target[i]).toFixed(1)}°</td>
       `;
       tableBody.appendChild(tr);
@@ -292,34 +281,21 @@
 
   let lastUiUpdate = 0;
   function loop(now) {
-    if (lab && lab.isRunning && wasmEngine) {
-      // Step 8 ticks (8 * 1/480 = 1/60s)
-      for (let i = 0; i < 8; i++) {
-        lab.step(1 / 480);
+    try {
+      if (wasmEngine && !failed) {
+        lab.advanceFrame(now);
+        lastDiagnostics = lab.getDiagnostics();
+        if (lab.isRunning && now - lastUiUpdate > 80) {
+          updateUI(lastDiagnostics);
+          lastUiUpdate = now;
+        }
       }
-    }
-
-    if (lab) {
-      const diag = lab.getDiagnostics();
-      if (diag) {
-        MiniTreeLab.renderScene(
-          ctx,
-          width,
-          height,
-          lab.camera,
-          diag.pose,
-          diag.targetPose,
-          lab.trail,
-          { gravity: lab.gravityOn }
-        );
+      if (lastDiagnostics) {
+        MiniTreeLab.renderScene(ctx, width, height, lab.camera,
+          lastDiagnostics.pose, lastDiagnostics.targetPose, lab.trail, { gravity: lab.gravityOn });
       }
-    }
-
-    if (now - lastUiUpdate > 80) {
-      updateUI();
-      lastUiUpdate = now;
-    }
-
+    } catch (err) { stopWithError(err); }
+    // A physics failure must not kill rendering or Reset recovery.
     requestAnimationFrame(loop);
   }
 

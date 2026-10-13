@@ -5,9 +5,10 @@
 (function(root) {
   'use strict';
 
-  const C = root.MiniSimContracts;
+  const C = typeof module !== 'undefined' && module.exports ? require('./sim-contracts.js') : root.MiniSimContracts;
   const radians = deg => deg * Math.PI / 180;
-  const degrees = rad => rad * 180 / Math.PI;
+  const DT = 1 / 480;
+  const MAX_FRAME_TICKS = 48;
 
   // Preset model specifications for SIM-3
   const PRESET_MODELS = {
@@ -248,124 +249,142 @@
     ctx.fillStyle = '#536e60';
     ctx.font = '11px system-ui';
     ctx.textAlign = 'left';
-    ctx.fillText('3D ORBIT VIEW · Drag to rotate · Scroll to zoom', 16, 24);
+    ctx.fillText('PLANAR CHAIN · XY', 16, 24);
     ctx.textAlign = 'right';
     ctx.fillText(options.gravity ? '↓ Gravity (9.81 m/s²)' : 'Gravity off', width - 16, 24);
   }
 
-  // High-level TreeLab Simulator Controller
+  // Freeze public presets so one consumer cannot change future experiments.
+  function freeze(value) {
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach(freeze);
+      Object.freeze(value);
+    }
+    return value;
+  }
+  freeze(PRESET_MODELS);
+
+  function requirePreset(key) {
+    if (!Object.prototype.hasOwnProperty.call(PRESET_MODELS, key)) throw new Error(`Unknown model: ${key}`);
+    return PRESET_MODELS[key];
+  }
+
+  // Fixed-step controller. Wall-clock pacing is bounded separately from physics.
   function createTreeLab(opts = {}) {
     let wasmEngine = opts.wasmEngine || null;
     let selectedKey = opts.defaultModel || '3-link';
-    let rawConfig = PRESET_MODELS[selectedKey];
-    let compiledModel = C.Tree.compileTreeModel(rawConfig.model);
-
-    let q = [...rawConfig.defaultQ];
-    let v = new Array(compiledModel.numLinks).fill(0);
-    let t = 0;
-    let target = [...rawConfig.defaultTarget];
-    let tauMax = 20.0;
-    let motors = true;
-    let damping = rawConfig.model.links[0].damping;
-    let gravityOn = true;
-
-    let isRunning = false;
+    const initial = requirePreset(selectedKey);
+    let compiledModel;
+    let q, v, target;
+    let tick = 0;
+    const tauMax = 20;
+    let motors = true, gravityOn = true, damping = initial.model.links[0].damping;
+    let isRunning = false, lastFrame = null, accumulator = 0;
     let trail = [];
     const maxTrailPoints = 300;
+    const camera = { yaw: 0.55, pitch: 0.35, distance: 3.2, target: [0, 0.45, 0] };
 
-    const camera = {
-      yaw: 0.55,
-      pitch: 0.35,
-      distance: 3.2,
-      target: [0, 0.45, 0]
-    };
-
-    function reset(keepTarget = false) {
-      rawConfig = PRESET_MODELS[selectedKey];
-      // Update gravity according to toggle
-      const modelDef = {
-        ...rawConfig.model,
-        gravity: gravityOn ? 9.81 : 0,
-        links: rawConfig.model.links.map(l => ({ ...l, damping }))
-      };
-      compiledModel = C.Tree.compileTreeModel(modelDef);
-      q = [...rawConfig.defaultQ];
-      v = new Array(compiledModel.numLinks).fill(0);
-      t = 0;
-      if (!keepTarget) target = [...rawConfig.defaultTarget];
-      trail = [];
+    function pauseClock() { lastFrame = null; accumulator = 0; }
+    function configure(key, gravity, nextDamping, keepTarget) {
+      const preset = requirePreset(key);
+      // Compile first: rejected changes cannot poison the current experiment.
+      const nextModel = C.Tree.compileTreeModel({
+        ...preset.model, gravity: gravity ? 9.81 : 0,
+        links: preset.model.links.map(link => ({ ...link, damping: nextDamping }))
+      });
+      selectedKey = key; gravityOn = gravity; damping = nextDamping;
+      compiledModel = nextModel;
+      q = [...preset.defaultQ]; v = new Array(nextModel.numLinks).fill(0);
+      if (!keepTarget) target = [...preset.defaultTarget];
+      tick = 0; trail = []; isRunning = false; pauseClock();
     }
-
-    function setModel(key) {
-      if (!PRESET_MODELS[key]) throw new Error(`Unknown model: ${key}`);
-      selectedKey = key;
-      reset(false);
+    function reset(keepTarget = false) { configure(selectedKey, gravityOn, damping, keepTarget); }
+    function setModel(key) { configure(key, gravityOn, damping, false); }
+    function requireBoolean(value) {
+      if (typeof value !== 'boolean') throw new Error('Expected a boolean control');
+      return value;
     }
-
-    function step(dt = 1 / 480) {
+    function step(dt = DT) {
       if (!wasmEngine) throw new Error('Wasm engine not initialized');
-      const stepRes = wasmEngine.stepControlled(compiledModel, q, v, t, dt, target, tauMax, motors);
-      q = stepRes.q;
-      v = stepRes.v;
-      t = stepRes.t;
-
-      const pose = C.Tree.forwardKinematics3D(compiledModel, q);
-      trail.push(pose.tip);
+      if (dt !== DT) throw new Error('Tree studio requires a fixed 1/480 s step');
+      const next = wasmEngine.stepControlled(compiledModel, q, v, tick * DT, DT, target, tauMax, motors);
+      const pose = C.Tree.forwardKinematics3D(compiledModel, next.q);
+      q = [...next.q]; v = [...next.v]; tick++;
+      trail.push({ ...pose.tip });
       if (trail.length > maxTrailPoints) trail.shift();
-
-      return {
-        q,
-        v,
-        t,
-        appliedTau: stepRes.appliedTau,
-        pose
-      };
+      return { q: [...q], v: [...v], t: tick * DT, appliedTau: [...next.appliedTau], pose };
     }
-
+    function advanceFrame(now) {
+      if (!Number.isFinite(now)) throw new Error('Invalid frame timestamp');
+      if (!isRunning) { pauseClock(); return 0; }
+      if (lastFrame === null) { lastFrame = now; return 0; }
+      // Rebase after a stall: keep fixed dt, bound work, discard wall-time debt.
+      const elapsed = Math.max(0, now - lastFrame) / 1000;
+      lastFrame = now;
+      accumulator = Math.min(accumulator + elapsed, MAX_FRAME_TICKS * DT);
+      const steps = Math.min(MAX_FRAME_TICKS, Math.floor((accumulator + 1e-12) / DT));
+      for (let i = 0; i < steps; i++) {
+        step();
+        accumulator = Math.max(0, accumulator - DT);
+      }
+      return steps;
+    }
     function getDiagnostics() {
       if (!wasmEngine) return null;
-      const terms = wasmEngine.terms(compiledModel, q, v);
-      const energy = wasmEngine.energy(compiledModel, q, v);
-      const jacobian = wasmEngine.jacobian(compiledModel, q);
-      const pose = C.Tree.forwardKinematics3D(compiledModel, q);
-      const targetPose = C.Tree.forwardKinematics3D(compiledModel, target);
-
       return {
-        model: compiledModel,
-        q,
-        v,
-        t,
-        target,
-        pose,
-        targetPose,
-        energy,
-        terms,
-        jacobian
+        model: compiledModel, q: [...q], v: [...v], t: tick * DT, target: [...target],
+        pose: C.Tree.forwardKinematics3D(compiledModel, q),
+        targetPose: C.Tree.forwardKinematics3D(compiledModel, target),
+        energy: wasmEngine.energy(compiledModel, q, v),
+        terms: wasmEngine.terms(compiledModel, q, v),
+        jacobian: wasmEngine.jacobian(compiledModel, q)
       };
     }
-
+    function exportSnapshot() {
+      const diag = getDiagnostics();
+      if (!diag) throw new Error('Wasm engine not initialized');
+      return {
+        schema: 'seedcore.mini-sim.tree-experiment.v1',
+        source: 'local_research_simulation', kind: 'state_snapshot',
+        modelId: compiledModel.modelId, modelDigest: compiledModel.modelDigest,
+        numLinks: compiledModel.numLinks, model: compiledModel,
+        engine: { backend: wasmEngine.BACKEND, abi: wasmEngine.ABI, build: { ...wasmEngine.BUILD } },
+        tick, dt: DT, time: tick * DT, state: { q: [...q], v: [...v] }, target: [...target],
+        control: { target: [...target], tauMax, motors, controller: 'gravity-compensated-pd-24-5-v1' },
+        energy: diag.energy, jacobian: diag.jacobian, date: new Date().toISOString(),
+        limitations: ['current state only; no replay or checkpoint restore',
+          'planar fixed-base simulation; no contacts, joint stops or hardware authority']
+      };
+    }
+    reset();
     return {
       get camera() { return camera; },
       get model() { return compiledModel; },
-      get q() { return q; },
-      get v() { return v; },
-      get t() { return t; },
-      get target() { return target; },
-      set target(val) { target = val; },
+      get q() { return [...q]; },
+      get v() { return [...v]; },
+      get t() { return tick * DT; },
+      get tick() { return tick; },
+      get target() { return [...target]; },
+      set target(value) {
+        if (!Array.isArray(value) || value.length !== compiledModel.numLinks) throw new Error('Target dimension mismatch');
+        for (const angle of value) if (!Number.isFinite(angle) || Math.abs(angle) > Math.PI) throw new Error('Invalid joint target');
+        target = [...value];
+      },
       get motors() { return motors; },
-      set motors(val) { motors = val; },
+      set motors(value) { motors = requireBoolean(value); },
       get gravityOn() { return gravityOn; },
-      set gravityOn(val) { gravityOn = val; reset(true); },
+      set gravityOn(value) { configure(selectedKey, requireBoolean(value), damping, true); },
       get damping() { return damping; },
-      set damping(val) { damping = val; reset(true); },
+      set damping(value) { configure(selectedKey, gravityOn, value, true); },
       get isRunning() { return isRunning; },
-      set isRunning(val) { isRunning = val; },
-      get trail() { return trail; },
-      setWasmEngine(engine) { wasmEngine = engine; },
-      setModel,
-      reset,
-      step,
-      getDiagnostics
+      set isRunning(value) {
+        requireBoolean(value);
+        if (value && !wasmEngine) throw new Error('Wasm engine not initialized');
+        isRunning = value; pauseClock();
+      },
+      get trail() { return trail.map(point => ({ ...point })); },
+      setWasmEngine(engine) { wasmEngine = engine; isRunning = false; pauseClock(); },
+      setModel, reset, step, advanceFrame, getDiagnostics, exportSnapshot
     };
   }
 

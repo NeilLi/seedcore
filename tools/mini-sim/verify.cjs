@@ -23,6 +23,6 @@ try {
   run(['--test','apps/mini-robot-simulator/physics.test.cjs','apps/mini-robot-simulator/simulation-worker.test.cjs',
     'apps/mini-robot-simulator/app-worker.test.cjs','tests/mini-sim/contracts.test.cjs',
     'tests/mini-sim/tree-contracts.test.cjs','tests/mini-sim/tree-physics.test.cjs',
-    'tests/mini-sim/tree-lab.test.cjs']);
+    'tests/mini-sim/tree-lab.test.cjs','tests/mini-sim/tree-lab-ui.test.cjs']);
   run(['tools/mini-sim/verify-physics.cjs']);
 } finally { fs.rmSync(temp,{ recursive:true,force:true }); }

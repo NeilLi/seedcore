@@ -23,6 +23,28 @@ Then open `http://127.0.0.1:8766`. A public deployment is not included.
 The local server works without internet access; offline reopening from a
 previously hosted site is not implemented.
 
+## Planar tree studio
+
+Open `tree-lab.html` (or use the navigation) for one-, two- and three-link
+presets with an orbit camera and analytical state inspector. The camera is 3D;
+the fixed-base revolute physics remains planar at z=0, with no contacts or
+joint stops. Drag with mouse/touch, or focus the canvas and use arrow keys to
+orbit and +/− to zoom.
+
+The studio advances fixed 1/480-second steps according to elapsed wall time,
+independent of display refresh rate. It caps catch-up at 48 steps per frame;
+long stalls slow simulated time without enlarging the timestep or skipping
+physics ticks. Hiding the tab pauses until Run is selected again. Model,
+gravity and damping edits pause and reset; target and motor changes apply
+from the next step. This narrow studio runs on the UI thread; worker-v3
+integration and browser performance qualification remain open.
+
+Physics/load errors stop visibly. Reset recovers numerical failures; Retry
+loading retries a failed or mismatched Wasm download. Export State saves the
+current model and digest, engine build, controller, tick and diagnostics as
+local research simulation JSON. It contains no replay history and cannot be
+imported as a checkpoint. The 2D lessons retain their existing save/restore flow.
+
 ## Implemented Physics
 
 `packages/mini-physics` owns the C++ dynamics used by the browser worker.

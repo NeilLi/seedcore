@@ -12,7 +12,7 @@
   <script src="tree-lab.js" defer></script>
   <script src="tree-lab-ui.js" defer></script>
 </head>
-<body>
+<body class="tree-studio">
   <header class="topbar">
     <a class="brand" href="./tree-lab.html"><span class="brand-mark" aria-hidden="true">s</span> seedcore <span class="brand-divider">/</span> mini robot lab</a>
     <nav class="nav-links">
@@ -26,9 +26,9 @@
       <div>
         <p class="eyebrow">SIM-3 / Multi-link dynamics</p>
         <h1>3D Kinematic Tree Studio</h1>
-        <p>Explore nonlinear articulated chains in 3D: 1-link pendulum, 2-link arm, and 3-link robot manipulator.</p>
+        <p>Explore a pendulum and two- or three-link arms in an orbit view. Motion stays in the XY plane.</p>
       </div>
-      <span class="offline">Zero-install C++/Wasm · runs locally</span>
+      <span class="offline">Local simulation · no hardware connection</span>
     </div>
 
     <div class="workspace">
@@ -55,22 +55,22 @@
         <label class="check"><input type="checkbox" id="motors" checked> Motors Active (PD)</label>
         <label class="check"><input type="checkbox" id="gravity" checked> Gravity (9.81 m/s²)</label>
 
-        <p class="small">The C++ Wasm kernel computes full analytical equations of motion at 480 Hz.</p>
+        <p class="small">Fixed physics steps: 1/480 second. Changing the model, gravity or damping pauses and resets the experiment.</p>
       </aside>
 
       <!-- 2. Middle Panel: 3D Stage Viewport -->
       <section class="stage-panel panel" aria-label="3D Robot Stage">
         <div class="stage-heading">
           <span><span class="status-dot"></span> 3D Articulated Viewport</span>
-          <span id="run-status">Initializing Wasm...</span>
+          <span id="run-status" role="status" aria-live="polite">Initializing Wasm...</span>
         </div>
 
-        <canvas id="viewport3d" role="img" aria-label="Interactive 3D view of the articulated robot arm"></canvas>
+        <canvas id="viewport3d" tabindex="0" role="img" aria-label="Orbit view of a planar robot arm" aria-describedby="camera-help"></canvas>
 
         <div class="stage-legend">
           <span><i class="legend-dot target-dot"></i> Target Star</span>
           <span><i class="legend-dot path-dot"></i> 3D End-Effector Trail</span>
-          <span>Camera: Drag to Orbit · Scroll to Zoom</span>
+          <span id="camera-help">Drag or use arrow keys to orbit · Scroll or +/− to zoom</span>
         </div>
 
         <div class="transport">
@@ -79,6 +79,8 @@
           <button id="reset">Reset</button>
           <button id="reset-cam">Reset Camera</button>
         </div>
+
+        <p id="error-message" class="error-message" role="alert"></p>
 
         <div class="readouts">
           <div><span>Simulation Time</span><strong id="time-val">0.00 s</strong></div>
@@ -131,15 +133,15 @@
         <p class="small"><strong>Model Digest:</strong> <span id="model-digest-badge" class="digest-badge">—</span></p>
 
         <div class="result-actions">
-          <button id="export-json">Export Experiment (JSON)</button>
+          <button id="export-json" disabled>Export State (JSON)</button>
         </div>
 
-        <p class="scope">Zero-allocation C++ physics with Cramer matrix inversion and RK4 integration running in WebAssembly.</p>
+        <p class="scope">Planar simulation with no collisions or joint stops. Export saves the current state and model, not a replay or resumable checkpoint.</p>
       </aside>
     </div>
 
     <footer>
-      <span>SeedCore Mini Physics 0.2 · SIM-3 General Tree Engine · Wasm ABI 2</span>
+      <span>SeedCore Mini Physics 0.2 · SIM-3 Planar Chain Studio · Wasm ABI 2</span>
       <span>Fixed-base revolute chains · SI units · WebAssembly f64</span>
     </footer>
   </main>

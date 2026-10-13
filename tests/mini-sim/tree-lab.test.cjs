@@ -9,8 +9,6 @@ const build = require('../../apps/mini-robot-simulator/physics-build.json');
 const TreeWasm = require('../../apps/mini-robot-simulator/tree-physics-wasm.js');
 const C = require('../../apps/mini-robot-simulator/sim-contracts.js');
 
-// Mock globalThis.MiniSimContracts for tree-lab.js
-globalThis.MiniSimContracts = C;
 const TreeLab = require('../../apps/mini-robot-simulator/tree-lab.js');
 
 const wasmEngine = TreeWasm.create(bytes, build);
@@ -126,4 +124,83 @@ test('renderScene executes canvas 2D draw operations without throwing', () => {
   assert.doesNotThrow(() => {
     TreeLab.renderScene(mockCtx, 800, 600, lab.camera, diag.pose, diag.targetPose, lab.trail, { gravity: true });
   });
+});
+
+test('wall-clock pacing produces identical physics at 30, 60, 120 and 144 Hz', () => {
+  const snapshots = [];
+  for (const fps of [30, 60, 120, 144]) {
+    const lab = TreeLab.createTreeLab({ wasmEngine });
+    lab.isRunning = true;
+    for (let i = 0; i <= fps; i++) lab.advanceFrame(i * 1000 / fps);
+    assert.equal(lab.tick, 480);
+    assert.equal(lab.t, 1);
+    snapshots.push(lab.q);
+  }
+  for (const q of snapshots) assert.deepEqual(q, snapshots[0]);
+});
+
+test('pause, reset and stalls cannot inject a large physics catch-up burst', () => {
+  const lab = TreeLab.createTreeLab({ wasmEngine });
+  lab.isRunning = true;
+  lab.advanceFrame(0);
+  assert.equal(lab.advanceFrame(10_000), 48);
+  assert.equal(lab.tick, 48);
+  lab.isRunning = false;
+  lab.advanceFrame(20_000);
+  lab.isRunning = true;
+  assert.equal(lab.advanceFrame(30_000), 0);
+  assert.equal(lab.advanceFrame(30_000 + 1000 / 60), 8);
+  lab.reset();
+  assert.equal(lab.isRunning, false);
+  assert.equal(lab.tick, 0);
+});
+
+test('invalid controls are rejected atomically and snapshots cannot mutate the simulation', () => {
+  const lab = TreeLab.createTreeLab({ wasmEngine });
+  lab.step();
+  const before = lab.getDiagnostics();
+  for (const change of [() => { lab.damping = NaN; }, () => { lab.gravityOn = 'false'; },
+    () => { lab.target = [0]; }, () => { lab.target = [0, NaN, 0]; },
+    () => { lab.motors = 1; }, () => lab.setModel('toString')]) {
+    assert.throws(change);
+    assert.deepEqual(lab.getDiagnostics(), before);
+  }
+  const target = [0.1, 0.2, 0.3];
+  lab.target = target; target[0] = 42;
+  lab.q[0] = 42; lab.v[0] = 42; lab.target[0] = 42;
+  lab.trail[0].x = 42;
+  const diag = lab.getDiagnostics(); diag.q[0] = 42; diag.target[0] = 42;
+  assert.notEqual(lab.q[0], 42);
+  assert.notEqual(lab.v[0], 42);
+  assert.equal(lab.target[0], 0.1);
+  assert.notEqual(lab.trail[0].x, 42);
+  assert.throws(() => TreeLab.createTreeLab({ defaultModel: 'toString' }));
+});
+
+test('model edits pause and reset time while retaining selected controller settings', () => {
+  const lab = TreeLab.createTreeLab({ wasmEngine });
+  lab.isRunning = true; lab.step(); lab.damping = 0.2;
+  assert.equal(lab.isRunning, false); assert.equal(lab.t, 0);
+  assert.equal(lab.model.links[0].damping, 0.2);
+  lab.isRunning = true; lab.step(); lab.gravityOn = false;
+  assert.equal(lab.isRunning, false); assert.equal(lab.model.gravity, 0);
+  lab.isRunning = true; lab.setModel('1-link');
+  assert.equal(lab.isRunning, false); assert.equal(lab.target.length, 1);
+});
+
+test('state export binds the complete model, control, tick, and verified engine build', () => {
+  const lab = TreeLab.createTreeLab({ wasmEngine });
+  lab.motors = false; lab.gravityOn = false; lab.damping = 0.21; lab.step();
+  const snapshot = lab.exportSnapshot();
+  assert.equal(snapshot.source, 'local_research_simulation');
+  assert.equal(snapshot.tick, 1); assert.equal(snapshot.dt, 1 / 480);
+  assert.equal(snapshot.time, snapshot.tick * snapshot.dt);
+  assert.equal(snapshot.engine.build.sha256, build.sha256);
+  assert.equal(snapshot.model.gravity, 0);
+  assert.equal(snapshot.model.links[0].damping, 0.21);
+  assert.equal(snapshot.control.motors, false);
+  assert.equal(snapshot.control.tauMax, 20);
+  assert.deepEqual(snapshot.control.target, lab.target);
+  assert.ok(snapshot.limitations.includes('current state only; no replay or checkpoint restore'));
+  assert.throws(() => TreeLab.createTreeLab().exportSnapshot());
 });
