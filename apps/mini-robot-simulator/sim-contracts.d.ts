@@ -197,7 +197,7 @@ declare namespace MiniSimContracts {
             com: number;
             inertia: number;
             damping: number;
-            jointLimits?: [number, number];
+            jointLimits?: readonly [number, number];
         }
         interface TreeModelInput {
             schema?: typeof SCHEMA;

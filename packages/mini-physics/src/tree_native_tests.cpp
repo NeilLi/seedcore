@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cassert>
 #include <iostream>
+#include <cstring>
+#include <limits>
 
 namespace {
 
@@ -72,7 +74,7 @@ void step_tree(double *b, int count, int op = 2) {
     int n = static_cast<int>(b[0]);
     for (int j = 0; j < n; j++) {
       b[17 + j] = b[34 + j];
-      b[20 + j] = b[37 + j]; // v_next is at 37 for n=3 (or 34+n)
+      b[20 + j] = b[37 + j]; // fixed ABI offset for every link count
     }
     b[23] = b[40];
   }
@@ -304,6 +306,49 @@ int main() {
     assert(mini_tree_eval(0, nullptr, 64) == 1);
   }
   std::cout << "  ✔ Invalid model parameter & boundary rejection passed\n";
+
+  // Raw ABI failures must never publish a partial result, including failures
+  // discovered after finite values have already been computed.
+  {
+    double b[64], before[64];
+    auto reset = [&]() {
+      init_1link(b);
+      for (int i = 34; i < 64; i++) b[i] = 123;
+    };
+    auto fails_unchanged = [&](int op, int status) {
+      std::memcpy(before, b, sizeof b);
+      assert(mini_tree_eval(op, b, 64) == status);
+      assert(std::memcmp(before, b, sizeof b) == 0);
+    };
+    for (double n : {1.5, 2.5, std::numeric_limits<double>::quiet_NaN(),
+                     std::numeric_limits<double>::infinity(), 1e100}) {
+      reset(); b[0] = n; fails_unchanged(0, 1);
+    }
+    for (double tau : {std::numeric_limits<double>::quiet_NaN(),
+                       std::numeric_limits<double>::infinity()}) {
+      reset(); b[24] = tau; fails_unchanged(2, 1);
+    }
+    reset(); b[20] = 1e200; fails_unchanged(0, 3);
+    init_2link(b); b[17] = 1e308; b[18] = 1e308; fails_unchanged(3, 3);
+    init_2link(b); b[8] = 0; b[11] = 1e-30; fails_unchanged(1, 2);
+  }
+  std::cout << "  ✔ Invalid scalar inputs and atomic failure outputs passed\n";
+
+  // Uniformly scaling mass and inertia must not change unforced acceleration.
+  // The old absolute determinant gate rejected the 2/3-link scaled fixtures.
+  for (int n = 1; n <= 3; n++) {
+    double base[64], b[64];
+    init_3link(base); base[0] = n;
+    for (int i = 0; i < n; i++) { base[13 + i] = 0; base[20 + i] = 0.2 * (i + 1); }
+    assert(mini_tree_eval(1, base, 64) == 0);
+    for (double scale : {1e-9, 1e-6, 1.0}) {
+      std::memcpy(b, base, sizeof b);
+      for (int i = 0; i < n; i++) { b[4 + i] *= scale; b[10 + i] *= scale; }
+      assert(mini_tree_eval(1, b, 64) == 0);
+      for (int i = 0; i < n; i++) close(b[34 + i], base[34 + i], 1e-10);
+    }
+  }
+  std::cout << "  ✔ Mass scale invariant acceleration passed\n";
 
   std::cout << "All SIM-3 native invariant test groups passed successfully!\n";
   return 0;

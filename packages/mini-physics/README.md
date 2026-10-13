@@ -1,4 +1,4 @@
-# SeedCore Mini Physics — SIM-2
+# SeedCore Mini Physics — SIM-2 and planar SIM-3 core
 
 Owned C++17, double-precision, smooth fixed-base two-link arm. The browser's
 prepared experiments now run this core in WebAssembly inside the existing
@@ -33,8 +33,9 @@ ctest --test-dir /tmp/seedcore-mini-physics --output-on-failure
 ```
 
 Clang/GCC-style floating-point flags are used. Windows/MSVC is unqualified.
-Fast math and multiply-add contraction are disabled. The Wasm module is 3,738
-bytes with fixed 131,072-byte linear memory; build artifacts are served locally.
+Fast math and multiply-add contraction are disabled. The Wasm module has fixed
+131,072-byte linear memory; its current size and digest are recorded in
+`apps/mini-robot-simulator/physics-build.json`. Build artifacts are served locally.
 Missing, corrupt or incompatible Wasm stops initialization, with no JS physics
 fallback. Reset can create a replacement worker after a failure.
 
@@ -58,6 +59,28 @@ This allocation-free specialized ABI deliberately precedes general model/state
 handles, model imports and tree dynamics. `step` supports arbitrary JS callback
 controls for reference compatibility by orchestrating RK4 around C++
 accelerations. That callback path is not used by the prepared browser lessons.
+
+## Planar serial-chain ABI
+
+`include/mini_tree_physics.h` declares the additional ABI 2 entrypoints using
+a separate 64-double buffer. It supports fixed-base planar chains with one to
+three revolute joints, per-link COM/inertia and per-joint damping. It does not
+implement branching or spatial dynamics. The existing browser worker still
+uses ABI 1; `tree-physics-wasm.js` exposes ABI 2 for independent callers.
+
+All results are validated before any output is published. Invalid link counts,
+non-finite inputs and divergence leave the caller's buffer unchanged. The mass
+solve uses LDL^T with pivots normalized by the largest mass-matrix diagonal;
+pivots at or below 1e-14 reject ill-conditioned models without rejecting a
+well-conditioned model solely for its mass scale.
+
+Tree contracts retain numeric precision and hash UTF-8 canonical JSON. Nested
+joint limits are immutable metadata; mechanical stops and encoder sampling are
+not implemented. State vectors must match the link count; empty velocity or
+torque vectors explicitly mean zero. Controlled steps require a complete target.
+Rebuilding changes the module digest, so existing saved progress requires its
+original matching build. Tree models previously rounded by the compiler must
+be recompiled before comparing model identities.
 
 ## Complete resumable state
 

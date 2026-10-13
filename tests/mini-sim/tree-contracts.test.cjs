@@ -149,3 +149,61 @@ test('TreeContracts rejects invalid tree models', () => {
   // compileTreeModel throws on invalid input
   assert.throws(() => C.Tree.compileTreeModel({ modelId: 'test', numLinks: 0, links: [], gravity: 9.81 }));
 });
+
+function modelInput(overrides = {}) {
+  return { modelId: 'regression', numLinks: 1, gravity: 9.81,
+    links: [{ name: 'link', length: 1, mass: 1, com: 0.5, inertia: 0.1, damping: 0, jointLimits: [-1, 1] }],
+    ...overrides };
+}
+
+test('Tree compiler preserves precise parameters and freezes nested joint limits', () => {
+  const input = modelInput();
+  input.links[0].inertia = 1e-9;
+  input.links[0].jointLimits = [1, 1 + 1e-10];
+  const compiled = C.Tree.compileTreeModel(input);
+  assert.equal(compiled.links[0].inertia, 1e-9);
+  assert.deepEqual(compiled.links[0].jointLimits, input.links[0].jointLimits);
+  assert.ok(Object.isFrozen(compiled.links[0].jointLimits));
+  input.links[0].jointLimits[0] = -10;
+  assert.equal(compiled.links[0].jointLimits[0], 1);
+  assert.notEqual(compiled.modelDigest, C.Tree.compileTreeModel(modelInput()).modelDigest);
+});
+
+test('Tree compiler hashes Unicode model identities as UTF-8 canonical JSON', () => {
+  const input = modelInput({ modelId: '机器人 🦆' });
+  input.links[0].name = '关节';
+  const compiled = C.Tree.compileTreeModel(input);
+  const canonical = { schema: C.Tree.SCHEMA, modelId: input.modelId, numLinks: input.numLinks,
+    links: compiled.links, gravity: compiled.gravity, encoders: compiled.encoders };
+  assert.equal(compiled.modelDigest, 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex'));
+});
+
+test('Tree validator rejects unsupported schemas, fields, and malformed optional metadata', () => {
+  const invalid = [
+    modelInput({ schema: 'unknown.v2' }), modelInput({ parent: 0 }),
+    ...['energy', null, ['camera'], ['energy', 'energy'], [null]].map(encoders => modelInput({ encoders })),
+    ...[null, false, 0, [0], [0, NaN]].map(jointLimits => {
+      const input = modelInput(); input.links[0].jointLimits = jointLimits; return input;
+    }),
+    ...[{ name: 'x'.repeat(33) }, { axis: [1, 0, 0] }].map(fields => {
+      const input = modelInput(); Object.assign(input.links[0], fields); return input;
+    })
+  ];
+  for (const input of invalid) {
+    assert.equal(C.Tree.validateTreeModel(input), false, JSON.stringify(input));
+    assert.throws(() => C.Tree.compileTreeModel(input), /Invalid TreeModel/);
+  }
+});
+
+test('Tree packing and FK reject malformed state instead of silently replacing it', () => {
+  const model = C.Tree.compileTreeModel(modelInput());
+  for (const q of [[], [NaN], [Infinity], [null], [0, 0]]) {
+    assert.throws(() => C.Tree.forwardKinematics3D(model, q));
+    assert.throws(() => C.Tree.packTreeBuffer(model, q, [0], 0, [0], 1 / 480, [0], 16, true));
+  }
+  for (const field of [1, 2, 3, 4, 5, 6, 7]) {
+    const args = [[0], [0], 0, [0], 1 / 480, [0], 16, true];
+    args[field] = Array.isArray(args[field]) ? [NaN] : NaN;
+    assert.throws(() => C.Tree.packTreeBuffer(model, ...args));
+  }
+});

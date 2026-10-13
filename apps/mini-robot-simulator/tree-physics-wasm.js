@@ -17,27 +17,52 @@
     const scratchPtr = e.mini_tree_scratch();
     const b = new Float64Array(e.memory.buffer, scratchPtr, 64);
 
+    function validateVector(values, n, name, allowEmpty = false) {
+      if (!Array.isArray(values) || (values.length !== n && !(allowEmpty && values.length === 0))) {
+        throw new Error(`${name} dimension mismatch`);
+      }
+      for (const value of values) {
+        if (!Number.isFinite(value)) throw new Error(`Invalid ${name} component`);
+      }
+    }
+
     function packInputs(model, q, v, t, tau, dt, target, tauMax, motors) {
+      if (!model || !Number.isInteger(model.numLinks) || model.numLinks < 1 || model.numLinks > 3 ||
+          !Array.isArray(model.links) || model.links.length !== model.numLinks) {
+        throw new Error('Invalid tree model dimensions');
+      }
+      validateVector(q, model.numLinks, 'q');
+      validateVector(v, model.numLinks, 'v', true);
+      validateVector(tau, model.numLinks, 'tau', true);
+      validateVector(target, model.numLinks, 'target', true);
+      if (!Number.isFinite(t) || !Number.isFinite(dt) || !Number.isFinite(tauMax) || typeof motors !== 'boolean') {
+        throw new Error('Invalid tree time or control input');
+      }
       b.fill(0);
       b[0] = model.numLinks;
       for (let i = 0; i < model.numLinks; i++) {
+        const link = model.links[i];
+        if (!link || !['length', 'mass', 'com', 'inertia', 'damping'].every(key => Number.isFinite(link[key]))) {
+          throw new Error('Invalid tree link parameters');
+        }
         b[1 + i] = model.links[i].length;
         b[4 + i] = model.links[i].mass;
         b[7 + i] = model.links[i].com;
         b[10 + i] = model.links[i].inertia;
         b[13 + i] = model.links[i].damping;
       }
+      if (!Number.isFinite(model.gravity)) throw new Error('Invalid tree gravity');
       b[16] = model.gravity;
 
       for (let i = 0; i < model.numLinks; i++) {
-        b[17 + i] = q && q[i] !== undefined ? q[i] : 0;
-        b[20 + i] = v && v[i] !== undefined ? v[i] : 0;
-        b[24 + i] = tau && tau[i] !== undefined ? tau[i] : 0;
-        b[28 + i] = target && target[i] !== undefined ? target[i] : 0;
+        b[17 + i] = q[i];
+        b[20 + i] = v.length === 0 ? 0 : v[i];
+        b[24 + i] = tau.length === 0 ? 0 : tau[i];
+        b[28 + i] = target.length === 0 ? 0 : target[i];
       }
-      b[23] = t || 0;
-      b[27] = dt || 0;
-      b[31] = tauMax !== undefined ? tauMax : 16.0;
+      b[23] = t;
+      b[27] = dt;
+      b[31] = tauMax;
       b[32] = motors ? 1.0 : 0.0;
     }
 
@@ -134,6 +159,7 @@
       },
 
       stepControlled(model, q, v, t, dt, target, tauMax = 16.0, motors = true) {
+        validateVector(target, model.numLinks, 'target');
         packInputs(model, q, v, t, [], dt, target, tauMax, motors);
         evaluate(6);
         const n = model.numLinks;

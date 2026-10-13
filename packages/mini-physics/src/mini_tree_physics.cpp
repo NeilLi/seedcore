@@ -25,8 +25,9 @@ struct TreeParams {
 };
 
 bool parse_params(const double *buf, TreeParams &p) {
+  // Validate before converting: non-finite/out-of-range casts are undefined in C++.
+  if (buf[0] != 1.0 && buf[0] != 2.0 && buf[0] != 3.0) return false;
   int n = static_cast<int>(buf[0]);
-  if (n < 1 || n > 3) return false;
   p.n = n;
   for (int i = 0; i < n; i++) {
     p.l[i] = buf[1 + i];
@@ -135,34 +136,33 @@ void tree_terms(const TreeParams &p, const double *q, const double *v,
   }
 }
 
-// Invert symmetric positive-definite M matrix and solve M * a = rhs
+// Solve with a scaled LDL^T factorization. An absolute determinant threshold
+// incorrectly rejects well-conditioned small/light robots (det scales as mass^n).
 int solve_accel(int n, const double M[3][3], const double rhs[3], double out[3]) {
-  if (n == 1) {
-    if (M[0][0] <= 1e-14) return 2;
-    out[0] = rhs[0] / M[0][0];
-    return 0;
+  double scale = 0;
+  for (int i = 0; i < n; i++) {
+    if (!finite(rhs[i])) return 3;
+    for (int j = 0; j < n; j++) if (!finite(M[i][j])) return 3;
+    if (M[i][i] > scale) scale = M[i][i];
   }
-  if (n == 2) {
-    double det = M[0][0] * M[1][1] - M[0][1] * M[0][1];
-    if (det <= 1e-14) return 2;
-    out[0] = (M[1][1] * rhs[0] - M[0][1] * rhs[1]) / det;
-    out[1] = (M[0][0] * rhs[1] - M[0][1] * rhs[0]) / det;
-    return 0;
+  if (scale <= 0) return 2;
+  double L[3][3] = {}, D[3] = {}, y[3] = {};
+  for (int j = 0; j < n; j++) {
+    D[j] = M[j][j] / scale;
+    for (int k = 0; k < j; k++) D[j] -= L[j][k] * L[j][k] * D[k];
+    if (D[j] <= 1e-14) return 2;
+    for (int i = j + 1; i < n; i++) {
+      double entry = M[i][j] / scale;
+      for (int k = 0; k < j; k++) entry -= L[i][k] * L[j][k] * D[k];
+      L[i][j] = entry / D[j];
+    }
+    y[j] = rhs[j] / scale;
+    for (int k = 0; k < j; k++) y[j] -= L[j][k] * y[k];
   }
-  // n == 3
-  double c00 = M[1][1] * M[2][2] - M[1][2] * M[1][2];
-  double c01 = -(M[0][1] * M[2][2] - M[1][2] * M[0][2]);
-  double c02 = M[0][1] * M[1][2] - M[1][1] * M[0][2];
-  double det = M[0][0] * c00 + M[0][1] * c01 + M[0][2] * c02;
-  if (det <= 1e-14) return 2;
-
-  double c11 = M[0][0] * M[2][2] - M[0][2] * M[0][2];
-  double c12 = -(M[0][0] * M[1][2] - M[0][1] * M[0][2]);
-  double c22 = M[0][0] * M[1][1] - M[0][1] * M[0][1];
-
-  out[0] = (c00 * rhs[0] + c01 * rhs[1] + c02 * rhs[2]) / det;
-  out[1] = (c01 * rhs[0] + c11 * rhs[1] + c12 * rhs[2]) / det;
-  out[2] = (c02 * rhs[0] + c12 * rhs[1] + c22 * rhs[2]) / det;
+  for (int i = n - 1; i >= 0; i--) {
+    out[i] = y[i] / D[i];
+    for (int j = i + 1; j < n; j++) out[i] -= L[j][i] * out[j];
+  }
   return 0;
 }
 
@@ -235,6 +235,9 @@ extern "C" int mini_tree_eval(int op, double *b, unsigned length) {
     double tau_max = b[31];
     double motors = b[32];
 
+    if (op == 2) {
+      for (int i = 0; i < p.n; i++) if (!finite(tau[i])) return 1;
+    }
     if (op == 6) {
       if (!finite(tau_max) || tau_max <= 0 || tau_max > 100.0) return 1;
       if (motors != 0.0 && motors != 1.0) return 1;
@@ -354,6 +357,8 @@ extern "C" int mini_tree_eval(int op, double *b, unsigned length) {
 
   for (int j = 0; j < count; j++) {
     if (!finite(result[j])) return 3;
+  }
+  for (int j = 0; j < count; j++) {
     b[34 + j] = result[j];
   }
 

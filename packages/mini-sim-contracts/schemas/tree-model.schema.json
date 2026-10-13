@@ -4,7 +4,6 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema",
     "modelId",
     "numLinks",
     "links",
@@ -89,6 +88,8 @@
     },
     "encoders": {
       "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
       "items": {
         "type": "string",
         "enum": [

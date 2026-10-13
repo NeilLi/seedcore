@@ -248,3 +248,53 @@ test('Tree Physics Wasm rejects invalid model configurations and dimensions', ()
   };
   assert.throws(() => tree.terms(badMassModel, [0]));
 });
+
+function regressionModel(n = 1) {
+  return { numLinks: n, gravity: 9.81, links: Array.from({ length: n }, () =>
+    ({ length: 1, mass: 1, com: 0.5, inertia: 0.1, damping: 0 })) };
+}
+
+test('Tree Wasm rejects malformed dimensions and non-finite time/control inputs', () => {
+  const model = regressionModel();
+  assert.throws(() => tree.terms({ ...model, numLinks: 1.5, links: [...model.links, ...model.links] }, [0, 0]));
+  for (const q of [[], [0, 0], [null], [NaN]]) assert.throws(() => tree.forward(model, q));
+  assert.throws(() => tree.step(model, [0], [0], NaN, [0], 1 / 480));
+  assert.throws(() => tree.stepControlled(model, [0], [0], 0, 1 / 480, [], 16, true));
+  assert.throws(() => tree.stepControlled(model, [0], [0], 0, 1 / 480, [0], 16, 'false'));
+});
+
+test('Tree acceleration is invariant to uniform mass and inertia scaling', () => {
+  for (const n of [1, 2, 3]) {
+    const model = regressionModel(n);
+    const q = [0.2, -0.3, 0.4].slice(0, n), v = [0.5, -0.2, 0.3].slice(0, n);
+    const expected = tree.acceleration(model, q, v);
+    for (const scale of [1e-9, 1e-6, 1]) {
+      const scaled = { ...model, links: model.links.map(l => ({ ...l, mass: l.mass * scale, inertia: l.inertia * scale })) };
+      const actual = tree.acceleration(scaled, q, v);
+      actual.forEach((a, i) => assert.ok(Math.abs(a - expected[i]) < 1e-10));
+    }
+  }
+});
+
+test('Raw tree ABI rejects invalid link counts and preserves the buffer on every error', () => {
+  const e = new WebAssembly.Instance(new WebAssembly.Module(bytes), { env: { sin: Math.sin, cos: Math.cos } }).exports;
+  const ptr = e.mini_tree_scratch(), b = new Float64Array(e.memory.buffer, ptr, 64);
+  const reset = () => {
+    b.fill(0); b[0] = 1; b[1] = 1; b[4] = 1; b[7] = 0.5; b[10] = 0.1; b[16] = 9.81; b[27] = 1 / 480;
+    b.fill(123, 34);
+  };
+  const failsUnchanged = (op, status) => {
+    const before = Array.from(b);
+    assert.equal(e.mini_tree_eval(op, ptr, 64), status);
+    assert.deepEqual(Array.from(b), before);
+  };
+  for (const n of [1.5, NaN, Infinity, -Infinity, 1e100]) {
+    reset(); b[0] = n; failsUnchanged(0, 1);
+  }
+  for (const tau of [NaN, Infinity]) {
+    reset(); b[24] = tau; failsUnchanged(2, 1);
+  }
+  reset(); b[20] = 1e200; failsUnchanged(0, 3);
+  reset(); b[17] = 1e308; b[0] = 2; b[2] = 1; b[5] = 1; b[8] = 0.5; b[11] = 0.1; b[18] = 1e308;
+  failsUnchanged(3, 3);
+});

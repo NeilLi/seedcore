@@ -10,10 +10,10 @@ namespace MiniSimContracts {
       name: string;
       length: number;    // meters (> 0)
       mass: number;      // kg (> 0)
-      com: number;       // COM distance from joint (> 0, <= length)
+      com: number;       // COM distance from joint (>= 0, <= length)
       inertia: number;   // moment of inertia about COM (> 0)
       damping: number;   // viscous damping (>= 0)
-      jointLimits?: [number, number]; // [min, max] radians
+      jointLimits?: readonly [number, number]; // metadata [min, max]; stops are not simulated
     }
 
     export interface TreeModelInput {
@@ -52,20 +52,30 @@ namespace MiniSimContracts {
   export function validateTreeModel(m: unknown): m is TreeModelInput {
     if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
     const model = m as Record<string, unknown>;
+    if (Object.keys(model).some(key => !['schema', 'modelId', 'numLinks', 'links', 'gravity', 'encoders'].includes(key))) return false;
+    if (model.schema !== undefined && model.schema !== SCHEMA) return false;
     if (typeof model.modelId !== 'string' || model.modelId.length === 0 || model.modelId.length > 64) return false;
     if (!Number.isInteger(model.numLinks) || (model.numLinks as number) < 1 || (model.numLinks as number) > 3) return false;
     if (!Array.isArray(model.links) || model.links.length !== model.numLinks) return false;
     if (typeof model.gravity !== 'number' || !Number.isFinite(model.gravity) || model.gravity < 0 || model.gravity > 50) return false;
+    if (model.encoders !== undefined) {
+      if (!Array.isArray(model.encoders) || model.encoders.length > 4 ||
+          new Set(model.encoders).size !== model.encoders.length) return false;
+      for (const encoder of model.encoders) {
+        if (!['joint_pos', 'joint_vel', 'tip_pos', 'energy'].includes(encoder)) return false;
+      }
+    }
 
     for (const link of model.links as TreeLink[]) {
-      if (!link || typeof link !== 'object') return false;
-      if (typeof link.name !== 'string' || link.name.length === 0) return false;
+      if (!link || typeof link !== 'object' || Array.isArray(link)) return false;
+      if (Object.keys(link).some(key => !['name', 'length', 'mass', 'com', 'inertia', 'damping', 'jointLimits'].includes(key))) return false;
+      if (typeof link.name !== 'string' || link.name.length === 0 || link.name.length > 32) return false;
       if (typeof link.length !== 'number' || !Number.isFinite(link.length) || link.length <= 0 || link.length > 10) return false;
       if (typeof link.mass !== 'number' || !Number.isFinite(link.mass) || link.mass <= 0 || link.mass > 100) return false;
       if (typeof link.com !== 'number' || !Number.isFinite(link.com) || link.com < 0 || link.com > link.length) return false;
       if (typeof link.inertia !== 'number' || !Number.isFinite(link.inertia) || link.inertia <= 0 || link.inertia > 100) return false;
       if (typeof link.damping !== 'number' || !Number.isFinite(link.damping) || link.damping < 0 || link.damping > 100) return false;
-      if (link.jointLimits) {
+      if (link.jointLimits !== undefined) {
         if (!Array.isArray(link.jointLimits) || link.jointLimits.length !== 2) return false;
         if (!Number.isFinite(link.jointLimits[0]) || !Number.isFinite(link.jointLimits[1]) || link.jointLimits[0] >= link.jointLimits[1]) return false;
       }
@@ -84,19 +94,19 @@ namespace MiniSimContracts {
       numLinks: input.numLinks,
       links: input.links.map(l => ({
         name: l.name,
-        length: Number(l.length.toFixed(8)),
-        mass: Number(l.mass.toFixed(8)),
-        com: Number(l.com.toFixed(8)),
-        inertia: Number(l.inertia.toFixed(8)),
-        damping: Number(l.damping.toFixed(8)),
-        jointLimits: l.jointLimits ? [Number(l.jointLimits[0].toFixed(8)), Number(l.jointLimits[1].toFixed(8))] as [number, number] : undefined
+        length: l.length,
+        mass: l.mass,
+        com: l.com,
+        inertia: l.inertia,
+        damping: l.damping,
+        jointLimits: l.jointLimits ? Object.freeze([...l.jointLimits] as [number, number]) : undefined
       })),
-      gravity: Number(input.gravity.toFixed(8)),
+      gravity: input.gravity,
       encoders: input.encoders || ['joint_pos', 'joint_vel', 'tip_pos', 'energy']
     };
 
     const canonicalJson = JSON.stringify(canonical);
-    const modelDigest = sha256Ascii(canonicalJson);
+    const modelDigest = sha256Bytes(new TextEncoder().encode(canonicalJson));
 
     return Object.freeze({
       schema: SCHEMA,
@@ -112,7 +122,7 @@ namespace MiniSimContracts {
   }
 
   export function forwardKinematics3D(model: CompiledTreeModel, q: number[]): TreePose3D {
-    if (q.length < model.numLinks) throw new Error('q dimension mismatch');
+    validateVector(q, model.numLinks, 'q');
     const joints: Point3D[] = [];
     let phi = 0;
     let x = 0;
@@ -142,6 +152,14 @@ namespace MiniSimContracts {
     tauMax: number,
     motors: boolean
   ): Float64Array {
+    validateVector(q, model.numLinks, 'q');
+    validateVector(v, model.numLinks, 'v', true);
+    validateVector(tau, model.numLinks, 'tau', true);
+    validateVector(target, model.numLinks, 'target', true);
+    if (!Number.isFinite(t) || t < 0 || !Number.isFinite(dt) || dt < 0 || dt > 1 / 120 ||
+        !Number.isFinite(tauMax) || tauMax < 0 || tauMax > 100 || typeof motors !== 'boolean') {
+      throw new Error('Invalid tree time or control input');
+    }
     const buf = new Float64Array(64);
     buf[0] = model.numLinks;
     for (let i = 0; i < model.numLinks; i++) {
@@ -154,10 +172,10 @@ namespace MiniSimContracts {
     buf[16] = model.gravity;
 
     for (let i = 0; i < model.numLinks; i++) {
-      buf[17 + i] = q[i] || 0;
-      buf[20 + i] = v[i] || 0;
-      buf[24 + i] = tau[i] || 0;
-      buf[28 + i] = target[i] || 0;
+      buf[17 + i] = q[i];
+      buf[20 + i] = v.length === 0 ? 0 : v[i];
+      buf[24 + i] = tau.length === 0 ? 0 : tau[i];
+      buf[28 + i] = target.length === 0 ? 0 : target[i];
     }
     buf[23] = t;
     buf[27] = dt;
@@ -165,6 +183,15 @@ namespace MiniSimContracts {
     buf[32] = motors ? 1.0 : 0.0;
 
     return buf;
+  }
+
+  function validateVector(values: number[], n: number, name: string, allowEmpty = false): void {
+    if (!Array.isArray(values) || (values.length !== n && !(allowEmpty && values.length === 0))) {
+      throw new Error(`${name} dimension mismatch`);
+    }
+    for (const value of values) {
+      if (!Number.isFinite(value)) throw new Error(`Invalid ${name} component`);
+    }
   }
 }
 }

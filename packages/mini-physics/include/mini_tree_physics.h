@@ -42,9 +42,7 @@ extern "C" {
  *     [40]: t_next
  *   Operation 3 (Forward Kinematics):
  *     [34..35]: origin (0, 0)
- *     [36..37]: joint 1 pos (x1, y1)
- *     [38..39]: joint 2 pos (x2, y2) (or tip if num_links==2)
- *     [40..41]: tip pos (x_tip, y_tip)
+ *     [36..(35 + 2*num_links)]: link endpoint (x, y) pairs; last pair is tip
  *   Operation 4 (Energy):
  *     [34]: Kinetic energy K
  *     [35]: Potential energy U
@@ -61,7 +59,7 @@ extern "C" {
  * Return codes:
  *   0: OK
  *   1: Invalid input, length, op, or parameters (non-finite, negative mass/length)
- *   2: Singular mass matrix (det <= 1e-14)
+ *   2: Singular/ill-conditioned mass matrix (scaled LDL^T pivot <= 1e-14)
  *   3: Numerical divergence / non-finite state
  *
  * On failure, output buffer remains unchanged.
