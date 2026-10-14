@@ -1,40 +1,31 @@
-# SeedCore Investor Application Pack
+# SeedCore Application And Partner Pack
 
-This directory packages the current SeedCore application narrative for investor
-submissions, VC conversations, accelerator follow-ups, and public validation.
+Date: 2026-10-14
+Status: Current affordable physical AI positioning; earlier custody materials retained as supporting references
 
-SeedCore's short form:
+The current narrative is **an open trust runtime for affordable physical AI**,
+starting with browser-first maker and supervised STEM kits. Its three pillars
+are SeedCore Inside, auditable classroom governance and later opt-in sim-to-real
+telemetry. China sourcing/ODM integration, Singapore trust/commercial stewardship
+and Thailand engineering/field delivery form the proposed operating model.
 
-```text
-Agent frameworks help AI decide what to do.
-Prompt guardrails control what AI says.
-SeedCore controls what AI is allowed to execute.
-```
+This pack distinguishes available browser/model/trust foundations from planned
+MCU firmware, physical WebSerial integration, hardware signing, pilots and OEM
+agreements. The [18-month plan](../development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+owns Q4 2026–Q1 2028 targets and the first 30-day schedule; evidence gates
+determine actual release and scale.
 
-The application stance is deliberately split into two tracks:
+## Current Materials
 
-- **Submit now** with clear positioning, implemented runtime baseline, focused
-  commercial wedge, completed local rare-shoe proof slice, and a concrete
-  next-step plan.
-- **Package next** by turning the local rare-shoe RCT artifacts into a public
-  validation showcase: walkthrough recording, README section, short deck, and
-  customer discovery list.
+- [One-page overview](seedcore_one_page_overview.md): product, pillars, founder advantage, present evidence and business model.
+- [Investor application copy](investor_application_copy.md): current narrative, milestone targets, open/paid boundaries and support sought.
+- [OEM partnership brief](oem_partnership_brief.md): draft design-in scope, conformance, responsibilities, economics and staged distribution.
+- [Physical AI demo script](demo_presentation_script.md): proposed split-screen allow/deny/revoke/evidence walkthrough; only show accepted capabilities.
 
-## Pack Contents
+## Supporting Custody Reference
 
-- [Investor application copy](investor_application_copy.md): paste-ready pitch,
-  final narrative, founder summary, investor ask, traction, 30-day plan, and
-  short-form application answers.
-- [One-page SeedCore overview](seedcore_one_page_overview.md): crisp company
-  and runtime overview with a simple architecture diagram.
-- [Rare-shoe RCT demo brief](rare_shoe_rct_demo_brief.md): the first commercial
-  proof scene and near-term verticalization checklist.
-- [Demo presentation script](demo_presentation_script.md): five-minute
-  walkthrough script for investor and partner conversations.
+- [Rare-shoe RCT demo brief](rare_shoe_rct_demo_brief.md): earlier custody proof scene, retained for regression/context; its commercial and near-term schedule is superseded.
 
-## Source References
-
-- [Agent Action Gateway Contract v1](../development/trust-runtime/agent_action_gateway_contract.md)
-- [Rare-Shoe RCT Demo Spec](../development/applications/rct/rare_shoes_collecting_transfer_demo_spec.md)
-- [Current Next Steps](../development/current_next_steps.md)
-- [SeedCore 2026 Execution Plan](../development/strategy/seedcore_2026_execution_plan.md)
+Preparing these materials does not send them, establish agreements or publish
+a physical demo. The [active queue](../development/current_next_steps.md) owns
+the next engineering and preparation work.

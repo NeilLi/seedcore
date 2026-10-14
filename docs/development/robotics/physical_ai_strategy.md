@@ -1,220 +1,172 @@
 # SeedCore Physical AI Strategy
 
-Date: 2026-09-21
-Status: Active product direction; adoption hypotheses and future capabilities are unvalidated
+Date: 2026-10-14
+Status: Active product direction; hardware, adoption, costs and commercial outcomes require validation
 
 ## Product Thesis
 
-**SeedCore is a trust runtime for physical AI: it governs which agent may ask
-which robot to do what, under which limits, and preserves evidence of the
-attempt.** Small robots are the first integration focus. Microduck is the
-reference target, not the boundary of the product.
+**SeedCore is the open trust runtime for affordable physical AI.** It governs
+which accountable agent may ask a robot to act, enforces bounded authority at
+the execution boundary and preserves evidence of the attempt. Browser lessons
+and reference firmware are the proposed adoption path for maker and supervised
+STEM kits, targeting selected embodiments below $300 excluding an existing host.
 
-The customer-facing mission is to **help people discover a useful job for a
-small robot, choose suitable hardware, and implement and support the functions
-they need**. The team delivers that service; the runtime provides its reusable
-technical foundation. People should not need robotics expertise to describe
-their desired outcome. See the
-[customer delivery model](robot_solution_delivery.md).
+The founder's stated 20-year Chinese IoT/silicon supply-chain experience,
+international engineering perspective and proposed Singapore–Thailand base
+create a credible route to combining affordable hardware with enterprise
+trust. The moat must be earned through qualified profiles, trusted releases,
+repeatable integration, support and usable evidence.
 
-The strategic bet is that more accessible robots and more independently
-authored behaviors will increase the need for portable authority and evidence
-contracts. This is a hypothesis, not a market-size or adoption forecast. The
-first task is to validate a real customer need alongside the engineering
-boundary needed to deliver it. More robot choices alone do not establish demand
-for SeedCore's service or willingness to pay.
+“Android + TrustZone” is a positioning analogy for common interfaces and
+isolated execution. SeedCore is not claiming to be an OS, implement TrustZone on
+every MCU or guarantee physical safety. The buyer-facing promise is simpler:
+**open a browser, run a supervised robot lesson within agreed limits, and
+understand why it moved or stopped.**
 
-The product should fit between an agent/application and a robot's existing
-runtime. Its reusable unit is a **governed skill attempt**: a versioned skill,
-an accountable principal, bounded authority, local enforcement and a verifiable
-outcome. A cute persona can attract users; this contract is what other teams
-could depend on.
+The [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+owns the dated schedule, gate definitions and revenue assumptions. The
+[active queue](../current_next_steps.md) owns immediate work.
 
-## The Paradigm Shift: Industrial Giants vs. DIY & Mini-Robotics
+## Tri-Node Operating Advantage
 
-Industrial robotics literature and enterprise blueprints (e.g., OpenVLA, Franka Emika Panda, Unitree H1, UR5) are designed for heavy, high-inertia factory platforms operating where kinetic mistakes carry catastrophic physical injury risks. SeedCore deliberately targets the **DIY, maker, desktop companion, and educational mini-robotics ecosystem** (e.g., Microduck, desktop arms, tabletop companions). This shifts the fundamental engineering priorities:
-
-1. **Safe-by-Physics vs. Active Industrial Containment:** With featherweight embodiments (< 500g – 2 kg) and micro-torques (< 0.2–2 Nm), actuator stall cannot break skin or furniture. Safety shifts from millisecond-level kinetic hazard containment (light curtains, 140 N force clamping) to **behavioral, privacy, and permission governance** under human supervision.
-2. **Slow Brain, Fast Spine for Consumer Buses:** Rather than requiring expensive industrial fieldbuses (EtherCAT, CAN-FD), mini-robots operate over consumer USB serial, WebSerial, or BLE (15–40 ms jitter). SeedCore embraces **receding-horizon action chunking**: the Brain (host/cloud/browser) emits 30–50 waypoints (0.5–1.0s horizon), while the Spine (onboard MCU at 200–500 Hz) interpolates smoothly and handles fail-safe stops locally.
-3. **Browser-First Simulation vs. Heavy Linux Tooling:** Replaces heavy workstation stacks (Ubuntu LTS, ROS 2, CUDA, Isaac Sim) with **zero-install C++/Wasm physics compilation** (browser-delivered MuJoCo/Wasm). Learners and makers can simulate, test gaits, and qualify models on ordinary Chromebooks and laptops.
-4. **Trust Runtime for Consumer & Classroom Environments:** Provides the missing governance layer for autonomous physical agents: scoped capability tokens, action-bound cryptographic receipts, and instant boundary revocation.
-
-See the full [comparative architecture matrix](embodied_ai_architecture_reference.md#3-the-paradigm-shift-industrial-giants-vs-diy--mini-robotics).
-
-## Customers, Delivery Partners And First Proof Point
-
-The intended customers include ordinary robot owners, creators and small
-organizations who can describe a useful function but need help selecting and
-adapting a robot. Start discovery with supervised activities whose usefulness
-and limits can be evaluated directly. Robotics developers, labs and hardware
-partners are early technical collaborators and may also be customers.
-
-Run two tracks: customer discovery identifies the job and success criteria;
-engineering establishes a trustworthy execution path. A customer trial needs
-both. A successful bounded-motion test does not prove that the intended
-function solves a worthwhile problem.
-
-The first engineering proof point is deliberately small: an agent proposes a short move in
-a marked test area, the operator sees its limits, SeedCore admits or denies
-it, the robot attempts it, and a timeline explains completion or interruption.
-Show allowed, denied and interrupted attempts together. The first product
-artifact is a reproducible integration and its evidence, not a skill store.
-
-| Stage | User value to validate | Evidence needed before expansion |
+| Node | Strategic responsibility | Proof of advantage |
 | --- | --- | --- |
-| Needs assessment and hardware fit | Turn an ordinary request into a feasible, useful function | Reviewed need brief, alternatives, constraints and acceptance criteria |
-| One supervised Microduck | Bounded AI behavior with understandable outcomes | M0–M4 demonstration and reproducible failure cases |
-| Reusable skill packaging | Install/change behavior without silently expanding authority | Package admission, isolation and rollback tests |
-| A second robot adapter | Reuse the same authority/evidence concepts across bodies | Independent developer integration; documented body-specific differences |
-| Small teams of robots | Explain partial execution and reconcile shared resources | Durable ownership, per-robot closure and measured local enforcement |
-| Household companions | Owner/guest boundaries and control of captured media | Separate privacy, access, recovery and household evaluation work |
+| China / Greater Bay Area network | BOM sourcing, DFM, serial-servo kits and ODM pre-flashing | Quoted recurring/landed costs, reproducible QA and a supported design-in |
+| Singapore | Proposed IP/commercial stewardship, trust roots, institutional contracts and cloud/model procurement | Clean license/IP inventory, signer governance, provider terms and buyer acceptance |
+| Thailand / Bangkok–Chonburi | Bench engineering, small-batch QA and supervised field learning | Short iteration cycles, repeatable lessons, supportable installations and measured delivery cost |
 
-Needs assessment can start immediately. Customer hardware trials depend on
-the selected profile's technical acceptance; broader household autonomy is a
-later scope than a supervised personal routine.
+These are operating hypotheses and assigned roles, not evidence of established
+entities, facilities, unrestricted model access or tariff exemption. Record
+current provider availability and actual origin/shipping costs before an offer.
 
-Child interaction, eldercare, assistive navigation and unattended operation are
-not first-pilot use cases. They introduce requirements the present simulator
-and governance tests do not establish.
+## Three Strategic Pillars
 
-## Where SeedCore Fits
+### A — SeedCore Inside
 
-| Component | Responsibility | SeedCore's integration responsibility |
+Offer an open Fast Spine reference plus a Browser Studio URL to manufacturers
+of affordable robotic kits. Start with one ESP32-S3 / TTL servo fixture, then
+one supported OEM kit. A pre-flashed release reduces installation effort;
+qualification, enrollment and recovery make that release dependable.
+
+The current browser foundation is the C++/Wasm planar lesson engine and the
+1/2/3-link studio with a 3D orbit view. WebSerial control, firmware flashing and
+authenticated MCU sessions remain planned. Ten-second repeat connection and
+30-second flashing are measured-experience targets on a named profile, not
+universal product claims.
+
+The [developer blueprint](mini_robot_developer_blueprint.md) and
+[Fast Spine protocol proposal](fast_spine_protocol_spec.md) define the proposed
+implementation. Basic firmware should remain open; supported provisioning,
+conformance maintenance and integration are separable commercial services.
+
+### B — Auditable Classroom Governance
+
+Make roles, motion permissions, local interruption, camera/egress permissions
+and evidence review explicit for teacher-supervised STEM work. An institution
+should be able to inspect allowed, denied and interrupted attempts and see
+which records support a verifier result.
+
+Motion authority is enforced at the admitted boundary and cannot be replaced
+by a browser UI rule. Privacy claims also need enforcement at actual capture,
+storage and network-egress paths; a signed motor token alone cannot prevent
+video streaming. First lessons use local simulation or accepted physical
+profiles without external camera uploads or dataset contribution.
+
+Governance artifacts can support procurement discussions. They do not establish
+legal compliance, physical safety certification or an industry-first product.
+“SeedCore Verified” should name a versioned conformance profile, tested firmware
+and body revision, with explicit coverage and withdrawal/update rules.
+
+### C — Opt-In Sim-to-Real Telemetry
+
+Begin with adult developer bench trajectories to measure backlash, friction,
+servo calibration and model error. Bind retained samples to device, firmware,
+model/calibration, admitted action, timing/sequence coverage, signer and verifier
+disposition. Use a common evidence envelope with body-specific observation and
+action schemas; 61 observations and 14 policy actions describe Microduck's
+pinned policy, not every robot or every receipt.
+
+Contribution must be optional with separate rights, consent, retention,
+deletion and reuse controls. School participation is independent from research
+sharing. Cryptographic integrity supports provenance under its key assumptions;
+it does not prove sensor truth, calibration or dataset quality.
+
+First validate a measurable improvement in calibration or held-out evaluation.
+Dataset brokerage and large-network claims come after demonstrated data
+quality and buyer demand. The telemetry product does not alter the existing
+[energy flywheel's authority boundary](../seedcore_flywheel_harness.md).
+
+## Reference Architecture And Claim Limits
+
+```text
+model proposes -> accountable Agent -> ActionIntent -> PDP
+  -> scoped ExecutionToken -> enrolled execution boundary
+  -> native controller or qualified MCU local enforcement
+  -> observed attempt -> captured evidence / configured signer
+  -> Rust verification / RESULT_VERIFIER / replay
+```
+
+High-level planning and local interpolation have separate deadlines. Evaluate
+200–500 Hz MCU interpolation with bounded action chunks; measure bus writes,
+telemetry reads, authentication and watchdog behavior separately. A local
+revocation lookup does not establish end-to-end physical stopping time.
+
+Small mass and compliance can reduce kinetic energy, but mini-robots still
+require electrical, pinch, force, fall and stop-behavior review for the selected
+profile. Physical limits come from hardware measurements; a workspace manifest
+or simulation does not enforce them by itself.
+
+Microduck remains the native `robotd` reference, with its balance and bus
+ownership preserved. The small arm is a separate MCU bench fixture. The present
+13,242-byte dual-ABI Wasm core handles fixed-base planar arms; it is not a
+browser Microduck/MuJoCo digital twin, contact engine or firmware size measure.
+
+The pinned body model is implemented. Complete its deployment manifest and
+M1–M4 before claiming integrated Microduck execution. SIM-3's planar slice is
+delivered; its broader qualification remains open. Existing Rust signature,
+token and replay verification does not itself establish enrolled device signing
+or a signed robot outcome.
+
+## Execution And Revenue Sequence
+
+| Target phase | Product outcome | Required advancement evidence |
 | --- | --- | --- |
-| LLM, VLA or behavior planner | Propose intent using observations | Keep proposals separate from authority and bind the selected artifact |
-| Training/simulation tools | Produce and evaluate candidate policies | Admit promotion separately; distinguish simulation from hardware evidence |
-| Robot SDK and middleware | Transport requests and expose device capabilities | Map reviewed skills to an authenticated endpoint; constrain alternate paths |
-| Onboard controller | Balance, actuator control, local interlocks and recovery | Deliver bounded intent; accept refusal and report observed interruption |
-| SeedCore trust runtime | Accountability, policy, tokens, revocation and evidence closure | Make the complete boundary reproducible for an integrator |
-| Product application | Interaction, persona, explanations and operator controls | Display permissions and uncertainty without minting authority |
+| Q4 2026 | Golden profile, M1/M2, constrained split-screen bench demo and minimum evidence | Actual authority/stop coverage and accepted evidence for anything shown physically |
+| Q1 2027 | M3/M4, one supervised delivery, then 3–5 sites / up to 100 cumulative kits | Hardware acceptance, useful repeat use, QA, cash and support capacity |
+| Q2–Q3 2027 | One LeRobot-family adapter and OEM design-in; conditional SIM research | Independent integration and one shipping conformance profile before 2–3 OEM targets |
+| Q4 2027–Q1 2028 | Hosted governance and qualified fleets; SoM only if justified | 3 → 10 → 30 robot fault/recovery evidence, paid demand and sustainable recurring cost |
 
-Microduck's pinned architecture assigns control and bus ownership to `robotd`.
-Reachy Mini also separates a client SDK from a daemon that handles hardware and
-safety checks. These are useful integration boundaries; their existence does
-not establish SeedCore enforcement. Sources:
-[Microduck architecture](https://github.com/pollen-robotics/microduck/blob/768e1922715942d8c6aa5254c6d1cd35cf099482/docs/design/architecture.md),
-[Reachy Mini concepts](https://huggingface.co/docs/reachy_mini/SDK/core-concept)
-(reviewed 2026-09-20; the latter is unpinned).
+Keep the local physics core, contracts and proposed basic firmware open.
+Validate paid OEM conformance/provisioning/support and hosted policy, roles,
+fleet administration and replay. Target per-device or institutional SaaS
+pricing after measuring support and inference costs. Basic Apache-licensed use
+does not require an OEM royalty. Open hardware licensing and badge terms are
+separate decisions.
 
-Use the native Microduck interface first. ROS 2 or micro-ROS adapters should be
-added when a selected device needs them. Choosing middleware, a Rust daemon,
-or a new single-board computer does not by itself create a trustworthy
-execution boundary. Ray, Redis and Postgres can support orchestration and
-evidence services; a network round trip to them must not be required to stop
-the robot locally.
+The [customer delivery model](robot_solution_delivery.md) translates a need into
+a function, hardware choice and acceptance plan. The
+[service operating plan](robot_service_operating_plan.md) limits initial work to
+one repeatable offer, one active physical profile and one live pilot. A bench
+fixture must stay bounded; otherwise replan capacity explicitly.
 
-## What To Keep From Custody Work
+The [OEM brief](../../application/oem_partnership_brief.md) prepares partner
+discussions; it is not an agreement or outreach authorization. Singapore
+innovation programmes are optional routes whose current terms need checking,
+not assumed funding.
 
-Keep delegated authority, endpoint binding, revocation, authenticated receipts,
-replay validation and incomplete-evidence handling. Preserve RCT as a regression
-reference rather than making shoe handoffs the opening robotics story.
+## Decision Evidence And Document Contract
 
-Do not map a custody transaction directly onto every control tick. A robot
-attempt has duration, changing observations, interruption and uncertain physical
-outcomes. A receipt can prove that a command was admitted or acknowledged
-without proving it completed. The
-[runtime contract proposal](robot_execution_contract.md) defines that distinction.
+Track useful lesson completion/repeat use, independent integration effort,
+onboarding and support hours, QA yield/landed kit cost, authority ingress
+coverage, admission/revocation timing, observed stop behavior, evidence gaps
+and verifier results. Measure paid conversion and renewal once offers exist.
 
-## Assessment Of The Supplied Suggestions
+Freeze numerical thresholds before testing. If a gate fails, preserve its trace,
+review deterministic failures and move dependent schedule targets. No calendar
+date, training score, model output or commercial interest grants execution
+authority.
 
-| Suggestion | Decision | Reason and implementation consequence |
-| --- | --- | --- |
-| Two-speed authorization | Adopt with three explicit responsibilities | Admission, local continuous enforcement and asynchronous evidence closure have different deadlines |
-| New `TaskExecutionToken` / kinematic PDP | Defer a new token type | Start with the existing `ExecutionToken`; version and review robot-specific bindings without changing frozen constraints silently |
-| Fixed 1 Hz / 50–200 Hz rates | Replace with measured budgets | Control periods, command age and stopping behavior depend on the selected body and runtime |
-| ReBAC skill manifests | Adopt as a proposed package contract | Identity relationships and grants need argument limits plus actual process/device/network isolation |
-| Episodic black box | Adopt as an evidence timeline | Replay validates captured records; exact perception reconstruction needs retained inputs and reproducible model state |
-| Signed sensor frames detect spoofing/drift | Narrow the claim | A valid signature establishes provenance/integrity under its key assumptions, not physical truth or calibration |
-| Simulation, studio, edge daemon | Reorder delivery | First prove one native adapter and local interruption; productize packaging after the boundary works |
-| Production-ready foundation / guaranteed physical safety | Reject as unsupported | Existing code and contract tests do not establish deployed enforcement, all-path coverage or physical safety certification |
-
-The attachment is advisory input to this strategy. Its claims are not a source
-of implementation status. The [source ledger](microduck_source_ledger.md) and
-linked repository code remain the evidence for the selected baseline.
-
-### Closed-Loop Proof-Point Roadmap Review (2026-09-21)
-
-The follow-up attachment contributes useful implementation candidates. It does
-not establish live simulator availability, upstream RPC behavior, timing bounds
-or commercial demand.
-
-| Suggestion | Treatment |
-| --- | --- |
-| `MicroduckAdapter` with a Unix-socket proxy | Evaluate in M1–M2; protect the native socket, authenticate callers and test alternate ingress. A forwarding proxy alone does not establish enforcement. |
-| Bounded session and sequence-numbered refresh | Consistent with the proposed contract; exact wire methods and watchdog behavior must come from the pinned executable runtime. |
-| Fixed walking speeds, lease durations and 100 ms stopping | Illustrative only. Freeze profile-specific acceptance limits before testing, and distinguish stop-request latency from observed physical stopping. |
-| Tiered telemetry and a rolling recorder | Adopt as a candidate capture design; always retain evidence required by the skill's outcome predicate. Hashes cannot recover discarded detail. |
-| Commercial scenes and an audit console | Treat scenes as customer-discovery hypotheses. Ordinary users need function setup, permission, stop and help controls; diagnostics support those workflows. |
-| Edge package in weeks 1–3; hardware in weeks 4–6 | Replace date promises with dependency gates and estimates after M0. Packaging and hardware readiness remain unvalidated. |
-| Second adapter proves a universal runtime | It provides evidence of reuse across two specific bodies; choose it for an actual customer need. |
-| Rename M5 to skill packaging | Preserve M5 as learning/promotion; packaging stays a separately named follow-on to avoid conflicting roadmaps. |
-
-The suggested next-code-sprint and commit steps are advisory. This strategy
-update does not implement an adapter or approve a repository commit, deployment
-or robot operation.
-
-## Adoption And Differentiation
-
-The strongest prospective advantage is an integration kit containing stable
-authority/evidence contracts, adapter conformance fixtures, realistic failure
-traces and an understandable operator timeline. Each new adapter should reuse
-those contracts while declaring its own physical limits. This is more useful
-to validate than a broad claim to be the operating system for all robots.
-
-Test the value with an external developer: can they integrate a new skill,
-understand a denial, reproduce an interrupted attempt, and change the planner
-without changing the permission model? Record elapsed integration effort and
-where they needed SeedCore-specific knowledge. If the integration is too heavy,
-reduce dependencies and improve the contract before adding more applications.
-
-The initial commercial hypothesis is needs assessment, hardware selection,
-scoped function implementation and optional support. Repeated customer jobs
-should become reviewed solution templates backed by reusable skills and
-adapters. Validate customer usefulness, delivery effort and support costs as
-well as developer integration effort. Demand, pricing and willingness to pay
-remain unvalidated; a marketplace or fleet service is not a prerequisite.
-
-Execute this through the [service operating plan](robot_service_operating_plan.md).
-For the founder-led stage, constrain work to one repeatable offer, one active
-hardware integration and one live pilot. Separate configuration, integration
-and research, then prove a second delivery of the same solution before widening
-the supported combinations.
-
-## Milestones And Decision Evidence
-
-The [active queue](../current_next_steps.md) owns M0–M5. Extend beyond it only
-after the preceding integration has evidence, not because a calendar date has
-arrived.
-
-| Measure | Record | Decision it supports |
-| --- | --- | --- |
-| Customer usefulness | Agreed job outcome versus the existing workflow, trial feedback and repeat use | Whether the solution is worth delivering |
-| Delivery sustainability | Setup time, customization/support hours, continuing costs and template reuse | Whether another customer can be served sustainably |
-| Authority coverage | Every command ingress and outcome of bypass/negative tests | Whether the claimed boundary is actually enforced |
-| Admission overhead | p50/p95/p99 latency and failures under a named load/profile | Whether skill admission is usable |
-| Local response | Worst observed stop latency/distance, command age, jitter, fault conditions | Whether the measured profile meets its reviewed limits |
-| Evidence completeness | Attempts with correlated closure; missing records and unresolved outcomes | Whether operators can explain each attempt |
-| Runtime footprint | CPU, memory, storage and offline behavior on the target board | Whether the edge boundary is practical |
-| Integration effort | External developer time, changed components and support needed | Whether contracts are reusable |
-| Portability | Reused contracts versus body-specific work on a second adapter | Whether SeedCore is becoming a component rather than a one-robot demo |
-
-Set numeric pass thresholds in the selected profile before testing; do not
-retrofit them to make a run pass. Tail latency and worst observed behavior are
-measurements, not universal physical guarantees. Preserve failures and report
-sample size, hardware, versions and test conditions.
-
-## Documentation Contract
-
-The root README leads with the product, present capabilities, first experiment
-and limitations. This strategy explains why. The
-[robot execution proposal](robot_execution_contract.md) and
-[skill package proposal](robot_skill_contract.md) explain the intended design.
-The [Microduck plan](microduck_integration_plan.md) owns device-specific work.
-The [customer delivery model](robot_solution_delivery.md) connects needs,
-hardware selection, custom functions, acceptance and support.
-
-Use “implemented”, “locally tested”, “planned” and “hardware-validated” only
-with their scope and evidence. Prefer **trust runtime for physical AI** over
-“trusted operating runtime” when the latter might imply an operating system or
-a physical safety guarantee. The public application studio can showcase robot
-experiences while the repository explains the reusable runtime beneath them.
+The root README reports present capabilities and target phases. This strategy
+explains positioning. The 18-month plan owns dates; the active queue owns next
+work; device/SIM plans and shared contracts own acceptance. Label implemented,
+locally tested, planned and hardware-validated claims with their scope.

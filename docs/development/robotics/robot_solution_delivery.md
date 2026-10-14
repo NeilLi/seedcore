@@ -1,6 +1,6 @@
 # From A Person's Need To A Working Robot Function
 
-Date: 2026-09-21
+Date: 2026-10-14
 Status: Proposed customer service and delivery model; customer demand and economics unvalidated
 
 ## Customer Promise
@@ -17,6 +17,14 @@ The customer-facing unit is a **robot solution**: a defined job, suitable
 hardware, configured functions, operating limits, acceptance evidence and a
 support plan. Internally, it may compose several governed skill attempts.
 Customer acceptance of the solution does not replace per-action authorization.
+
+The first repeatable offer now targets a teacher/operator-supervised STEM or
+maker lesson on one accepted profile. The
+[18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+links that delivery to SeedCore Inside OEM adoption and hosted governance.
+Use China sourcing, proposed Singapore trust/commercial stewardship and
+Thailand bench/field support as explicit responsibilities. Begin one pilot;
+expand toward 3–5 sites only after useful repeat delivery and support evidence.
 
 ## Discover The Job Before Choosing The Body
 
@@ -71,6 +79,7 @@ not validated segments or claims that a particular robot can perform them.
 
 | Expressed need | Small function to investigate | Evidence of usefulness |
 | --- | --- | --- |
+| “Let learners understand how an AI robot is controlled.” | Predict and run one bounded supervised lesson, observe denial/stop and explain the captured outcome | Learners understand the limits; the adult operator can repeat setup and recover within the agreed support effort |
 | “Make my exhibit more engaging.” | An operator-triggered gesture and short explanation in a marked area | Visitors understand it; the operator can start/stop it; setup effort is acceptable |
 | “Help me present something in my studio or shop.” | An on-demand introduction using reviewed content from a fixed position | Useful information delivered with manageable interruptions and support needs |
 | “Give my hobby robot a personal routine.” | A short owner-triggered expressive sequence within supported capabilities | Owner can configure, repeat and stop it; limits are understood |

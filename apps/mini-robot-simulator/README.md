@@ -1,6 +1,6 @@
 # SeedCore Mini Robot Lab
 
-Status: Early browser research prototype; SIM-1 delivered 2026-10-07 and the narrow SIM-2 C++/Wasm/checkpoint slice delivered 2026-10-08.
+Status: Local browser research prototype; SIM-1/SIM-2 delivered and the narrow SIM-3 planar 1/2/3-link orbit studio slice implemented. Broader SIM-3 gates remain open. Status checked 2026-10-14.
 
 A small learning application with an original two-link physics engine. Learners
 predict a result, adjust joint targets, motor strength or arm mass, run an
@@ -147,8 +147,9 @@ node tools/mini-sim/verify.cjs
 npm --prefix packages/mini-sim-contracts run build
 ```
 
-The verifier checks generated contracts and asset syntax, then runs 45 JS/worker/UI
-checks, 12 invariants against the Wasm adapter and 12 native invariant groups.
+The verifier checks generated contracts and asset syntax, then runs 78 Node.js
+tests, 12 invariants against the planar Wasm adapter, 12 native planar invariant
+groups and six native tree groups. The dual-ABI Wasm module is 13,242 raw bytes.
 It compares all 2,880 physics ticks of each lesson across JS/native/Wasm with an
 explicit 1e-8 tolerance, checks module/build identity and fixed memory, and tests
 exact checkpoint continuation, invalid restores and learner save/import behavior.
@@ -171,13 +172,20 @@ its related apps on 2026-10-05:
 
 1. SIM-1 is locally implemented and measured; release-device qualification remains open.
 2. SIM-2 narrow C++/Wasm and complete checkpoint slice is implemented and numerically checked.
-3. Develop compiled tree models, articulated dynamics, encoders and a 3D view.
+3. The planar 1/2/3-link tree and 3D orbit view are implemented; qualify broader trees, encoders, worker-v3 and independent MuJoCo comparisons.
 4. Validate floating bodies, contacts, friction, joint limits and further sensors.
 5. Add independent-instance batches and measure headless throughput.
 6. Qualify robot imports and a separate governed SeedCore simulation bridge.
 
-Learner usability and browser size/performance are checked throughout. SIM-3 through SIM-6 remain planned capabilities. Broader device/performance
-qualification remains open alongside the delivered SIM-2 slice.
+Learner usability and browser size/performance are checked throughout. Broader
+SIM-3 and SIM-4–SIM-6 capabilities remain planned. Device/performance
+qualification remains open alongside the delivered local slices.
+
+The [18-month execution plan](../../docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+sets commercial target windows. The proposed
+[Fast Spine bridge](../../docs/development/robotics/fast_spine_protocol_spec.md)
+requires separate authority, evidence and physical acceptance; this app currently
+contains neither WebSerial robot control nor authenticated hardware receipts.
 
 Each expansion needs independent numerical and behavioral acceptance evidence.
 Reduced coordinates alone do not guarantee contact stability, and a successful

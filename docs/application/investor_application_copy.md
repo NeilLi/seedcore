@@ -1,212 +1,131 @@
 # Investor Application Copy
 
+Date: 2026-10-14
+Status: Current physical AI narrative; demand, revenue, hardware readiness and partnerships are unvalidated
+
 ## One-Sentence Pitch
 
-SeedCore is a governed execution runtime that controls what AI agents and
-autonomous systems are allowed to execute in high-trust physical workflows.
+SeedCore is the open trust runtime for affordable physical AI, giving supported
+robot kits browser-first experiments, bounded AI execution and verifiable action
+evidence.
 
 ## Short Application Pitch
 
-Agent frameworks help AI decide what to do. Prompt guardrails control what AI
-says. SeedCore controls what AI is allowed to execute.
+AI models can propose what a robot should do; a usable product also needs clear
+authority, local limits and evidence of what it attempted. SeedCore supplies
+that boundary through accountable agents, deterministic policy admission,
+scoped execution tokens, local enforcement and verification/replay.
 
-SeedCore sits between AI intent and real-world action. Before execution
-authority can exist, it verifies explicit delegation, policy scope, asset
-state, custody context, hardware authority, and evidence requirements.
+Our first distribution wedge is maker and supervised STEM hardware. We propose
+SeedCore Inside reference firmware and browser lessons, auditable classroom
+governance, and later opt-in sim-to-real telemetry. Basic local tools remain
+open; supported OEM integration/provisioning and hosted institutional governance
+are the paid-value hypotheses.
 
-Unlike an agent framework or a prompt guardrail, SeedCore is a deterministic
-execution gate. It rejects ambient authority, issues short-lived,
-scope-bound execution authority only when policy admits the action, and
-produces replayable evidence chains that can be verified after the fact.
-
-The core runtime is implemented and contract-tested. The current commercial
-wedge is Restricted Custody Transfer: high-value physical asset movement where
-AI intent, authentication, delegated authority, custody telemetry, and verifier
-closure must all agree before the transfer is accepted.
-
-The first vertical proof scene is a rare collectible shoe transfer. It is not a
-sneaker marketplace. It is a compact, investor-readable demonstration of the
-broader SeedCore pattern for luxury goods, logistics, robotics handoff,
-industrial asset custody, lab samples, and other regulated physical workflows.
-
-## Final Investor Narrative
-
-SeedCore is a governed execution runtime for autonomous systems.
-
-As AI agents and robotic workflows move from recommendation into execution,
-enterprises need a way to prove that actions were authorized, scoped,
-evidenced, and replay-verifiable before those actions are accepted. SeedCore
-provides that execution gate.
-
-The runtime sits between AI intent and real-world action. It checks explicit
-delegation, policy scope, asset state, custody context, hardware authority,
-and evidence requirements. Only when those gates pass does SeedCore issue
-short-lived, scope-bound execution authority for the exact actor, asset,
-operation, location, and time window.
-
-After execution, SeedCore binds signed telemetry and evidence back to the
-evaluated request and produces proof surfaces that can be replayed later. If
-scope, authority, telemetry, or evidence does not match, the workflow denies
-or quarantines instead of silently continuing.
-
-The core runtime is implemented and contract-tested, including Agent Action
-Gateway v1, scoped execution authority, Policy Decision Point flow, evidence
-bundle primitives, result verification, proof rendering, and replay
-verification foundations.
-
-We are now packaging SeedCore into a focused commercial wedge: Restricted
-Custody Transfer for high-value physical assets. The first proof scene is a
-rare collectible shoe transfer, where the system must bind authentication,
-buyer-agent intent, delegated approval, bounded custody authority, signed
-handoff telemetry, delivery telemetry, and replay verification into one proof
-chain.
-
-The rare-shoe scene is not the company. It is the smallest vivid proof of a
-larger infrastructure pattern: governed execution for autonomous systems
-operating in high-trust physical workflows.
+The browser simulation and shared trust/proof foundations exist. Physical
+WebSerial/MCU firmware, Microduck HAL integration, enrolled robot signing and
+hardware pilots are the next work. We distinguish software test evidence from
+physical acceptance and commercial traction.
 
 ## Founder Summary
 
-I am Neil Li, founder and architect of SeedCore.
+I am Neil Li, founder and architect of SeedCore. My background includes Motorola,
+Alibaba and UESTC. I bring 20 years of Chinese IoT/silicon supply-chain experience
+and an international engineering perspective.
 
-Profile: Ex-Motorola and Alibaba. UESTC.
+The proposed operating model combines China sourcing and ODM integration,
+Singapore IP/trust/commercial stewardship, and Thailand engineering, QA and
+supervised field learning. The advantage we intend to prove is affordable,
+repeatable hardware integration with trustworthy software releases and support.
 
-My work focuses on AI agent infrastructure, governed execution, memory and
-state systems, and verifiable autonomous workflows.
+## Strategic Pillars And Moat
 
-I am building SeedCore because I believe the next major gap in AI
-infrastructure is trusted execution. As agents become more capable, the
-important question is not only whether they can reason, but whether their
-actions can be authorized, constrained, observed, and verified when they touch
-real systems. SeedCore is my attempt to build that trust/runtime layer.
+- **SeedCore Inside:** an open reference and browser experience manufacturers
+  can qualify for their supported kits.
+- **Auditable classroom governance:** explicit roles, scoped sessions, local
+  interruption, privacy-path controls and understandable replay.
+- **Opt-in telemetry:** retained, versioned adult/research trajectories that
+  improve calibration or evaluation under separately reviewed sharing rights.
 
-## What We Are Looking For From Investors
+The prospective moat is a growing set of qualified firmware/body profiles,
+conformance fixtures, trusted enrollment/releases, delivery templates and
+support evidence. The “Android + TrustZone” analogy describes portable
+interfaces and isolation ambition; it is not an OS, safety certification or
+proof that every MCU has a hardware trust root.
 
-I am looking for investor and advisor support turning SeedCore from a strong
-technical runtime into a focused commercial company.
+## Implemented Foundation And Current Gaps
 
-The main support I want from investors, VCs, accelerators, and strategic
-advisors is:
+| Foundation | Current evidence |
+| --- | --- |
+| Browser simulation | Worker lessons and fixed-base planar 1/2/3-link studio; dual-ABI Wasm is 13,242 raw bytes |
+| Microduck model | Native MJCF package with integrity, mass, joint and actuator parity |
+| Shared governance / proof | Gateway/PDP, tokens, revocation, evidence/replay primitives and Rust verification code |
+| Coordination | Local team/reservation and dispatch/verify/halt contracts |
 
-- commercial wedge refinement around Restricted Custody Transfer
-- structured customer discovery with logistics, luxury goods, robotics, and
-  regulated physical-workflow buyers
-- pilot design and partner introductions
-- founder coaching on enterprise wedge, pricing, and go-to-market sequencing
-- investment support and fundraising readiness
-- Korea and Asia market access
-- deep-tech founder network
-- guidance around TIPS or related government programs where relevant
+Checks on 2026-10-14 passed 78 Node.js simulator tests and 88 Python
+model/workbench tests. Broader SIM-3 qualification and Microduck M0 deployment
+pins/M1–M4 remain open. Generic custody/RCT proof is a maintained regression
+foundation, not the current commercial wedge.
 
-SeedCore needs the discipline of a focused wedge, not only more technical
-breadth. The immediate goal is to convert a working runtime into a pilot-ready
-company narrative, a small number of credible buyer conversations, and a demo
-that makes the trust problem obvious to non-technical decision makers.
+No shipping Fast Spine firmware, physical browser bridge, school deployment,
+OEM agreement, revenue, grant award or customer retention is established by
+these results. Microduck's 61/14 policy mapping belongs to its pinned profile;
+future bodies declare their own schema. Signatures support integrity/provenance
+under their key assumptions, not sensor truth or physical safety.
 
-## Traction And Current Stage
+## Target Execution Sequence
 
-SeedCore is in early commercialization. The core runtime baseline is
-implemented and contract-tested, and the current work is packaging that
-baseline into a pilot- and investor-ready vertical demo.
+| Window | Outcome to validate |
+| --- | --- |
+| Q4 2026 | M1/M2 golden native reference and constrained arm bench demo with minimum evidence |
+| Q1 2027 | M3/M4; one supervised pilot, then 3–5 sites; 10 → 25 → up to 100 cumulative kits after QA/cash/support reviews |
+| Q2–Q3 2027 | One accepted OEM shipping profile, then 2–3 OEM targets; one LeRobot-family and one model-provider proposal adapter |
+| Q4 2027–Q1 2028 | Fleet qualification 3 → 10 → up to 30 robots and paid Governance / Cloud Workbench; SoM only if demand supports it |
 
-Implemented technical baseline:
+These are planning targets with advancement gates, not promised release dates.
+A physical demo needs accepted authority, evidence and hardware behavior for
+its exact profile even if the full Microduck milestone is scheduled later.
 
-- Agent Action Gateway v1
-- scoped execution-authority lifecycle
-- Policy Decision Point architecture
-- generic Restricted Custody Transfer runtime
-- evidence bundle primitives
-- result verification flow
-- proof rendering foundation
-- operator and public proof surfaces
-- replay verification foundation
-- generic RCT signoff fixtures
+## Revenue Architecture
 
-Rare-shoe verticalization completed so far:
+Keep existing Apache-2.0 local physics/contracts and proposed basic firmware
+open. Validate separate paid OEM provisioning, co-branding/conformance
+maintenance and integration/support agreements. Open-code use does not require
+a mandatory royalty; hardware licensing and badge terms are separate.
 
-- `CollectibleShoeRegistration` read model
-- deterministic rare-shoe fixture set
-- rare-shoe gateway adapter into Agent Action Gateway v1
-- happy-path replay bundle
-- dynamic NFC clone / tamper fail-closed test
-- cross-asset replay fail-closed test
-- delayed-telemetry policy test
-- public/operator proof redaction mapping
+Schools, universities and labs may pay per-device or institutional subscriptions
+for hosted policy/roles, fleet records, verified replay and supported model
+routing. Price after measuring setup, support, inference and replacement cost.
+Local limits/watchdogs remain effective during cloud loss.
 
-Market signal:
+Selected kit cost below $300 excluding an existing host, a $12 controller BOM,
+10-second repeat connection and 30-second flashing are qualification targets.
+Dataset licensing is a later option after rights, quality and buyer demand;
+school adoption must not depend on contribution.
 
-- public GitHub repository has generated organic investor interest
-- inbound investor and accelerator interest
-- clear initial wedge around Restricted Custody Transfer
-- rare-shoe vertical selected as the first compact commercial proof scene
+## Next 30 Days: 14 October–12 November 2026
 
-SeedCore is beyond the idea stage. It is an implemented technical framework
-being converted into a focused commercial company.
+Freeze the deployment/protocol/trust profile; establish M1 read-only/golden
+simulation; integrate M2 session and negative cases; qualify a constrained
+single-servo → three-servo fixture with minimum action-bound evidence; prepare
+an ESP32-S3 flasher/recovery candidate, one lesson and an OEM design-in packet.
 
-## Next 30 Days
+The day-30 review compares actual traces, verifier results, timing, BOM quotes
+and support assumptions against the gates. If hardware/signing is not ready,
+show simulation and explicitly labeled protocol/bench evidence. Public release,
+partner contact and procurement are separate activities.
 
-The next 30 days are focused on moving from local proof to publishable demo and
-pilot discovery.
+Detailed dates, owner roles and exit decisions are in the
+[18-month execution plan](../development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md).
 
-Completed or underway:
+## Investor And Advisor Support Sought
 
-- final investor application copy
-- one-page SeedCore overview
-- rare-shoe fixture directory
-- `CollectibleShoeRegistration` read model
-- rare-shoe gateway adapter
-- proof-path tests for happy path, NFC clone / tamper, cross-asset replay, and
-  delayed telemetry
-- `rare_shoe_happy_path_replay_bundle.json`
-- public/operator proof redaction mapping
+Seek introductions to one technically aligned OEM and one supervised STEM/maker
+trial partner; scoped firmware/manufacturing expertise; institutional procurement
+and privacy-path review; and milestone-based financing that supports qualification
+and sustainable delivery. Singapore innovation programmes are possible routes
+whose current eligibility/terms need checking, not assumed funding.
 
-Remaining near-term deliverables:
-
-- README section for the Rare-Shoe RCT demo
-- five-minute demo walkthrough recording
-- five-slide architecture / investor deck
-- first customer discovery list and interview script
-- pilot hypothesis for one initial buyer segment
-
-Application phrasing:
-
-```text
-SeedCore's generic Restricted Custody Transfer runtime is implemented and
-contract-tested. We have now verticalized the first rare-shoe proof scene with
-deterministic fixtures, gateway adapter, replay bundle, fail-closed toxic-path
-tests, and public/operator proof redaction. The next step is demo packaging
-and pilot discovery.
-```
-
-## Short Form Answers
-
-### What Problem Are You Solving?
-
-AI agents are moving from recommendations into real-world execution, but most
-systems still treat a logged-in agent, tool call, or workflow step as enough
-authority to act. That is risky for physical assets, robotics, logistics,
-regulated operations, and high-value commerce. SeedCore solves the gap between
-AI intent and trusted execution by making authority explicit, scoped,
-evidence-conditioned, and replay-verifiable.
-
-### What Is Your Solution?
-
-SeedCore is a governed execution runtime. It receives agent intent, evaluates
-delegation and policy, checks asset and custody state, verifies required
-evidence, issues bounded execution authority only on allow, and then binds
-signed telemetry back to the evaluated request for replay and proof.
-
-### Why Now?
-
-Agentic AI is becoming operational. Enterprises will not only ask whether an
-agent produced the right recommendation; they will ask whether an agent was
-allowed to execute, whether the execution matched policy, and whether the
-evidence can be verified later. That trust layer is still missing.
-
-### Why This First Wedge?
-
-Restricted Custody Transfer is a narrow but high-consequence workflow. It
-forces the system to bind authentication, delegated authority, physical
-custody, telemetry, and proof. Rare collectible shoes make the failure modes
-easy to understand, while the same pattern extends to broader high-value
-physical workflows.
+The [OEM brief](oem_partnership_brief.md), [one-page overview](seedcore_one_page_overview.md)
+and [active queue](../development/current_next_steps.md) carry the same claims
+and schedule.

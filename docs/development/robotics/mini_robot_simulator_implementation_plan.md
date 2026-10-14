@@ -1,10 +1,19 @@
 # Mini Robot Simulator: Implementation Architecture
 
-Date: 2026-10-05
+Date: 2026-10-14 (original plan: 2026-10-05)
 
 Status: Engineering plan grounded in the current repository. The planar-arm
-browser prototype, local SIM-1 and the narrow SIM-2 C++/Wasm/checkpoint slice
-are implemented; general dynamics and later stages remain proposed.
+browser prototype, local SIM-1/SIM-2 and the narrow SIM-3 planar tree/orbit-view
+slice are implemented; broader SIM-3 gates and later stages remain proposed.
+
+Schedule alignment, 2026-10-14: the
+[18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+prioritizes M1/M2 and the constrained Fast Spine demonstration in Q4 2026,
+M3/M4 and supervised delivery in Q1 2027, then conditional SIM-3 remainder and
+SIM-4–SIM-6 research in Q2–Q3 2027. Each SIM stage keeps its acceptance below.
+Do not compress general contact/import research to meet OEM dates; qualified
+native MuJoCo adapters can progress independently. The current dual-ABI Wasm
+module is 13,242 raw bytes, and the current runner passes 78 Node.js tests.
 
 Implementation update, 2026-10-07: SIM-1 now has TypeScript-owned v2 contracts,
 a narrow immutable planar model compiler, model/run-recipe SHA-256 identities,

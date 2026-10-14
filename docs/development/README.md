@@ -1,12 +1,18 @@
 # SeedCore Development Docs
 
-Date: 2026-09-21
-Status: Canonical development map; physical AI runtime, Microduck reference integration
+Date: 2026-10-14
+Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
 as the first integration focus and Microduck as the reference target. The
 reusable unit is a governed skill attempt: accountable intent, bounded
 authority, local enforcement and evidence of the outcome.
+
+The active commercial direction is SeedCore Inside firmware/browser adoption,
+auditable classroom governance and later opt-in sim-to-real telemetry. The
+[18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+owns Q4 2026–Q1 2028 targets, operating-node roles, phase gates and the dated
+14 Oct–12 Nov tactical schedule. Costs, kit/site counts and timing are targets.
 
 The team-facing product work starts with people's needs: help a customer choose
 suitable hardware, implement a useful function, and operate it with support.
@@ -38,7 +44,7 @@ maintained, or deferred.
 | [Infrastructure](infrastructure/README.md) | Edge architecture, proof kernels, transport, hardware identity | Select work needed by the integration |
 | [Integrations](integrations/README.md) | External agents, SDKs, ingress, capability interfaces | Reuse existing ingress |
 | [Applications](applications/README.md) | RCT, city/producer, journey and creative tracks | RCT regression baseline; other expansion deferred |
-| [Strategy](strategy/README.md) | Earlier annual plans and longer-range direction | Context; the active queue takes precedence |
+| [Strategy](strategy/README.md) | Active 18-month schedule and historical annual plans | Current planning targets; the active queue owns next work |
 | [Archive](archive/README.md) | Superseded queues, frozen records, sign-offs | Historical |
 | [Assets](assets/README.md) | Architecture and presentation files | Supporting reference |
 
@@ -48,7 +54,7 @@ here does not promote it to an implemented feature.
 
 ## Reading Order
 
-1. [Physical AI strategy](robotics/physical_ai_strategy.md) and [customer delivery model](robotics/robot_solution_delivery.md): customer needs, product thesis, adoption tests and claim limits.
+1. [Physical AI strategy](robotics/physical_ai_strategy.md), [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md) and [customer delivery model](robotics/robot_solution_delivery.md): three pillars, dated targets, customer needs, adoption tests and claim limits.
 2. [Current next steps](current_next_steps.md) and [application directions](application_directions.md): sequence and portfolio decision.
 3. [Robot execution proposal](robotics/robot_execution_contract.md) and [skill package proposal](robotics/robot_skill_contract.md): intended reusable contracts; not shipped schemas.
 4. [Microduck architecture](robotics/microduck_architecture_study.md) and [RL study](robotics/microduck_rl_study.md): onboard boundaries, policy inputs and pinned-source corrections.
@@ -67,6 +73,9 @@ here does not promote it to an implemented feature.
 8. [Robot design toolkit assessment](robotics/robot_design_toolkit_assessment.md):
    accepted CAD-to-MuJoCo recommendations, source qualifications and proposed
    agent-assisted design workflow; CAD adapters and external imports remain planned.
+9. [Fast Spine protocol proposal](robotics/fast_spine_protocol_spec.md) and
+   [OEM partnership brief](../application/oem_partnership_brief.md): proposed
+   MCU sessions, WebSerial/flashing, conformance and design-in responsibilities.
 
 ## Authority And Document Precedence
 
@@ -84,8 +93,10 @@ remain stable root entrypoints. Local robot safety may refuse or stop an
 admitted action. Training results, model output, and telemetry do not mint
 execution authority.
 
-For scheduling, use this map, the portfolio decision, and the active queue
-before older annual plans or application schedules. Durable contracts and ADRs
+For scheduling, the active 18-month plan owns target dates and phase reviews;
+the portfolio decision owns scope and the active queue owns immediate work.
+These take precedence over older annual plans and application schedules. The
+device/SIM plans, durable contracts and ADRs
 retain their authority within their scope; changing priority does not waive
 their gates.
 

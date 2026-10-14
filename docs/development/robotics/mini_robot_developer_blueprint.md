@@ -1,246 +1,152 @@
-# Mini-Robotics Developer Blueprint: From Maker Kits to Governed Autonomous Companions
+# Mini-Robotics Developer Blueprint: The Golden Reference
 
-Date: 2026-10-12  
-Status: Developer engineering blueprint for DIY, educational, and desktop mini-robotics implementations using SeedCore. Translates theoretical embodied AI architectures into concrete hardware, firmware patterns, wire protocols, and governance flows.
+Date: 2026-10-14
+Status: Proposed engineering profile and delivery sequence; no Fast Spine firmware or WebSerial robot bridge is implemented
 
----
+## Goal And Present Foundation
 
-## 1. Introduction: The Mini-Robotics Paradigm
+Build one supervised browser-to-robot experiment whose proposal, permission,
+attempt and outcome are distinguishable. The existing planar browser lessons,
+1/2/3-link orbit studio and dual-ABI C++/Wasm core supply simulation. The
+Microduck MJCF package supplies a separate native MuJoCo reference; the current
+browser core cannot simulate that floating-base robot.
 
-Industrial robotics blueprints (e.g., OpenVLA, Franka Emika Panda, Unitree H1) are engineered for heavy, high-inertia platforms in factory environments where physical errors risk serious injury. Consequently, they prescribe heavy compute (Jetson AGX Orin / multi-GPU servers), rigid industrial fieldbuses (EtherCAT, CAN-FD, MIPI CSI-2), complex Linux stacks (Ubuntu, ROS 2, Isaac Sim), and active kinetic containment (ISO 10218 140 N force clamping).
+The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+owns dates, cost targets and phase gates. The
+[Fast Spine protocol proposal](fast_spine_protocol_spec.md) owns proposed MCU
+sessions, framing/authentication review, interruption and evidence requirements.
+This blueprint is neither a ready-to-flash binary nor a tested hardware design.
 
-When building for **DIY makers, students, desktop companions, and kid-safe embodiments (like Microduck or 3D-printed tabletop arms)**, these constraints invert:
+## Reference Profiles
 
-- **Safe-by-Physics:** Featherweight embodiments (< 500g – 2 kg) and micro-torques (< 0.2–2 Nm) mean that motor stall cannot break human skin or damage furniture. Safety shifts from millisecond kinetic hazard prevention to **behavioral, privacy, and permission governance**.
-- **Slow Brain, Fast Spine:** Instead of fighting consumer USB/WebSerial/BLE latency jitter (15–40 ms) with expensive industrial transceivers, we adopt **receding-horizon action chunking**: the Brain emits chunks of 30–50 future waypoints (covering 0.5–1.0s), while the onboard MCU Spine executes smooth spline interpolation at 200–500 Hz.
-- **Browser-Native & Zero-Install:** Instead of requiring 50 GB Linux and ROS 2 workstations, simulation and evaluation run directly in the browser via **C++/Wasm-compiled physics engines** (e.g., MuJoCo/Wasm).
-- **SeedCore Verifiable Governance:** Autonomous policies never have unchecked access to the motors; they execute under scoped `ExecutionToken` leases, verified at the command boundary and recorded in replayable cryptographic receipts.
+| Profile | Proposed hardware / runtime | Purpose and acceptance |
+| --- | --- | --- |
+| Planar learning fixture | Current C++/Wasm 1/2/3-link arm, no hardware | Local simulation lessons; broader SIM-3 gates remain open |
+| Fast Spine bench | One ESP32-S3 board, 1 → 3 STS3215 servos, USB CDC / WebSerial | Qualify admitted chunks, local deadlines/watchdog, physical stop and evidence for this fixture |
+| Native Microduck | Pinned body/policy/runtime, native RPC and `robotd` | M0–M5 native acceptance; preserve balance, control and sole bus ownership |
+| Later portability | RP2350 or one LeRobot/SO-100-family profile | Add only after independent integration, actual demand and support capacity |
 
-### The Intuitive Mental Model: Brain, Spine & Guard
+The ESP32-S3 is the first proposed board because its browser-flashing path can
+be qualified with `esp-web-tools`. RP2350 uses a separate UF2/update route.
+BLE and additional MCU families are later work; chipset availability alone
+does not establish compatible firmware.
 
-For children, students, and beginners, the architecture breaks down into three clear roles:
+## Cost And Electrical Register
 
-```
-┌────────────────────────────────────────────────────────┐
-│  1. THE THINKING BRAIN (Laptop, Chromebook, or Cloud)  │
-│  • Sees the world through a camera                     │
-│  • Thinks: "Let's pick up the red block"               │
-│  • Sends a plan of 30 waypoints every half-second      │
-└──────────────────────────┬─────────────────────────────┘
-                           │ (USB-CDC, WebSerial, or BLE)
-┌──────────────────────────▼─────────────────────────────┐
-│  2. THE SEEDCORE SAFETY GUARD (Rules & Permission)     │
-│  • Checks: Did a parent/teacher authorize this?        │
-│  • Checks: Does the arm stay inside the tabletop box?  │
-│  • Records a receipt of everything that happened       │
-└──────────────────────────┬─────────────────────────────┘
-                           │ (Verified trajectory chunk)
-┌──────────────────────────▼─────────────────────────────┐
-│  3. THE MOVING SPINE (ESP32 / RP2040 Microcontroller)  │
-│  • Smoothly moves the motors 200-500 times per second  │
-│  • If the wire unplugs, it stops safely immediately    │
-└────────────────────────────────────────────────────────┘
-```
+| Item | Planning assumption | Evidence before freezing |
+| --- | --- | --- |
+| Controller | $12 recurring board parts BOM target at quoted volume | Itemize MCU/module, USB, TTL interface, watchdog/stop input, protection and connectors; record assembly/test/yield separately |
+| Servos | STS3215 for the small arm; founder-proposed $8–$12 unit sourcing target | Current quotation, electrical variant, torque/speed, load, feedback coverage, cables and failure behavior |
+| Mechanics | Printed arm and bounded bench workspace | Pinch/fall/load assessment, joint limits and reproducible CAD/build manifest |
+| Servo power | Separate reviewed supply and distribution | Actual voltage/current budget, brownout, grounding, level compatibility and protection |
+| Host | Existing supported laptop/Chromebook | Web Serial access, managed-device policy and first-time/repeat onboarding tests |
+| Complete kit | Selected kit target below $300 excluding existing host | Landed BOM, assembly/test, enclosure, packaging, freight/tax, repair and support costs |
 
----
+Targets are not supplier prices or purchase authorization. Do not apply a
+small-arm BOM to a 14-actuator Microduck. Record engineering and provisioning
+costs separately from recurring hardware.
 
-## 2. Bill of Materials (BOM) & Hardware Specifications ($100–$250 Total)
+STS3215 uses **TTL**, not RS-485. Qualify half-duplex direction and logic levels
+for the selected board/servo revision; an RS-485 servo requires a separate
+electrical profile. Source: [Feetech STS3215 description](https://www.feetechrc.com/20210430-56680.html).
+USB-C does not establish that the host can power the servo load.
 
-Mini-robotics does not require enterprise capital equipment. A complete autonomous physical AI platform can be constructed from off-the-shelf maker components:
+Small mass and compliant materials can reduce impact energy, but they do not
+make stall contact harmless. Review force/pinch, thermal/electrical and fall
+behavior on the actual mechanism before supervised operation.
 
-| Subsystem | Component | Specifications | Estimated Cost |
-| :--- | :--- | :--- | :--- |
-| **Mechanical Body** | 3D-Printed Chassis | PLA / PETG with TPU flexible joints; SO-100 arm or Microduck biped body | $15 – $30 (filament) |
-| **Actuators** | Smart Serial Bus Servos | 5–6x **Feetech STS3215** or **Dynamixel XL330** (half-duplex UART/RS-485 daisy chain @ 1 Mbaud, continuous position/speed/temp feedback) | $60 – $150 |
-| **Spine MCU** | Microcontroller Board | **ESP32-S3** (Dual-core 240MHz, USB-OTG, BLE 5.0) or **Raspberry Pi Pico (RP2040)** (Dual Cortex-M0+, PIO state machines) | $6 – $12 |
-| **Power Distribution** | Battery / Power Supply | 5V 3A USB-C PD or 2S LiPo (7.4V) with buck converter (LM2596 / MP1584) | $15 – $25 |
-| **Vision Sensor** | Standard Camera | 1080p UVC wide-angle USB webcam or Raspberry Pi Camera Module 3 | $15 – $30 |
-| **Brain Compute** | Host Workstation | Existing MacBook, Windows PC, Linux laptop, or Chromebook | $0 (existing device) |
-| **Total BOM** | | | **$111 – $247** |
+## Brain, Boundary And Spine
 
----
-
-## 3. End-to-End System Architecture & Sequence Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Cam as UVC Webcam / Camera
-    participant Brain as Brain Policy (Host / Browser)
-    participant Guard as SeedCore Trust Boundary
-    participant Spine as MCU Spine (ESP32/RP2040)
-    participant Motor as Actuator Bus (STS3215 / XL330)
-
-    Note over Brain,Guard: 1. Semantic Planning & Chunk Generation (2 - 10 Hz)
-    Cam->>Brain: Image Frame (640x480 RGB @ 30 FPS)
-    Brain->>Brain: Visuomotor Inference (ACT / Diffusion / Flow π0)
-    Brain->>Guard: Propose ActionIntent + Chunk (32 waypoints, 640ms horizon) + ExecutionToken
-
-    Note over Guard: 2. Deterministic Verification (< 2 ms)
-    Guard->>Guard: 1. Verify Token Signature, Endpoint & Session Expiry
-    Guard->>Guard: 2. Clamp Trajectory to Cartesian Geofence [X, Y, Z]
-    Guard->>Guard: 3. Verify Joint Angle Limits & Max Angular Velocity
-
-    alt Verification Passed
-        Guard->>Spine: Transmit Verified Chunk via Serial (1 Mbps Packet)
-    else Verification Failed / Token Revoked
-        Guard->>Spine: Send E-STOP / Safe Resting Posture Command
-    end
-
-    Note over Spine,Motor: 3. Deterministic Spine Phase (200 - 500 Hz)
-    loop Every 2 ms (500 Hz tick)
-        Spine->>Spine: Quintic Hermite Spline Interpolation
-        Spine->>Motor: Broadcast Target Angles via UART Bus
-        Motor-->>Spine: Read Proprioception (Angle, Current, Error)
-    end
-
-    Spine-->>Guard: Return Telemetry Packet + State Signatures
-    Guard-->>Guard: Append to Evidence Journal (Replay Receipt)
+```text
+host/browser/cloud model proposes
+  -> accountable Agent / ActionIntent
+  -> PDP admits or denies
+  -> existing ExecutionToken
+  -> enrolled execution boundary claims and binds one session
+  -> authenticated chunks to MCU
+  -> local bounds, deadline and watchdog
+  -> captured measurements / configured signer
+  -> verifier outcome and operator timeline
 ```
 
----
+The browser may display permissions and transport messages; it must not carry
+issuer/private fleet keys or mint trusted authority. Serial-port permission and
+packet CRC do not authorize motion. The release needs actual device enforcement
+and rejection of unsigned/raw development paths.
 
-## 4. The Onboard MCU "Spine" Firmware Pattern
+Microduck follows the native RPC/`robotd` route instead of the arm's MCU raw
+joint interface. Reuse existing token/receipt contracts; proposed robot fields
+must be versioned and reviewed rather than silently added to frozen constraints.
 
-The onboard microcontroller (ESP32 / RP2040) **never executes neural networks**. Its sole responsibility is deterministic real-time motion generation, motor bus communication, and fail-safe safety clamping.
+## Firmware Work Packages
 
-### Core Responsibilities of the Spine
-1. **Packet Parser & CRC:** Ingests binary packets containing trajectory waypoints over USB-CDC, UART, or BLE.
-2. **Quintic Hermite Spline Interpolator:** Smoothly interpolates between discrete waypoints at 200–500 Hz, ensuring continuous position, velocity, and acceleration ($C^2$ continuity) to protect plastic gearboxes.
-3. **100 ms Heartbeat Watchdog:** If a communication packet is delayed beyond 100 ms, the spine aborts open-loop execution and smoothly brings the robot to a resting posture.
+1. **Discovery and enrollment:** boot/connect/flash are non-moving states;
+   report pinned device, firmware and profile identities. Provision trust roots
+   and a distinct device identity through a reviewed enrollment flow.
+2. **Bounded parsing and authentication:** validate full messages before queue
+   mutation; fixed buffers and explicit overflow behavior. Keep crypto/parser
+   work outside the interpolation tick.
+3. **Session enforcement:** claim one token once; bind endpoint, policy/model,
+   boot nonce, sequence and deadline. Refresh cannot widen scope, extend expiry
+   or revive a revoked/completed session. Restart/reconnect discards motion.
+4. **Interpolation and bus:** evaluate a 200 Hz baseline and 500 Hz target;
+   validate spline extrema, velocity/acceleration/jerk and transition behavior.
+   Measure servo write/read cadence and bus utilization independently.
+5. **Local interruption:** heartbeat, command freshness, authority freshness
+   and session deadline are separate controls. Freeze their limits before
+   tests. Stop response is body-specific; returning home or cutting torque
+   is not universally safe. A new packet must never clear a latched stop.
+6. **Evidence:** retain required command/state/events and coverage/gaps;
+   enrolled signing and verification are separate from motor-loop timing.
+   Missing capture cannot become verified completion.
 
-### Reference C++ Spine Implementation Pattern
+No illustrative CRC-only watchdog snippet is a substitute for these requirements.
+The [protocol proposal](fast_spine_protocol_spec.md) contains the acceptance
+matrix and first-week design decisions.
 
-```cpp
-// SpineController.hpp - Real-Time Trajectory Interpolator & Watchdog
-#pragma once
-#include <Arduino.h>
+## Browser And Flasher Delivery
 
-struct Waypoint {
-    float angles[6];  // Radians
-    uint32_t timestamp_ms;
-};
+Start with a split-screen experiment: planar simulation on one side, explicitly
+labeled fixture or accepted physical state on the other, and an admission/
+interruption/evidence timeline. An out-of-envelope proposal is denied; any
+changed trajectory must fit admitted transform semantics or be re-admitted.
 
-class SpineController {
-private:
-    Waypoint current_chunk[64];
-    uint8_t chunk_length = 0;
-    uint32_t last_packet_time = 0;
-    const uint32_t WATCHDOG_TIMEOUT_MS = 100;
-    bool is_e_stopped = false;
+For ESP32-S3, prepare a pinned `esp-web-tools` release and board/chip-specific
+manifest with image digests, version and recovery instructions. Flashing is
+separate from key enrollment and motor admission. Check wrong-board,
+interrupted-flash and recovery behavior; motor enable remains unavailable
+during update. Secure boot and the USB update path need joint qualification.
 
-public:
-    void init() {
-        Serial.begin(1000000); // 1 Mbps serial link to host
-        // Initialize servo hardware bus (UART1/UART2)
-    }
+Public hosting requires HTTPS and compatible Web Serial support; first access
+uses a user-selected port. Test managed Chromebooks and actual OS/browser
+combinations. Sources: [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
+and [Chrome Web Serial](https://developer.chrome.com/docs/capabilities/serial).
+The 10-second repeat connect and 30-second flash goals must report permission,
+enrollment, verification and recovery separately.
 
-    void on_packet_received(const uint8_t* buffer, size_t len) {
-        // 1. Verify packet CRC
-        if (!verify_crc(buffer, len)) return;
+## Evidence And Delivery Gates
 
-        // 2. Unpack waypoints
-        unpack_waypoints(buffer, current_chunk, &chunk_length);
-        last_packet_time = millis();
-        is_e_stopped = false;
-    }
+The Microduck 61/14 mapping is policy-specific. Arm telemetry uses its own units,
+dimensions, joint order and calibration under the shared evidence envelope.
+Retain the samples required by the declared result predicate, not just a hash.
+A Rust verification result does not itself sign a sensor frame; identify the
+actual signer and distinguish host assertions from device-rooted capture.
 
-    void tick_500hz() {
-        uint32_t now = millis();
+G1 authority/session acceptance precedes bench motion; G2 evidence and measured
+hardware acceptance precede a physical showcase/pilot. Validate denied, expired,
+forged, replayed, revoked, wrong-endpoint, unplugged, restarted, stale-sensor,
+local-stop and incomplete-evidence cases on the actual ingress.
 
-        // Heartbeat Watchdog: Stop if packet is stale
-        if (now - last_packet_time > WATCHDOG_TIMEOUT_MS) {
-            if (!is_e_stopped) {
-                execute_safe_resting_posture();
-                is_e_stopped = true;
-            }
-            return;
-        }
+Scale one supervised lesson and one live pilot before 3–5 sites. Produce
+10 → 25 → up to 100 cumulative kits only after manufacturing QA, demand, cash
+and support reviews. Open core/firmware and optional paid provisioning,
+conformance/support and hosted governance are separate offers.
 
-        // Evaluate Quintic Hermite Spline at current timestamp
-        float target_angles[6];
-        evaluate_spline(now, current_chunk, chunk_length, target_angles);
+## Related Documents
 
-        // Broadcast to smart serial servos
-        servo_bus_write(target_angles);
-    }
-
-private:
-    void execute_safe_resting_posture() {
-        // Decelerate smoothly to home resting pose (do not drop dead)
-        servo_bus_ramp_to_rest();
-    }
-};
-```
-
----
-
-## 5. SeedCore Command Boundary & Scoped Tokens
-
-Before trajectory chunks reach the MCU Spine, they pass through SeedCore's local execution boundary ([`robot_execution_contract.md`](robot_execution_contract.md)).
-
-### 1. Scoped Capability Tokens
-The Brain does not possess unrestricted motor write authority. It must hold an `ExecutionToken` specifying:
-- **Principal & Session:** Accountable user/agent ID and monotonic session sequence.
-- **Cartesian Geofence:** Minimum/maximum bounding box ($[X_{\min}, X_{\max}; Y_{\min}, Y_{\max}; Z_{\min}, Z_{\max}]$) preventing table edge runoffs.
-- **Kinematic Limits:** Maximum linear speed ($v_{\max} \le 0.15\text{ m/s}$) and joint angular velocity ($\dot{\theta}_{\max} \le 2.0\text{ rad/s}$).
-- **Time Lease:** Maximum session duration (e.g., 5.0 seconds).
-
-### 2. Deterministic Cartesian Clamping
-If a neural policy generates an erratic waypoint outside the authorized bounding box, SeedCore clamps the coordinate to the nearest boundary manifold before calculating inverse kinematics:
-
-$$x_{\text{clamped}} = \max(X_{\min}, \min(X_{\max}, x_{\text{proposed}}))$$
-
-### 3. Action-Bound Cryptographic Receipts
-At the completion or interruption of each motion attempt, SeedCore seals an immutable receipt containing:
-- SHA-256 of the input visual frame and model checkpoint digest.
-- The admitted `ExecutionToken` signature.
-- Recorded physical telemetry (joint angles, motor currents, error flags).
-- Verifier outcome predicate (`COMPLETED`, `PREEMPTED`, or `DENIED`).
-
-Parents, teachers, and developers can inspect this receipt in the replay console to understand exactly why the robot moved.
-
----
-
-## 6. Zero-Install Browser Simulation to Physical Deployment
-
-Rather than forcing developers through a multi-day installation of Ubuntu, ROS 2, and Isaac Sim, SeedCore provides a **browser-first C++/Wasm workflow**:
-
-```
-┌────────────────────────────────────────────────────────┐
-│  STEP 1: DEVELOP & SIMULATE IN BROWSER                 │
-│  • Open web application on Chromebook / Mac / Windows  │
-│  • Load Microduck / SO-100 digital twin in Wasm MuJoCo │
-│  • Train or test policy against simulated obstacles   │
-│  • Verify numerical agreement (SIM-1 - SIM-6 gates)    │
-└──────────────────────────┬─────────────────────────────┘
-                           │ Plug in USB Cable
-┌──────────────────────────▼─────────────────────────────┐
-│  STEP 2: DEPLOY TO PHYSICAL ROBOT                      │
-│  • Browser connects via WebSerial (navigator.serial)   │
-│  • SeedCore admits ExecutionToken lease in-browser     │
-│  • Trajectory chunks stream directly to physical MCU   │
-│  • Immediate physical motion with zero software setup  │
-└────────────────────────────────────────────────────────┘
-```
-
----
-
-## 7. Common Pitfalls & Developer Checklist
-
-| Pitfall | Common Misconception | Engineering Solution |
-| :--- | :--- | :--- |
-| **Conflating Policy Rate with Motor Rate** | "I need my 7B model to infer in 10 ms to achieve 50 Hz control." | Run the model at **2–10 Hz**; emit **action chunks** (30–50 waypoints); interpolate on the MCU at **200–500 Hz**. |
-| **Fighting Consumer USB Jitter** | "I cannot use USB webcams or serial cables because of 20 ms jitter." | Receding-horizon action chunking buffers future trajectory; small transport jitters are completely absorbed. |
-| **Over-Engineered Industrial Safety** | "I need 140 N force sensors and optical light curtains for my desktop arm." | Lightweight robots (<2 kg) are **Safe-by-Physics**. Focus safety engineering on **workspace geofences, privacy gates, and token revocation**. |
-| **Open-Loop Dropping** | "When the computer disconnects, cut motor torque immediately." | Cutting torque can cause an arm or biped to drop and break 3D-printed gears. Implement a **graceful deceleration ramp** in the MCU watchdog. |
-
----
-
-## Related Documentation
-
-- [`embodied_ai_architecture_reference.md`](embodied_ai_architecture_reference.md) — Architectural foundations and industrial vs. mini-robotics paradigm comparisons.
-- [`physical_ai_strategy.md`](physical_ai_strategy.md) — Strategic thesis and customer solution delivery model.
-- [`robot_execution_contract.md`](robot_execution_contract.md) — Runtime contracts for session admission, boundary validation, and evidence closure.
-- [`mini_robot_simulator_implementation_plan.md`](mini_robot_simulator_implementation_plan.md) — C++/Wasm browser physics architecture.
-- [`microduck_integration_plan.md`](microduck_integration_plan.md) — Microduck M0–M5 integration roadmap.
+- [Physical AI strategy](physical_ai_strategy.md)
+- [Microduck integration plan](microduck_integration_plan.md)
+- [Robot execution contract](robot_execution_contract.md)
+- [Mini simulator implementation plan](mini_robot_simulator_implementation_plan.md)
+- [Service operating plan](robot_service_operating_plan.md)
+- [OEM partnership brief](../../application/oem_partnership_brief.md)

@@ -1,6 +1,6 @@
 # Robot Service Operating Plan
 
-Date: 2026-09-21
+Date: 2026-10-14
 Status: Proposed operating plan for a founder-led team; budget, demand and hardware readiness unconfirmed
 
 ## Operating Decision
@@ -17,6 +17,13 @@ Maintain one active engineering integration and at most one live customer pilot 
 An additional prospect may participate in discovery without creating another
 delivery commitment.
 
+The [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+now targets supervised STEM/maker delivery and OEM distribution. A constrained
+arm fixture can validate the Fast Spine bench protocol alongside Microduck's
+native reference; it is not automatically a second supported product. Keep it
+within an explicit effort cap or revise staffing/scope. Start one live pilot,
+then expand toward 3–5 sites only after repeat delivery and support evidence.
+
 The main scaling risk is the multiplication of robot models, firmware versions,
 behaviors, environments and support arrangements. Limit the tested combinations
 explicitly. A supported robot means a tested body/runtime/skill/environment
@@ -24,15 +31,16 @@ profile, not every device carrying the same product name.
 
 ## 1. Choose A Small First Offer
 
-A candidate is an **operator-triggered robot presentation for a staffed studio
-or exhibit**: one short routine, reviewed content, a defined operating area,
-visible start/stop controls and a fallback explanation. It is a hypothesis to
-test with potential users, not a hardware recommendation or validated market.
+A candidate is a **teacher/operator-supervised browser robotics lesson**:
+predict a bounded motion, compare simulation with one accepted physical
+profile, observe denial/interruption and inspect the outcome. Use visible
+start/stop controls, an adult operator and a defined workspace. It is a need
+and willingness-to-pay hypothesis, not a validated classroom product.
 
 It offers a concrete way to observe usefulness, interruptions, setup effort
-and repeat use. Compare it with an ordinary presentation or screen. If the
-robot contributes only first-day novelty, reduce or stop the offer rather than
-adding capabilities to make it appear more useful.
+and repeat use. Compare it with a screen-only simulation lesson. If physical
+hardware contributes only first-day novelty, reduce or stop the offer rather
+than adding capabilities to make it appear more useful.
 
 Select the first offer using these conditions:
 
@@ -247,8 +255,10 @@ work. A backlog is not a customer delivery promise.
 
 ## 10. First Planning Horizon And Expansion Rules
 
-Use the following as a learning sequence, with dates set after staffing and
-hardware availability are confirmed. The business stages do not rename M0–M5.
+Use the following as a learning sequence against the 18-month plan's target
+windows: S0/S1 in Q4 2026, initial S2/S3 in Q1 2027, OEM repeat delivery in
+Q2–Q3 2027 and paid fleet governance in Q4 2027–Q1 2028. Staffing, readiness and
+evidence determine actual dates. The business stages do not rename M0–M5.
 
 For the first planning cycle, prepare the offer and solution record, inventory
 available hardware and founder hours, identify the highest-risk interface

@@ -1,114 +1,81 @@
-# Demo Presentation Script
+# Physical AI Demo Presentation Script
 
-## Opening
+Date: 2026-10-14
+Status: Proposed five-minute golden-reference walkthrough; physical bridge and signed robot closure are not yet implemented
 
-Hi, I am Neil Li, founder and architect of SeedCore.
+## Presenter Preparation
 
-My profile is Ex-Motorola and Alibaba. UESTC.
+Use only the profile whose acceptance gates have passed. Label local simulation,
+protocol fixtures and accepted physical capture distinctly. Current
+`tree-lab.html` can demonstrate planar dynamics; it cannot demonstrate gateway,
+WebSerial motion or signed robot evidence today.
 
-SeedCore is a governed execution runtime for autonomous systems.
+For a future physical run, freeze the hardware/firmware/model/policy identities,
+operator controls and measured bounds; enroll the signer and test required
+failure cases first. Do not use a fixture receipt as physical proof. The
+[execution plan](../development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+owns G1/G2 release requirements and the 30-day target.
 
-The core thesis is simple: AI intent should not automatically become execution
-authority. As agents and robotic systems begin initiating real-world actions,
-enterprises need a way to prove those actions were authorized, scoped,
-physically evidenced, and replay-verifiable. SeedCore is built to provide that
-trust/runtime layer.
+## 0:00–0:40 — Problem And Positioning
 
-## What I Will Show
+“SeedCore is an open trust runtime for affordable physical AI. The goal is a
+robot kit you can use from a browser, with clear limits and understandable
+records. A model proposes an action; an accountable agent and policy boundary
+determine whether that action can run.”
 
-In this demo, I will show a Restricted Custody Transfer workflow using a
-high-value rare collectible shoe as the commercial scene.
+State the actual demonstration profile and its evidence status before proceeding.
 
-This is not a sneaker marketplace. It is a compact proof that SeedCore can
-govern high-value physical commerce when authentication, delegated AI intent,
-custody movement, and evidence closure must all agree before execution.
+## 0:40–1:30 — Split-Screen Experiment
 
-## Step 1: Source Registration
+Open the planar studio on the left and the explicitly labeled fixture or
+accepted physical state/timeline on the right. Identify the model and device
+versions. Show one short operator-triggered proposal and its workspace/time
+limits. Browser port permission is a connection step, not motion authority.
 
-First, the rare shoe is registered as a governed source asset.
+After M2 is accepted, show the gateway/PDP decision and session binding for
+one allowed action. The local controller retains its own limits and stop.
 
-The registration includes product reference, seller reference, provenance
-class, style code, condition grade, authentication payload, and NFC binding.
+## 1:30–2:20 — Out-Of-Envelope Proposal
 
-SeedCore does not treat authentication as a simple boolean. It preserves the
-authentication evidence packet as an admissibility input. No transfer authority
-exists until the source registration is approved.
+Use a recorded or live VLM proposal; identify which. Ask for a move outside the
+reviewed envelope. Show denial and no dispatch, with the reason in the timeline.
 
-## Step 2: Agent Intent
+If a transformed motion is offered, show its new trajectory and renewed
+admission or the explicit admitted transform rule. Do not silently clamp a
+signed action and describe the original authorization as covering it.
 
-Next, a buyer-side or collector agent submits a purchase and custody-transfer
-proposal.
+## 2:20–3:10 — Revocation And Local Stop
 
-This intent is advisory only. The agent cannot move the asset directly.
+After accepted session enforcement is available, revoke a short active attempt
+and display propagation, local response initiation and observed stopping
+separately. Use measured timings, not a sub-millisecond physical-stop promise.
 
-The request is normalized through the Agent Action Gateway v1 contract, where
-listing, quote, order, declared value, buyer delegation, and destination scope
-are bound into one workflow.
+Demonstrate the reviewed local response to lost intent or disconnect if its
+hardware test passed. No buffered motion resumes on reconnect. The operator's
+local stop works without the browser or cloud.
 
-## Step 3: Policy Evaluation
+## 3:10–4:10 — Evidence And Verification
 
-SeedCore's Policy Decision Point checks whether the action is admissible.
+After M3-equivalent capture passes, show the action/session, policy/model,
+device/runtime, retained measurements, sequence coverage and actual signer.
+Run verification and explain the disposition. The signer seals captured
+evidence; Rust checks it.
 
-It verifies that authentication is approved and fresh, the asset is not
-quarantined, buyer delegation is active, the approval envelope is valid, the
-declared value is within policy, and product, quote, and order references all
-bind to the same asset.
+Show a missing or stale evidence case that cannot close successfully. A command
+acknowledgement is not physical completion. Replay explains captured records,
+with gaps and limits visible.
 
-If anything fails, the system denies or quarantines the workflow.
+## 4:10–5:00 — Adoption And Next Step
 
-## Step 4: Bounded Authority
+“SeedCore Inside is our proposed open firmware/browser distribution path.
+Auditable classroom governance adds teacher roles, permissions and replay.
+Later, developers can separately opt in to share trajectories for calibration.”
 
-Only after the policy gates pass does SeedCore mint bounded custody authority.
+Explain the proposed China sourcing, Singapore trust/commercial and Thailand
+engineering/field roles. Point to the next accepted profile, one supervised
+pilot and staged kit qualification. OEM, site counts, prices and fleet scale
+are targets, not established traction.
 
-The authority is scoped to the exact asset, actor or device, origin and
-destination zone, allowed operations, evidence requirements, and validity
-window.
-
-This is the key distinction: AI intent does not equal execution authority.
-
-## Step 5: Physical Handoff
-
-During physical handoff, the vault or courier edge node presents the scoped
-authority.
-
-The edge scan reads the NFC or equivalent hardware anchor. The scan telemetry
-is signed by the authorized device.
-
-Supporting evidence such as weight, seal, image, or video references can also
-be attached. The closure request must bind this telemetry back to the original
-evaluated asset.
-
-## Step 6: Result Verification
-
-At delivery, the receiving scan produces final signed telemetry.
-
-The result verifier validates the full chain: source registration,
-authentication evidence, buyer intent, bounded authority, origin telemetry,
-delivery telemetry, and final closure.
-
-If the proof chain is consistent, the custody transfer closes. If there is an
-NFC clone, cross-asset replay, stale telemetry, missing approval, or condition
-drift, the workflow fails closed into quarantine.
-
-## Step 7: Proof Surfaces
-
-Finally, SeedCore renders two proof surfaces.
-
-The public proof view shows a narrow legitimacy surface: product identity,
-provenance class, authentication verdict, current state, and proof hash.
-
-The operator forensic view contains the full replay bundle: telemetry
-references, signer provenance, policy decisions, verifier outcomes, and
-evidence bundle. Sensitive data like raw NFC UID or microscopic authentication
-evidence stays out of the public projection.
-
-## Closing
-
-This demo shows the core SeedCore pattern: agent intent -> policy admission ->
-bounded authority -> signed physical evidence -> replayable proof.
-
-The rare-shoe scene is only the first vertical. The same runtime pattern can
-extend to luxury goods, logistics, robotics handoff, industrial asset custody,
-lab samples, and regulated physical workflows.
-
-SeedCore's goal is to become the trust/runtime layer for autonomous systems.
+Use the [OEM partnership brief](oem_partnership_brief.md) for a candidate design-in
+discussion. RCT fixtures remain available as proof regressions; their older
+custody-demo narrative is not the active robotics schedule.

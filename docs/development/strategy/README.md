@@ -1,7 +1,7 @@
-# Strategy And Earlier Execution Plans
+# Strategy And Execution Plans
 
-Date: 2026-09-21
-Status: Strategy reading map; earlier sequencing superseded
+Date: 2026-10-14
+Status: Active 18-month schedule and earlier planning references
 
 The active product direction is the
 [physical AI strategy](../robotics/physical_ai_strategy.md): a reusable trust
@@ -11,7 +11,13 @@ The [customer delivery model](../robotics/robot_solution_delivery.md) describes
 how the team helps ordinary users define needs, select robots and implement
 and maintain useful functions.
 
-These longer-range documents retain their original reasoning and dated plans.
+The [physical AI execution plan](seedcore_physical_ai_execution_plan_2026_2028.md)
+is the canonical **Q4 2026–Q1 2028** planning schedule. It links M1–M4,
+conditional SIM research, China/Singapore/Thailand operating roles, staged kit
+production, supervised pilots, OEM adoption and hosted governance. Its first
+30-day window is 14 Oct–12 Nov 2026. Targets advance through evidence gates.
+
+The earlier annual documents retain their original reasoning and dated plans.
 For current priorities, use the [active queue](../current_next_steps.md) and
 [portfolio decision](../application_directions.md). The next stage focuses on
 Microduck and robotics integration; older RCT-first or city-first schedules
@@ -19,6 +25,7 @@ are not the current queue.
 
 ## Documents
 
+- [Physical AI Execution Plan: Q4 2026–Q1 2028](seedcore_physical_ai_execution_plan_2026_2028.md) — active dates, phase gates, 30-day work, economics and capacity
 - [North Star: The Genuine Environment for Autonomous Trade](north_star_autonomous_trade_environment.md)
 - [SeedCore 2026 Execution Plan](seedcore_2026_execution_plan.md)
 - [SeedCore 2027 Significant Direction](seedcore_2027_high_vertical_direction.md)

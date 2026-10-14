@@ -1,6 +1,6 @@
 # SeedCore Trust Runtime Category Distinction
 
-Date: 2026-09-21
+Date: 2026-10-14
 Status: Canonical messaging reference
 
 This document explains how to describe SeedCore clearly without collapsing it
@@ -13,12 +13,25 @@ integration focus, with Microduck as the reference target. SeedCore governs
 agent authority and evidence; the onboard robot runtime retains motor control
 and local safety responsibilities.
 
+The initial adoption wedge is affordable maker and supervised STEM kits:
+SeedCore Inside reference firmware/browser lessons, auditable classroom
+governance and later opt-in telemetry. The proposed China–Singapore–Thailand
+operating model and Q4 2026–Q1 2028 targets are in the
+[execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md).
+The “Android + TrustZone” analogy is an interface/isolation ambition, not an
+OS, universal hardware root of trust or safety certification claim.
+
 For a customer, describe the team's purpose in ordinary language: **SeedCore
 helps you choose a small robot for a real need, build the functions you want,
 and keep them working within agreed limits.** This is the proposed service
 direction. “Trust runtime for physical AI” names the technical foundation;
 customers need not understand tokens or proof kernels to explain their needs.
 See the [customer delivery model](robotics/robot_solution_delivery.md).
+
+For an institutional buyer, lead with a browser lesson they can operate within
+agreed limits and understandable evidence of the outcome. Delivery services
+support that repeatable offer; the broader bespoke-service mission does not
+expand the first supported profile.
 
 The intended reusable unit is a governed skill attempt: a versioned behavior,
 an accountable principal, bounded permission, enforced execution limits and

@@ -1,6 +1,6 @@
 # Microduck Integration Plan
 
-Date: 2026-09-21
+Date: 2026-10-14
 Status: Active next-stage plan; adapter and hardware integration not implemented
 
 ## Outcome And Scope
@@ -21,13 +21,33 @@ interruption and evidence. Version any resulting schema changes explicitly;
 this plan does not introduce a new `TaskExecutionToken` or alter frozen token
 constraints.
 
-### Mini-Robotics Architecture Focus Areas
+## Schedule And Baseline Alignment
 
-To achieve this proof point within the mini-robotics paradigm (desktop/maker/kid-safe embodiments rather than heavy industrial arms), engineering prioritizes:
+The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+targets M1/M2 in Q4 2026 and M3/M4 in Q1 2027. Begin minimum M3 capture before
+any physical demo; acceptance depends on evidence, not the date. M5 remains
+offline evaluation and separately admitted promotion.
 
-1. **Lightweight Kinematic Models (MJCF/URDF for Mini-Bots):** Pinned, versioned models of Microduck in MuJoCo optimized for fast C++/Wasm evaluation and tuned for small-scale physical dynamics (plastic gear backlash, low-friction feet, micro-servo deadbands).
-2. **Command Boundary Integration:** Mapping the SeedCore Trust Runtime (scoped token $\rightarrow$ verified policy check $\rightarrow$ cryptographic receipt) directly to the Microduck serial/BLE command bridge, ensuring the local controller verifies the token before executing motor setpoints.
-3. **Action-Bound Telemetry:** Recording golden observation datasets from the browser simulator and comparing them against physical Microduck execution telemetry to generate reproducible audit receipts. See [Embodied AI Architecture Reference](embodied_ai_architecture_reference.md#8-application-to-seedcores-microduck-milestone).
+The [Microduck 0.1.0 body package](../../../packages/models/microduck/0.1.0/README.md)
+is implemented with integrity/mass/joint/actuator parity. This closes model
+pinning, not the complete M0 deployment manifest below. No Microduck-specific
+HAL driver or admitted physical path exists at this revision.
+
+The [Fast Spine protocol](fast_spine_protocol_spec.md) covers a separate
+1–3 DOF ESP32-S3 / TTL arm bench fixture. Its WebSerial firmware does not replace
+Microduck's native runtime or establish Microduck M4. The current browser Wasm
+engine is a fixed-base planar arm model, not a Microduck digital twin.
+
+### Architecture Focus Areas
+
+1. **Pinned native model and policy:** use the existing MuJoCo body package;
+   add scene, actuator/backlash, policy and normalization pins required by M1.
+2. **Native command boundary:** map the existing gateway/PDP/token session to
+   the reviewed Microduck RPC path. Preserve `robotd` as controller and sole bus
+   owner; fence alternative ingress before claiming complete authority coverage.
+3. **Action-bound evidence:** compare the pinned native simulation's golden
+   signals with actual runtime observations. Bind hardware capture to the
+   selected profile, admitted session and enrolled signer.
 
 ## Runtime Boundaries
 

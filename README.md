@@ -3,46 +3,67 @@
 [![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Wasm ABI](https://img.shields.io/badge/Wasm%20Physics-ABI%201%20%7C%20ABI%202-success.svg)](packages/mini-physics/)
-[![Tests Passing](https://img.shields.io/badge/Tests-68%2F68%20passing-brightgreen.svg)](tools/mini-sim/verify.cjs)
+[![Tests Passing](https://img.shields.io/badge/Simulator%20Tests-78%2F78%20passing-brightgreen.svg)](tools/mini-sim/verify.cjs)
 
-**The Verifiable Trust Runtime & Operating Foundation for Mini-Robotics and Physical AI.**
+**The Open Trust Runtime for Affordable Physical AI.**
 
-SeedCore bridges high-level AI policies (Vision-Language-Action models, Diffusion Policies, and cloud VLMs) to physical mini-robots, educational kits, tabletop manipulators, and maker embodiments. It replaces dangerous unchecked motor access with **scoped capability tokens**, **cryptographic receipts**, and a **"Slow Brain, Fast Spine"** receding-horizon execution architecture.
+SeedCore develops the boundary between AI proposals and robot execution:
+accountable agents, **scoped capability tokens**, local enforcement and
+**verifiable action evidence**. Browser-first maker and supervised education
+kits are the initial adoption focus. Microduck is the native-runtime reference;
+a small tabletop arm is the proposed MCU Fast Spine bench fixture.
+
+The browser simulator, pinned Microduck body model and shared trust/proof
+components exist. Microduck M1–M4, physical WebSerial control, Fast Spine
+firmware and device-rooted robot receipts remain planned integration work.
 
 ---
 
-## The Paradigm Shift: Industrial Giants vs. DIY & Mini-Robotics
+## Positioning And Adoption
 
-Industrial robotics literature and enterprise foundations (e.g., Franka Emika Panda, Unitree H1, Boston Dynamics, UR5) are engineered for **heavy, high-inertia platforms** operating under catastrophic physical and financial hazard. Scaling down an industrial factory stack to a desktop or classroom fails because the fundamental constraints of mini-robotics are completely inverted:
+The founder's stated 20 years in Chinese IoT/silicon supply chains and
+international engineering perspective support a proposed **China–Singapore–Thailand**
+operating model: China sourcing/ODM integration, Singapore IP/trust/commercial
+stewardship and Thailand bench engineering/field delivery. The advantage must
+be demonstrated through cost, qualification and repeatable support.
 
-| Architectural Dimension | Classical Industrial Robotics (Factories / Heavy Humanoids) | DIY & Mini-Robotics (Desktop / Maker / Kids / Education) |
+| Pillar | Proposed product value | First validation |
 | --- | --- | --- |
-| **Physical Hazard Profile** | High mass (15–100+ kg), high torque (20–150+ Nm). Crushing, pinch, and impact hazard. | **Featherweight (< 500g – 2 kg), micro-torque (< 0.2–2 Nm).** Inherent, passive mechanical safety. |
-| **Safety Paradigm** | **Active Enforced Containment:** Hard real-time C++ geofencing, optical light curtains, ISO 10218 / ISO/TS 15066 force clamping. | **Safe-by-Physics:** Actuator stall torque cannot break human skin or living room objects. Passive compliance via 3D-printed PETG/PLA/TPU. |
-| **Compute & Power** | Heavy onboard SoCs (Jetson AGX Orin, 60W+) or multi-GPU servers (8x H100s). High thermal and battery load. | **Ultra-low power microcontrollers:** ESP32, RP2040, STM32, or host laptops/Chromebooks. 5V USB / 2S LiPo (7.4V). |
-| **Communication Bus** | Industrial fieldbuses: CAN-FD (5 Mbps), EtherCAT (100 Mbps), industrial MIPI CSI-2 camera DMA (<3.5ms). | **Consumer serial & Web APIs:** UART / RS-485 serial bus (1 Mbps), USB-CDC, WebSerial, BLE, Wi-Fi WebSocket. |
-| **Simulation & Tooling** | Heavy local Linux workstation dependencies, complex ROS 2 distributions, NVIDIA Isaac Sim / Omniverse. | **Browser-Native & Zero-Install:** Zero-allocation C++/Wasm simulation, WebGPU/Canvas rendering, runs on any Chromebook/laptop. |
-| **Model Strategy** | Monolithic 7B–70B parameter generalist VLAs running on remote GPU clusters. | **Hierarchical Edge-Microbrains:** Lightweight policies (ACT, Diffusion Policy, Octo-Small at 27M–93M) or cloud VLMs dispatching bounded action chunks. |
-| **Data Collection** | $100k+ optical motion-capture rigs, master-slave industrial arms, dedicated telemetry cages. | **Maker Teleoperation:** Passive 3D-printed leader arms (like SO-100), browser webcams, smartphone AR, gamepads, hand-pose vision. |
-| **Trust & Governance** | Rigid industrial PLC interlocks, closed proprietary firmware gates. | **SeedCore Verifiable Governance:** Policy-bounded execution, cryptographically signed receipts, scoped capability tokens, parental/educator supervision. |
-| **Cost Profile** | $15,000 – $150,000+ per unit. | **$50 – $300 total Bill of Materials (BOM).** |
+| **SeedCore Inside** | Open reference firmware and browser lessons for supported affordable robot kits | One independently reproducible firmware/board/body profile |
+| **Auditable classroom governance** | Teacher roles, bounded motion, privacy/egress controls and explainable evidence | Allowed, denied and interrupted attempts with actual boundary enforcement |
+| **Opt-in sim-to-real telemetry** | Retained, versioned trajectories with action and signer provenance | Adult bench data improves calibration/evaluation under reviewed sharing rights |
 
-### SeedCore's Central Role in the Mini-Robotics Ecosystem
+Selected kits below **$300** and a **$12 controller BOM** are design targets,
+excluding an existing host and with cost boundaries documented in the
+[execution plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md).
+They are not Microduck prices or supplier quotations. “Android + TrustZone”
+expresses an interface/isolation ambition, not an OS or safety certification.
 
-Because mini-robots like **Microduck**, tabletop arms, and desktop companions are *safe-by-physics*, safety shifts from kinetic hazard containment to **behavioral, permission, and privacy governance**:
+### Slow Brain, Fast Spine: Proposed Physical Bridge
 
-1. **Scoped Capability Tokens:** An AI planner never receives raw motor access. It requests a bounded motion session (e.g., *"Walk forward 10 cm to inspect toy within 3.0s"*). SeedCore's Policy Decision Point (PDP) admits the request into a cryptographic token.
-2. **The "Slow Brain, Fast Spine" Bridge:** Rather than fighting 15–40ms consumer bus jitter (USB/BLE), SeedCore pairs an asymmetric pipeline:
-   - **The Slow Brain (Cloud / Laptop / Browser):** Computes action chunks (30–50 future waypoints covering 0.5–1.0s) every 100–200ms.
-   - **The Fast Spine (Edge MCU ESP32 / RP2040):** A deterministic C++ spline interpolator running at 200–500 Hz smoothly drives serial bus servos (e.g. Feetech STS3215 or 9g servos). If communication drops, a hardware watchdog brings the robot to a stable resting posture.
-3. **Action-Bound Receipts & Evidence:** Every physical attempt generates a replayable, cryptographically signed receipt. Parents, teachers, and developers can verify exactly why the robot moved, what sensor data triggered it, and whether it complied with policy.
-4. **Revocation at the Boundary:** If an action exceeds safe limits (tilt threshold, table edge detection, or manual stop), SeedCore immediately revokes the token at the bridge.
+High-level planning produces bounded intent or action chunks; a native robot
+controller or qualified MCU handles local execution. The planned arm profile
+evaluates **200–500 Hz interpolation**, independently measuring servo-bus and
+telemetry rates. Microduck retains `robotd` control and bus ownership.
+
+PDP admission, continuous local limits/deadlines and asynchronous evidence
+closure have separate responsibilities. Local stop must work during browser
+or cloud loss. Measure revocation propagation and observed stopping; a fast
+lookup is not a physical-stop guarantee. Small robots still need profile-specific
+force, pinch, electrical and fall assessment.
+
+The current browser studio contains no hardware/gateway connection or signed
+robot receipts. Its physics covers fixed-base planar 1/2/3-link arms rendered
+with a 3D camera; native MuJoCo owns the separate pinned Microduck model path.
 
 ---
 
 ## Technical Stack Architecture
 
 SeedCore is structured in clean, decoupled layers separating governance, mathematical simulation, hardware abstraction, and cryptographic proofs:
+
+This diagram is the target integration architecture. The physical MCU bridge
+and Microduck action/evidence path are not yet delivered.
 
 ```mermaid
 flowchart TD
@@ -62,29 +83,31 @@ flowchart TD
     end
 
     subgraph SimulationOrHardware ["4. Physical & Simulated Embodiments"]
-        G -->|Option A: WebSerial / BLE Bridge| H[Edge MCU Fast Spine - ESP32 / RP2040]
-        H -->|UART 1 Mbps| I[Microduck / Mini-Robot Servos]
-        G -->|Option B: Native Simulation| J[MuJoCo Pinned Model Engine]
-        G -->|Option C: Zero-Install Browser| K[C++ Wasm Tree Physics Engine ABI 2]
+        G -->|Option A: Proposed WebSerial Bridge| H[Edge MCU Fast Spine - ESP32-S3]
+        H -->|Qualified TTL Bus| I[Tabletop Arm Servos]
+        G -->|Option B: Native Microduck Path| P[Pinned RPC / robotd]
+        P --> Q[Microduck Local Control / Servo Bus]
+        G -->|Option C: Native Simulation| J[MuJoCo Pinned Model Engine]
+        G -->|Option D: Browser Integration Target| K[C++ Wasm Planar Tree Physics ABI 2]
     end
 
     subgraph EvidencePipeline ["5. Evidence & Verification Layer"]
-        I & J & K -->|Proprioception & Action Telemetry| L[Action-Bound Receipt Generator]
+        I & Q & J & K -->|Proprioception & Action Telemetry| L[Action-Bound Receipt Generator]
         L --> M[Rust Proof Kernel / RESULT_VERIFIER]
-        M --> N[Immutable Execution Receipt / Replay]
+        M --> N[Verifiable Execution Receipt / Replay]
     end
 ```
 
 ### 1. Trust Runtime & Policy Decision Layer
-- **Agent Action Gateway (`src/seedcore/agents/`):** Validates caller identity, intent taxonomy, and rate limits.
-- **Policy Decision Point (PDP):** Evaluates intents against fine-grained policy rules; issues bounded `TaskExecutionToken` instances with cryptographic signatures, strict expiration timestamps, and capability masks.
-- **Revocation Custody (`src/seedcore/hal/custody/`):** [`execution_token_revocation.py`](src/seedcore/hal/custody/execution_token_revocation.py) provides sub-millisecond revocation lookups to cancel in-flight sessions instantly.
+- **Agent Action Gateway:** [`agent_actions_router.py`](src/seedcore/api/routers/agent_actions_router.py) supplies the existing intent ingress.
+- **Policy Decision Point (PDP):** Evaluates intents and issues scoped `ExecutionToken` authority. Robot-specific session bindings require versioned review against the existing token and policy contracts.
+- **Revocation Custody:** [`execution_token_revocation.py`](src/seedcore/hal/custody/execution_token_revocation.py) supplies shared revocation checks; physical propagation and stopping remain profile-specific acceptance work.
 
 ### 2. Hardware Abstraction Layer (HAL) & Drivers
 - **Base Interfaces (`src/seedcore/hal/interfaces.py`):** Unified [`BaseRobotDriver`](src/seedcore/hal/interfaces.py), [`ProprioceptionState`](src/seedcore/hal/interfaces.py), [`RobotCapabilities`](src/seedcore/hal/interfaces.py), and operational [`RobotState`](src/seedcore/hal/interfaces.py).
 - **Driver Implementations (`src/seedcore/hal/drivers/`):**
   - [`robot_sim_driver.py`](src/seedcore/hal/drivers/robot_sim_driver.py): Extensible execution framework with in-memory and physics-backed profiles.
-  - Microduck HAL simulation driver (M1): Pinned 61-dim observation vector, 14-dim action vector, home poses, and zero-drift startup verification.
+  - Microduck HAL simulation driver (M1, planned): 61-dim observations and 14 policy actions with pinned signal semantics, normalization, home/scaling and startup without unrequested motion. Those dimensions are Microduck-specific.
 
 ### 3. Native MuJoCo Workbench & Model Packages
 - **Model Ingestion (`packages/models/`):** Validated, versioned model packages with SHA-256 integrity manifests. Includes the pinned **Microduck 0.1.0** MJCF model ([`packages/models/microduck/0.1.0/manifest.json`](packages/models/microduck/0.1.0/manifest.json), $0.737\text{ kg}$, $nq=21, nv=20, nu=14$).
@@ -97,7 +120,7 @@ flowchart TD
 - **Dual-ABI WebAssembly Build (`apps/mini-robot-simulator/mini-physics.wasm`):**
   - Compiled via Clang and `wasm-ld` (`tools/mini-sim/build-physics.cjs`).
   - Exports: `mini_abi`, `mini_eval`, `mini_scratch` (ABI 1) and `mini_tree_abi`, `mini_tree_eval`, `mini_tree_scratch` (ABI 2).
-  - Compact transfer footprint ($\sim 13\text{ KB}$), standalone host math imports (`sin`, `cos`).
+  - Current raw module size **13,242 bytes**; standalone host math imports (`sin`, `cos`). This is not MCU firmware size or whole-application memory use.
 
 ### 5. Simulator Contracts & Verification
 - **Schema Contracts (`packages/mini-sim-contracts/`):**
@@ -106,7 +129,7 @@ flowchart TD
   - Built via locked `tsc` into zero-dependency [`sim-contracts.js`](apps/mini-robot-simulator/sim-contracts.js) and [`sim-contracts.d.ts`](apps/mini-robot-simulator/sim-contracts.d.ts).
 
 ### 6. Zero-Install 3D Browser Studio & Workbench
-- **3D Kinematic Tree Studio ([`apps/mini-robot-simulator/tree-lab.html`](apps/mini-robot-simulator/tree-lab.html)):**
+- **Planar Tree Studio with a 3D View ([`apps/mini-robot-simulator/tree-lab.html`](apps/mini-robot-simulator/tree-lab.html)):**
   - Interactive 3D perspective viewport ([`tree-lab.js`](apps/mini-robot-simulator/tree-lab.js), [`tree-lab-ui.js`](apps/mini-robot-simulator/tree-lab-ui.js)) with drag-to-orbit camera controls, depth clipping, and perspective scaling.
   - Preset models: 1-link pendulum, 2-link serial arm, 3-link articulated manipulator.
   - Real-time analytical inspectors: live mass matrix $M(q)$, end-effector Jacobian $\mathbf{J}(q)$, kinetic/potential/total mechanical energy meters, and JSON experiment export.
@@ -114,7 +137,8 @@ flowchart TD
   - WebWorker isolated simulation ([`simulation-worker.js`](apps/mini-robot-simulator/simulation-worker.js)) with resumable checkpoints, predictive learning challenges, and 480 Hz real-time stepping.
 
 ### 7. Cryptographic Proof Kernel & Verifier
-- **Rust Proof Engine (`rust/`):** Offline and embedded high-assurance proof kernel (`seedcore-verify`) validating transfer chains, state transitions, and custody handoffs.
+- **Rust Proof Engine (`rust/`):** Rust proof kernel and offline CLI (`seedcore-verify`) with token, signature, receipt and replay verification.
+- Device enrollment, signed robot telemetry and Microduck `RESULT_VERIFIER` closure remain M3/M4 integration work; a verifier needs captured evidence from a configured signer.
 - **TypeScript Proof Surfaces (`ts/`):** Verification APIs, typed schema contracts, and operator console bindings.
 
 ### 8. Multi-Robot Team Orchestration
@@ -170,12 +194,28 @@ seedcore/
 | --- | --- | --- | --- |
 | **SIM-1** | Worker Isolation | **Complete** | WebWorker isolation, versioned run/model/command contracts, reproducible checkpoints. |
 | **SIM-2** | C++ Wasm Planar Core | **Complete** | Zero-allocation C++ two-link dynamics (ABI 1), Wasm build, JS/native/Wasm parity (< 1e-12 error). |
-| **SIM-3** | Multi-Link Tree & 3D Studio | **Complete** | $N$-link serial tree dynamics (ABI 2), Wasm dual-ABI, 3D perspective viewport with orbit controls, live $M(q)/\mathbf{J}(q)$ inspectors, **68/68 tests passing**. |
-| **M0** | Microduck Model Pinning | **Complete** | Ingested Microduck 0.1.0 MJCF ($0.737\text{ kg}$, 14 actuators), integrity manifests, mass/joint parity. |
-| **M1** | Microduck Simulation Driver | **In Progress** | MuJoCo HAL driver, 61-dim observation vector, 14-dim action vector, zero-drift startup verification. |
-| **M2** | Governed Motion Intent | **Upcoming** | Bounded velocity sessions, ActionIntent $\rightarrow$ ExecutionToken $\rightarrow$ local MCU command bridge. |
-| **M3** | Evidence & Receipts | **Upcoming** | Action-bound telemetry, cryptographic receipts, replay, and `RESULT_VERIFIER` closure. |
-| **M4** | Supervised Hardware | **Upcoming** | Physical Microduck bring-up, WebSerial/BLE bridge, local MCU watchdog preemption. |
+| **SIM-3** | Planar Tree & 3D Studio | **Delivered slice; broader gates open** | Fixed-base 1/2/3-link planar dynamics and orbit view; **78/78 Node.js tests passed 2026-10-14**. Branching/spatial dynamics, encoders, worker-v3 and MuJoCo comparisons remain open. |
+| **M0** | Microduck Model / Deployment Pins | **Model complete; deployment inventory open** | Microduck 0.1.0 MJCF ($0.737\text{ kg}$, 14 actuators), integrity/mass/joint parity. Runtime, policy, normalization and hardware/transport pins still required. |
+| **M1** | Microduck Simulation Driver | **Planned — Q4 2026** | Native MuJoCo HAL driver, golden 61/14 semantics and startup without unrequested motion. |
+| **M2** | Governed Motion Intent | **Planned — Q4 2026** | Bounded velocity/stop session via existing gateway/PDP/token/native controller. Arm MCU bridge is a separate fixture. |
+| **M3** | Evidence & Receipts | **Planned — Q4 2026–Q1 2027** | Action-bound telemetry, enrolled signer, replay and `RESULT_VERIFIER` closure; minimum evidence precedes a physical demo. |
+| **M4** | Supervised Hardware | **Planned — Q1 2027** | Native Microduck bring-up and measured local stop/fault behavior; arm WebSerial acceptance is separate. |
+| **M5** | Learning & Promotion | **Supporting offline lane** | Baseline/candidate comparison, export parity, reviewed promotion and rollback; training grants no motion authority. |
+
+### 18-Month Planning Targets
+
+| Window | Engineering / supply chain | Adoption / revenue validation |
+| --- | --- | --- |
+| **Q4 2026** | M1/M2 golden reference, minimum evidence, one ESP32-S3 / TTL arm fixture and quoted board BOM | Split-screen demo after its physical gates; OEM and lesson packets |
+| **Q1 2027** | Microduck M3/M4; staged 10 → 25 → up to 100 cumulative developer kits | One supervised pilot, then 3–5 sites after useful repeat delivery/support evidence |
+| **Q2–Q3 2027** | Conditional SIM-3 remainder / SIM-4–SIM-6; one LeRobot-family and one model proposal adapter | One OEM shipping profile first, then 2–3 OEM targets and scoped conformance badge |
+| **Q4 2027–Q1 2028** | Durable fleet authority/evidence; 3 → 10 → up to 30 robots; SoM only if demand justifies it | Paid Governance / Cloud Workbench with measured support and recurring costs |
+
+Dates and adoption counts are targets. The
+[18-month execution plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+owns gates, owners, costs and the **14 Oct–12 Nov 2026** tactical schedule.
+Keep local tools open; validate paid OEM provisioning/conformance/support and
+hosted governance. Telemetry contribution is optional and separately controlled.
 
 ---
 
@@ -194,7 +234,7 @@ python3 -m http.server 8080 --directory apps/mini-robot-simulator
 ```
 
 ### 2. Run the Comprehensive Simulator Test Suite
-Runs the locked TypeScript contract checks, syntax audits, native C++ invariants, and all 68 Node.js tests:
+Runs the locked TypeScript contract checks, syntax audits, native C++ invariants, and all 78 Node.js tests:
 
 ```bash
 node tools/mini-sim/verify.cjs
@@ -227,7 +267,11 @@ cargo test --workspace --manifest-path rust/Cargo.toml
 
 ## Key Technical Documentation
 
-- **[Mini-Robotics Developer Blueprint](docs/development/robotics/mini_robot_developer_blueprint.md):** Complete guide covering the $150 BOM, ESP32/RP2040 fast spine firmware, WebSerial communication, and SeedCore trust tokens.
+- **[18-Month Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Tri-node strategy, Q4 2026–Q1 2028 schedule, phase gates, first 30 days and revenue assumptions.
+- **[Physical AI Strategy](docs/development/robotics/physical_ai_strategy.md):** SeedCore Inside, auditable classroom governance and opt-in telemetry pillars.
+- **[Fast Spine Protocol Proposal](docs/development/robotics/fast_spine_protocol_spec.md):** M2/M4 WebSerial session, authentication, interruption, telemetry and flashing requirements; not implemented firmware.
+- **[OEM Partnership Brief](docs/application/oem_partnership_brief.md):** Draft design-in offer, responsibilities, conformance and staged production; not a partner agreement.
+- **[Mini-Robotics Developer Blueprint](docs/development/robotics/mini_robot_developer_blueprint.md):** Proposed reference profile, cost targets and qualified browser-to-hardware delivery sequence.
 - **[Embodied AI Architecture Reference](docs/development/robotics/embodied_ai_architecture_reference.md):** Deep-dive contrasting industrial robotics with DIY/mini-robotics, receding-horizon action chunking, and verifiable governance.
 - **[Mini-Robot Simulator Implementation Plan](docs/development/robotics/mini_robot_simulator_implementation_plan.md):** Engineering roadmap and qualification gates for SIM-1 through SIM-6.
 - **[Microduck Integration Plan](docs/development/robotics/microduck_integration_plan.md):** Milestones M0 through M4 for the reference bipedal embodiment.

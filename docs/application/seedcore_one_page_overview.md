@@ -1,137 +1,80 @@
 # SeedCore One-Page Overview
 
-## Executive Summary
+Date: 2026-10-14
+Status: Current positioning; physical firmware, pilots and commercial adoption are planned
 
-Agent frameworks help AI decide what to do.
+**SeedCore is the open trust runtime for affordable physical AI.** It connects
+AI proposals to bounded robot execution and verifiable action evidence.
+Browser-first maker and supervised STEM kits are the first adoption focus.
 
-Prompt guardrails control what AI says.
+## The Problem And Product
 
-SeedCore controls what AI is allowed to execute.
+An accessible robot kit still needs usable software, clear operator permissions,
+predictable interruption and understandable records of what happened. A model
+proposal or browser connection alone should not authorize motor access.
 
-SeedCore is a governed execution runtime for autonomous systems. It sits
-between AI intent and real-world execution, verifying delegation, policy scope,
-asset state, hardware authority, custody telemetry, and evidence requirements
-before execution authority can exist.
-
-Unlike an AI agent framework or a prompt guardrail, SeedCore is a deterministic
-execution gate. It rejects ambient authority, mints short-lived
-scope-bound execution authority only when policy admits the action, and
-produces replayable evidence chains that can be verified after the fact.
-
-The core runtime is already implemented and contract-tested, including Agent
-Action Gateway v1, scoped execution authority, Policy Decision Points,
-evidence bundles, result verification, generic Restricted Custody Transfer
-proof surfaces, and replay verification primitives. We are packaging this into
-a rare-shoe Restricted Custody Transfer demo to show how SeedCore binds
-authentication, delegated AI intent, custody telemetry, and verifier closure
-into one replayable proof chain for investor and pilot conversations.
-
-## What We Do
-
-SeedCore builds the trust/runtime layer for autonomous systems. As AI agents
-and robotic workflows begin initiating real-world actions, enterprises need
-infrastructure that can turn business policy into executable authority.
-
-SeedCore receives agentic intent, evaluates it through a Policy Decision Point,
-checks explicit delegation and approval envelopes, validates source
-registration and asset state, and confirms physical scope, hardware identity,
-custody state, and evidence requirements before any execution authority can
-exist.
-
-SeedCore rejects ambient authority: a logged-in agent, tool call, or workflow
-step is not automatically authorized to act. Authority must be explicit,
-scoped, time-bounded, asset-bound, and evidence-conditioned, so that execution
-is governed rather than assumed.
-
-After execution, SeedCore binds signed telemetry back to the evaluated request
-and produces replayable proof surfaces for public verification and operator
-forensics. This turns autonomous execution into a verifiable workflow rather
-than a loose operational log.
-
-## Four Critical Questions
-
-- **Who authorized this action?** SeedCore verifies explicit delegation and
-  approval envelopes so authority is attributable and scoped.
-- **Was the action policy-admissible?** The Policy Decision Point
-  deterministically evaluates whether the requested operation is allowed under
-  current policy and state.
-- **Did the physical-world evidence match the approved intent?** Signed
-  telemetry and evidence requirements must match the evaluated request and
-  permitted scope.
-- **Can the workflow be replayed and verified later?** SeedCore produces
-  replayable evidence chains and proof surfaces for audit, dispute resolution,
-  and forensics.
-
-## Execution Flow
+SeedCore's intended flow is:
 
 ```text
-AI Intent
--> Agent Action Gateway
--> Policy Decision Point
--> Bounded Execution Authority
--> Signed Telemetry
--> Result Verifier
--> Public Proof + Operator Forensics
+AI proposal -> accountable Agent -> PDP -> scoped ExecutionToken
+  -> enrolled boundary / local controller -> observed attempt
+  -> signed evidence from a configured signer -> verification / replay
 ```
 
-```mermaid
-flowchart LR
-    A["AI / Human Intent"] --> B["Agent Action Gateway v1"]
-    B --> C["Policy Decision + Snapshot"]
-    C -->|allow| D["Short-Lived Execution Authority"]
-    C -->|deny / quarantine / escalate| H["Governed Outcome"]
-    D --> E["Edge Device / Custody Action"]
-    E --> F["Signed Telemetry + EvidenceBundle"]
-    F --> G["Result Verifier"]
-    G --> I["Public Proof"]
-    G --> J["Operator Forensics"]
-```
+The native robot controller keeps control-loop and local-stop responsibility.
+Admission, continuous local enforcement and evidence closure have separate
+deadlines. Camera capture/egress and research sharing need their own permissions.
 
-Every decision can be reconstructed from the request, policy snapshot, approval
-envelope, authority token, evidence bundle, receipts, and verifier outcome. If
-any gate fails, such as scope mismatch, stale telemetry, missing approvals, or
-inconsistent evidence, the workflow denies or quarantines. There are no silent
-failures.
+## Three Pillars
 
-## Why SeedCore Is Different
+| Pillar | Offer |
+| --- | --- |
+| SeedCore Inside | Open reference firmware and browser lessons for supported OEM robot kits |
+| Auditable classroom governance | Teacher/operator roles, bounded sessions, capture/egress controls and verifiable replay |
+| Opt-in sim-to-real telemetry | Versioned adult/research trajectories for calibration and evaluation, with separate rights and retention |
 
-- **Policy is the execution gate, not advice.** SeedCore does not merely
-  recommend allow or deny. The policy decision controls whether scoped
-  execution authority is minted, making policy part of the runtime rather than
-  an after-the-fact compliance report.
-- **Authority is explicit and bounded.** A logged-in agent still needs
-  delegated, scoped, time-bounded, asset-bound authority before execution can
-  occur.
-- **Policy is tied to physical evidence.** SeedCore extends policy evaluation
-  to custody state, signed telemetry, hardware identity, signer provenance,
-  physical-scope matching, and closure proof.
-- **Decisions are replayable.** SeedCore turns execution into a replayable
-  proof chain rather than a loose operational log.
-- **The system fails closed.** If scope mismatches, telemetry is stale, replay
-  fails, authority expires, or evidence is inconsistent, SeedCore denies or
-  quarantines instead of silently continuing.
+## Founder And Operating Advantage
 
-## Implemented Baseline
+Neil Li brings the stated 20 years of Chinese IoT/silicon supply-chain experience
+and an international engineering perspective. The proposed tri-node model
+combines China sourcing/ODM integration, Singapore IP/trust/commercial
+stewardship and Thailand bench engineering, QA and supervised field delivery.
+These advantages must become qualified profiles and repeatable support;
+incorporation, facilities, partner agreements and regulatory outcomes are not
+established by the plan.
 
-- scoped execution-authority lifecycle
-- Policy Decision Points
-- Agent Action Gateway v1
-- generic Restricted Custody Transfer runtime
-- evidence bundle primitives
-- result verification flow
-- trust signing posture
-- generic proof rendering
-- operator/proof surfaces
-- replay verification foundation
-- generic RCT signoff fixtures
+## Evidence And Next Milestone
 
-## Rare-Shoe Verticalization Status
+Available foundations include browser planar lessons and a 1/2/3-link orbit
+studio, a 13,242-byte dual-ABI Wasm core, pinned Microduck native MJCF data,
+shared PDP/token/revocation/evidence paths and Rust token/signature/replay
+verification. On 2026-10-14, local checks passed 78 simulator tests and 88
+model/workbench tests.
 
-- `CollectibleShoeRegistration` read model
-- rare-shoe deterministic fixture set
-- rare-shoe gateway adapter
-- NFC clone / tamper fail-closed semantics
-- happy-path replay bundle
-- toxic-path tests for cross-asset replay and delayed telemetry
-- public/operator proof redaction mapping
-- demo walkthrough assets
+Microduck HAL integration, MCU Fast Spine firmware, physical WebSerial control,
+enrolled robot signing and hardware acceptance remain planned. SIM-3's planar
+slice is delivered; broader dynamics/encoder/worker/oracle gates remain open.
+The Microduck 61/14 policy mapping is not a universal robotics data schema.
+
+The next target is a split-screen bounded-motion demonstration with denial,
+revocation/interruption and sufficient evidence for the profile actually shown.
+A physical demo requires authority, evidence and hardware gates; fixtures stay
+labeled.
+
+## Schedule And Business Model
+
+Q4 2026 targets M1/M2 and the golden reference; Q1 2027 targets M3/M4, one
+supervised pilot and staged developer kits. Q2–Q3 2027 targets a first OEM
+design-in and LeRobot-family adapter. Q4 2027–Q1 2028 targets qualified fleets
+and paid Governance / Cloud Workbench. Dates and adoption counts depend on
+technical, demand and support evidence.
+
+Keep local tools and proposed basic firmware open. Validate paid OEM
+provisioning/conformance/support and institutional hosted governance, roles,
+fleet records and replay. Selected kits below $300 and a $12 controller BOM
+are design targets with explicit exclusions, not current prices. Data
+contribution is optional; badge conformance is not safety certification.
+
+See the [execution plan](../development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md),
+[OEM brief](oem_partnership_brief.md) and
+[current next steps](../development/current_next_steps.md).

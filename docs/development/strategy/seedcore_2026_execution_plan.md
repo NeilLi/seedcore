@@ -1,7 +1,7 @@
 # SeedCore 2026 Execution Plan
 
-> Stage update (2026-09-17): Retained as supporting/deferred work; earlier scheduling priorities are superseded.
-> Microduck and robotics integration lead the [active queue](../current_next_steps.md).
+> Schedule update (2026-10-14): Historical/supporting annual plan; its RCT-first priorities and dates are superseded by the [Q4 2026–Q1 2028 physical AI execution plan](seedcore_physical_ai_execution_plan_2026_2028.md).
+> Use the [active queue](../current_next_steps.md) for immediate work; original implementation/sign-off records below retain their dated scope.
 
 Date: 2026-06-15
 Status: Working execution plan (Q2 freeze implemented; Window A host-first closure complete; RESULT_VERIFIER P0 shipped; remote kube topology validated with scripted verification lane; verification API kube integration lane implemented; local autonomous application market signal incorporated; June stack triage applied)

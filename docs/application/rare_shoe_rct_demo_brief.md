@@ -1,5 +1,10 @@
 # Rare-Shoe Restricted Custody Transfer Demo Brief
 
+> Portfolio update (2026-10-14): Supporting custody proof/regression reference.
+> The commercial wedge and near-term schedule below are superseded by the
+> [physical AI execution plan](../development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+> and [current application overview](seedcore_one_page_overview.md).
+
 ## Why Rare Shoes
 
 Rare shoes are not the market limit. They are the first vivid proof scene.

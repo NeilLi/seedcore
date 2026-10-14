@@ -1,7 +1,7 @@
 # SeedCore 2027 Significant Direction
 
-> Stage update (2026-09-17): Retained as supporting/deferred work; earlier scheduling priorities are superseded.
-> Microduck and robotics integration lead the [active queue](../current_next_steps.md).
+> Schedule update (2026-10-14): Historical/supporting direction; its IGX/enterprise-first dates are superseded by the [Q4 2026–Q1 2028 physical AI execution plan](seedcore_physical_ai_execution_plan_2026_2028.md).
+> Use the [active queue](../current_next_steps.md) for immediate work; hardware-rooted trust remains a conditional later-stage goal.
 
 Date: 2026-04-01  
 Status: Working direction for 2027 staging

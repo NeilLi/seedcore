@@ -1,7 +1,7 @@
 # Robotics Development
 
-Date: 2026-09-21
-Status: Primary next-stage development area
+Date: 2026-10-14
+Status: Primary development area; native reference, Fast Spine fixture and supervised STEM/OEM delivery
 
 SeedCore's robotics direction is a reusable trust runtime for physical AI.
 Microduck is the selected reference integration. Read the strategy for product
@@ -15,13 +15,15 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | Document | Role |
 | --- | --- |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
+| [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, tri-node roles, phase gates and 14 Oct–12 Nov tactical work |
+| [Fast Spine protocol proposal](fast_spine_protocol_spec.md) | Proposed WebSerial MCU admission/session, authenticated chunks, local interruption, evidence and flashing; no firmware implemented |
 | [Customer solution delivery](robot_solution_delivery.md) | Proposed service: needs discovery, hardware fit, custom functions, customer acceptance and support |
 | [Service operating plan](robot_service_operating_plan.md) | Founder-led execution: first offer, scope limits, delivery gates, team roles, support and economics |
 | [Robot execution and evidence contract](robot_execution_contract.md) | Proposed reusable boundary: admission, local enforcement, sessions, partitions and evidence limits |
 | [Governed robot skill packages](robot_skill_contract.md) | Proposed packaging, permission, isolation and promotion contract; no loader/studio implemented |
 | [Robot Learning Studio solution](robot_learning_studio_solution.md) | Proposed mission workflow grounded in the PKG and hotel simulators; browser/custom-engine decision, contracts, evidence and curriculum |
 | [Mini robot simulator implementation architecture](mini_robot_simulator_implementation_plan.md) | Proposed C++/Wasm engine, compiled assets, state, sensors, batches and browser delivery; current-app inspection and SIM-1–SIM-6 acceptance gates |
-| [Mini Robot Lab prototype](../../../apps/mini-robot-simulator/README.md) | Browser-first custom physics research: two-joint planar arm, beginner experiments and numerical tests; no hardware or governed execution connection |
+| [Mini Robot Lab prototype](../../../apps/mini-robot-simulator/README.md) | Delivered planar lessons and 1/2/3-link orbit studio slice; broader SIM-3 gates open; no hardware or governed execution connection |
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [PythonRobotics applicability](pythonrobotics_assessment.md) | Source review and implemented offline planar navigation baseline; advisory only, no hardware connection |
 | [MuJoCo development workbench](mujoco_development_workbench.md) | Implemented native model/experiment foundation, internal agent tools and external package inspection; browser workspace planned |
@@ -40,7 +42,8 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [VLA optimizations](vla_2026_optimizations.md) | Related research |
 | [Embodied AI research report](../reports/embodied_ai_research_report.md) | Archived external literature; timing, benchmark and safety claims require qualification in the architecture reference |
 | [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation: industrial giants vs DIY mini-robotics paradigm shift, "slow brain, fast spine" receding-horizon action chunking, and Microduck milestone focus |
-| [Mini-robotics developer blueprint](mini_robot_developer_blueprint.md) | Concrete implementation guide: $150 BOM, C++ MCU spine watchdog pattern, WebSerial deployment and SeedCore trust tokens |
+| [Mini-robotics developer blueprint](mini_robot_developer_blueprint.md) | Proposed board/TTL fixture, quoted cost targets, authenticated firmware/session requirements and gated browser-to-hardware workflow |
+| [OEM partnership brief](../../application/oem_partnership_brief.md) | Draft SeedCore Inside design-in, open/paid boundaries, QA, support and staged kit distribution |
 
 ## Repository Starting Points
 
