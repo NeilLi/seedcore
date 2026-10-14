@@ -18,7 +18,7 @@ This is the **simplest approach** that works with your existing Docker image:
 source deploy/aws/.env.aws
 
 # 2. Build and push your image (from your Mac)
-cd /Users/ningli/project/seedcore
+cd /path/to/seedcore
 docker build --platform linux/amd64 -f docker/Dockerfile -t seedcore:latest .
 docker tag seedcore:latest ${ECR_REGISTRY}/seedcore:latest
 docker push ${ECR_REGISTRY}/seedcore:latest
@@ -93,7 +93,7 @@ Once Option 1 is working, you can:
 
 ```bash
 # Navigate to project
-cd /Users/ningli/project/seedcore
+cd /path/to/seedcore
 
 # Load AWS credentials from .env.aws (create this file from env.aws.example)
 source deploy/aws/.env.aws

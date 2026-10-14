@@ -14,7 +14,7 @@ Support an app-layer feature where a source claim is not a plain form submit. It
 
 ## Normalization Baseline
 
-The current baseline should match the governed ingress model described in [source-registration-events.md](/Users/ningli/project/seedcore/docs/references/source-registration-events.md).
+The current baseline should match the governed ingress model described in [source-registration-events.md](../../references/source-registration-events.md).
 
 SeedCore normalizes source declarations, vision scans, seal checks, environmental readings, and operator commands into one governed `TrackingEvent` stream before planning begins.
 
@@ -31,15 +31,15 @@ That means the normalization component is not only a parser. It is the ingress l
 
 The current framework already provides most of the runtime skeleton:
 
-- API ingress persists tasks as a thin pipe in [src/seedcore/api/routers/tasks_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tasks_router.py)
-- governed ingress for tracking events already exists in [src/seedcore/api/routers/tracking_events_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tracking_events_router.py)
-- `SourceRegistration` projection logic already exists in [src/seedcore/ops/source_registration/projector.py](/Users/ningli/project/seedcore/src/seedcore/ops/source_registration/projector.py)
-- `TaskPayload` already carries multimodal and routing metadata in [src/seedcore/models/task_payload.py](/Users/ningli/project/seedcore/src/seedcore/models/task_payload.py)
-- the coordinator already refines `params.multimodal`, calls Eventizer, and persists multimodal context in [src/seedcore/services/coordinator_service.py](/Users/ningli/project/seedcore/src/seedcore/services/coordinator_service.py)
-- deterministic normalization and multimodal refinement already exist in [src/seedcore/services/eventizer_service.py](/Users/ningli/project/seedcore/src/seedcore/services/eventizer_service.py)
-- cognitive reasoning and semantic enrichment already exist in [src/seedcore/services/cognitive_service.py](/Users/ningli/project/seedcore/src/seedcore/services/cognitive_service.py)
-- governed fact persistence already exists in [src/seedcore/services/fact_service.py](/Users/ningli/project/seedcore/src/seedcore/services/fact_service.py)
-- audit evidence already exists through `EvidenceBundle` in [src/seedcore/models/evidence_bundle.py](/Users/ningli/project/seedcore/src/seedcore/models/evidence_bundle.py)
+- API ingress persists tasks as a thin pipe in [src/seedcore/api/routers/tasks_router.py](../../../src/seedcore/api/routers/tasks_router.py)
+- governed ingress for tracking events already exists in [src/seedcore/api/routers/tracking_events_router.py](../../../src/seedcore/api/routers/tracking_events_router.py)
+- `SourceRegistration` projection logic already exists in [src/seedcore/ops/source_registration/projector.py](../../../src/seedcore/ops/source_registration/projector.py)
+- `TaskPayload` already carries multimodal and routing metadata in [src/seedcore/models/task_payload.py](../../../src/seedcore/models/task_payload.py)
+- the coordinator already refines `params.multimodal`, calls Eventizer, and persists multimodal context in [src/seedcore/services/coordinator_service.py](../../../src/seedcore/services/coordinator_service.py)
+- deterministic normalization and multimodal refinement already exist in [src/seedcore/services/eventizer_service.py](../../../src/seedcore/services/eventizer_service.py)
+- cognitive reasoning and semantic enrichment already exist in [src/seedcore/services/cognitive_service.py](../../../src/seedcore/services/cognitive_service.py)
+- governed fact persistence already exists in [src/seedcore/services/fact_service.py](../../../src/seedcore/services/fact_service.py)
+- audit evidence already exists through `EvidenceBundle` in [src/seedcore/models/evidence_bundle.py](../../../src/seedcore/models/evidence_bundle.py)
 - snapshot-scoped policy evaluation already exists through PKG and `snapshot_id`
 
 The gap is not orchestration. The gap is consolidating the new event-stream-first baseline into a clear domain contract. Today the runtime can accept multimodal payloads and governed tracking events, but the app layer and planning layer still need one explicit normalization story that ties `TrackingEvent`, `SourceRegistration`, Eventizer, and cognitive service together.

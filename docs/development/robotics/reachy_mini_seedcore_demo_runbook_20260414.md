@@ -1,7 +1,7 @@
 # Reachy Mini -> SeedCore Digital Twin Demo Runbook (2026-04-14)
 
 Primary schedule source:
-- `/Users/ningli/project/seedcore/docs/development/operations/design_partner_demo_schedule.md`
+- `./docs/development/operations/design_partner_demo_schedule.md`
 
 Scope note:
 - `local_practice_schedule.md` intentionally skipped (removed).

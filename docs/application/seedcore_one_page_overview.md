@@ -33,15 +33,12 @@ deadlines. Camera capture/egress and research sharing need their own permissions
 | Auditable classroom governance | Teacher/operator roles, bounded sessions, capture/egress controls and verifiable replay |
 | Opt-in sim-to-real telemetry | Versioned adult/research trajectories for calibration and evaluation, with separate rights and retention |
 
-## Founder And Operating Advantage
+## Product Differentiation
 
-Neil Li brings the stated 20 years of Chinese IoT/silicon supply-chain experience
-and an international engineering perspective. The proposed tri-node model
-combines China sourcing/ODM integration, Singapore IP/trust/commercial
-stewardship and Thailand bench engineering, QA and supervised field delivery.
-These advantages must become qualified profiles and repeatable support;
-incorporation, facilities, partner agreements and regulatory outcomes are not
-established by the plan.
+SeedCore combines browser-first tools, bounded execution authority and
+verifiable evidence with qualified hardware profiles. Differentiation must be
+shown through independent integration, trusted releases and repeatable support.
+Partner agreements and regulatory outcomes are not established by the plan.
 
 ## Evidence And Next Milestone
 

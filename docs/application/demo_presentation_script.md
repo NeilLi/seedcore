@@ -71,9 +71,9 @@ with gaps and limits visible.
 Auditable classroom governance adds teacher roles, permissions and replay.
 Later, developers can separately opt in to share trajectories for calibration.”
 
-Explain the proposed China sourcing, Singapore trust/commercial and Thailand
-engineering/field roles. Point to the next accepted profile, one supervised
-pilot and staged kit qualification. OEM, site counts, prices and fleet scale
+Explain hardware qualification, trusted releases and support responsibilities.
+Point to the next accepted profile, one supervised pilot and staged kit
+qualification. OEM, site counts, prices and fleet scale
 are targets, not established traction.
 
 Use the [OEM partnership brief](oem_partnership_brief.md) for a candidate design-in

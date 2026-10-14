@@ -1,6 +1,6 @@
 # SeedCore API Reference
 
-This document is a practical reference for the currently mounted `seedcore-api` surface defined by [main.py](/Users/ningli/project/seedcore/src/seedcore/main.py) and the active router registry in [__init__.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/__init__.py).
+This document is a practical reference for the currently mounted `seedcore-api` surface defined by [main.py](../../../src/seedcore/main.py) and the active router registry in [__init__.py](../../../src/seedcore/api/routers/__init__.py).
 
 It is intentionally runtime-oriented: it describes what the application actually exposes today, how those endpoints are grouped, and a few important behavior notes from startup and readiness handling.
 
@@ -30,7 +30,7 @@ Legacy routers still exist in the codebase under `src/seedcore/api/routers/legac
 
 ## 2. Runtime And Startup Notes
 
-Important behavior from [main.py](/Users/ningli/project/seedcore/src/seedcore/main.py):
+Important behavior from [main.py](../../../src/seedcore/main.py):
 
 - CORS origins come from `CORS_ALLOW_ORIGINS`, defaulting to `*`.
 - `RUN_DDL_ON_STARTUP=true` causes task and fact tables to be created on boot.
@@ -52,7 +52,7 @@ These endpoints are mounted directly on the app, not under `/api/v1`.
 
 ## 4. Tasks API
 
-Implemented in [tasks_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tasks_router.py).
+Implemented in [tasks_router.py](../../../src/seedcore/api/routers/tasks_router.py).
 
 ### 4.1 Endpoints
 
@@ -74,7 +74,7 @@ Implemented in [tasks_router.py](/Users/ningli/project/seedcore/src/seedcore/api
 
 ## 5. Replay, Trust, And Verification API
 
-Implemented in [replay_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/replay_router.py).
+Implemented in [replay_router.py](../../../src/seedcore/api/routers/replay_router.py).
 
 This router exposes the replay/trust MVP layer over governed audit records, evidence bundles, custody state, and digital twin history.
 
@@ -130,7 +130,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 - Trust-page projections now also expose top-level `authority_consistency` for direct API consumers.
 - Trust-page projections now include `operator_actions` with remediation hints when authority consistency issues are present.
 - Trust-page, trust-certificate, JSON-LD proof, and verification responses now include `owner_context_hash` for cross-artifact owner-reference consistency checks.
-- `owner_context_hash` canonicalization is defined in [owner_context_hash_contract.md](/Users/ningli/project/seedcore/docs/references/contracts/owner_context_hash_contract.md), with shared runtime implementation and golden-vector tests.
+- `owner_context_hash` canonicalization is defined in [owner_context_hash_contract.md](../contracts/owner_context_hash_contract.md), with shared runtime implementation and golden-vector tests.
 - Public replay-artifact payloads now include `authority_consistency_hash` and `operator_actions` for lightweight triage parity.
 - Public replay-artifact payloads now also include `authority_consistency` for direct `ok/issues/hash` inspection.
 - Trust-page/certificate/verifier claim sets now include authority-binding claims (`authority_binding_consistent`, `authority_binding_mismatch_detected`).
@@ -148,7 +148,7 @@ This router exposes the replay/trust MVP layer over governed audit records, evid
 
 ## 6. Source Registration API
 
-Implemented in [source_registrations_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/source_registrations_router.py).
+Implemented in [source_registrations_router.py](../../../src/seedcore/api/routers/source_registrations_router.py).
 
 This surface supports governed provenance-heavy registration intake and decision submission.
 
@@ -167,7 +167,7 @@ This surface supports governed provenance-heavy registration intake and decision
 
 ## 7. Tracking Events API
 
-Implemented in [tracking_events_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tracking_events_router.py).
+Implemented in [tracking_events_router.py](../../../src/seedcore/api/routers/tracking_events_router.py).
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
@@ -180,7 +180,7 @@ Tracking events form the append-only provenance ingress stream used by source re
 
 ## 8. Identity And Delegation API
 
-Implemented in [identity_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/identity_router.py).
+Implemented in [identity_router.py](../../../src/seedcore/api/routers/identity_router.py).
 
 This surface adds the missing external authority APIs needed for DID-style identity, delegation lifecycle management, and externally signed intent submission.
 
@@ -212,7 +212,7 @@ This surface adds the missing external authority APIs needed for DID-style ident
 
 ## 8.2 Policy Assistant Batch Preflight API
 
-Implemented in [policy_assistant_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/policy_assistant_router.py).
+Implemented in [policy_assistant_router.py](../../../src/seedcore/api/routers/policy_assistant_router.py).
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
@@ -225,7 +225,7 @@ Notes:
 
 ## 9. Custody API
 
-Implemented in [custody_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/custody_router.py).
+Implemented in [custody_router.py](../../../src/seedcore/api/routers/custody_router.py).
 
 This surface exposes the new custody graph, lineage, search, and dispute workflows over the append-only custody transition chain.
 
@@ -256,7 +256,7 @@ This surface exposes the new custody graph, lineage, search, and dispute workflo
 
 ## 10. Control API
 
-Implemented in [control_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/control_router.py).
+Implemented in [control_router.py](../../../src/seedcore/api/routers/control_router.py).
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
@@ -270,7 +270,7 @@ This is the lightweight CRUD control-plane surface currently mounted in the acti
 
 ## 11. Advisory API
 
-Implemented in [advisory_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/advisory_router.py).
+Implemented in [advisory_router.py](../../../src/seedcore/api/routers/advisory_router.py).
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
@@ -280,7 +280,7 @@ This route is advisory-only. It does not replace the governed authorization path
 
 ## 12. PKG API
 
-Implemented in [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py).
+Implemented in [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py).
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
@@ -309,7 +309,7 @@ These endpoints support policy runtime inspection and snapshot-oriented operatio
 
 ## 13. Capabilities API
 
-Implemented in [capabilities_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/capabilities_router.py).
+Implemented in [capabilities_router.py](../../../src/seedcore/api/routers/capabilities_router.py).
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |

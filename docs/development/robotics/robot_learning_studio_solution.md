@@ -459,7 +459,7 @@ validate external services, operate hardware or establish production readiness.
 ## 12. Source Record
 
 Inspected on 2026-10-01. The requested projects resolve locally to
-`/Users/ningli/project/pkg-simulator` and `/Users/ningli/project/hotel-simulator`.
+`/path/to/workspace/pkg-simulator` and `/path/to/workspace/hotel-simulator`.
 Both tracked source trees were clean when inspected. Hotel also contained an
 untracked `hotel-simulator.zip`; it was not used. Findings refer to source code,
 not README claims alone. No changes were made to either reference repository.

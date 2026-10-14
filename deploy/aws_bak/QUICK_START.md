@@ -17,7 +17,7 @@ Your image is built for **linux/amd64** platform (✅ correct for AWS):
 
 ```bash
 # From your Mac (already done if you ran ./build.sh)
-cd /Users/ningli/project/seedcore
+cd /path/to/seedcore
 ./build.sh  # This now includes --platform linux/amd64
 
 # Push to ECR

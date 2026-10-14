@@ -59,7 +59,7 @@ execution.
 ## Architectural Position
 
 From the diagram in
-[zero_trust_custody_digital_twin_runtime.md](/Users/ningli/project/seedcore/docs/architecture/overview/zero_trust_custody_digital_twin_runtime.md),
+[zero_trust_custody_digital_twin_runtime.md](../../architecture/overview/zero_trust_custody_digital_twin_runtime.md),
 the Owner / Creator Layer sits between external AI ecosystems and the SeedCore
 runtime.
 
@@ -124,7 +124,7 @@ Current runtime endpoints already provide most of the required contract:
 - `POST /api/v1/intents/submit-signed`
 
 These are documented in
-[seedcore-api-reference.md](/Users/ningli/project/seedcore/docs/references/api/seedcore-api-reference.md#L183).
+[seedcore-api-reference.md](../../references/api/seedcore-api-reference.md#L183).
 
 ### Authority API responsibilities
 
@@ -141,7 +141,7 @@ The model-facing surface should stay deliberately thin. It should call the
 Authority API and return normalized results, not implement local governance.
 
 The current MCP server already expresses the right tool boundary in
-[mcp_server.py](/Users/ningli/project/seedcore/src/seedcore/plugin/mcp_server.py#L40).
+[mcp_server.py](../../../src/seedcore/plugin/mcp_server.py#L40).
 
 Recommended tool families:
 
@@ -368,7 +368,7 @@ Kafka is appropriate for external assistants or workflow engines that need
 asynchronous delegated-intent submission.
 
 The contract is already documented in
-[kafka_delegated_intent_ingress.md](/Users/ningli/project/seedcore/docs/development/integrations/kafka_delegated_intent_ingress.md).
+[kafka_delegated_intent_ingress.md](kafka_delegated_intent_ingress.md).
 
 The required behavior is:
 

@@ -14,8 +14,8 @@ Do not treat these PNGs as the source of truth for current architecture decision
 
 Prefer actively maintained documentation in:
 
-- [docs/architecture](/Users/ningli/project/seedcore/docs/architecture)
-- [docs/development](/Users/ningli/project/seedcore/docs/development)
+- [docs/architecture](../../architecture)
+- [docs/development](../../development)
 
 If a diagram is still operationally important, prefer replacing it with:
 

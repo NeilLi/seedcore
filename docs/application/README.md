@@ -6,8 +6,8 @@ Status: Current affordable physical AI positioning; earlier custody materials re
 The current narrative is **an open trust runtime for affordable physical AI**,
 starting with browser-first maker and supervised STEM kits. Its three pillars
 are SeedCore Inside, auditable classroom governance and later opt-in sim-to-real
-telemetry. China sourcing/ODM integration, Singapore trust/commercial stewardship
-and Thailand engineering/field delivery form the proposed operating model.
+telemetry. Delivery responsibilities cover hardware qualification, trusted
+releases, integration and field support.
 
 This pack distinguishes available browser/model/trust foundations from planned
 MCU firmware, physical WebSerial integration, hardware signing, pilots and OEM
@@ -17,7 +17,7 @@ determine actual release and scale.
 
 ## Current Materials
 
-- [One-page overview](seedcore_one_page_overview.md): product, pillars, founder advantage, present evidence and business model.
+- [One-page overview](seedcore_one_page_overview.md): product, pillars, differentiation, present evidence and business model.
 - [Investor application copy](investor_application_copy.md): current narrative, milestone targets, open/paid boundaries and support sought.
 - [OEM partnership brief](oem_partnership_brief.md): draft design-in scope, conformance, responsibilities, economics and staged distribution.
 - [Physical AI demo script](demo_presentation_script.md): proposed split-screen allow/deny/revoke/evidence walkthrough; only show accepted capabilities.

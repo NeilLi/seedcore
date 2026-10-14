@@ -23,7 +23,7 @@ Program alignment:
   [seedcore_2026_execution_plan.md](../strategy/seedcore_2026_execution_plan.md):
   make the current RCT wedge operationally promotable
 - Q3 priority in
-  [agent_action_gateway_contract.md](/Users/ningli/project/seedcore/docs/development/trust-runtime/agent_action_gateway_contract.md):
+  [agent_action_gateway_contract.md](agent_action_gateway_contract.md):
   expose a stable external agent boundary over a trustworthy decision path
 - product narrative in
   [seedcore_2026_execution_plan.md](../strategy/seedcore_2026_execution_plan.md):
@@ -41,37 +41,37 @@ Practical implication:
 What already exists:
 
 - a formal promotion contract in
-  [hot_path_enforcement_promotion_contract.md](/Users/ningli/project/seedcore/docs/development/trust-runtime/hot_path_enforcement_promotion_contract.md)
+  [hot_path_enforcement_promotion_contract.md](hot_path_enforcement_promotion_contract.md)
 - a typed hot-path endpoint and shadow-status endpoint in
-  [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py)
+  [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
 - hot-path evaluation logic and parity accounting in
-  [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py)
+  [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py)
 - a canonical shadow verifier in
-  [verify_rct_hot_path_shadow.py](/Users/ningli/project/seedcore/scripts/host/verify_rct_hot_path_shadow.py)
+  [verify_rct_hot_path_shadow.py](../../../scripts/host/verify_rct_hot_path_shadow.py)
 - authz-graph runtime health and refresh endpoints in
-  [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py)
+  [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
   and
-  [authz_graph/manager.py](/Users/ningli/project/seedcore/src/seedcore/ops/pkg/authz_graph/manager.py)
+  [authz_graph/manager.py](../../../src/seedcore/ops/pkg/authz_graph/manager.py)
 
 What is still true today:
 
 - the hot-path endpoint is mostly a verification sidecar; the main coordinator
   execution path still builds a `policy_case` and calls `evaluate_intent(...)`
   directly in
-  [coordinator_service.py](/Users/ningli/project/seedcore/src/seedcore/services/coordinator_service.py)
+  [coordinator_service.py](../../../src/seedcore/services/coordinator_service.py)
 - hot-path mode resolution is now runtime-dynamic (`shadow` / `canary` /
   `enforce`) in
-  [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py),
+  [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py),
   including rollback-triggered baseline fallback behavior
 - parity evidence now persists in a durable store (SQLite) with JSONL mirror in
-  [hot_path_parity_log.py](/Users/ningli/project/seedcore/src/seedcore/ops/hot_path_parity_log.py),
+  [hot_path_parity_log.py](../../../src/seedcore/ops/hot_path_parity_log.py),
   so promotion windows can be audited over `1,000`-run slices
 - the current live sign-off doc shows green parity for the four canonical cases,
   but the recorded latency profile (`p50=52ms`, `p95=130ms`, `p99=146ms`) is
   above the stricter promotion contract threshold
 - dedicated benchmark harness support now exists for
   `/api/v1/pdp/hot-path/evaluate` in
-  [benchmark_rct_hot_path.py](/Users/ningli/project/seedcore/scripts/host/benchmark_rct_hot_path.py),
+  [benchmark_rct_hot_path.py](../../../scripts/host/benchmark_rct_hot_path.py),
   including request delay and jitter controls for edge-ish load timing realism
 - hot-path status now includes additive observability payloads
   (`alert_level`, structured alerts, gauges, optional deployment role) for
@@ -142,9 +142,9 @@ Concrete work:
 
 Primary code areas:
 
-- [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py)
-- [coordinator_service.py](/Users/ningli/project/seedcore/src/seedcore/services/coordinator_service.py)
-- [governance.py](/Users/ningli/project/seedcore/src/seedcore/coordinator/core/governance.py)
+- [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py)
+- [coordinator_service.py](../../../src/seedcore/services/coordinator_service.py)
+- [governance.py](../../../src/seedcore/coordinator/core/governance.py)
 
 Exit criteria:
 
@@ -176,10 +176,10 @@ Concrete work:
 
 Primary code areas:
 
-- [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py)
-- [verify_rct_hot_path_shadow.py](/Users/ningli/project/seedcore/scripts/host/verify_rct_hot_path_shadow.py)
-- [authz_parity_service.py](/Users/ningli/project/seedcore/src/seedcore/ops/pkg/authz_parity_service.py)
-- [test_pdp_hot_path_router.py](/Users/ningli/project/seedcore/tests/test_pdp_hot_path_router.py)
+- [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py)
+- [verify_rct_hot_path_shadow.py](../../../scripts/host/verify_rct_hot_path_shadow.py)
+- [authz_parity_service.py](../../../src/seedcore/ops/pkg/authz_parity_service.py)
+- [test_pdp_hot_path_router.py](../../../tests/test_pdp_hot_path_router.py)
 
 Exit criteria:
 
@@ -214,13 +214,13 @@ Concrete work:
 
 Primary code areas:
 
-- [pdp_hot_path.py](/Users/ningli/project/seedcore/src/seedcore/ops/pdp_hot_path.py)
-- [pkg_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/pkg_router.py)
-- [authz_graph/manager.py](/Users/ningli/project/seedcore/src/seedcore/ops/pkg/authz_graph/manager.py)
+- [pdp_hot_path.py](../../../src/seedcore/ops/pdp_hot_path.py)
+- [pkg_router.py](../../../src/seedcore/api/routers/pkg_router.py)
+- [authz_graph/manager.py](../../../src/seedcore/ops/pkg/authz_graph/manager.py)
 - replay and evidence projection paths under
-  [src/seedcore/services](/Users/ningli/project/seedcore/src/seedcore/services)
+  [src/seedcore/services](../../../src/seedcore/services)
   and
-  [src/seedcore/ops/evidence](/Users/ningli/project/seedcore/src/seedcore/ops/evidence)
+  [src/seedcore/ops/evidence](../../../src/seedcore/ops/evidence)
 
 Exit criteria:
 
@@ -250,11 +250,11 @@ Concrete work:
 Primary code areas:
 
 - new script under
-  [scripts/host](/Users/ningli/project/seedcore/scripts/host)
+  [scripts/host](../../../scripts/host)
 - existing fixture inputs under
-  [rust/fixtures/transfers](/Users/ningli/project/seedcore/rust/fixtures/transfers)
+  [rust/fixtures/transfers](../../../rust/fixtures/transfers)
 - local runtime bring-up flow in
-  [deploy/local/README.md](/Users/ningli/project/seedcore/deploy/local/README.md)
+  [deploy/local/README.md](../../../deploy/local/README.md)
 
 Exit criteria:
 
@@ -310,7 +310,7 @@ Concrete work:
 
 Primary docs:
 
-- [hot_path_enforcement_promotion_contract.md](/Users/ningli/project/seedcore/docs/development/trust-runtime/hot_path_enforcement_promotion_contract.md)
+- [hot_path_enforcement_promotion_contract.md](hot_path_enforcement_promotion_contract.md)
 - [current_next_steps.md](../current_next_steps.md)
 - [restricted_custody_transfer_demo_signoff_report.md](../archive/historical/restricted_custody_transfer_demo_signoff_report.md)
 

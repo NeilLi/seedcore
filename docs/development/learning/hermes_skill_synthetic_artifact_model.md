@@ -35,14 +35,14 @@ SeedCore already treats **skills** and **artifacts** as different categories:
 This distinction is visible in the current repo:
 
 - `skill` is a dedicated table and graph-node type in
-  [`deploy/migrations/008_hgnn_agent_layer.sql`](/Users/ningli/project/seedcore/deploy/migrations/008_hgnn_agent_layer.sql:82)
+  [`deploy/migrations/008_hgnn_agent_layer.sql`](../../../deploy/migrations/008_hgnn_agent_layer.sql:82)
 - skills can be addressed through `start_skill_ids` in graph dispatch flows in
-  [`src/seedcore/dispatcher/graph_dispatcher.py`](/Users/ningli/project/seedcore/src/seedcore/dispatcher/graph_dispatcher.py:409)
+  [`src/seedcore/dispatcher/graph_dispatcher.py`](../../../src/seedcore/dispatcher/graph_dispatcher.py:409)
 - artifacts are a first-class graph/runtime category in
-  [`src/seedcore/graph/loader.py`](/Users/ningli/project/seedcore/src/seedcore/graph/loader.py:56)
+  [`src/seedcore/graph/loader.py`](../../../src/seedcore/graph/loader.py:56)
 - SeedCore design notes consistently reserve artifacts for replayable,
   evidence-friendly outputs in
-  [`docs/design-notes.md`](/Users/ningli/project/seedcore/docs/design-notes.md:51)
+  [`docs/design-notes.md`](../../design-notes.md:51)
 
 If we model a Hermes Skill as **only** a skill, we lose packaging and
 versioned exchange semantics.

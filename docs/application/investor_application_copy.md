@@ -27,16 +27,12 @@ WebSerial/MCU firmware, Microduck HAL integration, enrolled robot signing and
 hardware pilots are the next work. We distinguish software test evidence from
 physical acceptance and commercial traction.
 
-## Founder Summary
+## Delivery Approach
 
-I am Neil Li, founder and architect of SeedCore. My background includes Motorola,
-Alibaba and UESTC. I bring 20 years of Chinese IoT/silicon supply-chain experience
-and an international engineering perspective.
-
-The proposed operating model combines China sourcing and ODM integration,
-Singapore IP/trust/commercial stewardship, and Thailand engineering, QA and
-supervised field learning. The advantage we intend to prove is affordable,
-repeatable hardware integration with trustworthy software releases and support.
+The project combines hardware qualification, trusted software releases,
+repeatable integration and supervised field validation. The advantage to prove
+is an affordable, reproducible robot experience with clear authority, usable
+evidence and sustainable support.
 
 ## Strategic Pillars And Moat
 
@@ -123,8 +119,8 @@ Detailed dates, owner roles and exit decisions are in the
 Seek introductions to one technically aligned OEM and one supervised STEM/maker
 trial partner; scoped firmware/manufacturing expertise; institutional procurement
 and privacy-path review; and milestone-based financing that supports qualification
-and sustainable delivery. Singapore innovation programmes are possible routes
-whose current eligibility/terms need checking, not assumed funding.
+and sustainable delivery. Innovation programmes are possible routes whose
+current eligibility/terms need checking, not assumed funding.
 
 The [OEM brief](oem_partnership_brief.md), [one-page overview](seedcore_one_page_overview.md)
 and [active queue](../development/current_next_steps.md) carry the same claims

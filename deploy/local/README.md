@@ -94,7 +94,7 @@ bash scripts/host/verify_kafka_readyz_gate.sh
 
 External assistant Kafka contract:
 
-- See [kafka_delegated_intent_ingress.md](/Users/ningli/project/seedcore/docs/development/integrations/kafka_delegated_intent_ingress.md)
+- See [kafka_delegated_intent_ingress.md](../../docs/development/integrations/kafka_delegated_intent_ingress.md)
 
 ## Restart Sequence
 

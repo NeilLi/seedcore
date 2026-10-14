@@ -84,7 +84,7 @@ This script will:
 ```
 
 This script will:
-- Parse `/Users/ningli/project/seedcore/docker/env.example`
+- Parse `./docker/env.example`
 - Create `seedcore-env` ConfigMap with non-sensitive configuration
 - Create `seedcore-env-secret` Secret with sensitive data (passwords, API keys)
 - Create `seedcore-client-env` ConfigMap with AWS-specific service URLs

@@ -3,7 +3,7 @@
 ## Purpose
 
 This note turns the high-level Rust direction in
-[language_evolution_map.md](/Users/ningli/project/seedcore/docs/development/infrastructure/language_evolution_map.md)
+[language_evolution_map.md](language_evolution_map.md)
 into a concrete, service/CLI-first workspace proposal that is ready to hand to
 an implementer.
 

@@ -84,7 +84,7 @@ export PG_DSN=postgresql://postgres:password@127.0.0.1:5432/seedcore
 export REDIS_HOST=127.0.0.1
 export REDIS_PORT=6379
 export RUN_DDL_ON_STARTUP=true
-export PYTHONPATH=/Users/ningli/project/seedcore/src
+export PYTHONPATH=./src
 
 uvicorn seedcore.main:app --host 127.0.0.1 --port 8002
 ```

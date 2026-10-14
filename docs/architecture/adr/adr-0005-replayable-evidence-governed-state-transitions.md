@@ -154,27 +154,27 @@ The backlog below is intentionally small and non-binding. It separates the piece
 
 Start by introducing optional replay fields rather than a new authenticated state store:
 
-- update [evidence_bundle.py](/Users/ningli/project/seedcore/src/seedcore/models/evidence_bundle.py) so governed artifacts can carry `prior_state_binding` and `result_state_binding` alongside the existing `state_binding_hash`
-- update [replay.py](/Users/ningli/project/seedcore/src/seedcore/models/replay.py) so `ReplayRecord` can surface the same fields directly
-- populate those fields in [builder.py](/Users/ningli/project/seedcore/src/seedcore/ops/evidence/builder.py) using the existing normalization logic in [state_binding.py](/Users/ningli/project/seedcore/src/seedcore/ops/evidence/state_binding.py)
-- thread the values through twin persistence in [dao.py](/Users/ningli/project/seedcore/src/seedcore/coordinator/dao.py) where `DigitalTwinDAO._append_history` and `DigitalTwinEventJournalDAO.append_event` already define the append-only mutation seam
-- if the team wants first-class columns instead of payload-only embedding, add them in a new migration adjacent to [127_digital_twin_event_journal.sql](/Users/ningli/project/seedcore/deploy/migrations/127_digital_twin_event_journal.sql)
+- update [evidence_bundle.py](../../../src/seedcore/models/evidence_bundle.py) so governed artifacts can carry `prior_state_binding` and `result_state_binding` alongside the existing `state_binding_hash`
+- update [replay.py](../../../src/seedcore/models/replay.py) so `ReplayRecord` can surface the same fields directly
+- populate those fields in [builder.py](../../../src/seedcore/ops/evidence/builder.py) using the existing normalization logic in [state_binding.py](../../../src/seedcore/ops/evidence/state_binding.py)
+- thread the values through twin persistence in [dao.py](../../../src/seedcore/coordinator/dao.py) where `DigitalTwinDAO._append_history` and `DigitalTwinEventJournalDAO.append_event` already define the append-only mutation seam
+- if the team wants first-class columns instead of payload-only embedding, add them in a new migration adjacent to [127_digital_twin_event_journal.sql](../../../deploy/migrations/127_digital_twin_event_journal.sql)
 
 ### 2. Add minimal causal-parent references only for direct governed dependencies
 
 Keep this narrow: one mutation should be able to point at the immediately relevant prior approval, receipt, or evidence bundle.
 
-- add an optional `causal_parent_refs` field to governed evidence artifacts in [evidence_bundle.py](/Users/ningli/project/seedcore/src/seedcore/models/evidence_bundle.py)
-- populate it only where the dependency is already known during assembly in [builder.py](/Users/ningli/project/seedcore/src/seedcore/ops/evidence/builder.py) and gateway closure handling in [agent_actions_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/agent_actions_router.py)
-- persist those references with the twin event payload via [dao.py](/Users/ningli/project/seedcore/src/seedcore/coordinator/dao.py) rather than introducing a separate graph subsystem
+- add an optional `causal_parent_refs` field to governed evidence artifacts in [evidence_bundle.py](../../../src/seedcore/models/evidence_bundle.py)
+- populate it only where the dependency is already known during assembly in [builder.py](../../../src/seedcore/ops/evidence/builder.py) and gateway closure handling in [agent_actions_router.py](../../../src/seedcore/api/routers/agent_actions_router.py)
+- persist those references with the twin event payload via [dao.py](../../../src/seedcore/coordinator/dao.py) rather than introducing a separate graph subsystem
 
 ### 3. Surface and verify the new fields opportunistically, without breaking legacy replay
 
 The current replay path should remain valid for old records, while newer records expose stronger structure when available.
 
-- extend replay assembly in [replay_service.py](/Users/ningli/project/seedcore/src/seedcore/services/replay_service.py) so `prior_state_binding`, `result_state_binding`, and `causal_parent_refs` appear in replay outputs and timeline/detail projections
-- add conditional checks in [rct_replay_verification.py](/Users/ningli/project/seedcore/src/seedcore/ops/evidence/rct_replay_verification.py) so stricter validation runs only when the new fields are present or explicitly required for a workflow
-- keep API/read compatibility by letting [replay.py](/Users/ningli/project/seedcore/src/seedcore/models/replay.py) and the existing verification surface accept both legacy and upgraded records
+- extend replay assembly in [replay_service.py](../../../src/seedcore/services/replay_service.py) so `prior_state_binding`, `result_state_binding`, and `causal_parent_refs` appear in replay outputs and timeline/detail projections
+- add conditional checks in [rct_replay_verification.py](../../../src/seedcore/ops/evidence/rct_replay_verification.py) so stricter validation runs only when the new fields are present or explicitly required for a workflow
+- keep API/read compatibility by letting [replay.py](../../../src/seedcore/models/replay.py) and the existing verification surface accept both legacy and upgraded records
 - add regression coverage in the existing replay/evidence test area so legacy records still pass while upgraded records surface the extra bindings cleanly
 
 ### Current Canary
@@ -183,7 +183,7 @@ The current implementation uses a deliberately narrow rollout shape:
 
 - the new state-transition replay checks are guarded by `SEEDCORE_RCT_REPLAY_STRICT_STATE_TRANSITION_FIELDS`
 - even when that env flag is enabled, replay only applies the new check when the record explicitly opts in through `policy_case.workflow_hints.strict_state_transition_fields = true`
-- the first producer path setting that hint is the **agent-action gateway restricted-custody closure** path in [agent_actions_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/agent_actions_router.py)
+- the first producer path setting that hint is the **agent-action gateway restricted-custody closure** path in [agent_actions_router.py](../../../src/seedcore/api/routers/agent_actions_router.py)
 
 This keeps the canary bounded to one governed workflow producer instead of broadening strict replay requirements across every existing RCT record at once.
 

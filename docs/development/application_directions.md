@@ -5,9 +5,9 @@ Status: Canonical portfolio decision — affordable physical AI, supervised STEM
 
 **SeedCore is an open trust runtime for affordable physical AI.** The next
 commercial wedge is browser-first maker and supervised education kits with
-bounded AI execution and verifiable action evidence. The founder's stated
-Chinese IoT/silicon experience supports sourcing and OEM integration; the
-proposed Singapore–Thailand base supports trust stewardship and field delivery.
+bounded AI execution and verifiable action evidence. Delivery responsibilities
+cover hardware qualification, OEM integration, trusted releases and field
+support.
 
 The three pillars are **SeedCore Inside** firmware/browser adoption,
 **auditable classroom governance**, and a later **opt-in sim-to-real telemetry

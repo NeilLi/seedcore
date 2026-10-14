@@ -362,7 +362,7 @@ Decision:
 Checked-in signoff note:
 
 - see
-  [kube_topology_validation_q2_signoff.md](/Users/ningli/project/seedcore/docs/development/archive/historical/kube_topology_validation_q2_signoff.md)
+  [kube_topology_validation_q2_signoff.md](../archive/historical/kube_topology_validation_q2_signoff.md)
 
 ## Execution Update (2026-04-10, Kube Verification Lane Hardening)
 
@@ -885,8 +885,8 @@ Required outcomes:
 
 Primary repo anchors:
 
-- [hot_path_shadow_to_enforce_breakdown.md](/Users/ningli/project/seedcore/docs/development/trust-runtime/hot_path_shadow_to_enforce_breakdown.md)
-- [hot_path_enforcement_promotion_contract.md](/Users/ningli/project/seedcore/docs/development/trust-runtime/hot_path_enforcement_promotion_contract.md)
+- [hot_path_shadow_to_enforce_breakdown.md](../trust-runtime/hot_path_shadow_to_enforce_breakdown.md)
+- [hot_path_enforcement_promotion_contract.md](../trust-runtime/hot_path_enforcement_promotion_contract.md)
 
 ### Workstream 2: Agent Action Gateway And Delegated Authority
 
@@ -1397,7 +1397,7 @@ That is enough to matter.
 After 2026 closure, the next-stage high-vertical deployment direction is
 tracked in:
 
-- [seedcore_2027_high_vertical_direction.md](/Users/ningli/project/seedcore/docs/development/strategy/seedcore_2027_high_vertical_direction.md)
+- [seedcore_2027_high_vertical_direction.md](seedcore_2027_high_vertical_direction.md)
 
 This continuation keeps the same trust-boundary model while adding staged
 hardware-bound execution identity for IGX/Jetson edge deployments.

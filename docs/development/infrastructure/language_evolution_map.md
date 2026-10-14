@@ -124,7 +124,7 @@ Rationale:
 - verifier tooling should be externally shareable and offline-friendly
 
 The detailed service/CLI-first Rust workspace proposal now lives in
-[rust_workspace_proposal.md](/Users/ningli/project/seedcore/docs/development/infrastructure/rust_workspace_proposal.md).
+[rust_workspace_proposal.md](rust_workspace_proposal.md).
 
 ### Move Toward TypeScript
 

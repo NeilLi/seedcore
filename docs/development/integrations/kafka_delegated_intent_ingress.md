@@ -143,7 +143,7 @@ payload = DelegatedIntentPayload.model_validate(
                 "scope_id": "scope-transfer-001",
                 "asset_ref": "asset:lot-8841",
                 "product_ref": "product:sku-8841",
-                "facility_ref": "facility:bangkok-01",
+                "facility_ref": "facility:lab-01",
                 "expected_from_zone": "vault_a",
                 "expected_to_zone": "handoff_bay_3",
             },
@@ -186,4 +186,4 @@ The ingress worker expects the standard SeedCore envelope on the wire.
 
 Focused unit coverage for this ingress path lives in:
 
-- [tests/test_kafka_delegated_intent.py](/Users/ningli/project/seedcore/tests/test_kafka_delegated_intent.py)
+- [tests/test_kafka_delegated_intent.py](../../../tests/test_kafka_delegated_intent.py)

@@ -29,7 +29,7 @@ This enforces:
 
 ### 2.1 TrackingEvent
 
-Defined in [source_registration.py](/Users/ningli/project/seedcore/src/seedcore/models/source_registration.py#L98).
+Defined in [source_registration.py](../../src/seedcore/models/source_registration.py#L98).
 
 Canonical fields:
 
@@ -71,7 +71,7 @@ Canonical fields:
 
 `SourceRegistration`, `SourceRegistrationArtifact`, and `SourceRegistrationMeasurement` are projections over that log.
 
-Projection logic is implemented in [projector.py](/Users/ningli/project/seedcore/src/seedcore/ops/source_registration/projector.py#L29).
+Projection logic is implemented in [projector.py](../../src/seedcore/ops/source_registration/projector.py#L29).
 
 High-level projection behavior:
 
@@ -102,7 +102,7 @@ State transition notes:
 
 ### 5.1 Tracking Event Ingress
 
-Implemented in [tracking_events_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/tracking_events_router.py#L77).
+Implemented in [tracking_events_router.py](../../src/seedcore/api/routers/tracking_events_router.py#L77).
 
 Available endpoints:
 
@@ -113,7 +113,7 @@ Available endpoints:
 
 ### 5.2 Source Registration API
 
-Implemented in [source_registrations_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/source_registrations_router.py#L268).
+Implemented in [source_registrations_router.py](../../src/seedcore/api/routers/source_registrations_router.py#L268).
 
 Important behavior change:
 
@@ -184,7 +184,7 @@ Important behavior change:
 
 That means the coordinator should evaluate the projected state of the registration rather than trusting a one-shot request payload.
 
-This matches the current runtime implementation in [coordinator_service.py](/Users/ningli/project/seedcore/src/seedcore/services/coordinator_service.py#L1327).
+This matches the current runtime implementation in [coordinator_service.py](../../src/seedcore/services/coordinator_service.py#L1327).
 
 ## 8. Release Flow Separation
 
@@ -192,7 +192,7 @@ Physical packing or release still requires a later `ActionIntent`.
 
 The PDP now rejects `PACK` and `RELEASE` actions unless they reference an approved `SourceRegistration`.
 
-That enforcement lives in [governance.py](/Users/ningli/project/seedcore/src/seedcore/coordinator/core/governance.py#L193).
+That enforcement lives in [governance.py](../../src/seedcore/coordinator/core/governance.py#L193).
 
 The intended split is:
 
@@ -206,11 +206,11 @@ The intended split is:
 
 Database support for the event log is added in:
 
-- [123_tracking_events.sql](/Users/ningli/project/seedcore/deploy/migrations/123_tracking_events.sql)
+- [123_tracking_events.sql](../../deploy/migrations/123_tracking_events.sql)
 
 Bootstrap ordering is updated in:
 
-- [init-full-db.sh](/Users/ningli/project/seedcore/deploy/init-full-db.sh#L30)
+- [init-full-db.sh](../../deploy/init-full-db.sh#L30)
 
 ## 10. Practical Rule
 

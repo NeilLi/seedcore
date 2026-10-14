@@ -571,24 +571,24 @@ Agent Action Gateway / PDP / RESULT_VERIFIER
 Use `pkg-simulator` for the interactive PolicyGraph Builder product:
 
 ```text
-/Users/ningli/project/pkg-simulator/pages/
+/path/to/workspace/pkg-simulator/pages/
   PolicyAssistantPage.tsx          # guided policy workflow already exists
   PolicyStudio.tsx                 # advanced snapshot/rule authoring
   SandboxSimulator.tsx             # scenario/testing surface
 
-/Users/ningli/project/pkg-simulator/components/policy-assistant/
+/path/to/workspace/pkg-simulator/components/policy-assistant/
   PolicyIntentStep.tsx
   PolicyDraftStep.tsx
   PreflightStep.tsx
   ScenarioPackStep.tsx
   ReviewCommitStep.tsx
 
-/Users/ningli/project/pkg-simulator/services/
+/path/to/workspace/pkg-simulator/services/
   policyAssistantService.ts        # draft assembly, scenario-pack generation
   seedcoreService.ts               # calls SeedCore API
   snapshotService.ts               # snapshot lifecycle UI
 
-/Users/ningli/project/pkg-simulator/types/
+/path/to/workspace/pkg-simulator/types/
   policyAssistant.ts               # UI/session policy draft types
 ```
 

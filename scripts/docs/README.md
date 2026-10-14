@@ -19,7 +19,7 @@ Use manual runs for this Mac; installing the scheduler is optional. After the
 one-time private access setup below, connect to the internet and run:
 
 ```bash
-cd /Users/ningli/project/seedcore
+cd /path/to/seedcore
 .venv/bin/python scripts/docs/local_research_sync.py \
   --credentials "$HOME/Library/Application Support/SeedCore/research-sync/google/application_default_credentials.json" run
 ```

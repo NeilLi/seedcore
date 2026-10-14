@@ -26,9 +26,9 @@ Formula:
 
 ## Shared Implementation
 
-- Runtime helper: [owner_context.py](/Users/ningli/project/seedcore/src/seedcore/ops/evidence/owner_context.py)
-- Golden vectors: [golden.json](/Users/ningli/project/seedcore/tests/fixtures/owner_context_hash/golden.json)
-- Contract test: [test_owner_context_hash_contract.py](/Users/ningli/project/seedcore/tests/test_owner_context_hash_contract.py)
+- Runtime helper: [owner_context.py](../../../src/seedcore/ops/evidence/owner_context.py)
+- Golden vectors: [golden.json](../../../tests/fixtures/owner_context_hash/golden.json)
+- Contract test: [test_owner_context_hash_contract.py](../../../tests/test_owner_context_hash_contract.py)
 
 ## Compatibility
 

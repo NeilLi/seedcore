@@ -21,11 +21,9 @@ firmware and device-rooted robot receipts remain planned integration work.
 
 ## Positioning And Adoption
 
-The founder's stated 20 years in Chinese IoT/silicon supply chains and
-international engineering perspective support a proposed **China–Singapore–Thailand**
-operating model: China sourcing/ODM integration, Singapore IP/trust/commercial
-stewardship and Thailand bench engineering/field delivery. The advantage must
-be demonstrated through cost, qualification and repeatable support.
+SeedCore combines open developer tools, qualified hardware profiles and
+verifiable execution. Its advantage must be demonstrated through cost,
+qualification, trusted releases and repeatable support.
 
 | Pillar | Proposed product value | First validation |
 | --- | --- | --- |
@@ -267,7 +265,7 @@ cargo test --workspace --manifest-path rust/Cargo.toml
 
 ## Key Technical Documentation
 
-- **[18-Month Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Tri-node strategy, Q4 2026–Q1 2028 schedule, phase gates, first 30 days and revenue assumptions.
+- **[18-Month Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Product strategy, Q4 2026–Q1 2028 schedule, phase gates, first 30 days and revenue assumptions.
 - **[Physical AI Strategy](docs/development/robotics/physical_ai_strategy.md):** SeedCore Inside, auditable classroom governance and opt-in telemetry pillars.
 - **[Fast Spine Protocol Proposal](docs/development/robotics/fast_spine_protocol_spec.md):** M2/M4 WebSerial session, authentication, interruption, telemetry and flashing requirements; not implemented firmware.
 - **[OEM Partnership Brief](docs/application/oem_partnership_brief.md):** Draft design-in offer, responsibilities, conformance and staged production; not a partner agreement.

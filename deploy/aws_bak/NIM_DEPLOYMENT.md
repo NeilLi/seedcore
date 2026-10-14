@@ -92,7 +92,7 @@ ConfigMaps are auto-created from the YAML files:
 ### Deploy Everything (including NIM)
 
 ```bash
-cd /Users/ningli/project/seedcore/deploy/aws
+cd ./deploy/aws
 ./deploy-all.sh deploy
 ```
 

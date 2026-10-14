@@ -33,7 +33,7 @@ Short version:
 ## Why This Is Deferred
 
 The requirement appears in the north-star architecture reference in
-[north_star_autonomous_trade_environment.md](/Users/ningli/project/seedcore/docs/development/strategy/north_star_autonomous_trade_environment.md),
+[north_star_autonomous_trade_environment.md](../strategy/north_star_autonomous_trade_environment.md),
 which explicitly describes a target environment where `RESULT_VERIFIER` agents
 monitor the event stream and automatically quarantine twins on verification
 failure.
@@ -109,7 +109,7 @@ urgent and more clearly on the critical path:
   Restricted Custody Transfer wedge
 
 Those items are already called out as live gaps in
-[hot_path_shadow_to_enforce_breakdown.md](/Users/ningli/project/seedcore/docs/development/trust-runtime/hot_path_shadow_to_enforce_breakdown.md)
+[hot_path_shadow_to_enforce_breakdown.md](../trust-runtime/hot_path_shadow_to_enforce_breakdown.md)
 and in the current staged roadmap.
 
 ## Revisit Triggers

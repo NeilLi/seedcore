@@ -38,7 +38,7 @@ flowchart TD
 
 ## Landed Schema: `GovernanceLearningSampleV1`
 
-The schema is defined as a strict Pydantic model inside [governance_learning.py](file:///Users/ningli/project/seedcore/src/seedcore/models/governance_learning.py).
+The schema is defined as a strict Pydantic model inside [governance_learning.py](../../../src/seedcore/models/governance_learning.py).
 
 ### Feature Vector & Evidence Summary
 To make the samples usable by XGBoost or lightweight models (under `src/seedcore/ml/distillation/sample_store.py`), we will extract a structured feature vector and evidence summary.
@@ -110,11 +110,11 @@ class GovernanceLearningSampleV1(BaseModel):
 All four implementation tasks have been successfully landed and verified:
 
 ### Task 1: Schema Registration (Completed)
-*   **Action:** Created [governance_learning.py](file:///Users/ningli/project/seedcore/src/seedcore/models/governance_learning.py) defining `GovernanceLearningSampleV1`.
-*   **Integration:** Registered the new model in the models init package [__init__.py](file:///Users/ningli/project/seedcore/src/seedcore/models/__init__.py).
+*   **Action:** Created [governance_learning.py](../../../src/seedcore/models/governance_learning.py) defining `GovernanceLearningSampleV1`.
+*   **Integration:** Registered the new model in the models init package [__init__.py](../../../src/seedcore/models/__init__.py).
 
 ### Task 2: Implement Exporter & Pipeline (Completed)
-*   **Action:** Built the parameter-driven pipeline to transform supplied replay, evidence, and verifier artifacts into learning samples. Created `GovernanceLearningSampleExporter` in [exporter.py](file:///Users/ningli/project/seedcore/src/seedcore/ops/governance_learning/exporter.py).
+*   **Action:** Built the parameter-driven pipeline to transform supplied replay, evidence, and verifier artifacts into learning samples. Created `GovernanceLearningSampleExporter` in [exporter.py](../../../src/seedcore/ops/governance_learning/exporter.py).
 *   **Pipeline Flow:**
     1.  Accepts the terminal verifier outcome from the caller; a DAO-backed `ResultVerifierOutcomeRecord` query is a later integration step.
     2.  Accepts the corresponding `EvidenceBundle` and original `ActionIntent` payload.
@@ -123,14 +123,14 @@ All four implementation tasks have been successfully landed and verified:
     5.  Emits and appends the completed `GovernanceLearningSampleV1` packet to the JSONL store via `src/seedcore/ml/distillation/sample_store.py`.
 
 ### Task 3: Expand Adversarial Scenarios (Completed)
-*   **Action:** Expanded `GovernanceScenarioGenerator` in [governance_scenarios.py](file:///Users/ningli/project/seedcore/src/seedcore/ml/curriculum/governance_scenarios.py) to cover advanced probes:
+*   **Action:** Expanded `GovernanceScenarioGenerator` in [governance_scenarios.py](../../../src/seedcore/ml/curriculum/governance_scenarios.py) to cover advanced probes:
     -   `coordinate_redirect`: Attempt to route pick/drop to unapproved coordinates (expected: `deny`).
     -   `replay_injection`: Inject an expired or previously verification-closed execution token (expected: `deny`).
     -   `tampered_telemetry_signature`: Provide signed edge telemetry where signature is invalid (expected: `quarantine`).
     -   `high_value_missing_cosignature`: Quarantine missing required co-signatures (expected: `quarantine`).
 
 ### Task 4: Baseline Evaluation Harness (Completed)
-*   **Action:** Created the validation harness [test_governance_learning_harness.py](file:///Users/ningli/project/seedcore/tests/test_governance_learning_harness.py).
+*   **Action:** Created the validation harness [test_governance_learning_harness.py](../../../tests/test_governance_learning_harness.py).
 *   **Checks:**
     -   Verifies that validation fails closed if required hashes (policy snapshot, decision graph, evidence bundle) are absent.
     -   Asserts that no `verification_mismatch` outcome is ever marked as `admissible_for_positive_reward`.

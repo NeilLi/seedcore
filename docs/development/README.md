@@ -20,7 +20,7 @@ The [customer delivery model](robotics/robot_solution_delivery.md) connects that
 service to the runtime. Customer discovery and engineering run alongside each
 other; a hardware trial must satisfy both acceptance tracks.
 
-For the founder-led delivery process, use the
+For the small-team delivery process, use the
 [service operating plan](robotics/robot_service_operating_plan.md): one supported
 profile and live pilot initially, with explicit scope, support and expansion gates.
 

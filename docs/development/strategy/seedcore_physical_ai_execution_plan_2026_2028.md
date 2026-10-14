@@ -11,11 +11,9 @@ The initial distribution wedge is maker and supervised STEM hardware, targeting
 selected reference kits below $300 excluding an existing host computer. That
 price is a design goal; it is not the established cost of Microduck.
 
-The founder's stated 20 years in Chinese IoT/silicon supply chains and
-international engineering experience support a China–Singapore–Thailand
-operating strategy. The prospective moat comes from repeatable firmware,
-hardware qualification, trusted releases and supported deployments. Geography
-and personal networks alone do not establish that moat.
+The prospective moat comes from repeatable firmware, hardware qualification,
+trusted releases and supported deployments. Independent integration and
+sustainable delivery must demonstrate that advantage.
 
 Start with one browser lesson: an operator proposes a short tabletop-arm move,
 sees admission or denial, interrupts an admitted attempt and inspects its
@@ -43,19 +41,18 @@ Local checks on this date: the simulator runner passed **78 Node.js tests**,
 invariants. Model/workbench checks passed **88 Python tests**. These are
 software/model results, not physical hardware or classroom acceptance.
 
-## Three Operating Nodes
+## Delivery Responsibilities
 
-| Node | Accountable work | Deliverable before scale |
+| Responsibility | Accountable work | Deliverable before scale |
 | --- | --- | --- |
-| Greater Bay Area / China network | Component quotations, DFM, servo sourcing, ODM firmware integration and factory test | Revision-specific BOM, supplier alternatives, traceable lots and manufacturing test records |
-| Singapore | Proposed commercial/IP stewardship, release trust roots, enterprise contracts, cloud/model procurement and institutional partnerships | Documented IP/license chain, signer governance, customer/data terms and a current provider-availability matrix |
-| Thailand: Bangkok / Chonburi | Bench engineering, small-batch assembly/QA, operator training and supervised field feedback | Repeatable build/test instructions, support owner, pilot evidence and actual landed-cost records |
+| Supply chain / manufacturing | Component quotations, DFM, servo sourcing, ODM firmware integration and factory test | Revision-specific BOM, supplier alternatives, traceable lots and manufacturing test records |
+| Trust / commercial | Proposed commercial/IP stewardship, release trust roots, enterprise contracts, cloud/model procurement and institutional partnerships | Documented IP/license chain, signer governance, customer/data terms and a current provider-availability matrix |
+| Engineering / field delivery | Bench engineering, small-batch assembly/QA, operator training and supervised field feedback | Repeatable build/test instructions, support owner, pilot evidence and actual landed-cost records |
 
-Treat these as proposed operating responsibilities, not claims of completed
-incorporation, unrestricted model access or established facilities. Evaluate
-shipping routes using actual origin, classification and processing records.
-Assembly or re-export through Thailand does not automatically change origin or
-remove duties. The [US International Trade Administration's origin guidance](https://www.trade.gov/rules-origin-substantial-transformation)
+These are proposed responsibilities, not evidence of established facilities or
+agreements. Evaluate shipping routes using actual origin, classification and
+processing records. Assembly or re-export does not automatically change origin
+or remove duties. The [US International Trade Administration's origin guidance](https://www.trade.gov/rules-origin-substantial-transformation)
 describes the product-specific substantial-transformation assessment.
 
 ## Strategic Pillars And Delivery Order
@@ -85,8 +82,8 @@ If a gate slips, move its dependent work; do not release it to preserve a date.
 | Phase / target window | Technical work | Hardware / supply chain | Commercial / ecosystem | Exit decision |
 | --- | --- | --- | --- | --- |
 | 1 — Golden reference; months 1–3, Oct–Dec 2026 | Close M0 deployment pins and M1 golden 61/14 observations; complete M2 native governed motion/stop; specify and bench-test the separate WebSerial Fast Spine profile; begin minimum M3 evidence for a physical demo | Choose one ESP32-S3 board and one TTL STS3215 fixture; quote a $12 controller BOM target; build up to 10 engineering units after bench gates | Prepare one split-screen demo and OEM/pilot briefs; target a public demo only after required authority, evidence and hardware gates | Reproducible allow/deny/interruption evidence; no motion on failed authority; measured disconnect/stop behavior; supportable first offer |
-| 2 — Closed-loop proof and supervised pilots; months 4–6, Jan–Mar 2027 | Complete Microduck M3 and M4 on its native runtime; qualify the arm's physical bridge separately; deliver telemetry/replay and flash/enrollment recovery | Progress through 10 → 25 → up to 100 cumulative developer kits only after QA, demand, cash and support reviews; Thailand/China assembly roles recorded | Start one adult-supervised school/maker pilot; expand toward 3–5 Bangkok/Singapore sites after repeat use and support evidence | Selected robot M0–M4 pass; one repeat delivery; named operator/support owners; useful lessons and sustainable support cost |
-| 3 — OEM adoption and ecosystem adapters; months 7–12, Apr–Sep 2027 | Close remaining SIM-3 gates; stage SIM-4 contacts/sensors → SIM-5 batches → SIM-6 imports/governed bridge with independent acceptance; add one pinned LeRobot/SO-100-family adapter and one model-provider proposal adapter | Qualify one OEM kit first; expand toward 2–3 shipping OEM relationships after conformance and update/support tests | Publish a versioned SeedCore Verified conformance profile; seek OEM design-ins and an applicable Singapore innovation call; trial opt-in adult telemetry | External developer reproduces integration; at least one partner has a tested shipping profile; repeat-use/paid demand justifies the next adapter |
+| 2 — Closed-loop proof and supervised pilots; months 4–6, Jan–Mar 2027 | Complete Microduck M3 and M4 on its native runtime; qualify the arm's physical bridge separately; deliver telemetry/replay and flash/enrollment recovery | Progress through 10 → 25 → up to 100 cumulative developer kits only after QA, demand, cash and support reviews; assembly and QA responsibilities recorded | Start one adult-supervised school/maker pilot; expand toward 3–5 pilot sites after repeat use and support evidence | Selected robot M0–M4 pass; one repeat delivery; named operator/support owners; useful lessons and sustainable support cost |
+| 3 — OEM adoption and ecosystem adapters; months 7–12, Apr–Sep 2027 | Close remaining SIM-3 gates; stage SIM-4 contacts/sensors → SIM-5 batches → SIM-6 imports/governed bridge with independent acceptance; add one pinned LeRobot/SO-100-family adapter and one model-provider proposal adapter | Qualify one OEM kit first; expand toward 2–3 shipping OEM relationships after conformance and update/support tests | Publish a versioned SeedCore Verified conformance profile; seek OEM design-ins and an applicable innovation call; trial opt-in adult telemetry | External developer reproduces integration; at least one partner has a tested shipping profile; repeat-use/paid demand justifies the next adapter |
 | 4 — Fleet governance and commercial scale; months 13–18, Oct 2027–Mar 2028 | Durable enrollment/reservations, per-robot authority and closure; qualify 3 → 10 → up to 30 robots; hosted Workbench for policy templates and replay; validate device-rooted evidence | Freeze a SoM only if volume and support justify it; select a currently supported secure element or qualified RP2350 secure partition, with enrollment/rotation/recovery tests | Offer paid Governance / Cloud Workbench subscriptions to validated schools, universities and labs; retain open local tools | Paid renewal/repeat use, positive recurring contribution target and tested fleet interruption/recovery; board/SoM investment justified by demand |
 
 The SIM-4–SIM-6 lane is conditional research. Its full general-engine scope may
@@ -114,11 +111,11 @@ A mock receipt or protocol fixture must remain visibly labeled as such.
 
 | Dates | Primary owner role | Concrete output | Acceptance / next decision |
 | --- | --- | --- | --- |
-| 14–20 Oct | Founder / integration lead | Freeze the M0 deployment inventory, M1 golden vectors, one bench board/servo choice and [Fast Spine protocol proposal](../robotics/fast_spine_protocol_spec.md); prepare partner and school need briefs | No unresolved units/joint ordering hidden; firmware trust and stop design reviewed; record quotations, effort cap and hardware availability |
+| 14–20 Oct | Project / integration lead | Freeze the M0 deployment inventory, M1 golden vectors, one bench board/servo choice and [Fast Spine protocol proposal](../robotics/fast_spine_protocol_spec.md); prepare partner and school need briefs | No unresolved units/joint ordering hidden; firmware trust and stop design reviewed; record quotations, effort cap and hardware availability |
 | 21–27 Oct | Runtime / robotics lead | Read-only Microduck simulation adapter and M1 parity evidence; split-screen experiment shell using `tree-lab.html` for the planar arm; session/negative-case fixtures | Startup is read-only; profiles are labeled; rejected authority cannot reach dispatch |
 | 28 Oct–3 Nov | Firmware / verification lead | M2 session/refresh/revocation integration; single-servo → three-servo bench progression; minimum action-bound M3 evidence and measured watchdog traces | Advance physical tests only after G1; a physical demo requires G2 for its exact profile; simulated cases remain the fallback deliverable |
 | 4–10 Nov | Browser / delivery lead | Reviewed ESP32-S3 release binary, versioned `esp-web-tools` manifest proposal, flash/recovery checklist, OEM packet and one supervised lesson plan | No motor enable during flash/enrollment; wrong-board/failed-flash recovery; demo matches passed gates; no publication before release review |
-| 11–12 Nov | Founder / reviewer | Day-30 review pack: demo trace, denied/revoked cases, verifier dispositions, BOM quotes, onboarding timings, support assumptions and next-month backlog | Go/rescope/defer based on evidence; identify one OEM design-in candidate and one pilot candidate without assuming agreements |
+| 11–12 Nov | Project lead / reviewer | Day-30 review pack: demo trace, denied/revoked cases, verifier dispositions, BOM quotes, onboarding timings, support assumptions and next-month backlog | Go/rescope/defer based on evidence; identify one OEM design-in candidate and one pilot candidate without assuming agreements |
 
 The split-screen demo shows a VLM or recorded proposal attempting an
 out-of-envelope move. The PDP denies it; an altered trajectory needs renewed
@@ -176,7 +173,7 @@ using the [service operating plan](../robotics/robot_service_operating_plan.md).
 Do not make dataset sales, grant awards or hardware margins necessary for the
 first software offer to work.
 
-Assume a founder-led team with scoped firmware/manufacturing review. Keep one
+Assume a small delivery team with scoped firmware/manufacturing review. Keep one
 active physical profile and one live pilot initially. The arm bench fixture is
 a bounded work package: if it becomes a second product or needs extra staff,
 make the capacity decision explicitly. Broad SIM research, BLE, multiple VLM
@@ -195,13 +192,14 @@ repeated deterministic failures with verifier/runbook evidence. At each monthly
 review, change dependent dates and scope together rather than retroactively
 weakening the gate.
 
-For Singapore institutional work, review the [PDPC education guidance](https://www.pdpc.gov.sg/guidelines-and-consultation/2018/09/advisory-guidelines-for-the-education-sector)
+For institutional work, review applicable privacy requirements, using the
+[PDPC education guidance](https://www.pdpc.gov.sg/guidelines-and-consultation/2018/09/advisory-guidelines-for-the-education-sector)
 and [children's data guidance](https://www.pdpc.gov.sg/guidelines-and-consultation/2024/03/advisory-guidelines-on-the-pdpa-for-childrens-personal-data-in-the-digital-environment)
 against the actual capture/retention design. Camera egress and trajectory
 contribution start disabled; consent and processor arrangements are distinct
 from motion authorization. “SeedCore Verified” is a scoped conformance badge,
-not regulatory certification. [IMDA's Open Innovation Platform](https://www.imda.gov.sg/how-we-can-help/open-innovation-platform)
-is a possible challenge/customer route, not an awarded EdTech grant.
+not regulatory certification. Innovation challenges may offer customer-discovery
+routes; programme participation and grant funding are not assumed.
 
 External sources checked 2026-10-14; recheck part lifecycle, programme terms,
 provider availability and browser support before implementation or commitments.

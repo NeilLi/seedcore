@@ -11,7 +11,7 @@ the visitor through the neighborhood.
 ## Run
 
 ```bash
-cd /Users/ningli/project/seedcore/apps/neighborhood-guide
+cd ./apps/neighborhood-guide
 godot --path .
 ```
 

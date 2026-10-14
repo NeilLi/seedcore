@@ -13,10 +13,6 @@ the outcome through action evidence.
 The OEM owns the body, electrical design, manufacturing and hardware warranty.
 SeedCore provides the reviewed authority/evidence integration, reference
 firmware, conformance fixtures and optional supported governance services.
-The founder brings the stated 20 years of Chinese IoT/silicon supply-chain
-experience and an international engineering perspective. The proposed
-Singapore–Thailand base supports trust stewardship and field delivery; it does
-not establish automatic regulatory approval or tariff treatment.
 
 ## What Exists And What A Design-In Would Build
 
@@ -54,8 +50,8 @@ not advertised universal onboarding times.
 | --- | --- |
 | OEM / ODM | Schematic and bus/power details, sample/profile access, firmware ingress inventory, traceable parts, factory QA, enclosure/mechanical limits and warranty/repair route |
 | SeedCore runtime / firmware | Versioned authority/session binding, device enforcement, failure fixtures, evidence integration, browser release and supported update policy |
-| Singapore trust / commercial role | IP/license inventory, issuer/release key governance, contracting and data-processing boundaries |
-| Thailand field / support role | Bench qualification, assembly/QA where selected, training, supervised lesson feedback and incident/support measurements |
+| Trust / commercial role | IP/license inventory, issuer/release key governance, contracting and data-processing boundaries |
+| Field / support role | Bench qualification, assembly/QA where selected, training, supervised lesson feedback and incident/support measurements |
 
 Agree who provisions each device identity, handles key rotation/revocation,
 retains manufacturing records and pays for update/support work before a factory
@@ -99,8 +95,7 @@ and support terms before granting it.
 
 ## Target Ecosystems And Evidence Packet
 
-Seeed Studio and M5Stack are initial ecosystem candidates from the founder's
-proposal. Waveshare, Hiwonder, Yahboom and other kit vendors are additional
+Seeed Studio and M5Stack are initial ecosystem candidates. Waveshare, Hiwonder, Yahboom and other kit vendors are additional
 unqualified candidates. No endorsement, compatible current SKU or agreement
 is claimed. Rank actual candidates by accessible engineering contact, board
 and servo fit, manufacturing/update ownership and demonstrated institutional
@@ -111,9 +106,8 @@ evidence and verifier result where accepted, conformance checklist, flashing
 recovery guide, one lesson and a support/economics estimate. Contact and
 publication require separate authorization.
 
-For Singapore discovery, evaluate a relevant challenge under
-[IMDA's Open Innovation Platform](https://www.imda.gov.sg/how-we-can-help/open-innovation-platform).
-It is a potential co-innovation/customer route, not an awarded EdTech grant.
+Evaluate relevant innovation challenges against current eligibility and customer
+needs. Programme participation and funding are not established by this brief.
 
 ## Draft Opening
 

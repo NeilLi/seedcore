@@ -5,7 +5,7 @@
 **Reference Docs:**  
 *   [safety_doctrine_enforcement_plan.md](../trust-runtime/safety_doctrine_enforcement_plan.md)
 *   [seedcore_proof_pyo3_bridge_decision_memo.md](seedcore_proof_pyo3_bridge_decision_memo.md)
-*   [trust_runtime_category_distinction.md](file:///Users/ningli/project/seedcore/docs/development/trust_runtime_category_distinction.md)
+*   [trust_runtime_category_distinction.md](../trust_runtime_category_distinction.md)
 
 ---
 

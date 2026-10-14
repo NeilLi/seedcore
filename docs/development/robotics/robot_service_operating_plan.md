@@ -1,7 +1,7 @@
 # Robot Service Operating Plan
 
 Date: 2026-10-14
-Status: Proposed operating plan for a founder-led team; budget, demand and hardware readiness unconfirmed
+Status: Proposed operating plan for a small delivery team; budget, demand and hardware readiness unconfirmed
 
 ## Operating Decision
 
@@ -11,7 +11,7 @@ The long-term mission remains broad. The initial offer must be narrow enough
 that a small team can reproduce it and own its failures.
 
 This plan operationalizes the [customer delivery model](robot_solution_delivery.md).
-Use a founder-led team of one or two core people, with specialist help as
+Use a small delivery team of one or two core people, with specialist help as
 needed. Available hours and specialist access still need to be established.
 Maintain one active engineering integration and at most one live customer pilot initially.
 An additional prospect may participate in discovery without creating another
@@ -215,7 +215,7 @@ For planning, track:
 
 ```text
 deployment contribution = service revenue
-  - delivery labor (including founder time)
+  - delivery labor (including team time)
   - installation/travel and third-party costs
   - hardware subsidy, if any
   - expected included support/rework
@@ -261,7 +261,7 @@ Q2–Q3 2027 and paid fleet governance in Q4 2027–Q1 2028. Staffing, readiness
 evidence determine actual dates. The business stages do not rename M0–M5.
 
 For the first planning cycle, prepare the offer and solution record, inventory
-available hardware and founder hours, identify the highest-risk interface
+available hardware and team availability, identify the highest-risk interface
 unknown for M0, and set the discovery/feasibility effort caps. The next decision
 is whether one need and one feasible body justify a trial commitment. Avoid
 promising a customer delivery date until that decision has evidence.

@@ -201,7 +201,7 @@ Operational interpretation:
 
 The smallest safe Gemini-visible surface remains the exact read-only bundle
 already defined in
-[`src/seedcore/plugin/mcp_server.py`](/Users/ningli/project/seedcore/src/seedcore/plugin/mcp_server.py):
+[`src/seedcore/plugin/mcp_server.py`](../../../../src/seedcore/plugin/mcp_server.py):
 
 - `seedcore.verification.queue`
 - `seedcore.verification.workflow_verification_detail`

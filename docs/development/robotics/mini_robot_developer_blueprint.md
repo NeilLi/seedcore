@@ -36,7 +36,7 @@ does not establish compatible firmware.
 | Item | Planning assumption | Evidence before freezing |
 | --- | --- | --- |
 | Controller | $12 recurring board parts BOM target at quoted volume | Itemize MCU/module, USB, TTL interface, watchdog/stop input, protection and connectors; record assembly/test/yield separately |
-| Servos | STS3215 for the small arm; founder-proposed $8–$12 unit sourcing target | Current quotation, electrical variant, torque/speed, load, feedback coverage, cables and failure behavior |
+| Servos | STS3215 for the small arm; $8–$12 unit sourcing target | Current quotation, electrical variant, torque/speed, load, feedback coverage, cables and failure behavior |
 | Mechanics | Printed arm and bounded bench workspace | Pinch/fall/load assessment, joint limits and reproducible CAD/build manifest |
 | Servo power | Separate reviewed supply and distribution | Actual voltage/current budget, brownout, grounding, level compatibility and protection |
 | Host | Existing supported laptop/Chromebook | Web Serial access, managed-device policy and first-time/repeat onboarding tests |

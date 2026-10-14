@@ -15,8 +15,8 @@ and local safety responsibilities.
 
 The initial adoption wedge is affordable maker and supervised STEM kits:
 SeedCore Inside reference firmware/browser lessons, auditable classroom
-governance and later opt-in telemetry. The proposed China–Singapore–Thailand
-operating model and Q4 2026–Q1 2028 targets are in the
+governance and later opt-in telemetry. Delivery responsibilities and
+Q4 2026–Q1 2028 targets are in the
 [execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md).
 The “Android + TrustZone” analogy is an interface/isolation ambition, not an
 OS, universal hardware root of trust or safety certification claim.

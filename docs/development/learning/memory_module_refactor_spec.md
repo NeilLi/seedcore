@@ -73,13 +73,13 @@ Quick read for **“Core alignment & contract freeze”** (Phase 0–1) vs **lat
 ### Completed in code
 
 - caller-facing service contracts now exist in
-  [src/seedcore/memory/contracts.py](/Users/ningli/project/seedcore/src/seedcore/memory/contracts.py)
+  [src/seedcore/memory/contracts.py](../../../src/seedcore/memory/contracts.py)
 - a shared runtime boundary now exists in
-  [src/seedcore/memory/runtime.py](/Users/ningli/project/seedcore/src/seedcore/memory/runtime.py)
+  [src/seedcore/memory/runtime.py](../../../src/seedcore/memory/runtime.py)
 - working-memory and semantic-memory adapters now exist in
-  [src/seedcore/memory/working_memory.py](/Users/ningli/project/seedcore/src/seedcore/memory/working_memory.py)
+  [src/seedcore/memory/working_memory.py](../../../src/seedcore/memory/working_memory.py)
   and
-  [src/seedcore/memory/semantic_memory.py](/Users/ningli/project/seedcore/src/seedcore/memory/semantic_memory.py)
+  [src/seedcore/memory/semantic_memory.py](../../../src/seedcore/memory/semantic_memory.py)
 - semantic backend contract mismatches in `HolonFabric` were repaired so
   upsert, delete, search, get-by-id, relationships, and stats now align with
   current backends
@@ -156,10 +156,10 @@ Status update:
 
 Relevant files:
 
-- [src/seedcore/memory/__init__.py](/Users/ningli/project/seedcore/src/seedcore/memory/__init__.py)
-- [src/seedcore/memory/system.py](/Users/ningli/project/seedcore/src/seedcore/memory/system.py)
-- [README.md](/Users/ningli/project/seedcore/README.md)
-- [docs/architecture/adr/adr-0001-pdp-hot-path.md](/Users/ningli/project/seedcore/docs/architecture/adr/adr-0001-pdp-hot-path.md)
+- [src/seedcore/memory/__init__.py](../../../src/seedcore/memory/__init__.py)
+- [src/seedcore/memory/system.py](../../../src/seedcore/memory/system.py)
+- [README.md](../../../README.md)
+- [docs/architecture/adr/adr-0001-pdp-hot-path.md](../../architecture/adr/adr-0001-pdp-hot-path.md)
 
 ### 2. The semantic-memory contract is stale at the API level
 
@@ -174,9 +174,9 @@ actual backends:
 
 Relevant files:
 
-- [src/seedcore/memory/holon_fabric.py](/Users/ningli/project/seedcore/src/seedcore/memory/holon_fabric.py)
-- [src/seedcore/memory/backends/pgvector_backend.py](/Users/ningli/project/seedcore/src/seedcore/memory/backends/pgvector_backend.py)
-- [src/seedcore/memory/backends/neo4j_graph.py](/Users/ningli/project/seedcore/src/seedcore/memory/backends/neo4j_graph.py)
+- [src/seedcore/memory/holon_fabric.py](../../../src/seedcore/memory/holon_fabric.py)
+- [src/seedcore/memory/backends/pgvector_backend.py](../../../src/seedcore/memory/backends/pgvector_backend.py)
+- [src/seedcore/memory/backends/neo4j_graph.py](../../../src/seedcore/memory/backends/neo4j_graph.py)
 
 Status update:
 
@@ -201,8 +201,8 @@ data model it writes into.
 
 Relevant files:
 
-- [src/seedcore/cognitive/memory_bridge.py](/Users/ningli/project/seedcore/src/seedcore/cognitive/memory_bridge.py)
-- [src/seedcore/models/holon.py](/Users/ningli/project/seedcore/src/seedcore/models/holon.py)
+- [src/seedcore/cognitive/memory_bridge.py](../../../src/seedcore/cognitive/memory_bridge.py)
+- [src/seedcore/models/holon.py](../../../src/seedcore/models/holon.py)
 
 Status update:
 
@@ -226,10 +226,10 @@ boundary.
 
 Relevant files:
 
-- [src/seedcore/agents/base.py](/Users/ningli/project/seedcore/src/seedcore/agents/base.py)
-- [src/seedcore/organs/organ.py](/Users/ningli/project/seedcore/src/seedcore/organs/organ.py)
-- [src/seedcore/tools/manager_actor.py](/Users/ningli/project/seedcore/src/seedcore/tools/manager_actor.py)
-- [src/seedcore/ops/state/memory_aggregator.py](/Users/ningli/project/seedcore/src/seedcore/ops/state/memory_aggregator.py)
+- [src/seedcore/agents/base.py](../../../src/seedcore/agents/base.py)
+- [src/seedcore/organs/organ.py](../../../src/seedcore/organs/organ.py)
+- [src/seedcore/tools/manager_actor.py](../../../src/seedcore/tools/manager_actor.py)
+- [src/seedcore/ops/state/memory_aggregator.py](../../../src/seedcore/ops/state/memory_aggregator.py)
 
 Status update:
 
@@ -248,7 +248,7 @@ expected via `CognitiveMemoryBridge` and scoped retrieval.
 
 Relevant file:
 
-- [src/seedcore/cognitive/cognitive_core.py](/Users/ningli/project/seedcore/src/seedcore/cognitive/cognitive_core.py)
+- [src/seedcore/cognitive/cognitive_core.py](../../../src/seedcore/cognitive/cognitive_core.py)
 
 Status update:
 
@@ -266,8 +266,8 @@ Earlier versions reached through ad hoc internals or invented fields.
 
 Relevant files:
 
-- [src/seedcore/ops/state/memory_aggregator.py](/Users/ningli/project/seedcore/src/seedcore/ops/state/memory_aggregator.py)
-- [src/seedcore/memory/telemetry.py](/Users/ningli/project/seedcore/src/seedcore/memory/telemetry.py)
+- [src/seedcore/ops/state/memory_aggregator.py](../../../src/seedcore/ops/state/memory_aggregator.py)
+- [src/seedcore/memory/telemetry.py](../../../src/seedcore/memory/telemetry.py)
 
 Status update:
 
@@ -290,8 +290,8 @@ forensic / trust-slice architecture.
 
 Relevant files:
 
-- [src/seedcore/memory/flashbulb_memory.py](/Users/ningli/project/seedcore/src/seedcore/memory/flashbulb_memory.py)
-- [src/seedcore/api/routers/legacy/mfb_router.py](/Users/ningli/project/seedcore/src/seedcore/api/routers/legacy/mfb_router.py)
+- [src/seedcore/memory/flashbulb_memory.py](../../../src/seedcore/memory/flashbulb_memory.py)
+- [src/seedcore/api/routers/legacy/mfb_router.py](../../../src/seedcore/api/routers/legacy/mfb_router.py)
 
 Status update:
 
@@ -853,9 +853,9 @@ pytest -q tests/test_memory_tool_integration.py
 
 After implementation, update:
 
-- [README.md](/Users/ningli/project/seedcore/README.md)
-- [docs/architecture/overview/architecture.md](/Users/ningli/project/seedcore/docs/architecture/overview/architecture.md)
-- [src/seedcore/__init__.py](/Users/ningli/project/seedcore/src/seedcore/__init__.py)
+- [README.md](../../../README.md)
+- [docs/architecture/overview/architecture.md](../../architecture/overview/architecture.md)
+- [src/seedcore/__init__.py](../../../src/seedcore/__init__.py)
 
 The goal is to make the docs say the same thing the code now means:
 

@@ -65,7 +65,7 @@ SeedCore needs learned components that are better at:
 - using tools predictably instead of hallucinating outcomes
 
 That aligns directly with the rule already stated in
-[`governance_aware_learning_next_stage_plan.md`](/Users/ningli/project/seedcore/docs/development/learning/governance_aware_learning_next_stage_plan.md:1):
+[`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md:1):
 
 > The model may learn. SeedCore still decides.
 
@@ -204,7 +204,7 @@ Target outputs:
 - `abstain`
 
 This aligns with the "Distilled Policy Scaffolds" objective in
-[`governance_aware_learning_next_stage_plan.md`](/Users/ningli/project/seedcore/docs/development/learning/governance_aware_learning_next_stage_plan.md:72).
+[`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md:72).
 
 ### Workstream B: Abstention-first authority behavior
 
@@ -221,7 +221,7 @@ Preferred behavior:
 - explicit abstention over invented confidence
 
 This aligns with the "HALT / Abstention Behavior" objective in
-[`governance_aware_learning_next_stage_plan.md`](/Users/ningli/project/seedcore/docs/development/learning/governance_aware_learning_next_stage_plan.md:89).
+[`governance_aware_learning_next_stage_plan.md`](governance_aware_learning_next_stage_plan.md:89).
 
 ### Workstream C: Tool-call discipline for policy/operator assistants
 
@@ -233,7 +233,7 @@ Train models against SeedCore tools and schemas so they can:
 - avoid fabricating non-tool-backed claims
 
 This is especially relevant for the surfaces described in
-[`policy_assistant_mvp_spec.md`](/Users/ningli/project/seedcore/docs/development/learning/policy_assistant_mvp_spec.md:1)
+[`policy_assistant_mvp_spec.md`](policy_assistant_mvp_spec.md:1)
 and the operator/verification UX contract family.
 
 ### Workstream D: Evidence-grounded explanation generation

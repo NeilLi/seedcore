@@ -82,10 +82,10 @@ before it can be called signed hardware evidence.
 ## Customer, OEM And Data Preparation
 
 Target one repeatable supervised STEM/maker lesson on one accepted profile.
-Start with one live pilot; expand toward 3–5 Bangkok/Singapore sites and up to
+Start with one live pilot; expand toward 3–5 pilot sites and up to
 100 cumulative developer kits after useful repeat delivery, QA, cash and
-support reviews. The proposed China sourcing, Singapore trust/commercial and
-Thailand bench/field roles are in the execution plan.
+support reviews. Hardware qualification, trust/release and field-support
+responsibilities are in the execution plan.
 
 Prepare a need/function brief, customer acceptance criteria, hardware fit,
 operator controls, warranty/repair route and delivery/support cost estimate.

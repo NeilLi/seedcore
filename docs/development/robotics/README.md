@@ -15,10 +15,10 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | Document | Role |
 | --- | --- |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
-| [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, tri-node roles, phase gates and 14 Oct–12 Nov tactical work |
+| [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
 | [Fast Spine protocol proposal](fast_spine_protocol_spec.md) | Proposed WebSerial MCU admission/session, authenticated chunks, local interruption, evidence and flashing; no firmware implemented |
 | [Customer solution delivery](robot_solution_delivery.md) | Proposed service: needs discovery, hardware fit, custom functions, customer acceptance and support |
-| [Service operating plan](robot_service_operating_plan.md) | Founder-led execution: first offer, scope limits, delivery gates, team roles, support and economics |
+| [Service operating plan](robot_service_operating_plan.md) | Small-team execution: first offer, scope limits, delivery gates, team roles, support and economics |
 | [Robot execution and evidence contract](robot_execution_contract.md) | Proposed reusable boundary: admission, local enforcement, sessions, partitions and evidence limits |
 | [Governed robot skill packages](robot_skill_contract.md) | Proposed packaging, permission, isolation and promotion contract; no loader/studio implemented |
 | [Robot Learning Studio solution](robot_learning_studio_solution.md) | Proposed mission workflow grounded in the PKG and hotel simulators; browser/custom-engine decision, contracts, evidence and curriculum |

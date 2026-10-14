@@ -11,10 +11,8 @@ the execution boundary and preserves evidence of the attempt. Browser lessons
 and reference firmware are the proposed adoption path for maker and supervised
 STEM kits, targeting selected embodiments below $300 excluding an existing host.
 
-The founder's stated 20-year Chinese IoT/silicon supply-chain experience,
-international engineering perspective and proposed Singapore–Thailand base
-create a credible route to combining affordable hardware with enterprise
-trust. The moat must be earned through qualified profiles, trusted releases,
+SeedCore aims to combine affordable hardware with verifiable execution.
+Its advantage must be earned through qualified profiles, trusted releases,
 repeatable integration, support and usable evidence.
 
 “Android + TrustZone” is a positioning analogy for common interfaces and
@@ -27,17 +25,17 @@ The [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md
 owns the dated schedule, gate definitions and revenue assumptions. The
 [active queue](../current_next_steps.md) owns immediate work.
 
-## Tri-Node Operating Advantage
+## Delivery Responsibilities
 
-| Node | Strategic responsibility | Proof of advantage |
+| Role | Strategic responsibility | Proof of advantage |
 | --- | --- | --- |
-| China / Greater Bay Area network | BOM sourcing, DFM, serial-servo kits and ODM pre-flashing | Quoted recurring/landed costs, reproducible QA and a supported design-in |
-| Singapore | Proposed IP/commercial stewardship, trust roots, institutional contracts and cloud/model procurement | Clean license/IP inventory, signer governance, provider terms and buyer acceptance |
-| Thailand / Bangkok–Chonburi | Bench engineering, small-batch QA and supervised field learning | Short iteration cycles, repeatable lessons, supportable installations and measured delivery cost |
+| Supply chain / manufacturing | BOM sourcing, DFM, serial-servo kits and ODM pre-flashing | Quoted recurring/landed costs, reproducible QA and a supported design-in |
+| Trust / commercial | Proposed IP/commercial stewardship, trust roots, institutional contracts and cloud/model procurement | Clean license/IP inventory, signer governance, provider terms and buyer acceptance |
+| Engineering / field delivery | Bench engineering, small-batch QA and supervised field learning | Short iteration cycles, repeatable lessons, supportable installations and measured delivery cost |
 
-These are operating hypotheses and assigned roles, not evidence of established
-entities, facilities, unrestricted model access or tariff exemption. Record
-current provider availability and actual origin/shipping costs before an offer.
+These are proposed responsibilities, not evidence of established facilities or
+agreements. Record provider availability, qualification evidence and actual
+landed costs before an offer.
 
 ## Three Strategic Pillars
 
@@ -150,9 +148,9 @@ one repeatable offer, one active physical profile and one live pilot. A bench
 fixture must stay bounded; otherwise replan capacity explicitly.
 
 The [OEM brief](../../application/oem_partnership_brief.md) prepares partner
-discussions; it is not an agreement or outreach authorization. Singapore
-innovation programmes are optional routes whose current terms need checking,
-not assumed funding.
+discussions; it is not an agreement or outreach authorization. Innovation
+programmes are optional routes whose current terms need checking, not assumed
+funding.
 
 ## Decision Evidence And Document Contract
 

@@ -13,7 +13,7 @@ and maintain useful functions.
 
 The [physical AI execution plan](seedcore_physical_ai_execution_plan_2026_2028.md)
 is the canonical **Q4 2026–Q1 2028** planning schedule. It links M1–M4,
-conditional SIM research, China/Singapore/Thailand operating roles, staged kit
+conditional SIM research, delivery responsibilities, staged kit
 production, supervised pilots, OEM adoption and hosted governance. Its first
 30-day window is 14 Oct–12 Nov 2026. Targets advance through evidence gates.
 

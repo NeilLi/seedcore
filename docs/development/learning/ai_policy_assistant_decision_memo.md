@@ -5,8 +5,8 @@ Status: Proposed decision; baseline inspection passed on 2026-05-19
 
 Implementation follow-up:
 
-- [Policy Assistant MVP Spec (SeedCore API + Runtime)](/Users/ningli/project/seedcore/docs/development/learning/policy_assistant_mvp_spec.md)
-- [Policy Assistant MVP Spec (pkg-simulator UI + Integration)](/Users/ningli/project/pkg-simulator/docs/POLICY_ASSISTANT_MVP_SPEC.md)
+- [Policy Assistant MVP Spec (SeedCore API + Runtime)](policy_assistant_mvp_spec.md)
+- Policy Assistant MVP Spec (pkg-simulator UI + Integration): `pkg-simulator/docs/POLICY_ASSISTANT_MVP_SPEC.md` in the companion project
 
 ## Implementation Status (2026-05-19)
 

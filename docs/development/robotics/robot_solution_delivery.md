@@ -22,9 +22,9 @@ The first repeatable offer now targets a teacher/operator-supervised STEM or
 maker lesson on one accepted profile. The
 [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 links that delivery to SeedCore Inside OEM adoption and hosted governance.
-Use China sourcing, proposed Singapore trust/commercial stewardship and
-Thailand bench/field support as explicit responsibilities. Begin one pilot;
-expand toward 3–5 sites only after useful repeat delivery and support evidence.
+Assign hardware qualification, trust/release and field-support responsibilities.
+Begin one pilot; expand toward 3–5 sites only after useful repeat delivery and
+support evidence.
 
 ## Discover The Job Before Choosing The Body
 
@@ -127,7 +127,7 @@ templates unless separately authorized.
 ## Two Tracks And A Shared Release Gate
 
 The [service operating plan](robot_service_operating_plan.md) turns this model
-into a founder-led workflow: one initial offer and supported profile, bounded
+into a small-team workflow: one initial offer and supported profile, bounded
 customization, stage owners, acceptance measures, support responsibilities and
 delivery economics. Use it to decide whether to accept, rescope or defer work.
 
