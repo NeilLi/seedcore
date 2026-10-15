@@ -109,6 +109,15 @@ A mock receipt or protocol fixture must remain visibly labeled as such.
 
 ## First 30 Days: 14 October–12 November 2026
 
+The subsequent [Central World product workstream](../robotics/central_world_engineering_plan.md)
+targets 19 Oct–10 Jan for component standardization → assembly/DRC → separately
+qualified browser MuJoCo/gesture rehearsal → conditional governed deployment →
+alpha review. Its Phase 1 software foundation is implemented early; exact part
+qualification and later phases are open. This can bring forward a browser
+MuJoCo adapter without moving the custom engine's broader SIM-4–SIM-6 research
+or weakening native M0–M4/G0–G2. Review capacity weekly; January defaults to a
+simulation/authoring alpha when firmware/hardware gates are not ready.
+
 **15 October simulation-first checkpoint:** no hardware is connected. The
 [offline acceptance guide](../robotics/simulation_first_acceptance.md) records
 the read-only adapter, pinned ONNX candidate, upstream-derived replay goldens,

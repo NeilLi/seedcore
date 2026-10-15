@@ -1,0 +1,11 @@
+{
+  "schema_version": "seedcore.component-reference.v1",
+  "reference_id": "microduck-0.1.0",
+  "kind": "imported_native_model",
+  "package_manifest": "packages/models/microduck/0.1.0/manifest.json",
+  "package_manifest_sha256": "31018dfaa996b9a4ae519f121134b40331be2ef9b92835bb9274c5f777444371",
+  "deployment_profile": "packages/robotics-profiles/microduck-sim-v1.json",
+  "catalog_assembly": null,
+  "hardware_qualification": "open",
+  "note": "Existing native Microduck package, not a robot assembled from these 12 draft components. No mesh conversion or hardware fit claim. Keep native controller and policy compatibility gates."
+}

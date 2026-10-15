@@ -1,0 +1,49 @@
+{
+  "schema_version": "seedcore.component-source-review.v1",
+  "inspected_on": "2026-10-15",
+  "code_copied": false,
+  "sources": [
+    {
+      "repository": "https://github.com/OpenLegged/URDF-Studio",
+      "revision": "23b96e2f3d5b1b68ad9629925d4479e9847d35a5",
+      "observed_license": "Apache-2.0",
+      "disposition": "evaluate stable canvas package in Phase 2; no code imported",
+      "inspected_file_sha256": {
+        "README.md": "8be786c42948d3090c279444d1aa21c482766016d1979833ecc56b147a9a7e9d",
+        "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "packages/react-robot-canvas/package.json": "bd4f563eb6d30bb064f414faeee75a776268fdc3dc0f50d09735fa0be58d9c67"
+      },
+      "canvas_package": {
+        "name": "@urdf-studio/react-robot-canvas",
+        "version": "0.1.0",
+        "license": "Apache-2.0",
+        "peerDependencies": {
+          "@react-three/drei": "^10.0.0",
+          "@react-three/fiber": "^9.0.0",
+          "react": "^19.0.0",
+          "react-dom": "^19.0.0",
+          "three": "^0.181.0"
+        }
+      }
+    },
+    {
+      "repository": "https://github.com/ttktjmt/mjswan",
+      "revision": "8f57ab5024de57a577c17e6ca7bb3d31f6ae7518",
+      "observed_license": "Apache-2.0",
+      "disposition": "evaluate browser MuJoCo and policy adapter in Phase 3; no code imported",
+      "inspected_file_sha256": {
+        "README.md": "49f722c63b6d179f5d9d8001438519bc9d4c63b5a9b997a7930490efa136669e",
+        "LICENSE": "223c3a1a01cabccd4ca49ec2f3c16e60e027ebf3d393d1b952acba65822e7253"
+      }
+    },
+    {
+      "repository": "https://github.com/project-instinct/robot-motion-editor",
+      "revision": "bee9fc67773b80fb5daafed5726498c45e3d0bdc",
+      "observed_license": null,
+      "disposition": "no root license found in inspected tree; design reference only; do not copy code/assets until permissions clarified",
+      "inspected_file_sha256": {
+        "README.md": "f5cb3c14fe36ccd94f0028b6eeaaabf0d9db6f848e265e573e86eff3ca1655df"
+      }
+    }
+  ]
+}

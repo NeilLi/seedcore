@@ -1,0 +1,124 @@
+{
+  "schema_version": "seedcore.component.v1",
+  "identity": {
+    "part_id": "generic.sg90-draft",
+    "version": "0.1.0",
+    "name": "SG90 servo family - illustrative draft",
+    "category": "actuator",
+    "status": "draft",
+    "bom_cost_usd": null,
+    "cost_basis": "unknown",
+    "supplier_skus": [],
+    "notes": "Original simulation proxy only. Dimensions, mass, mounts and interfaces are authoring assumptions, not product specifications. Select a board/SKU and verify drawings, pinout and ratings before hardware qualification."
+  },
+  "mechanical": {
+    "frame": "right_handed_z_up_meters",
+    "basis": "simulation_proxy",
+    "visual_mesh": {
+      "uri": "assets/generic-sg90-draft.glb",
+      "sha256": "236c78c4fe827351e6633bfa6cb09c3b4b8a159957db57fd1ce241a232d8a128",
+      "format": "glb2",
+      "up_axis": "Y",
+      "license": "Apache-2.0",
+      "origin": "seedcore_box_proxy"
+    },
+    "collision": {
+      "type": "box",
+      "size_m": [
+        0.024,
+        0.012,
+        0.03
+      ]
+    },
+    "mass_kg": 0.012,
+    "center_of_mass_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_kg_m2": {
+      "ixx": 1.044e-06,
+      "iyy": 1.476e-06,
+      "izz": 7.2e-07,
+      "ixy": 0.0,
+      "ixz": 0.0,
+      "iyz": 0.0
+    },
+    "snap_ports": [
+      {
+        "port_id": "mount.bottom",
+        "position_m": [
+          0.0,
+          0.0,
+          -0.015
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      },
+      {
+        "port_id": "mount.top",
+        "position_m": [
+          0.0,
+          0.0,
+          0.015
+        ],
+        "quaternion_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      }
+    ]
+  },
+  "electrical": {
+    "rating_basis": "unknown",
+    "min_v": null,
+    "max_v": null,
+    "continuous_ma": null,
+    "peak_ma": null,
+    "output_capacity_ma": null,
+    "bus_interfaces": [
+      {
+        "interface_id": "control",
+        "kind": "PWM",
+        "role": "peripheral",
+        "protocol": null,
+        "logic_min_v": null,
+        "logic_max_v": null,
+        "i2c_address": null,
+        "pins": []
+      }
+    ]
+  },
+  "hal_and_safety": {
+    "capabilities": [
+      "actuator.joint_position"
+    ],
+    "runtime_binding": null,
+    "qualification": "unqualified",
+    "hard_limits": {
+      "min_rad": null,
+      "max_rad": null,
+      "max_rad_s": null,
+      "max_torque_nm": null
+    },
+    "simulation_limits": {
+      "min_rad": -0.5,
+      "max_rad": 0.5,
+      "max_rad_s": 1.0,
+      "max_torque_nm": 0.2
+    },
+    "execution_authority": "none"
+  }
+}

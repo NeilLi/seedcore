@@ -1,0 +1,106 @@
+{
+  "schema_version": "seedcore.component.v1",
+  "identity": {
+    "part_id": "seedcore.sensor-hat",
+    "version": "0.1.0",
+    "name": "Sensor hat proxy - illustrative draft",
+    "category": "chassis",
+    "status": "draft",
+    "bom_cost_usd": null,
+    "cost_basis": "unknown",
+    "supplier_skus": [],
+    "notes": "Original simulation proxy only. Dimensions, mass, mounts and interfaces are authoring assumptions, not product specifications. Select a board/SKU and verify drawings, pinout and ratings before hardware qualification."
+  },
+  "mechanical": {
+    "frame": "right_handed_z_up_meters",
+    "basis": "simulation_proxy",
+    "visual_mesh": {
+      "uri": "assets/seedcore-sensor-hat.glb",
+      "sha256": "a8a9ae5d556f04d54c900e1d4282f3f51d94834712ea0ce98e169065a14d530d",
+      "format": "glb2",
+      "up_axis": "Y",
+      "license": "Apache-2.0",
+      "origin": "seedcore_box_proxy"
+    },
+    "collision": {
+      "type": "box",
+      "size_m": [
+        0.06,
+        0.05,
+        0.008
+      ]
+    },
+    "mass_kg": 0.02,
+    "center_of_mass_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_kg_m2": {
+      "ixx": 4.2733333333333345e-06,
+      "iyy": 6.106666666666666e-06,
+      "izz": 1.0166666666666667e-05,
+      "ixy": 0.0,
+      "ixz": 0.0,
+      "iyz": 0.0
+    },
+    "snap_ports": [
+      {
+        "port_id": "mount.bottom",
+        "position_m": [
+          0.0,
+          0.0,
+          -0.004
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      },
+      {
+        "port_id": "mount.top",
+        "position_m": [
+          0.0,
+          0.0,
+          0.004
+        ],
+        "quaternion_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      }
+    ]
+  },
+  "electrical": {
+    "rating_basis": "not_applicable",
+    "min_v": null,
+    "max_v": null,
+    "continuous_ma": null,
+    "peak_ma": null,
+    "output_capacity_ma": null,
+    "bus_interfaces": []
+  },
+  "hal_and_safety": {
+    "capabilities": [],
+    "runtime_binding": null,
+    "qualification": "unqualified",
+    "hard_limits": {
+      "min_rad": null,
+      "max_rad": null,
+      "max_rad_s": null,
+      "max_torque_nm": null
+    },
+    "simulation_limits": null,
+    "execution_authority": "none"
+  }
+}

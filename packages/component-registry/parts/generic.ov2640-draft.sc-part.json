@@ -1,0 +1,129 @@
+{
+  "schema_version": "seedcore.component.v1",
+  "identity": {
+    "part_id": "generic.ov2640-draft",
+    "version": "0.1.0",
+    "name": "OV2640 camera module family - illustrative draft",
+    "category": "sensor",
+    "status": "draft",
+    "bom_cost_usd": null,
+    "cost_basis": "unknown",
+    "supplier_skus": [],
+    "notes": "Original simulation proxy only. Dimensions, mass, mounts and interfaces are authoring assumptions, not product specifications. Select a board/SKU and verify drawings, pinout and ratings before hardware qualification."
+  },
+  "mechanical": {
+    "frame": "right_handed_z_up_meters",
+    "basis": "simulation_proxy",
+    "visual_mesh": {
+      "uri": "assets/generic-ov2640-draft.glb",
+      "sha256": "755313805bff80c02f3a1097ebfa3c1e1f9f20718b6bfa81533050d566b13c2d",
+      "format": "glb2",
+      "up_axis": "Y",
+      "license": "Apache-2.0",
+      "origin": "seedcore_box_proxy"
+    },
+    "collision": {
+      "type": "box",
+      "size_m": [
+        0.024,
+        0.024,
+        0.01
+      ]
+    },
+    "mass_kg": 0.01,
+    "center_of_mass_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_kg_m2": {
+      "ixx": 5.633333333333334e-07,
+      "iyy": 5.633333333333334e-07,
+      "izz": 9.6e-07,
+      "ixy": 0.0,
+      "ixz": 0.0,
+      "iyz": 0.0
+    },
+    "snap_ports": [
+      {
+        "port_id": "mount.bottom",
+        "position_m": [
+          0.0,
+          0.0,
+          -0.005
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      },
+      {
+        "port_id": "mount.top",
+        "position_m": [
+          0.0,
+          0.0,
+          0.005
+        ],
+        "quaternion_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      }
+    ]
+  },
+  "electrical": {
+    "rating_basis": "unknown",
+    "min_v": null,
+    "max_v": null,
+    "continuous_ma": null,
+    "peak_ma": null,
+    "output_capacity_ma": null,
+    "bus_interfaces": [
+      {
+        "interface_id": "control",
+        "kind": "I2C",
+        "role": "peripheral",
+        "protocol": null,
+        "logic_min_v": null,
+        "logic_max_v": null,
+        "i2c_address": null,
+        "pins": []
+      },
+      {
+        "interface_id": "pixels",
+        "kind": "CAMERA_PARALLEL",
+        "role": "peripheral",
+        "protocol": null,
+        "logic_min_v": null,
+        "logic_max_v": null,
+        "i2c_address": null,
+        "pins": []
+      }
+    ]
+  },
+  "hal_and_safety": {
+    "capabilities": [
+      "sensor.camera_rgb"
+    ],
+    "runtime_binding": null,
+    "qualification": "unqualified",
+    "hard_limits": {
+      "min_rad": null,
+      "max_rad": null,
+      "max_rad_s": null,
+      "max_torque_nm": null
+    },
+    "simulation_limits": null,
+    "execution_authority": "none"
+  }
+}

@@ -6,6 +6,23 @@ Status: Proposed solution and staged implementation specification; studio and Mi
 
 Audience: Product, curriculum, application, runtime and robotics contributors
 
+## Central World Follow-up — 2026-10-15
+
+The user selected a Phase 1 component foundation plus a
+[12-week Central World engineering plan](central_world_engineering_plan.md).
+The [component registry](../../../packages/component-registry/README.md) now
+provides the four-block part schema, 12 illustrative drafts, integrity/semantic
+checks and a local part viewer. Exact hardware data and later assembly, DRC,
+browser MuJoCo/policy, timeline and deployment integration remain gated. The
+current pass does not implement the full Studio or a public community service.
+
+The target delivery is a browser workbench inside the monorepo. General
+assembled/contact models use a separately qualified MuJoCo-Wasm adapter;
+existing custom planar lessons remain their own profile. This newer staged plan
+supersedes the original Godot-first workspace as the active product schedule
+below, while preserving mission, authority and evidence boundaries. It does not
+close native Microduck M stages or authorize connected hardware operation.
+
 ## General Development Workbench Decision — 2026-10-08
 
 The user selected MuJoCo integration and a general robot-development workbench

@@ -21,6 +21,12 @@ WebSerial, Fast Spine firmware and device-rooted receipts remain open. See the
 [simulation-first acceptance guide](docs/development/robotics/simulation_first_acceptance.md)
 for local policy paths, reproducible checks and the split-screen rehearsal.
 
+The [Central World component foundation](packages/component-registry/README.md)
+adds a strict part schema, 12 illustrative draft components and a local read-only
+geometry/port viewer. The [12-week studio plan](docs/development/robotics/central_world_engineering_plan.md)
+stages assembly, DRC, browser MuJoCo and governed deployment. Qualified hardware
+data, the assembly IDE and physical provisioning remain open.
+
 ---
 
 ## Positioning And Adoption

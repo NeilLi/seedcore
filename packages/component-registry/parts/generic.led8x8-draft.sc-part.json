@@ -1,0 +1,108 @@
+{
+  "schema_version": "seedcore.component.v1",
+  "identity": {
+    "part_id": "generic.led8x8-draft",
+    "version": "0.1.0",
+    "name": "8 x 8 LED module (driver unselected) - illustrative draft",
+    "category": "actuator",
+    "status": "draft",
+    "bom_cost_usd": null,
+    "cost_basis": "unknown",
+    "supplier_skus": [],
+    "notes": "Original simulation proxy only. Dimensions, mass, mounts and interfaces are authoring assumptions, not product specifications. Select a board/SKU and verify drawings, pinout and ratings before hardware qualification."
+  },
+  "mechanical": {
+    "frame": "right_handed_z_up_meters",
+    "basis": "simulation_proxy",
+    "visual_mesh": {
+      "uri": "assets/generic-led8x8-draft.glb",
+      "sha256": "bbc8ee17a6194c0f67869a6106c0c4216d53ed88679c3f43717d8c213928cd0a",
+      "format": "glb2",
+      "up_axis": "Y",
+      "license": "Apache-2.0",
+      "origin": "seedcore_box_proxy"
+    },
+    "collision": {
+      "type": "box",
+      "size_m": [
+        0.032,
+        0.032,
+        0.008
+      ]
+    },
+    "mass_kg": 0.015,
+    "center_of_mass_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_kg_m2": {
+      "ixx": 1.36e-06,
+      "iyy": 1.36e-06,
+      "izz": 2.5599999999999996e-06,
+      "ixy": 0.0,
+      "ixz": 0.0,
+      "iyz": 0.0
+    },
+    "snap_ports": [
+      {
+        "port_id": "mount.bottom",
+        "position_m": [
+          0.0,
+          0.0,
+          -0.004
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      },
+      {
+        "port_id": "mount.top",
+        "position_m": [
+          0.0,
+          0.0,
+          0.004
+        ],
+        "quaternion_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mount_standard": "seedcore.proxy_mount_v1",
+        "gender": "neutral",
+        "qualification": "illustrative"
+      }
+    ]
+  },
+  "electrical": {
+    "rating_basis": "unknown",
+    "min_v": null,
+    "max_v": null,
+    "continuous_ma": null,
+    "peak_ma": null,
+    "output_capacity_ma": null,
+    "bus_interfaces": []
+  },
+  "hal_and_safety": {
+    "capabilities": [
+      "display.led_matrix"
+    ],
+    "runtime_binding": null,
+    "qualification": "unqualified",
+    "hard_limits": {
+      "min_rad": null,
+      "max_rad": null,
+      "max_rad_s": null,
+      "max_torque_nm": null
+    },
+    "simulation_limits": null,
+    "execution_authority": "none"
+  }
+}

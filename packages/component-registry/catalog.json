@@ -1,0 +1,89 @@
+{
+  "schema_version": "seedcore.component-catalog.v1",
+  "status": "draft_only",
+  "schema_sha256": "6e135605c599cd74e4619c25baa17b1443d4af39a0eaf94949fb1ca235a837b3",
+  "parts": [
+    {
+      "part_id": "espressif.esp32-s3-draft",
+      "version": "0.1.0",
+      "path": "parts/espressif.esp32-s3-draft.sc-part.json",
+      "sha256": "2d6fa5aa946d773f79fd962069b62373645885c92e8ff8e5a70c20b588b34e70"
+    },
+    {
+      "part_id": "feetech.sts3215-draft",
+      "version": "0.1.0",
+      "path": "parts/feetech.sts3215-draft.sc-part.json",
+      "sha256": "046cb29725fec98b6386fb41e26cee763acb4f6bc2af495b66b8a33788cbf3d0"
+    },
+    {
+      "part_id": "generic.bec-draft",
+      "version": "0.1.0",
+      "path": "parts/generic.bec-draft.sc-part.json",
+      "sha256": "6eaf49533d463b575cafa5235076047436412ccb11d9a7822d2668fe1a119d0e"
+    },
+    {
+      "part_id": "generic.led8x8-draft",
+      "version": "0.1.0",
+      "path": "parts/generic.led8x8-draft.sc-part.json",
+      "sha256": "d9395dda9b0c89dd16306aaabf425d19f4f3904aa24e0d1e4655e5e25af6a54c"
+    },
+    {
+      "part_id": "generic.lipo2s-draft",
+      "version": "0.1.0",
+      "path": "parts/generic.lipo2s-draft.sc-part.json",
+      "sha256": "f25444e87d7aeaafe9185a30372c092ce8c4cf7d8fc4a696b9029578167bf59f"
+    },
+    {
+      "part_id": "generic.mpu6050-draft",
+      "version": "0.1.0",
+      "path": "parts/generic.mpu6050-draft.sc-part.json",
+      "sha256": "3a33ad3e457384f67aa955af772d062b55dc5e18e6883115c980225119bd5c7f"
+    },
+    {
+      "part_id": "generic.ov2640-draft",
+      "version": "0.1.0",
+      "path": "parts/generic.ov2640-draft.sc-part.json",
+      "sha256": "74ba148000e40d5ed0119faa3fd1e577ad1ce0343c3fc3ed59e97d3441fb40d0"
+    },
+    {
+      "part_id": "generic.sg90-draft",
+      "version": "0.1.0",
+      "path": "parts/generic.sg90-draft.sc-part.json",
+      "sha256": "60f06870470530e129dbfdea4571406cb9f9753242e103a803f0b3e8503c1ecd"
+    },
+    {
+      "part_id": "seedcore.link-bracket",
+      "version": "0.1.0",
+      "path": "parts/seedcore.link-bracket.sc-part.json",
+      "sha256": "d5e905d3ed8cace75c81f7f2a2e274acd0dd987eca4e1098f215cb193b561a1f"
+    },
+    {
+      "part_id": "seedcore.sensor-hat",
+      "version": "0.1.0",
+      "path": "parts/seedcore.sensor-hat.sc-part.json",
+      "sha256": "ef6f55e3957fe34f1bc228c5a2e8f55cadde3990137f62e045e98adccf247d8f"
+    },
+    {
+      "part_id": "seedcore.tabletop-base",
+      "version": "0.1.0",
+      "path": "parts/seedcore.tabletop-base.sc-part.json",
+      "sha256": "43ee3453f55752c371ae1b3bb135420183e8aa35e64fcc5ac4820abee0a2fb0a"
+    },
+    {
+      "part_id": "tuya.t5-draft",
+      "version": "0.1.0",
+      "path": "parts/tuya.t5-draft.sc-part.json",
+      "sha256": "70510efb48e42642430f914e653400d1969f987c16b340b41cdc9ef752c873d1"
+    }
+  ],
+  "references": [
+    {
+      "path": "references/microduck-0.1.0.json",
+      "sha256": "8f0ec5874fa8ecefdd58dd0c552d3894001340b578f87a5359de078adafc1e98"
+    },
+    {
+      "path": "references/upstream-sources.json",
+      "sha256": "7dd018c8ae88b4de26d40023d0867e74edf5356d87dadcb2b8505b0536b0cd46"
+    }
+  ]
+}

@@ -61,6 +61,10 @@ here does not promote it to an implemented feature.
 5. [Microduck integration plan](robotics/microduck_integration_plan.md): adapter and evidence work.
    [Simulation-first acceptance](robotics/simulation_first_acceptance.md) records
    the offline policy paths, implemented read-only/session fixtures and remaining gates.
+   [Central World engineering plan](robotics/central_world_engineering_plan.md)
+   adds the component/assembly/browser studio workstream and dated 12-week gates;
+   its Phase 1 [component registry](../../packages/component-registry/README.md)
+   is a draft authoring foundation, with hardware qualification open.
    [Multi-robot team architecture](robotics/multi_robot_team_architecture.md) describes
    the implemented coordination layer for cooperative work and competitive play.
 6. [Policy gates](policy_gate_matrix.md), [token lifecycle](trust-runtime/execution_token_lifecycle_management.md),

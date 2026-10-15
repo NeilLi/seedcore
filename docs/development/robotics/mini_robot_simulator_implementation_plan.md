@@ -6,6 +6,14 @@ Status: Engineering plan grounded in the current repository. The planar-arm
 browser prototype, local SIM-1/SIM-2 and the narrow SIM-3 planar tree/orbit-view
 slice are implemented; broader SIM-3 gates and later stages remain proposed.
 
+Product workstream update, 2026-10-15: the
+[Central World plan](central_world_engineering_plan.md) adds a Phase 1 component
+registry and a gated 12-week assembly/browser studio track. Its general browser
+MuJoCo adapter is distinct from this custom planar engine's SIM-3–SIM-6 research.
+The existing Wasm ABI cannot consume arbitrary assembled MJCF or provide biped
+ground contacts; that support must be independently implemented and qualified.
+No custom-engine stage or native hardware gate is closed by the new catalog.
+
 Schedule alignment, 2026-10-14: the
 [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 prioritizes M1/M2 and the constrained Fast Spine demonstration in Q4 2026,

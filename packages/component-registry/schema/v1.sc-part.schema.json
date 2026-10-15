@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.seedcore.ai/component/v1.sc-part.schema.json",
+  "title": "SeedCore component v1 (authoring metadata, never execution authority)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "identity", "mechanical", "electrical", "hal_and_safety"],
+  "properties": {
+    "schema_version": {"const": "seedcore.component.v1"},
+    "identity": {"$ref": "#/$defs/identity"},
+    "mechanical": {"$ref": "#/$defs/mechanical"},
+    "electrical": {"$ref": "#/$defs/electrical"},
+    "hal_and_safety": {"$ref": "#/$defs/hal_and_safety"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{2,95}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 512},
+    "https": {"type": "string", "pattern": "^https://[^\\s]+$", "maxLength": 2048},
+    "nonnegative_or_unknown": {"type": ["number", "null"], "minimum": 0, "maximum": 1000000},
+    "vector3": {"type": "array", "items": {"type": "number", "minimum": -10, "maximum": 10}, "minItems": 3, "maxItems": 3},
+    "quaternion": {
+      "description": "Unit quaternion [w,x,y,z], active local-to-parent rotation. Norm is checked by the semantic validator.",
+      "type": "array", "items": {"type": "number", "minimum": -1, "maximum": 1}, "minItems": 4, "maxItems": 4
+    },
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["part_id", "version", "name", "category", "status", "bom_cost_usd", "cost_basis", "supplier_skus", "notes"],
+      "properties": {
+        "part_id": {"$ref": "#/$defs/id"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$", "maxLength": 32},
+        "name": {"$ref": "#/$defs/text"},
+        "category": {"enum": ["mcu", "actuator", "sensor", "power", "chassis"]},
+        "status": {"enum": ["draft", "documented"]},
+        "bom_cost_usd": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "cost_basis": {"enum": ["unknown", "estimate", "supplier_quote"]},
+        "supplier_skus": {
+          "type": "array", "maxItems": 16,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["supplier", "sku", "url", "quoted_on"],
+            "properties": {
+              "supplier": {"$ref": "#/$defs/text"}, "sku": {"$ref": "#/$defs/text"},
+              "url": {"$ref": "#/$defs/https"},
+              "quoted_on": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+            }
+          }
+        },
+        "notes": {"$ref": "#/$defs/text"}
+      }
+    },
+    "port": {
+      "type": "object", "additionalProperties": false,
+      "required": ["port_id", "position_m", "quaternion_wxyz", "mount_standard", "gender", "qualification"],
+      "properties": {
+        "port_id": {"$ref": "#/$defs/id"},
+        "position_m": {"$ref": "#/$defs/vector3"},
+        "quaternion_wxyz": {"$ref": "#/$defs/quaternion"},
+        "mount_standard": {"$ref": "#/$defs/id"},
+        "gender": {"enum": ["neutral", "plug", "socket"]},
+        "qualification": {"enum": ["illustrative", "drawing_reviewed"]}
+      }
+    },
+    "mechanical": {
+      "type": "object", "additionalProperties": false,
+      "required": ["frame", "basis", "visual_mesh", "collision", "mass_kg", "center_of_mass_m", "inertia_kg_m2", "snap_ports"],
+      "properties": {
+        "frame": {"const": "right_handed_z_up_meters"},
+        "basis": {"enum": ["simulation_proxy", "drawing_reviewed"]},
+        "visual_mesh": {
+          "type": "object", "additionalProperties": false,
+          "required": ["uri", "sha256", "format", "up_axis", "license", "origin"],
+          "properties": {
+            "uri": {"type": "string", "pattern": "^assets/[a-z0-9_-]+\\.glb$", "maxLength": 128},
+            "sha256": {"$ref": "#/$defs/sha256"}, "format": {"const": "glb2"},
+            "up_axis": {"const": "Y"}, "license": {"const": "Apache-2.0"},
+            "origin": {"enum": ["seedcore_box_proxy", "reviewed_asset"]}
+          }
+        },
+        "collision": {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "size_m"],
+          "properties": {"type": {"const": "box"}, "size_m": {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0, "maximum": 2}, "minItems": 3, "maxItems": 3}}
+        },
+        "mass_kg": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+        "center_of_mass_m": {"$ref": "#/$defs/vector3"},
+        "inertia_kg_m2": {
+          "description": "About the declared COM, expressed in the part frame; kg m^2, symmetric tensor.",
+          "type": "object", "additionalProperties": false,
+          "required": ["ixx", "iyy", "izz", "ixy", "ixz", "iyz"],
+          "properties": {
+            "ixx": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+            "iyy": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+            "izz": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+            "ixy": {"type": "number", "minimum": -1000, "maximum": 1000},
+            "ixz": {"type": "number", "minimum": -1000, "maximum": 1000},
+            "iyz": {"type": "number", "minimum": -1000, "maximum": 1000}
+          }
+        },
+        "snap_ports": {"type": "array", "items": {"$ref": "#/$defs/port"}, "minItems": 1, "maxItems": 32}
+      }
+    },
+    "bus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["interface_id", "kind", "role", "protocol", "logic_min_v", "logic_max_v", "i2c_address", "pins"],
+      "properties": {
+        "interface_id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["TTL_UART_BUS", "I2C", "PWM", "SPI", "POWER_RAIL", "CAMERA_PARALLEL"]},
+        "role": {"enum": ["controller", "peripheral", "source", "sink"]},
+        "protocol": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "logic_min_v": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "logic_max_v": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "i2c_address": {"type": ["integer", "null"], "minimum": 8, "maximum": 119},
+        "pins": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$"}, "maxItems": 32, "uniqueItems": true}
+      }
+    },
+    "electrical": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rating_basis", "min_v", "max_v", "continuous_ma", "peak_ma", "output_capacity_ma", "bus_interfaces"],
+      "properties": {
+        "rating_basis": {"enum": ["unknown", "not_applicable", "documented"]},
+        "min_v": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "max_v": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "continuous_ma": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "peak_ma": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "output_capacity_ma": {"$ref": "#/$defs/nonnegative_or_unknown"},
+        "bus_interfaces": {"type": "array", "items": {"$ref": "#/$defs/bus"}, "maxItems": 16}
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["min_rad", "max_rad", "max_rad_s", "max_torque_nm"],
+      "properties": {
+        "min_rad": {"type": ["number", "null"], "minimum": -10, "maximum": 10},
+        "max_rad": {"type": ["number", "null"], "minimum": -10, "maximum": 10},
+        "max_rad_s": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 100},
+        "max_torque_nm": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 100}
+      }
+    },
+    "hal_and_safety": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capabilities", "runtime_binding", "qualification", "hard_limits", "simulation_limits", "execution_authority"],
+      "properties": {
+        "capabilities": {"type": "array", "items": {"enum": ["actuator.joint_position", "sensor.imu_6dof", "sensor.camera_rgb", "display.led_matrix"]}, "maxItems": 8, "uniqueItems": true},
+        "runtime_binding": {"type": "null"},
+        "qualification": {"const": "unqualified"},
+        "hard_limits": {"$ref": "#/$defs/limits"},
+        "simulation_limits": {"anyOf": [{"$ref": "#/$defs/limits"}, {"type": "null"}]},
+        "execution_authority": {"const": "none"}
+      }
+    }
+  }
+}

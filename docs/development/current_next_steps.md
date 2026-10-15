@@ -23,6 +23,14 @@ No hardware is connected. Independent training-checkpoint outputs, native
 Microduck governed motion, MCU firmware and physical WebSerial remain open.
 The simulation-only profile does not close full G0/G1/G2 or Microduck M2–M4.
 
+The user-selected next product workstream is the
+[Central World Phase 1 foundation and 12-week plan](robotics/central_world_engineering_plan.md).
+Its strict component schema, 12 draft/proxy records, source pins, linter and
+read-only part viewer are implemented. Exact supplier/drawing/pin/rail data
+remain open. Keep native M0–M4 acceptance intact; CW assembly/DRC/simulation and
+deployment stages have separate gates. January's default target is an authoring
+and simulation alpha; hardware and publication depend on their own acceptance.
+
 Continue in order: obtain the missing training/export references and reconcile
 runtime/body/policy compatibility; bind the native boundary to live authority;
 implement/cross-build MCU enforcement; then qualify one servo before three.
