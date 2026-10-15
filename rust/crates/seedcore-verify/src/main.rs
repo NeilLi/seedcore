@@ -30,6 +30,8 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::str::FromStr;
 
+mod robot_session;
+
 fn main() -> ExitCode {
     match run(env::args().collect()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -50,7 +52,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let artifact_path = flag_value(&args, "--artifact")?;
             let token: ExecutionToken = read_json_file(&artifact_path)?;
             let now = timestamp_from_flag(&args, "--now", "2026-04-02T08:00:30Z")?;
-            let report = verify_token(&token, &FixtureStaticResolver, now);
+            let report = if let Some(bundle_path) = optional_flag_value(&args, "--trust-bundle") {
+                let bundle = load_trust_bundle(Path::new(&bundle_path))?;
+                robot_session::verify_trusted_token(&token, &bundle, now)
+            } else {
+                verify_token(&token, &FixtureStaticResolver, now)
+            };
+            print_json(&report)
+        }
+        "verify-spine-session" => {
+            let artifact = flag_value(&args, "--artifact")?;
+            let spec = flag_value(&args, "--spec")?;
+            let trust = flag_value(&args, "--trust-bundle")?;
+            let token_hash = flag_value(&args, "--token-sha256")?;
+            let report = robot_session::verify_session(
+                Path::new(&artifact),
+                Path::new(&spec),
+                Path::new(&trust),
+                &token_hash,
+            )?;
             print_json(&report)
         }
         "enforce-token" => {
@@ -186,7 +206,8 @@ fn usage() -> String {
         "  seedcore-verify apply-approval-transition --artifact <path> --transition <path> [--history <path>] [--now <rfc3339>]",
         "  seedcore-verify verify-approval-history --artifact <path>",
         "  seedcore-verify mint-token --claims <path>",
-        "  seedcore-verify verify-token --artifact <path>",
+        "  seedcore-verify verify-token --artifact <path> [--trust-bundle <path>] [--now <rfc3339>]",
+        "  seedcore-verify verify-spine-session --artifact <path> --spec <path> --trust-bundle <path> --token-sha256 <hash>",
         "  seedcore-verify enforce-token --token <path> --request <path>",
         "  seedcore-verify verify-policy-eval --artifact <path>",
         "  seedcore-verify evaluate-policy --artifact <path>",

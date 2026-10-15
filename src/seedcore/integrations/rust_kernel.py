@@ -94,21 +94,24 @@ def verify_execution_token_with_rust(
     token: Mapping[str, Any],
     *,
     now: datetime | None = None,
+    trust_bundle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    now_value = _isoformat_utc(now or datetime.now(timezone.utc))
+    # Admission may issue a sub-second token in this same second. Rounding now
+    # down would make its issued_at appear to be in the future.
+    now_value = (
+        (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    )
     artifact_path = _write_temp_json(dict(token))
+    trust_path = _write_temp_json(dict(trust_bundle)) if trust_bundle is not None else None
     try:
-        output = _run_verify_cli(
-            [
-                "verify-token",
-                "--artifact",
-                artifact_path,
-                "--now",
-                now_value,
-            ]
-        )
+        args = ["verify-token", "--artifact", artifact_path, "--now", now_value]
+        if trust_path is not None:
+            args += ["--trust-bundle", trust_path]
+        output = _run_verify_cli(args)
     finally:
         _unlink_quietly(artifact_path)
+        if trust_path is not None:
+            _unlink_quietly(trust_path)
     if "verified" not in output:
         return {"verified": False, "error_code": "rust_verify_token_failed", "details": [output]}
     return output
@@ -141,6 +144,31 @@ def enforce_execution_token_with_rust(
     if "allowed" not in output:
         return {"allowed": False, "error_code": "rust_enforce_token_failed", "details": [output]}
     return output
+
+
+def verify_spine_session_with_rust(
+    receipt: Mapping[str, Any],
+    *,
+    spec: Mapping[str, Any],
+    trust_bundle: Mapping[str, Any],
+    token_sha256: str,
+) -> dict[str, Any]:
+    """Offline simulated-controller evidence only; never physical acceptance."""
+    paths = []
+    try:
+        for payload in (receipt, spec, trust_bundle):
+            paths.append(_write_temp_json(dict(payload)))
+        report = _run_verify_cli(
+            ["verify-spine-session", "--artifact", paths[0], "--spec", paths[1],
+             "--trust-bundle", paths[2], "--token-sha256", token_sha256]
+        )
+        if report.get("scope") != "simulation_only" or report.get("physical_acceptance") is not False:
+            return {"verified": False, "scope": "simulation_only", "physical_acceptance": False,
+                    "disposition": "quarantine", "error": "invalid_spine_verification_report"}
+        return report
+    finally:
+        for path in paths:
+            _unlink_quietly(path)
 
 
 def mint_execution_token_with_rust(claims: Mapping[str, Any]) -> dict[str, Any]:
