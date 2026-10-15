@@ -1,0 +1,11 @@
+{
+  "frame_hex": "0553430101010101021d427b2270726f66696c65223a2273696d756c6174696f6e5f6f6e6c79227d45aec62f812343dbb44393e69b3ee9d982edf513c0afb21756c066c4158f2b3eb518553e00",
+  "key_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "message_type": "HELLO",
+  "payload": {
+    "profile": "simulation_only"
+  },
+  "profile": "test_vector_only",
+  "sequence": 0,
+  "warning": "Public test key; never enroll or reuse on a device."
+}

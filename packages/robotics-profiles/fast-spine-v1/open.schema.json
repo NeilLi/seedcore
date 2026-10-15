@@ -1,0 +1,163 @@
+{
+  "$defs": {
+    "SessionSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_timeout_ms": {
+          "maximum": 500,
+          "minimum": 20,
+          "title": "Authority Timeout Ms",
+          "type": "integer"
+        },
+        "boot_nonce": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Boot Nonce",
+          "type": "string"
+        },
+        "command_timeout_ms": {
+          "maximum": 500,
+          "minimum": 20,
+          "title": "Command Timeout Ms",
+          "type": "integer"
+        },
+        "duration_ms": {
+          "maximum": 5000,
+          "minimum": 100,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "endpoint_id": {
+          "pattern": "^spine_sim://[a-zA-Z0-9._/-]{1,128}$",
+          "title": "Endpoint Id",
+          "type": "string"
+        },
+        "heartbeat_timeout_ms": {
+          "maximum": 1000,
+          "minimum": 20,
+          "title": "Heartbeat Timeout Ms",
+          "type": "integer"
+        },
+        "initial_rad": {
+          "items": {
+            "maximum": 10,
+            "minimum": -10,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Initial Rad",
+          "type": "array"
+        },
+        "lower_rad": {
+          "items": {
+            "maximum": 10,
+            "minimum": -10,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Lower Rad",
+          "type": "array"
+        },
+        "max_acceleration_rad_s2": {
+          "exclusiveMinimum": 0,
+          "maximum": 40,
+          "title": "Max Acceleration Rad S2",
+          "type": "number"
+        },
+        "max_jerk_rad_s3": {
+          "exclusiveMinimum": 0,
+          "maximum": 2000,
+          "title": "Max Jerk Rad S3",
+          "type": "number"
+        },
+        "max_velocity_rad_s": {
+          "exclusiveMinimum": 0,
+          "maximum": 2,
+          "title": "Max Velocity Rad S",
+          "type": "number"
+        },
+        "model_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Model Sha256",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "principal_id": {
+          "pattern": "^[a-zA-Z0-9._-]{1,64}$",
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "profile": {
+          "const": "simulation_only",
+          "default": "simulation_only",
+          "title": "Profile",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "seedcore.fast-spine.session.v1",
+          "default": "seedcore.fast-spine.session.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "upper_rad": {
+          "items": {
+            "maximum": 10,
+            "minimum": -10,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Upper Rad",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "endpoint_id",
+        "boot_nonce",
+        "principal_id",
+        "policy_sha256",
+        "model_sha256",
+        "duration_ms",
+        "command_timeout_ms",
+        "heartbeat_timeout_ms",
+        "authority_timeout_ms",
+        "lower_rad",
+        "upper_rad",
+        "initial_rad",
+        "max_velocity_rad_s",
+        "max_acceleration_rad_s2",
+        "max_jerk_rad_s3"
+      ],
+      "title": "SessionSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "execution_token": {
+      "additionalProperties": true,
+      "title": "Execution Token",
+      "type": "object"
+    },
+    "spec": {
+      "$ref": "#/$defs/SessionSpec"
+    }
+  },
+  "required": [
+    "spec",
+    "execution_token"
+  ],
+  "title": "SessionOpen",
+  "type": "object"
+}

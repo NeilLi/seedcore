@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "Waypoint": {
+      "additionalProperties": false,
+      "properties": {
+        "at_ms": {
+          "maximum": 5000,
+          "minimum": 10,
+          "title": "At Ms",
+          "type": "integer"
+        },
+        "positions_rad": {
+          "items": {
+            "maximum": 10,
+            "minimum": -10,
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Positions Rad",
+          "type": "array"
+        }
+      },
+      "required": [
+        "at_ms",
+        "positions_rad"
+      ],
+      "title": "Waypoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "boot_nonce": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Boot Nonce",
+      "type": "string"
+    },
+    "endpoint_id": {
+      "pattern": "^spine_sim://[a-zA-Z0-9._/-]{1,128}$",
+      "title": "Endpoint Id",
+      "type": "string"
+    },
+    "generated_at_ms": {
+      "maximum": 5000,
+      "minimum": 0,
+      "title": "Generated At Ms",
+      "type": "integer"
+    },
+    "sequence": {
+      "maximum": 4294967295,
+      "minimum": 1,
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "session_id": {
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "token_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Token Sha256",
+      "type": "string"
+    },
+    "waypoints": {
+      "items": {
+        "$ref": "#/$defs/Waypoint"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Waypoints",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "endpoint_id",
+    "boot_nonce",
+    "token_sha256",
+    "sequence",
+    "generated_at_ms",
+    "waypoints"
+  ],
+  "title": "CommandChunk",
+  "type": "object"
+}

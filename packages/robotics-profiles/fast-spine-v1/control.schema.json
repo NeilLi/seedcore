@@ -1,0 +1,40 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "boot_nonce": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Boot Nonce",
+      "type": "string"
+    },
+    "endpoint_id": {
+      "pattern": "^spine_sim://[a-zA-Z0-9._/-]{1,128}$",
+      "title": "Endpoint Id",
+      "type": "string"
+    },
+    "sequence": {
+      "maximum": 4294967295,
+      "minimum": 1,
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "session_id": {
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "token_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Token Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "endpoint_id",
+    "boot_nonce",
+    "token_sha256",
+    "sequence"
+  ],
+  "title": "ControlMessage",
+  "type": "object"
+}
