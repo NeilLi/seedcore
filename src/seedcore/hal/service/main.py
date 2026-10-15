@@ -49,6 +49,7 @@ from ..custody.execution_token_revocation import (
 from ..drivers.reachy_mini import ReachyMiniDriver
 from ..drivers.reachy_sim import ReachySimDriver
 from ..drivers.robot_sim_driver import RobotSimExecutionDriver
+from ..drivers.microduck import MicroduckReadOnlyDriver
 from ..interfaces import RobotState, BaseRobotDriver
 
 # Configure logging - ensure logs go to stdout/stderr for Kubernetes
@@ -104,6 +105,8 @@ async def lifespan(app: FastAPI):
                     "warmth": 80,
                 }
             )
+        elif SIM_BACKEND == "microduck_readonly":
+            driver = MicroduckReadOnlyDriver(config={"profile": "offline_mujoco"})
         else:
             logger.info(f"HAL: Initializing simulation driver (gRPC: {SIM_GRPC_ADDRESS})")
             driver = ReachySimDriver(config={
@@ -123,7 +126,7 @@ async def lifespan(app: FastAPI):
     # Note: In simulation mode, the sim server is started as a background process
     # by the container entrypoint script, so we retry connection here
     logger.info(f"HAL: Attempting to connect to robot ({DRIVER_MODE} mode)...")
-    if DRIVER_MODE == "simulation" and SIM_BACKEND != "robot_sim":
+    if DRIVER_MODE == "simulation" and SIM_BACKEND not in {"robot_sim", "microduck_readonly"}:
         logger.info(f"HAL: Waiting for simulation server at {SIM_GRPC_ADDRESS}...")
     
     if driver.connect():
@@ -227,7 +230,7 @@ async def get_state():
     try:
         logger.debug(f"get_state: Retrieving state (driver_mode={DRIVER_MODE}, state={driver.state.value})")
         # For simulation driver, use get_state() method
-        if isinstance(driver, (ReachySimDriver, RobotSimExecutionDriver)):
+        if isinstance(driver, (ReachySimDriver, RobotSimExecutionDriver, MicroduckReadOnlyDriver)):
             state = driver.get_state()
         else:
             # For physical driver, construct state from get_current_pose

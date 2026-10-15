@@ -1,0 +1,155 @@
+{
+  "schema_version": "seedcore.microduck.deployment.v1",
+  "profile": "offline_mujoco",
+  "status": "offline_candidate",
+  "runtime": {
+    "repository_url": "https://github.com/pollen-robotics/microduck",
+    "revision": "2703e0900da3e3d84114461ca91400c374d1d741",
+    "files": {
+      "duck-control/src/model.rs": "9945d475584cc2b2455b755640ef58f53516bb67f969aa00f70f07af179b945a",
+      "duck-control/src/obs.rs": "9545dae40e6a324cea153d2dc8d79563ba105c348f96e00128fb2e55d27f26a6",
+      "duck-ipc-proto/src/lib.rs": "a2d87c70acedaa9acd7dcb84f735da35e8de71747e01016f5afc6d089caa128c"
+    },
+    "previous_documented_revision": "768e1922715942d8c6aa5254c6d1cd35cf099482",
+    "previous_revision_status": "not_available_in_local_checkout"
+  },
+  "rl": {
+    "repository_url": "https://github.com/pollen-robotics/microduck_rl",
+    "revision": "cb70b792312d559a4da09064d92009079671815f",
+    "files": {
+      "scripts/infer_policy.py": "03bfd0642a880cd379e057536ee819bd1377d4af7b5206a57907d10afd1d4270",
+      "src/mjlab_microduck/robot/microduck_constants.py": "0e7097afe833ac1259b197f9854d01c1666be03ac0c9b090233b4fbc7619eb94",
+      "src/mjlab_microduck/tasks/microduck_velocity_env_cfg.py": "75a0430b814ac7495eb237ab806fbd4dd10309b9fd3027ac3eee3c2e3c5a944a",
+      "src/mjlab_microduck/export.py": "ef4d851eee70ce0d1c896a0be14fd4a936a0d17e83649dfd572a5282ffcdf5b9"
+    }
+  },
+  "body_manifest": "packages/models/microduck/0.1.0/manifest.json",
+  "body_manifest_sha256": "31018dfaa996b9a4ae519f121134b40331be2ef9b92835bb9274c5f777444371",
+  "policy": {
+    "repository_url": "https://huggingface.co/pollen-robotics/microduck-policies",
+    "revision": "665ae4eb20bfe13bca1ef4ea6d4bb6b4a096e448",
+    "file": "alpha_walking.onnx",
+    "sha256": "e36332d383997d51401897734cd3e79cf5038406feddb18b4d57ecfb141daa6c",
+    "size_bytes": 793705,
+    "local_cache": "artifacts/microduck/665ae4eb20bfe13bca1ef4ea6d4bb6b4a096e448/alpha_walking.onnx",
+    "normalization": "embedded_in_onnx",
+    "training_checkpoint_parity": "not_available",
+    "artifact_inference_parity": "offline_cpu_replay_only",
+    "source_run_path": null
+  },
+  "observation_layout": [
+    {
+      "name": "base_ang_vel",
+      "start": 0,
+      "width": 3,
+      "units": "rad/s"
+    },
+    {
+      "name": "projected_gravity",
+      "start": 3,
+      "width": 3,
+      "units": "unit_vector"
+    },
+    {
+      "name": "joint_pos",
+      "start": 6,
+      "width": 14,
+      "units": "rad_relative_to_home"
+    },
+    {
+      "name": "joint_vel",
+      "start": 20,
+      "width": 14,
+      "units": "rad/s"
+    },
+    {
+      "name": "actions",
+      "start": 34,
+      "width": 14,
+      "units": "raw_previous_policy_action"
+    },
+    {
+      "name": "command",
+      "start": 48,
+      "width": 3,
+      "units": "m/s,m/s,rad/s"
+    },
+    {
+      "name": "head_command",
+      "start": 51,
+      "width": 4,
+      "units": "rad"
+    },
+    {
+      "name": "body_command",
+      "start": 55,
+      "width": 6,
+      "units": "m,m,m,rad,rad,rad"
+    }
+  ],
+  "policy_joints": [
+    "left_hip_yaw",
+    "left_hip_roll",
+    "left_hip_pitch",
+    "left_knee",
+    "left_ankle",
+    "neck_pitch",
+    "head_pitch",
+    "head_yaw",
+    "head_roll",
+    "right_hip_yaw",
+    "right_hip_roll",
+    "right_hip_pitch",
+    "right_knee",
+    "right_ankle"
+  ],
+  "physical_joints": [
+    "left_hip_yaw",
+    "left_hip_roll",
+    "left_hip_pitch",
+    "left_knee",
+    "left_ankle",
+    "neck_pitch",
+    "head_pitch",
+    "head_yaw",
+    "head_roll",
+    "mouth",
+    "right_hip_yaw",
+    "right_hip_roll",
+    "right_hip_pitch",
+    "right_knee",
+    "right_ankle"
+  ],
+  "home_rad": [
+    0.0,
+    -0.0873,
+    -0.4579,
+    -0.0049,
+    0.453,
+    0.3491,
+    0.3491,
+    0.0,
+    0.0,
+    0.0,
+    0.0873,
+    0.4579,
+    0.0049,
+    -0.453
+  ],
+  "action_scale": 1.0,
+  "policy_period_s": 0.02,
+  "tolerances": {
+    "observation_atol": 1e-06,
+    "action_atol": 1e-05,
+    "rtol": 0.0,
+    "metadata_home_atol": 0.000501
+  },
+  "hardware": null,
+  "open_gates": [
+    "training_checkpoint_and_independent_export_outputs",
+    "runtime_policy_model_pair_validation",
+    "physical_board_firmware_imu_calibration",
+    "native_rpc_ingress_and_local_watchdog_measurements",
+    "bill_of_materials_quotes_and_hardware_access"
+  ]
+}
