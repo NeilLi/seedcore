@@ -16,7 +16,9 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | --- | --- |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
 | [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
-| [Fast Spine protocol proposal](fast_spine_protocol_spec.md) | Proposed WebSerial MCU admission/session, authenticated chunks, local interruption, evidence and flashing; no firmware implemented |
+| [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
+| [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
+| [Day-30 review sheet](day30_simulation_review.md) | Early evidence inventory, missing physical measurements and go/rescope/defer criteria |
 | [Customer solution delivery](robot_solution_delivery.md) | Proposed service: needs discovery, hardware fit, custom functions, customer acceptance and support |
 | [Service operating plan](robot_service_operating_plan.md) | Small-team execution: first offer, scope limits, delivery gates, team roles, support and economics |
 | [Robot execution and evidence contract](robot_execution_contract.md) | Proposed reusable boundary: admission, local enforcement, sessions, partitions and evidence limits |
@@ -54,7 +56,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Generic simulator](../../../src/seedcore/hal/drivers/robot_sim_driver.py) | Fixture/PyBullet substrate; not a Microduck body model |
 | [Revocation](../../../src/seedcore/hal/custody/execution_token_revocation.py) | Shared revocation validation |
 | [Simulator tests](../../../tests/test_robot_sim_week4_integration.py) | Existing regression coverage; Microduck tests still needed |
-| Microduck driver and RPC adapter | Not present at this revision; planned in M1–M2 |
+| [Microduck read-only driver](../../../src/seedcore/hal/drivers/microduck.py) | Offline MuJoCo and explicit fake-I/O profiles implemented; native admitted RPC motion remains M2 work |
 
 The generic HAL includes configurable token enforcement and development token
 handling. M2 must establish a reviewed deployment profile and command-path

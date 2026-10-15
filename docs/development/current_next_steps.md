@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-10-14
-Status: Canonical active execution queue — golden reference, governed motion and supervised STEM/OEM preparation
+Date: 2026-10-15
+Status: Canonical active execution queue — simulation-first candidate delivered; native/physical gates open
 
 The immediate outcome is one bounded robot attempt with an understandable
 allow/deny/interruption timeline and sufficient verifier evidence. Use the
@@ -14,9 +14,20 @@ M0–M5 acceptance.
 ## Current Baseline And Execution Order
 
 SIM-1/SIM-2 are locally delivered. SIM-3 has a delivered planar 1/2/3-link studio
-slice, with broader gates open. Microduck model pinning is complete; the full
-runtime/policy/hardware deployment manifest is still needed. No Microduck HAL
-adapter, Fast Spine firmware or physical WebSerial bridge is present.
+slice, with broader gates open. The [simulation-first acceptance record](robotics/simulation_first_acceptance.md)
+now includes a pinned offline Microduck source/policy candidate, a read-only HAL
+adapter, 16 upstream-derived observation/ONNX artifact goldens, and a split-screen
+bounded-session rehearsal. Token claim/refresh/revocation, authenticated framing,
+an independent host watchdog and Python/Rust simulation receipt checks exist.
+No hardware is connected. Independent training-checkpoint outputs, native
+Microduck governed motion, MCU firmware and physical WebSerial remain open.
+The simulation-only profile does not close full G0/G1/G2 or Microduck M2–M4.
+
+Continue in order: obtain the missing training/export references and reconcile
+runtime/body/policy compatibility; bind the native boundary to live authority;
+implement/cross-build MCU enforcement; then qualify one servo before three.
+Firmware packet preparation, the supervised simulation lesson and review sheet
+are available in the acceptance guide and [lesson](../application/seedcore_session_lesson.md).
 
 | Stage | Next deliverable | Exit condition | Target window |
 | --- | --- | --- | --- |

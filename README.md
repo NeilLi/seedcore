@@ -14,8 +14,12 @@ kits are the initial adoption focus. Microduck is the native-runtime reference;
 a small tabletop arm is the proposed MCU Fast Spine bench fixture.
 
 The browser simulator, pinned Microduck body model and shared trust/proof
-components exist. Microduck M1–M4, physical WebSerial control, Fast Spine
-firmware and device-rooted robot receipts remain planned integration work.
+components exist. A read-only Microduck adapter and bounded-session host
+simulation now provide observation/artifact replay and signed simulation
+evidence. Independent training parity, native Microduck motion, physical
+WebSerial, Fast Spine firmware and device-rooted receipts remain open. See the
+[simulation-first acceptance guide](docs/development/robotics/simulation_first_acceptance.md)
+for local policy paths, reproducible checks and the split-screen rehearsal.
 
 ---
 
@@ -105,7 +109,7 @@ flowchart TD
 - **Base Interfaces (`src/seedcore/hal/interfaces.py`):** Unified [`BaseRobotDriver`](src/seedcore/hal/interfaces.py), [`ProprioceptionState`](src/seedcore/hal/interfaces.py), [`RobotCapabilities`](src/seedcore/hal/interfaces.py), and operational [`RobotState`](src/seedcore/hal/interfaces.py).
 - **Driver Implementations (`src/seedcore/hal/drivers/`):**
   - [`robot_sim_driver.py`](src/seedcore/hal/drivers/robot_sim_driver.py): Extensible execution framework with in-memory and physics-backed profiles.
-  - Microduck HAL simulation driver (M1, planned): 61-dim observations and 14 policy actions with pinned signal semantics, normalization, home/scaling and startup without unrequested motion. Those dimensions are Microduck-specific.
+  - [`microduck.py`](src/seedcore/hal/drivers/microduck.py): M1 read-only MuJoCo and explicit fake-I/O profiles; pinned 61/14 semantics, home/scaling and no startup actuation. Hardware selection fails without simulation fallback. Independent checkpoint/export parity remains open. Those dimensions are Microduck-specific.
 
 ### 3. Native MuJoCo Workbench & Model Packages
 - **Model Ingestion (`packages/models/`):** Validated, versioned model packages with SHA-256 integrity manifests. Includes the pinned **Microduck 0.1.0** MJCF model ([`packages/models/microduck/0.1.0/manifest.json`](packages/models/microduck/0.1.0/manifest.json), $0.737\text{ kg}$, $nq=21, nv=20, nu=14$).

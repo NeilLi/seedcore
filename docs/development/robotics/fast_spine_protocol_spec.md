@@ -1,7 +1,72 @@
-# Fast Spine WebSerial Protocol Proposal
+# Fast Spine Protocol: Simulation v1 and Hardware Proposal
 
-Date: 2026-10-14
-Status: M2/M4 design proposal; no matching MCU firmware, wire schema or physical bridge is implemented
+Date: 2026-10-15
+Status: Host simulation v1 framing/schemas/session/evidence implemented; MCU firmware and physical WebSerial bridge remain open
+
+## Implemented Simulation Freeze
+
+The [simulation-first acceptance guide](simulation_first_acceptance.md) records
+policy paths, parity provenance, reproducible checks and open native/hardware
+gates. Generated [v1 contracts](../../../packages/robotics-profiles/fast-spine-v1/)
+freeze the localhost rehearsal only. They cannot address a hardware endpoint.
+
+The actual wire envelope is COBS encoded and zero terminated. Before COBS:
+
+```text
+header <2sBBIH, little endian (10 bytes)
+  magic "SC", version u8=1, type u8, sequence u32, payload_length u16
+canonical ASCII JSON payload (maximum 4096 bytes)
+HMAC-SHA256("seedcore.fast-spine.wire.v1\0" || header || payload) (32 bytes)
+CRC32/IEEE(header || payload || MAC), little-endian u32 (4 bytes)
+```
+
+The decoder bounds encoded/decoded buffers, rejects unknown versions/types,
+duplicate JSON keys and noncanonical payloads, verifies CRC and MAC before
+dispatch, and resynchronizes at a delimiter after an oversized frame. A
+provisioned 32-byte host key is mandatory. The public golden-vector key is test
+material and must never be enrolled. No reusable key is delivered to the browser.
+
+| Implemented type ID | Payload / effect |
+| --- | --- |
+| 1 `HELLO` | Non-actuating simulation discovery, sequence 0 |
+| 2 `SESSION_OPEN` | Frozen spec plus existing signed ExecutionToken; sequence 0; verify exact spec binding and durably claim once |
+| 3 `CHUNK` | Session/endpoint/boot/token digest, strict increasing sequence, relative generated time and 1–32 waypoints |
+| 4 `HEARTBEAT` | Same bindings and shared sequence; refresh transport health only |
+| 5 `CANCEL` | Fence and discard queued simulated motion |
+| 6 `REVOKE` | Persist token revocation, fence and discard queue |
+| 7 `STATE` | Reserved; incoming attempts reject as unsupported control |
+| 8 `SESSION_END` | Explicit completion only after admitted queued motion has applied |
+
+The host receiver pins issuer keys, requires Ed25519 and the existing frozen
+token constraint/precondition shapes, checks endpoint/principal/MOVE/scope,
+rejects unsupported live obligations, and binds the canonical spec digest using
+existing `payload_hash`. It adds no production token fields or gateway route.
+The localhost issuer is explicitly a simulation admission fixture, not a live
+PDP. Durable SQLite claim/revocation storage fails closed; consumed tokens stay
+consumed after interruption and process restart.
+
+The lesson profile fixes a 1000 ms session, 250 ms command age, 300 ms heartbeat
+and 250 ms authority freshness. A separate host thread polls every 5 ms; this is
+a scheduling interval, not a measured worst-case response guarantee. Each
+session has an immutable monotonic deadline bounded by token expiry. Heartbeat
+and fresh commands cannot extend it. Revocation, stale authority/command,
+heartbeat loss, clock rollback and local stop fence the attempt. Reconnect
+cannot resume it. In-memory pose holds at the last observation after fencing;
+that is not a qualified physical stop policy.
+
+The controller appends to a maximum 64-point queue, validates each entire chunk
+before mutation, and interpolates zero-end-velocity/acceleration quintics.
+For distance d and interval T, extrema are 1.875d/T velocity,
+10d/(sqrt(3)T²) acceleration and 60d/T³ jerk. Bounds apply between endpoints.
+Queue exhaustion holds pose until fresh intent or the command-age fence; it
+does not replay an old segment. Event capture is bounded at 2048 records;
+overflow fences and prevents a complete evidence claim.
+
+Host-signed, action-bound simulation receipts have Python and Rust verification.
+They capture controller state, not Wasm preview state or physical telemetry.
+Incomplete/conflicting evidence quarantines. `physical_acceptance` is always
+false. Actual MCU key establishment, hardware signers, native M2 integration,
+production RESULT_VERIFIER closure and timing qualification remain open.
 
 ## Scope And Profiles
 
@@ -18,8 +83,9 @@ bounded intent to the pinned native RPC contract. Raw servo chunks are for the
 separate arm fixture, not an alternative remote Microduck motor interface.
 
 The current `tree-lab.html` is a planar research simulator with a 3D camera.
-WebSerial, firmware flashing, authorization and robot receipts are proposed
-additions. No current simulator export is a signed physical receipt.
+The separate `session-lab.html` pairs it with the host simulation rehearsal.
+WebSerial, firmware flashing and physical robot receipts remain proposed.
+No current simulator export is a signed physical receipt.
 
 ## Authority And Trust Boundary
 
@@ -44,8 +110,9 @@ Reuse the existing `ExecutionToken` and single-use claim semantics. Robot
 session bindings and any device admission artifact require versioned schema
 review against the [execution proposal](robot_execution_contract.md),
 [token lifecycle](../trust-runtime/execution_token_lifecycle_management.md) and
-[frozen policy gates](../policy_gate_matrix.md). None of the field/message names
-below is a shipped token field or gateway API.
+[frozen policy gates](../policy_gate_matrix.md). The simulation reuses existing
+token fields; hardware-only extensions below remain proposals, not shipped
+device messages or production gateway APIs.
 
 The device must either validate the original token and applicable context, or
 validate a reviewed boundary-signed admission record cryptographically bound
@@ -54,7 +121,7 @@ trusted issuer, issuer key provisioning, verification algorithm, scope binding,
 durable claim/replay storage and failure behavior. Never accept a browser's
 assertion that a token was checked.
 
-## Proposed Message Set
+## Proposed Hardware Message Extensions (Not Implemented)
 
 | Message | Direction | Required behavior |
 | --- | --- | --- |

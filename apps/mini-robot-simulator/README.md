@@ -2,6 +2,23 @@
 
 Status: Local browser research prototype; SIM-1/SIM-2 delivered and the narrow SIM-3 planar 1/2/3-link orbit studio slice implemented. Broader SIM-3 gates remain open. Status checked 2026-10-14.
 
+The additional `session-lab.html` pairs the tree studio with a localhost-only
+bounded controller rehearsal. It requires the Python host below; the original
+lessons continue to work from a static server. No hardware is connected.
+
+```bash
+# From the repository root, with the project environment and Rust verifier built:
+.venv/bin/python scripts/robotics/serve_session_lab.py
+```
+
+Open `http://127.0.0.1:8766/studio/session-lab.html`. The host owns simulation
+keys, token checks, single-use claims and an independent watchdog; the browser
+proposes fixed lesson cases and downloads signed simulation evidence. The Wasm
+pane is an independent dynamics preview. This does not invoke the production
+PDP or provide physical robot control. See the
+[acceptance guide](../../docs/development/robotics/simulation_first_acceptance.md)
+for verification, model paths and open gates.
+
 A small learning application with an original two-link physics engine. Learners
 predict a result, adjust joint targets, motor strength or arm mass, run an
 experiment, and replay the calculated observations. The three prepared
@@ -111,7 +128,7 @@ records SIM-2 build ownership, numerical evidence and resume semantics.
 
 ## Learning And Execution Boundaries
 
-The application runs isolated local experiments. It does not call SeedCore's
+The original static lessons run isolated local experiments. They do not call SeedCore's
 gateway, mint execution authority, control hardware or produce authenticated
 robot execution evidence. Feedback uses deterministic lesson rules and measured
 simulation values, without an AI service. JSON downloads identify their source

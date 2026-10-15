@@ -1,7 +1,21 @@
 # Microduck Source Ledger
 
-Date: 2026-09-21
-Status: Supporting source record; revalidate when selecting the implementation baseline
+Date: 2026-10-15
+Status: Research snapshots below retained; new offline candidate inspected, compatibility acceptance open
+
+## Offline Candidate Inspection (2026-10-15)
+
+The [candidate manifest](../../../packages/robotics-profiles/microduck-sim-v1.json)
+records executable runtime source at `2703e0900da3e3d84114461ca91400c374d1d741`,
+the existing RL pin and source-file digests. The earlier runtime revision below
+is unavailable in the local checkout and was not silently revalidated. Official
+ONNX artifacts were inspected/downloaded at policy revision
+`665ae4eb20bfe13bca1ef4ea6d4bb6b4a096e448`; `alpha_walking.onnx` is the selected
+offline inference candidate. The [acceptance record](simulation_first_acceptance.md)
+documents paths, hashes and upstream-Rust/independent-ONNX replay vectors.
+Matching training-checkpoint outputs and runtime/body/policy compatibility are
+still missing. The following older source table is a historical research record,
+not the new tested deployment profile.
 
 ## Provenance
 

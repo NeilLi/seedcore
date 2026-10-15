@@ -59,6 +59,8 @@ here does not promote it to an implemented feature.
 3. [Robot execution proposal](robotics/robot_execution_contract.md) and [skill package proposal](robotics/robot_skill_contract.md): intended reusable contracts; not shipped schemas.
 4. [Microduck architecture](robotics/microduck_architecture_study.md) and [RL study](robotics/microduck_rl_study.md): onboard boundaries, policy inputs and pinned-source corrections.
 5. [Microduck integration plan](robotics/microduck_integration_plan.md): adapter and evidence work.
+   [Simulation-first acceptance](robotics/simulation_first_acceptance.md) records
+   the offline policy paths, implemented read-only/session fixtures and remaining gates.
    [Multi-robot team architecture](robotics/multi_robot_team_architecture.md) describes
    the implemented coordination layer for cooperative work and competitive play.
 6. [Policy gates](policy_gate_matrix.md), [token lifecycle](trust-runtime/execution_token_lifecycle_management.md),

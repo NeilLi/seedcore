@@ -1,6 +1,6 @@
 # SeedCore Inside: OEM Partnership Brief
 
-Date: 2026-10-14
+Date: 2026-10-15
 Status: Draft for partner review; no outreach, agreement, kit availability or commercial terms are established
 
 ## Partner Proposal
@@ -21,6 +21,16 @@ firmware, conformance fixtures and optional supported governance services.
 | Browser planar lessons and 1/2/3-link orbit studio; 13,242-byte dual-ABI Wasm core | Physical connection and onboarding for one qualified board/body profile |
 | Shared PDP, scoped tokens, revocation and Rust verification primitives | Enforced MCU admission/command path, enrolled identity and action-bound hardware evidence |
 | Pinned Microduck native model and local team contracts | Separately accepted robot adapter, firmware release and supported deployment |
+
+The [simulation-first packet](../development/robotics/simulation_first_acceptance.md)
+also supplies a read-only Microduck adapter, pinned ONNX replay fixtures and a
+split-screen bounded-session rehearsal with authenticated framing, host
+watchdog, negative authority cases and Python/Rust signed simulation evidence.
+An [operator lesson](seedcore_session_lesson.md),
+[review sheet](../development/robotics/day30_simulation_review.md) and local
+firmware review-packet preparer are available. Independent training references,
+native governed motion, MCU build, device enrollment and physical measurements
+remain open; this is not a qualified OEM firmware package.
 
 The browser studio currently simulates local experiments. Pre-flashed Fast
 Spine firmware, WebSerial robot control, a one-click flasher and an OEM badge

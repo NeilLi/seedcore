@@ -109,6 +109,15 @@ A mock receipt or protocol fixture must remain visibly labeled as such.
 
 ## First 30 Days: 14 October–12 November 2026
 
+**15 October simulation-first checkpoint:** no hardware is connected. The
+[offline acceptance guide](../robotics/simulation_first_acceptance.md) records
+the read-only adapter, pinned ONNX candidate, upstream-derived replay goldens,
+bounded session/watchdog fixtures and Python/Rust simulation evidence. The
+[supervised lesson](../../application/seedcore_session_lesson.md) and
+[day-30 review sheet](../robotics/day30_simulation_review.md) are prepared.
+These outputs advance the simulation lane; they do not close training parity,
+native Microduck M2–M4, MCU release, physical stop measurements or G2.
+
 | Dates | Primary owner role | Concrete output | Acceptance / next decision |
 | --- | --- | --- | --- |
 | 14–20 Oct | Project / integration lead | Freeze the M0 deployment inventory, M1 golden vectors, one bench board/servo choice and [Fast Spine protocol proposal](../robotics/fast_spine_protocol_spec.md); prepare partner and school need briefs | No unresolved units/joint ordering hidden; firmware trust and stop design reviewed; record quotations, effort cap and hardware availability |

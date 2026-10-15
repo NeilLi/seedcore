@@ -1,7 +1,7 @@
 # Microduck Integration Plan
 
-Date: 2026-10-14
-Status: Active next-stage plan; adapter and hardware integration not implemented
+Date: 2026-10-15
+Status: Read-only offline candidate implemented; native motion, training parity and hardware acceptance open
 
 ## Outcome And Scope
 
@@ -30,8 +30,12 @@ offline evaluation and separately admitted promotion.
 
 The [Microduck 0.1.0 body package](../../../packages/models/microduck/0.1.0/README.md)
 is implemented with integrity/mass/joint/actuator parity. This closes model
-pinning, not the complete M0 deployment manifest below. No Microduck-specific
-HAL driver or admitted physical path exists at this revision.
+pinning, not the complete M0 deployment manifest below. The
+[simulation-first acceptance guide](simulation_first_acceptance.md) now records
+the candidate source/policy manifest, read-only MuJoCo/fake-I/O HAL adapter and
+independent observation/ONNX artifact replay goldens. Matching checkpoint outputs
+and runtime/body/policy compatibility remain open. No admitted physical path
+exists; the separate bounded-session rehearsal does not close native M2–M4.
 
 The [Fast Spine protocol](fast_spine_protocol_spec.md) covers a separate
 1–3 DOF ESP32-S3 / TTL arm bench fixture. Its WebSerial firmware does not replace
