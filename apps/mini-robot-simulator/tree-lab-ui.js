@@ -311,6 +311,29 @@
   }).observe(canvas);
 
   setupControls();
+  // Same-origin parent previews affect this local simulation only. They never
+  // grant authority or connect to hardware. Reject all other message sources.
+  if (window.addEventListener && window.location) window.addEventListener('message', event => {
+    if (event.origin !== window.location.origin || event.source !== window.parent) return;
+    const data = event.data;
+    if (!data || data.type !== 'seedcore.spine.preview.v1' || data.profile !== 'simulation_only' ||
+        ![1, 3].includes(data.joints) || typeof data.running !== 'boolean' ||
+        !Array.isArray(data.target_rad) || data.target_rad.length !== data.joints ||
+        data.target_rad.some(q => !Number.isFinite(q) || Math.abs(q) > 0.5)) return;
+    guarded(() => {
+      const key = `${data.joints}-link`;
+      if ($('model-select').value !== key) {
+        lab.setModel(key); $('model-select').value = key; buildJointSliders();
+      }
+      lab.target = [...data.target_rad];
+      for (let i = 0; i < data.joints; i++) {
+        $(`q-target-${i}`).value = degrees(lab.target[i]).toString();
+        $(`q-target-${i}-val`).textContent = `${degrees(lab.target[i]).toFixed(2)}°`;
+      }
+      lab.isRunning = data.running && !document.hidden && !!wasmEngine && !failed;
+      updateUI(); setTransport(lab.isRunning ? 'Running · bounded simulation preview' : 'Paused · session ended');
+    });
+  });
   initWasm();
   requestAnimationFrame(loop);
 })();

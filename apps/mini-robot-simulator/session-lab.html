@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bounded Session Lab · SeedCore</title>
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="session-lab.css">
+  <script src="session-lab.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">s</span> seedcore <span class="brand-divider">/</span> session lab</a>
+    <nav class="nav-links"><a class="nav-link" href="tree-lab.html">Tree Studio</a><a class="nav-link active" href="session-lab.html">Bounded Sessions</a></nav>
+    <span class="research-label">Simulation only</span>
+  </header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">Permission → attempt → evidence</p><h1>A move needs permission.</h1>
+      <p>Try a bounded move, interrupt it, and inspect the recorded outcome.</p></div><span class="offline">No connected hardware</span></div>
+    <div id="service-message" class="service-note" role="status">Connecting to the local rehearsal service…</div>
+    <div class="session-workspace">
+      <section class="panel preview-panel" aria-label="Dynamics preview">
+        <div class="section-title"><div><p class="eyebrow">01 / Dynamics preview</p><h2>Planar Tree Studio</h2></div><span>Independent Wasm model</span></div>
+        <iframe id="physics-preview" src="tree-lab.html" title="SeedCore planar dynamics studio"></iframe>
+      </section>
+      <section class="panel session-panel" aria-label="Governed controller rehearsal">
+        <p class="eyebrow">02 / Controller rehearsal</p><h2>One second. Clear limits.</h2>
+        <p class="scope-note">The host runs an admission fixture and simulated joint controller. Its records describe this experiment.</p>
+        <label for="joint-count">Bench progression</label><select id="joint-count"><option value="1">One simulated servo</option><option value="3" selected>Three simulated servos</option></select>
+        <label for="experiment">Proposal</label><select id="experiment"><option value="allowed">Small move within the envelope</option><option value="out_of_bounds">Move outside the envelope</option><option value="expired">Expired permission</option><option value="forged">Tampered permission</option><option value="wrong_endpoint">Permission for another endpoint</option></select>
+        <div class="session-actions"><button class="primary" id="propose" disabled>Propose move</button><button id="revoke" disabled>Revoke</button><button id="stop" disabled>Local stop</button></div>
+        <div class="outcome" aria-live="polite"><span id="decision" class="outcome-label">Ready</span><p id="reason">Choose an experiment.</p></div>
+        <dl class="session-readouts"><dt>Session</dt><dd id="session-state">—</dd><dt>Joint positions</dt><dd id="joint-state">—</dd><dt>Evidence</dt><dd id="proof-state">Not yet sealed</dd></dl>
+        <button id="download" disabled>Verify &amp; download evidence</button>
+        <details><summary>Session record</summary><pre id="record">No attempt yet.</pre></details>
+        <p class="scope-note">Closing or hiding this tab stops command refresh. The host watchdog ends stale sessions. Physical timing and device signing require separate qualification.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
