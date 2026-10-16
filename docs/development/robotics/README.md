@@ -1,6 +1,6 @@
 # Robotics Development
 
-Date: 2026-10-14
+Date: 2026-10-15
 Status: Primary development area; native reference, Fast Spine fixture and supervised STEM/OEM delivery
 
 SeedCore's robotics direction is a reusable trust runtime for physical AI.
@@ -19,6 +19,8 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
 | [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
 | [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan component/assembly/DRC/browser/governance workstream; Phase 1 foundation delivered, later stages gated |
+| [Central World remaining schedule](central_world_remaining_delivery_schedule.md) | CW-A01–CW-L03 work packages, owner roles, dependencies and deliverables for phases 2–5; start with the assembly/joint contract |
+| [Central World acceptance matrix](central_world_acceptance_matrix.md) | Required negative/fault/parity/measurement evidence and traceability for the suggested features |
 | [Component registry](../../../packages/component-registry/README.md) | Strict four-block schema, 12 illustrative drafts, hashed GLBs, semantic linter and local read-only viewer; no qualified hardware or execution authority |
 | [Day-30 review sheet](day30_simulation_review.md) | Early evidence inventory, missing physical measurements and go/rescope/defer criteria |
 | [Customer solution delivery](robot_solution_delivery.md) | Proposed service: needs discovery, hardware fit, custom functions, customer acceptance and support |

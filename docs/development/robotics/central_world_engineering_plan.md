@@ -2,12 +2,19 @@
 
 Date: 2026-10-15
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
-Status: Phase 1 software foundation implemented; later phases proposed and gated
+Status: Phase 1 software foundation committed; remaining work packages and acceptance planned
 
 The product direction unifies component authoring, visual assembly, browser
 rehearsal and separately governed deployment inside the SeedCore monorepo.
-The current pass is **Phase 1 foundation plus this plan**, as selected by the
-user. No hardware is connected. Do not treat the dates below as release approval.
+The Phase 1 software foundation is committed as `c16b805`. No hardware is
+connected. Do not treat the dates below as release approval.
+
+This master plan owns the calendar and architecture. The
+[remaining delivery schedule](central_world_remaining_delivery_schedule.md)
+owns CW-A01 through CW-L03 work packages, owner roles and dependency handoffs;
+the [acceptance matrix](central_world_acceptance_matrix.md) owns required tests,
+measurement records and suggestion traceability. Start CW-A01's assembly/joint
+contract next; exact physical catalog data remains an independent open gate.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 retains the commercial horizon. [Microduck M0–M5](microduck_integration_plan.md)
@@ -16,11 +23,13 @@ workstream above them; its CW gates do not rename or close the M stages.
 
 ## Outcome and first supported scope
 
-The first alpha lets an adult maker inspect a draft part, assemble one reviewed
-tabletop profile, understand its wiring/power readiness, rehearse a bounded
+The first alpha lets an adult maker inspect a draft part, assemble one supported
+tabletop simulation profile, understand its wiring/power readiness, rehearse a bounded
 gesture and export an accurately labeled build record. Native Microduck remains
 a separate imported reference. A physical move becomes available only after
 that exact board/body/profile passes authority, evidence and hardware acceptance.
+Proxy data can support that explicit simulation profile; physical readiness
+requires the separate exact-part data review.
 
 The default January target is a useful **simulation/authoring alpha**. A
 physical demonstration is a conditional lane. Tuya T5, arbitrary imported

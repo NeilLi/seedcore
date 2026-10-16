@@ -1,6 +1,6 @@
 # Robot Execution And Evidence Contract
 
-Date: 2026-09-20
+Date: 2026-10-15 (original proposal: 2026-09-20)
 Status: Proposed robotics extension; not an implemented schema or hardware safety claim
 
 This proposal refines the [Microduck integration plan](microduck_integration_plan.md).
@@ -8,6 +8,27 @@ Existing [policy gates](../policy_gate_matrix.md) and
 [token lifecycle rules](../trust-runtime/execution_token_lifecycle_management.md)
 remain authoritative. No new token type, deny code or frozen constraint field
 is introduced by this document.
+
+## Custom Build Handoff
+
+The [Central World schedule](central_world_remaining_delivery_schedule.md)
+places reviewed-build/live admission in CW-G01, scoped replay in CW-G02 and
+physical configuration/installer qualification in CW-F01/CW-F02. The
+[acceptance matrix](central_world_acceptance_matrix.md) supplies corresponding
+authority, evidence, NVS and hardware cases; these are future integration work.
+
+A frozen assembly hash is a candidate identity. The trusted boundary must
+independently validate enrolled endpoint, body, firmware/configuration, policy,
+joint mapping and physical/capture limits before admitting the behavior.
+Catalog metadata, DRC pass, browser signature or a publisher badge cannot supply
+that authority. Bind reviewed versioned payload/profile digests through existing
+token fields where supported; any frozen-contract extension needs review.
+
+Intersect limits per resource/joint rather than taking a global minimum across
+unrelated components. A change to parts, articulation, configuration or behavior
+invalidates prior admission. Host-signed simulated controller state remains
+simulation evidence; hardware completion needs captured data and the applicable
+enrolled signer/verifier path. Replay projections remain read-only.
 
 ## Three Responsibilities, Different Deadlines
 

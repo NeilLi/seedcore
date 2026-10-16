@@ -1,6 +1,6 @@
 # Robot Service Operating Plan
 
-Date: 2026-10-14
+Date: 2026-10-15
 Status: Proposed operating plan for a small delivery team; budget, demand and hardware readiness unconfirmed
 
 ## Operating Decision
@@ -255,6 +255,14 @@ work. A backlog is not a customer delivery promise.
 
 ## 10. First Planning Horizon And Expansion Rules
 
+The [Central World remaining schedule](central_world_remaining_delivery_schedule.md)
+is an active, bounded authoring workstream alongside this service learning
+sequence. Owner roles and package handoffs do not assume additional staff.
+Start CW-A01 on explicit proxy data while exact part qualification stays open;
+maintain one active implementation package per implementer. CW-L02/CW-L03
+collect maker task, assistance, setup and support evidence before expanding the
+offer. Hardware and public publication remain separate reviewed activities.
+
 Use the following as a learning sequence against the 18-month plan's target
 windows: S0/S1 in Q4 2026, initial S2/S3 in Q1 2027, OEM repeat delivery in
 Q2–Q3 2027 and paid fleet governance in Q4 2027–Q1 2028. Staffing, readiness and
@@ -275,8 +283,9 @@ promising a customer delivery date until that decision has evidence.
 
 The next robot body is justified when a repeated customer need requires it,
 the initial offer has stable ownership/support and an explicit integration
-budget exists. A broader studio is justified when repeated manual work shows
-what should be automated. Wider autonomy requires its own acceptance evidence.
+budget exists. Expand the scheduled studio beyond one supported starter when
+observed maker tasks and repeated manual work justify the added automation and
+support cost. Wider autonomy requires its own acceptance evidence.
 
 Stop or rescope when no recurring need emerges, required interfaces cannot be
 governed, a physical limit cannot be observed/enforced, usefulness disappears

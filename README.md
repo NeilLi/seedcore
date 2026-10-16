@@ -26,6 +26,9 @@ adds a strict part schema, 12 illustrative draft components and a local read-onl
 geometry/port viewer. The [12-week studio plan](docs/development/robotics/central_world_engineering_plan.md)
 stages assembly, DRC, browser MuJoCo and governed deployment. Qualified hardware
 data, the assembly IDE and physical provisioning remain open.
+The [remaining delivery schedule](docs/development/robotics/central_world_remaining_delivery_schedule.md)
+and [acceptance matrix](docs/development/robotics/central_world_acceptance_matrix.md)
+define the next assembly/joint contract and the later phase handoffs.
 
 ---
 

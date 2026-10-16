@@ -1,6 +1,6 @@
 # Governed Robot Skill Packages
 
-Date: 2026-09-21
+Date: 2026-10-15 (original proposal: 2026-09-21)
 Status: Proposed developer contract; no package loader, sandbox or studio shipped by this document
 
 ## Unit Of Integration
@@ -84,11 +84,26 @@ and the corresponding evidence for comparison.
 
 ## Delivery Order
 
-After one Microduck session works end to end, turn its accepted and rejected
-cases into a package conformance fixture. Prove a second skill can reuse the
-same authority/evidence path before building a visual studio. A useful studio
-should show requested versus granted permissions, simulation results, local
-stop behavior and actual verifier outcomes.
+The [Central World schedule](central_world_remaining_delivery_schedule.md)
+permits offline assembly and declarative gesture authoring before a complete
+physical session. CW-S03 proposes model-bound policy packages; CW-S04 proposes
+bounded joint/LED timelines. Create `packages/skill-packages` only with a working
+versioned manifest/fixture slice. No skill package loader is delivered by the
+current catalog or simulation fixture.
+
+Record stable joint IDs, curve/interpolation semantics, requested capabilities,
+source rights, model/adapter compatibility and output bounds. A loop, edit,
+time stretch or changed body creates a new behavior identity and invalidates
+earlier admission. Initial packages contain declarative bounded data rather
+than privileged scripts; camera/network output remains absent unless required
+and separately admitted.
+
+For live execution, turn accepted/rejected end-to-end session cases into package
+conformance fixtures, then prove a second skill reuses the same enforcement and
+evidence path. CW-G01/CW-G02 supply the planned live admission/replay integration;
+the [acceptance matrix](central_world_acceptance_matrix.md) owns the required
+compatibility, curve-extrema, edit, authority and evidence cases. A useful studio
+shows requested versus granted permissions and the exact verifier scope.
 
 Public distribution, unreviewed third-party installation and a marketplace
 remain future decisions. The next implementation milestones remain

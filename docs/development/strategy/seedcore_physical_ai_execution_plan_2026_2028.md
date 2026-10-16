@@ -118,6 +118,13 @@ MuJoCo adapter without moving the custom engine's broader SIM-4–SIM-6 research
 or weakening native M0–M4/G0–G2. Review capacity weekly; January defaults to a
 simulation/authoring alpha when firmware/hardware gates are not ready.
 
+The [remaining CW delivery schedule](../robotics/central_world_remaining_delivery_schedule.md)
+owns work-package roles and dependencies, and the
+[acceptance matrix](../robotics/central_world_acceptance_matrix.md) owns required
+review evidence. CW-A01 assembly/joint contracts are next; exact physical data
+is CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
+that may extend beyond its target, not an automatic November release promise.
+
 **15 October simulation-first checkpoint:** no hardware is connected. The
 [offline acceptance guide](../robotics/simulation_first_acceptance.md) records
 the read-only adapter, pinned ONNX candidate, upstream-derived replay goldens,
@@ -129,10 +136,10 @@ native Microduck M2–M4, MCU release, physical stop measurements or G2.
 
 | Dates | Primary owner role | Concrete output | Acceptance / next decision |
 | --- | --- | --- | --- |
-| 14–20 Oct | Project / integration lead | Freeze the M0 deployment inventory, M1 golden vectors, one bench board/servo choice and [Fast Spine protocol proposal](../robotics/fast_spine_protocol_spec.md); prepare partner and school need briefs | No unresolved units/joint ordering hidden; firmware trust and stop design reviewed; record quotations, effort cap and hardware availability |
-| 21–27 Oct | Runtime / robotics lead | Read-only Microduck simulation adapter and M1 parity evidence; split-screen experiment shell using `tree-lab.html` for the planar arm; session/negative-case fixtures | Startup is read-only; profiles are labeled; rejected authority cannot reach dispatch |
-| 28 Oct–3 Nov | Firmware / verification lead | M2 session/refresh/revocation integration; single-servo → three-servo bench progression; minimum action-bound M3 evidence and measured watchdog traces | Advance physical tests only after G1; a physical demo requires G2 for its exact profile; simulated cases remain the fallback deliverable |
-| 4–10 Nov | Browser / delivery lead | Reviewed ESP32-S3 release binary, versioned `esp-web-tools` manifest proposal, flash/recovery checklist, OEM packet and one supervised lesson plan | No motor enable during flash/enrollment; wrong-board/failed-flash recovery; demo matches passed gates; no publication before release review |
+| 14–20 Oct | Project / integration lead | Reconcile candidate M0 pins and delivered artifact goldens; request independent checkpoint/export references; record missing board/fixture facts and review [Fast Spine protocol](../robotics/fast_spine_protocol_spec.md) | Units/ordering and unknowns explicit; no unmeasured hardware freeze; record effort, quotations and availability as known or open |
+| 21–27 Oct | Runtime / robotics lead | Reproduce delivered read-only/session/negative fixtures; begin CW-A01 assembly/joint contract preparation | Startup remains read-only; rejected authority cannot dispatch; fixture scope stays distinct from live native integration |
+| 28 Oct–3 Nov | Firmware / verification lead | Advance live native M2 and minimum M3 integration beyond the host rehearsal; define conditional one-servo → three-servo bench acceptance | Physical tests require a fixture and G1; public physical demo requires G2; offline CW work can proceed independently |
+| 4–10 Nov | Browser / delivery lead | Firmware/source/toolchain/board readiness review, existing packet preparer and recovery requirements; refresh OEM packet and delivered lesson | Real release binary/installer only after qualified source/build/enrollment/recovery evidence; CW-F01/CW-F02 remain conditional later work |
 | 11–12 Nov | Project lead / reviewer | Day-30 review pack: demo trace, denied/revoked cases, verifier dispositions, BOM quotes, onboarding timings, support assumptions and next-month backlog | Go/rescope/defer based on evidence; identify one OEM design-in candidate and one pilot candidate without assuming agreements |
 
 The split-screen demo shows a VLM or recorded proposal attempting an

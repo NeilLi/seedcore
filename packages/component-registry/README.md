@@ -113,3 +113,9 @@ The [source review](references/upstream-sources.json) pins URDF-Studio, mjswan
 and the motion-editor snapshots and inspected-file hashes. No upstream code was
 imported. The [Central World plan](../../docs/development/robotics/central_world_engineering_plan.md)
 owns the later assembly, DRC, simulation, governance and deployment stages.
+The [remaining schedule](../../docs/development/robotics/central_world_remaining_delivery_schedule.md)
+starts CW-A01's assembly/joint contract next; CW-D01 separately closes exact
+physical data for the selected profile. Use the
+[acceptance matrix](../../docs/development/robotics/central_world_acceptance_matrix.md)
+for handoff evidence. These plans do not add fields or runtime bindings to the
+current v1 part records.

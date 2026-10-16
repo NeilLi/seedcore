@@ -70,6 +70,20 @@ production RESULT_VERIFIER closure and timing qualification remain open.
 
 ## Scope And Profiles
 
+The [Central World schedule](central_world_remaining_delivery_schedule.md)
+adds custom-build admission in CW-G01 and conditional configuration/installer
+work in CW-F01/CW-F02. Its
+[acceptance matrix](central_world_acceptance_matrix.md) owns planned NVS, device
+and replay-binding cases. These do not extend the implemented simulation v1
+wire schemas. A physical configuration/admission format needs version review,
+actual board/firmware compatibility and enrolled trust roots.
+
+Pin the configuration ABI and partition layout; compare generated NVS against
+the official generator before using it. A browser configuration blob is not a
+trusted grant. Device limits must remain enforced independently; configuration
+digest, firmware/body identity, admission and captured evidence must agree.
+No private enrollment/issuer key belongs in a public image or generated NVS.
+
 Specify the minimum boundary for a supervised 1–3 DOF tabletop fixture. Use
 one ESP32-S3 board, USB CDC / WebSerial and a reviewed Feetech STS3215 TTL
 bus. BLE is a later transport qualification. The proposed RP2350 variant

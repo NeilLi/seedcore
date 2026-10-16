@@ -1,6 +1,6 @@
 # Application Directions
 
-Date: 2026-10-14
+Date: 2026-10-15
 Status: Canonical portfolio decision — affordable physical AI, supervised STEM/maker adoption and OEM distribution
 
 **SeedCore is an open trust runtime for affordable physical AI.** The next
@@ -16,6 +16,12 @@ thesis; the [18-month plan](strategy/seedcore_physical_ai_execution_plan_2026_20
 owns Oct 2026–Mar 2028 target windows. The [active queue](current_next_steps.md)
 owns immediate sequencing.
 
+The [Central World master plan](robotics/central_world_engineering_plan.md)
+owns the 19 Oct–10 Jan authoring/simulation track. Its
+[remaining schedule](robotics/central_world_remaining_delivery_schedule.md)
+and [acceptance matrix](robotics/central_world_acceptance_matrix.md) define
+phase 2–5 handoffs without changing native hardware or public-release gates.
+
 ## Portfolio Decision
 
 | Direction | Role now | Expansion condition |
@@ -23,6 +29,7 @@ owns immediate sequencing.
 | Microduck native integration | Primary 61/14 policy/runtime reference; complete M0 deployment pins and M1–M4 | Native adapter, authority/evidence tests and separately measured hardware acceptance |
 | 1–3 DOF Fast Spine fixture | Bounded bench work package for browser-to-MCU protocol, stop and onboarding | No automatic Microduck M4 credit; supported arm product needs its own accepted profile and support capacity |
 | Browser lessons / tree studio | Delivered local planar research foundation | Qualify browser/device experience; physical connection follows G1/G2 gates |
+| Central World authoring studio | Phase 1 draft catalog/viewer delivered; CW-A01 assembly/joint contract is next | CW2 graph/DRC and CW3 native/browser simulation evidence; January authoring alpha is conditional on its own gates |
 | Shared trust / proof runtime | Required foundation | Preserve accountable Agent, PDP, token, revocation, local control and evidence closure |
 | Supervised STEM/maker offer | Active need/lesson and support preparation | One useful supervised pilot, then repeat delivery before 3–5 sites or a larger kit batch |
 | OEM SeedCore Inside | Prepare design-in/conformance packet now | One accepted shipping profile before targeting 2–3 OEM relationships |
@@ -44,6 +51,12 @@ The split-screen browser/arm hero demo is a target. Current `tree-lab.html`
 contains no hardware, gateway or signed robot evidence connection. Physical
 public demonstrations and customer trials require authority, evidence and
 hardware acceptance for the exact profile. Keep fixtures visibly distinct.
+
+The offline product can first demonstrate a versioned custom assembly, explicit
+DRC blocked/conflict findings and a separately scoped tabletop gesture. The
+delivered host session rehearsal provides simulation authority/evidence
+fixtures, not physical acceptance. Missing hardware or Microduck checkpoint
+outputs do not block that declared offline scope.
 
 ## Capacity And Authority
 

@@ -1,6 +1,6 @@
 # From A Person's Need To A Working Robot Function
 
-Date: 2026-10-14
+Date: 2026-10-15
 Status: Proposed customer service and delivery model; customer demand and economics unvalidated
 
 ## Customer Promise
@@ -25,6 +25,15 @@ links that delivery to SeedCore Inside OEM adoption and hosted governance.
 Assign hardware qualification, trust/release and field-support responsibilities.
 Begin one pilot; expand toward 3–5 sites only after useful repeat delivery and
 support evidence.
+
+The [Central World remaining schedule](central_world_remaining_delivery_schedule.md)
+adds a bounded offline authoring path for that offer: one starter assembly,
+DRC findings, a Robot Moments gesture and an accurately labeled design pack.
+CW-L02 measures the independent maker/operator task; CW-E01 exports only real
+owned/licensed printable files and reviewed wiring, with unknown costs and nets
+visible. Current draft catalog parts do not supply a hardware recommendation,
+quote or qualified wiring plan. A useful simulation alpha can precede a customer
+hardware trial, whose need, support and technical acceptance remain required.
 
 ## Discover The Job Before Choosing The Body
 

@@ -187,6 +187,14 @@ Verification:
 
 ## Remaining development sequence
 
+The [Central World work packages](central_world_remaining_delivery_schedule.md)
+assign assembly compilation/native parity to CW-S01 and the separately pinned
+browser worker to CW-S02. CW-S03's trained-policy lane requires independent
+references; CW-S04's declared tabletop gesture can proceed separately. Use the
+[acceptance matrix](central_world_acceptance_matrix.md) for model/clock/worker,
+policy and capture evidence. Existing native workbench results remain offline
+measurements, not live execution grants or hardware verifier outcomes.
+
 The [robot design toolkit assessment](robot_design_toolkit_assessment.md)
 records the accepted recommendation to start with Rhoban/Onshape exports and
 then add FreeCAD/RobotCAD authoring. It defines conversion checks and source
@@ -198,9 +206,10 @@ qualifications for further import work; neither CAD adapter is implemented.
    experiment recipes, sensor/frame qualification, further transmissions and
    measured actuator calibration where required by the selected robot.
 2. **Interactive workspace:** a 3D browser scene, model inspector, conversation,
-   experiment comparison and recorded replay. Stream native-engine results first;
-   qualify the canonical Wasm worker for local no-install physics where it fits.
-   Each run has one physics-state owner; UI animation cannot overwrite it.
+   experiment comparison and recorded replay. Declare native-result streaming
+   and the separately qualified browser MuJoCo worker as explicit runtime
+   profiles. The custom planar engine is not a general MJCF fallback. Each run
+   has one physics-state owner; UI animation cannot overwrite it.
 3. **Development evaluations:** task-specific scenarios, parameter sweeps,
    missing/noisy/delayed sensors and regression packs. Preserve failed gates and
    model/recipe identity. Add MJX/Warp only when batch throughput requires it.

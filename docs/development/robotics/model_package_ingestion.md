@@ -6,6 +6,23 @@ Status: implemented offline MJCF/URDF ingestion and pinned Microduck reference.
 MuJoCo development workbench. Loading and simulation remain under
 `OFFLINE_MUJOCO_NO_ACTUATION`; the package is data, not execution authority.
 
+## Central World Component-To-Model Boundary
+
+The [component registry](../../../packages/component-registry/README.md) validates
+authoring parts and GLB proxies; it is a different contract from this compiled
+model package. Its schema pass does not define joints or create a MuJoCo model.
+[CW-A01/CW-S01](central_world_remaining_delivery_schedule.md) must declare
+articulation, compile only the supported subset and compare native FK, mass,
+joint/actuator ordering and limits before CW-S02 browser use. A visual port
+normal or GLB URI cannot substitute for an explicit joint or qualified asset
+conversion. Preserve source rights and content identity through that handoff.
+
+Keep the existing Microduck package unchanged unless separately versioned and
+reviewed. An edited body needs new model/policy compatibility evidence; neither
+component provenance nor native compilation establishes trained-policy transfer.
+The [acceptance matrix](central_world_acceptance_matrix.md) defines planned
+SIM/POL checks without changing this implemented ingestion schema.
+
 ## Contract and identity
 
 The [JSON schema](../../../packages/models/model-package.schema.json) is generated

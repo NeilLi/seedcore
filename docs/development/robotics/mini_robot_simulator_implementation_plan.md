@@ -14,6 +14,14 @@ The existing Wasm ABI cannot consume arbitrary assembled MJCF or provide biped
 ground contacts; that support must be independently implemented and qualified.
 No custom-engine stage or native hardware gate is closed by the new catalog.
 
+The [remaining CW schedule](central_world_remaining_delivery_schedule.md)
+assigns assembly/MJCF compilation and native comparison to CW-S01, the general
+browser worker to CW-S02, model-bound policy to CW-S03 and bounded gesture/replay
+to CW-S04. The [acceptance matrix](central_world_acceptance_matrix.md) requires
+unsupported-model refusal, numerical/clock/buffer/capture evidence and named
+device measurements. Preserve the current custom ABI and lesson tests; this
+work does not silently turn the planar engine into a general MJCF backend.
+
 Schedule alignment, 2026-10-14: the
 [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 prioritizes M1/M2 and the constrained Fast Spine demonstration in Q4 2026,

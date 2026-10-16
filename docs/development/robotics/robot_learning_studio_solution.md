@@ -8,13 +8,27 @@ Audience: Product, curriculum, application, runtime and robotics contributors
 
 ## Central World Follow-up — 2026-10-15
 
-The user selected a Phase 1 component foundation plus a
-[12-week Central World engineering plan](central_world_engineering_plan.md).
+The [12-week Central World engineering plan](central_world_engineering_plan.md)
+is the active browser-product schedule.
 The [component registry](../../../packages/component-registry/README.md) now
 provides the four-block part schema, 12 illustrative drafts, integrity/semantic
 checks and a local part viewer. Exact hardware data and later assembly, DRC,
 browser MuJoCo/policy, timeline and deployment integration remain gated. The
-current pass does not implement the full Studio or a public community service.
+full Studio and public community service remain planned.
+
+The [remaining delivery schedule](central_world_remaining_delivery_schedule.md)
+now assigns the next assembly/joint contract to CW-A01, graph/canvas/DRC to
+CW-A02–CW-A04, physics/policy/Robot Moments to CW-S01–CW-S04, live trust/replay
+and export to CW-G01–CW-E01, and curated fork/alpha review to CW-L01–CW-L03.
+Physical provisioning is conditional CW-F01/CW-F02. The
+[acceptance matrix](central_world_acceptance_matrix.md) binds those handoffs to
+specific graph, parity, curve, authority, evidence and operator checks.
+
+For the authoring alpha, the learner flow is inspect → assemble → understand
+findings → rehearse → inspect outcome → export. Changing a part, joint or curve
+creates a new revision and invalidates prior findings/admission. Distinguish
+draft/blocked, simulated, interrupted and verified-under-scope outcomes. A
+generic “Verified Safe” label is not a result of signature or simulation checks.
 
 The target delivery is a browser workbench inside the monorepo. General
 assembled/contact models use a separately qualified MuJoCo-Wasm adapter;

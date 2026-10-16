@@ -45,6 +45,24 @@ The Studio should live as an advanced replay view inside the current
 verification/operator product surface. It extends Screen 4 from the Q2 audit
 trail spec instead of creating a parallel dashboard.
 
+### Central World Robot Projection — 2026-10-15
+
+[CW-G02](../robotics/central_world_remaining_delivery_schedule.md) plans an
+additive read-only robot projection into the existing operator/verification
+surfaces. It follows assembly/behavior identity and live admission work rather
+than creating a second authority service. The
+[acceptance matrix](../robotics/central_world_acceptance_matrix.md) assigns its
+binding, coverage, signer and missing/conflicting-evidence cases to CW-EVID-01.
+
+The projection must preserve original source artifacts, build/model/behavior/
+configuration and token/session references, capture clock, sequence coverage,
+signer/trust context and verifier scope/disposition. A host-signed simulated
+controller receipt remains simulation evidence; neither a canvas frame nor a
+queued command ACK is physical outcome evidence. Show interruption, missing
+capture, stale/conflicting evidence and quarantine distinctly. Copilot text cites
+those deterministic fields and cannot clear quarantine or turn replay into a
+new execution request. No new robot endpoint/schema is shipped by this addendum.
+
 ## 3. Primary Jobs
 
 An operator, auditor, or design-partner evaluator should be able to:

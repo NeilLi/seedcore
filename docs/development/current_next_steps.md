@@ -3,7 +3,8 @@
 Date: 2026-10-15
 Status: Canonical active execution queue — simulation-first candidate delivered; native/physical gates open
 
-The immediate outcome is one bounded robot attempt with an understandable
+The immediate product work is a versioned assembly/joint contract for one
+tabletop starter, progressing toward a bounded attempt with an understandable
 allow/deny/interruption timeline and sufficient verifier evidence. Use the
 [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 for Oct 2026–Mar 2028 targets and the dated 14 Oct–12 Nov tactical schedule.
@@ -31,16 +32,36 @@ remain open. Keep native M0–M4 acceptance intact; CW assembly/DRC/simulation a
 deployment stages have separate gates. January's default target is an authoring
 and simulation alpha; hardware and publication depend on their own acceptance.
 
-Continue in order: obtain the missing training/export references and reconcile
+For the native lane, obtain the missing training/export references and reconcile
 runtime/body/policy compatibility; bind the native boundary to live authority;
 implement/cross-build MCU enforcement; then qualify one servo before three.
+Offline Central World authoring proceeds independently; missing hardware or
+Microduck training references do not block an explicit proxy graph or separately
+declared tabletop gesture. Use one active implementation package per implementer.
 Firmware packet preparation, the supervised simulation lesson and review sheet
 are available in the acceptance guide and [lesson](../application/seedcore_session_lesson.md).
+
+## Immediate Central World Queue
+
+The [remaining delivery schedule](robotics/central_world_remaining_delivery_schedule.md)
+owns detailed order and owner roles; the
+[acceptance matrix](robotics/central_world_acceptance_matrix.md) owns tests and
+measurement artifacts. All packages below remain planned/open.
+
+| Order | Package | Next reviewable result | Dependency |
+| --- | --- | --- | --- |
+| 1 | CW-A01 | Assembly/joint/net schema, immutable revision/digest rules and invalid-graph fixtures | Delivered CW1 software; explicit proxy scope allowed |
+| Supporting data | CW-D01 | Exact board/servo/rail/drawing source register | Unknown facts remain open; needed for physical DRC/qualification |
+| 2 | CW-A02–CW-A04 | Mini Studio canvas/store, mating/snapping and worker DRC/BOM findings | CW-A01; physical pass also needs reviewed data |
+| 3 | CW-S01–CW-S04 | Restricted MJCF/native parity, browser worker and bounded gesture replay | Accepted assembly/DRC; trained-policy lane has separate compatibility/reference gates |
+| 4 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
+
+## Native Reference Milestones
 
 | Stage | Next deliverable | Exit condition | Target window |
 | --- | --- | --- | --- |
 | M0 deployment freeze | Runtime/RL/policy pins, 61/14 semantics, transport, board and watchdog inventory alongside the pinned body model | Reproducible profile; units, ordering, normalization and unresolved source claims explicit | Oct 2026 |
-| M1 | Read-only native adapter, explicit fake-I/O/MuJoCo/hardware identities and golden vectors | No startup motion; observations and ONNX outputs match pinned semantics within frozen tolerances | Oct–Dec 2026 |
+| M1 | Close independent training/export and runtime/body/policy compatibility around the delivered read-only adapter and artifact goldens | No startup motion; observations and ONNX outputs match independent pinned references within frozen tolerances | Oct–Dec 2026 |
 | M2 | One bounded velocity/stop session through gateway/PDP/token/native boundary | Invalid, expired, forged, replayed, revoked, wrong-endpoint and out-of-scope requests cannot dispatch motion | Oct–Dec 2026 |
 | M3 | Action-bound telemetry, signer provenance, receipts, replay and RESULT_VERIFIER | Sufficient evidence closes; missing/stale/conflicting evidence is rejected or quarantined | Begin Q4 2026; complete Q1 2027 |
 | M4 | One supervised Microduck profile on its native runtime | Measured latency/stop/fault behavior and repeatable allowed/denied/interrupted evidence | Q1 2027, after M1–M3 |
@@ -52,22 +73,24 @@ meaning; skill packaging and commercial stages are separate follow-ons.
 
 ## First 30-Day Work Packages
 
-1. **14–20 Oct:** freeze the deployment profile, golden-vector plan and one
-   ESP32-S3 / STS3215 TTL bench fixture. Review the
+1. **14–20 Oct:** reconcile the candidate deployment pins, request independent
+   checkpoint/export references and record missing board/fixture facts. Review the
    [Fast Spine protocol proposal](robotics/fast_spine_protocol_spec.md), trust
    roots, session/deadline semantics and command ingress. Record BOM quotes,
    hardware access and effort limits.
-2. **21–27 Oct:** establish M1 read-only simulation and a split-screen shell
-   using the current planar `tree-lab.html`. Add admission/session fixtures and
-   preserve distinct simulator, protocol-fixture and hardware labels.
-3. **28 Oct–3 Nov:** implement M2 session/refresh/stop and minimum M3 evidence;
-   progress single-servo to three-servo bench checks only after the relevant
+2. **21–27 Oct:** reproduce the delivered read-only adapter, split-screen session
+   rehearsal and negative authority checks; begin CW-A01 contract preparation.
+   Preserve distinct simulator, protocol-fixture and hardware labels.
+3. **28 Oct–3 Nov:** advance live native M2 admission/session/stop integration and
+   minimum M3 requirements beyond the delivered host simulation. Bench checks
+   remain conditional on a fixture; progress one servo to three only after the relevant
    authority gate. A physical demo requires the selected profile's evidence
    and hardware acceptance, even before full Microduck M3/M4 are complete.
-4. **4–10 Nov:** prepare a reviewed ESP32-S3 firmware/flasher release candidate,
-   flash/recovery instructions, one supervised lesson and the
-   [OEM packet](../application/oem_partnership_brief.md). Public release waits
-   for release review; RP2350 flashing and BLE remain separate later work.
+4. **4–10 Nov:** review the firmware/toolchain/board qualification inventory,
+   delivered release-packet preparer, supervised lesson and
+   [OEM packet](../application/oem_partnership_brief.md). A firmware release
+   candidate requires actual reviewed source/build and recovery evidence;
+   CW-F01/CW-F02 remain the conditional later lane. RP2350/BLE are separate work.
 5. **11–12 Nov:** review traces, verifier outcomes, measured timing, quotations,
    setup/support estimates and the next backlog. Choose go/rescope/defer from
    evidence; move dependent dates when a gate slips.

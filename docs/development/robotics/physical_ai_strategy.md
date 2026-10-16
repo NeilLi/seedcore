@@ -1,6 +1,6 @@
 # SeedCore Physical AI Strategy
 
-Date: 2026-10-14
+Date: 2026-10-15
 Status: Active product direction; hardware, adoption, costs and commercial outcomes require validation
 
 ## Product Thesis
@@ -51,6 +51,14 @@ The current browser foundation is the C++/Wasm planar lesson engine and the
 authenticated MCU sessions remain planned. Ten-second repeat connection and
 30-second flashing are measured-experience targets on a named profile, not
 universal product claims.
+
+The delivered component registry and read-only viewer add a draft authoring
+foundation. The [Central World schedule](central_world_remaining_delivery_schedule.md)
+stages assembly/DRC, browser MuJoCo/Robot Moments, live admission/replay,
+design export and curated alpha review. Its
+[acceptance matrix](central_world_acceptance_matrix.md) preserves unknown-data,
+body/policy compatibility and signer/physical-evidence boundaries. A catalog
+record does not qualify an OEM kit or authorize a firmware configuration.
 
 The [developer blueprint](mini_robot_developer_blueprint.md) and
 [Fast Spine protocol proposal](fast_spine_protocol_spec.md) define the proposed
@@ -133,6 +141,12 @@ or a signed robot outcome.
 | Q1 2027 | M3/M4, one supervised delivery, then 3–5 sites / up to 100 cumulative kits | Hardware acceptance, useful repeat use, QA, cash and support capacity |
 | Q2–Q3 2027 | One LeRobot-family adapter and OEM design-in; conditional SIM research | Independent integration and one shipping conformance profile before 2–3 OEM targets |
 | Q4 2027–Q1 2028 | Hosted governance and qualified fleets; SoM only if justified | 3 → 10 → 30 robot fault/recovery evidence, paid demand and sustainable recurring cost |
+
+Within those targets, the 19 Oct–10 Jan Central World track can deliver a
+simulation/authoring alpha independently of a physical showcase. Start with one
+declared tabletop articulation; keep trained Microduck locomotion conditional
+on independent references and model compatibility. Firmware/NVS/installer work
+is a separate one-board qualification lane, not universal flashing support.
 
 Keep the local physics core, contracts and proposed basic firmware open.
 Validate paid OEM conformance/provisioning/support and hosted policy, roles,

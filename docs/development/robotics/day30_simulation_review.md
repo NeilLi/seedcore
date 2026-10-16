@@ -9,6 +9,15 @@ Use the [execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_20
 for gate definitions and the [acceptance guide](simulation_first_acceptance.md)
 for reproducible commands and artifact provenance.
 
+The committed Central World component foundation and its
+[remaining schedule](central_world_remaining_delivery_schedule.md) add a
+separate authoring lane. At the day-30 review, record actual CW-A01–CW-A03
+progress and open CW-D01 facts against the master calendar; do not mark future
+packages complete from their dates. Use the
+[acceptance matrix](central_world_acceptance_matrix.md) for evidence. A missing
+firmware/source/fixture keeps the physical lane deferred while proxy authoring
+and explicit simulation tasks continue.
+
 | Review item | Current evidence | Required before dependent acceptance |
 | --- | --- | --- |
 | Source/policy contract | Candidate runtime/RL/body/policy pins and explicit 61/14/15 mapping | Reconcile unavailable earlier runtime pin and runtime/body/policy compatibility |

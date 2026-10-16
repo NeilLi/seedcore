@@ -32,6 +32,17 @@ firmware review-packet preparer are available. Independent training references,
 native governed motion, MCU build, device enrollment and physical measurements
 remain open; this is not a qualified OEM firmware package.
 
+The [Central World component foundation](../../packages/component-registry/README.md)
+adds 12 illustrative draft parts and a local geometry/port viewer. The
+[remaining delivery schedule](../development/robotics/central_world_remaining_delivery_schedule.md)
+plans assembly/DRC, compatible browser simulation/Robot Moments, live admission,
+design export and curated alpha review. The
+[acceptance matrix](../development/robotics/central_world_acceptance_matrix.md)
+defines evidence that an OEM handoff would need. These dates are engineering
+targets, not kit availability or promised OEM delivery dates. Exact SKU/drawing,
+rail/pin data and costs are still open. A future custom configuration must pass
+the one-board firmware/NVS/enrollment/recovery lane before provisioning is offered.
+
 The browser studio currently simulates local experiments. Pre-flashed Fast
 Spine firmware, WebSerial robot control, a one-click flasher and an OEM badge
 are planned work. Demonstrate them only after their release gates pass.

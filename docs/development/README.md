@@ -65,6 +65,9 @@ here does not promote it to an implemented feature.
    adds the component/assembly/browser studio workstream and dated 12-week gates;
    its Phase 1 [component registry](../../packages/component-registry/README.md)
    is a draft authoring foundation, with hardware qualification open.
+   The [remaining delivery schedule](robotics/central_world_remaining_delivery_schedule.md)
+   and [acceptance matrix](robotics/central_world_acceptance_matrix.md) turn
+   phases 2–5 into ordered work packages, owner handoffs and review evidence.
    [Multi-robot team architecture](robotics/multi_robot_team_architecture.md) describes
    the implemented coordination layer for cooperative work and competitive play.
 6. [Policy gates](policy_gate_matrix.md), [token lifecycle](trust-runtime/execution_token_lifecycle_management.md),

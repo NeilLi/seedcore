@@ -1,7 +1,7 @@
 # Mini-Robotics Developer Blueprint: The Golden Reference
 
-Date: 2026-10-14
-Status: Proposed engineering profile and delivery sequence; no Fast Spine firmware or WebSerial robot bridge is implemented
+Date: 2026-10-15
+Status: Simulation foundations delivered; physical firmware, board and WebSerial qualification open
 
 ## Goal And Present Foundation
 
@@ -16,6 +16,14 @@ owns dates, cost targets and phase gates. The
 [Fast Spine protocol proposal](fast_spine_protocol_spec.md) owns proposed MCU
 sessions, framing/authentication review, interruption and evidence requirements.
 This blueprint is neither a ready-to-flash binary nor a tested hardware design.
+
+The read-only Microduck adapter, host bounded-session rehearsal and draft part
+catalog/viewer are delivered offline foundations. The
+[Central World remaining schedule](central_world_remaining_delivery_schedule.md)
+owns the next assembly/joint → DRC → model/gesture → admission/replay → export
+handoffs. The [acceptance matrix](central_world_acceptance_matrix.md) owns tests.
+CW-F01/CW-F02 cover conditional one-board NVS/firmware/enrollment/recovery work;
+the existing review-packet preparer does not satisfy those gates.
 
 ## Reference Profiles
 
@@ -105,6 +113,12 @@ The [protocol proposal](fast_spine_protocol_spec.md) contains the acceptance
 matrix and first-week design decisions.
 
 ## Browser And Flasher Delivery
+
+Custom-build configuration must match a reviewed firmware ABI and partition
+layout, reproduce official-generator NVS goldens and bind its digest to trusted
+enrollment/admission/evidence. Browser-edited NVS cannot widen immutable device
+limits or supply private keys. Tuya T5 requires a separate platform/update
+profile; the first proposed physical lane remains one exact ESP32-S3 board.
 
 Start with a split-screen experiment: planar simulation on one side, explicitly
 labeled fixture or accepted physical state on the other, and an admission/
