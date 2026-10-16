@@ -1,6 +1,6 @@
 # Current Next Steps
 
-Date: 2026-10-15
+Date: 2026-10-16
 Status: Canonical active execution queue — simulation-first candidate delivered; native/physical gates open
 
 The immediate product work is a versioned assembly/joint contract for one
@@ -31,6 +31,12 @@ read-only part viewer are implemented. Exact supplier/drawing/pin/rail data
 remain open. Keep native M0–M4 acceptance intact; CW assembly/DRC/simulation and
 deployment stages have separate gates. January's default target is an authoring
 and simulation alpha; hardware and publication depend on their own acceptance.
+
+The [mjswan source assessment](robotics/mjswan_integration_assessment.md)
+is complete. Version 0.11.9 is a conditional CW-S02/CW-S03 candidate, with
+engine/training version conflicts and missing public worker/control/capture
+seams to resolve first. No runtime was imported or benchmarked. This decision
+does not change CW-A01's priority or close Microduck training parity.
 
 For the native lane, obtain the missing training/export references and reconcile
 runtime/body/policy compatibility; bind the native boundary to live authority;

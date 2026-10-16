@@ -1,6 +1,6 @@
 # Central World: Mini Robotics Studio engineering plan
 
-Date: 2026-10-15
+Date: 2026-10-16
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
 Status: Phase 1 software foundation committed; remaining work packages and acceptance planned
 
@@ -146,6 +146,13 @@ MJCF/contact/floating-base models. `tools/mini-sim` does not accept arbitrary
 MJCF or simulate biped ground contact. Do not relabel a planar preview as a
 Microduck digital twin or supply a silent fallback when general simulation fails.
 
+The [mjswan assessment](mjswan_integration_assessment.md) selects 0.11.9 as a
+conditional interactive-runtime candidate for CW-S02/CW-S03. Its MuJoCo 3.11.0
+pin differs from this repository's 3.15.0 baseline; its DOM-bound public engine
+does not expose the required control veto or worker-owned state/capture contract.
+Prove those seams before adopting a runtime dependency. Its reviewed ONNX path
+uses Wasm, not WebGPU. CW-A01 remains the next implementation package.
+
 The browser assembly compiler must define inertial/joint frames, axes/ranges,
 actuator mapping/gains/limits and fixed versus floating root behavior; sanitize
 names and reject unsupported graphs. Keep meshes local/digest-bound. Compare
@@ -284,7 +291,7 @@ records inspected files and exact revisions:
 | Reference | Pin / decision |
 | --- | --- |
 | [URDF-Studio](https://github.com/OpenLegged/URDF-Studio/tree/23b96e2f3d5b1b68ad9629925d4479e9847d35a5) | Apache-2.0 observed; evaluate the stable canvas package in CW2. Its React 19/R3F 9/Three peer requirements need an explicit workspace integration decision. No fork/import yet. |
-| [mjswan](https://github.com/ttktjmt/mjswan/tree/8f57ab5024de57a577c17e6ca7bb3d31f6ae7518) | Apache-2.0 observed; browser MuJoCo/policy reference in CW3. Review attribution, transitive code and model licenses independently before reuse. |
+| [mjswan](https://github.com/ttktjmt/mjswan/tree/8f57ab5024de57a577c17e6ca7bb3d31f6ae7518) | Conditional 0.11.9 candidate for CW-S02/CW-S03; [source assessment and qualification gates](mjswan_integration_assessment.md). Apache-2.0 observed; no import or runtime qualification yet. |
 | [robot-motion-editor](https://github.com/project-instinct/robot-motion-editor/tree/bee9fc67773b80fb5daafed5726498c45e3d0bdc) | No root license found in inspected tree; design reference only. Do not copy code/assets pending permissions; a separately authored timeline may be implemented. |
 
 Open risks are exact catalog data and mechanical qualification, browser

@@ -1,6 +1,6 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-10-15
+Date: 2026-10-16
 Status: Planned work packages after the committed Phase 1 software foundation
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
@@ -110,11 +110,24 @@ host/browser stalls cannot silently enlarge dt or drop required capture.
 Qualify an explicit single-thread profile if offered. Local top-level isolation
 does not establish that a portal/subdomain/iframe deployment is isolated.
 
+Use the [mjswan source assessment](mjswan_integration_assessment.md) as the
+CW-S02/CW-S03 candidate decision. Start with API feasibility: the reviewed 0.11.9
+engine lacks a public per-control veto, worker state-ownership contract and full
+telemetry export. Its MuJoCo 3.11.0 pin needs explicit reconciliation with
+SeedCore 3.15.0; do not install it into the frozen environment. Qualify a small
+generic extension before performance/policy work, or rescope to official Wasm
+bindings under the same adapter contract if a large private fork is required.
+
 CW-S03 is conditional for Microduck locomotion: exact checkpoint/export outputs
 and runtime/model/policy compatibility are still open. Its 61/14 mapping is not
 the action space of an arbitrary custom robot. Do not change frozen tolerances
 to force WebGPU/Wasm parity. A keyframed tabletop gesture provides a useful
 alpha path without claiming a balancing biped or a trained-policy transfer.
+
+The reviewed mjswan policy backend is Wasm-only. Its mjlab 1.6.0 exporter also
+differs from the inspected Microduck training pin, mjlab 1.3.0. Preflight exact
+task/actuator semantics and independent outputs in an isolated environment;
+the upstream export skill does not establish automatic Microduck compatibility.
 
 Skill packages initially contain declarative bounded data, not arbitrary
 privileged scripts. Publisher provenance, compatibility and requested

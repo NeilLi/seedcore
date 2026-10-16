@@ -195,6 +195,12 @@ references; CW-S04's declared tabletop gesture can proceed separately. Use the
 policy and capture evidence. Existing native workbench results remain offline
 measurements, not live execution grants or hardware verifier outcomes.
 
+The [mjswan assessment](mjswan_integration_assessment.md) records a conditional
+browser-runtime candidate, including its 3.11.0 engine pin versus this native
+3.15.0 baseline, Wasm-only policy backend and missing public enforcement/worker
+seams. Evaluate in isolation; retain this workbench baseline until a separately
+reviewed version migration and native/browser parity report justify a change.
+
 The [robot design toolkit assessment](robot_design_toolkit_assessment.md)
 records the accepted recommendation to start with Rhoban/Onshape exports and
 then add FreeCAD/RobotCAD authoring. It defines conversion checks and source

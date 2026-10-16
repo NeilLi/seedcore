@@ -33,6 +33,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Multi-robot team architecture](multi_robot_team_architecture.md) | Implemented organ/agent/cognitive/coordinator contracts; live adapter gates |
 | [PythonRobotics applicability](pythonrobotics_assessment.md) | Source review and implemented offline planar navigation baseline; advisory only, no hardware connection |
 | [MuJoCo development workbench](mujoco_development_workbench.md) | Implemented native model/experiment foundation, internal agent tools and external package inspection; browser workspace planned |
+| [mjswan integration assessment](mjswan_integration_assessment.md) | Source-reviewed 0.11.9 candidate for CW-S02/CW-S03; engine/training version reconciliation and worker/control/capture qualification required; no runtime imported |
 | [Model package ingestion](model_package_ingestion.md) | Implemented versioned integrity manifests, MJCF/URDF loader and pinned Microduck model with mass/joint/tree parity checks |
 | [Robot design toolkit assessment](robot_design_toolkit_assessment.md) | Accepted research recommendation: Rhoban/Onshape first, FreeCAD/RobotCAD second; sources, conversion fidelity and proposed CAD-to-MuJoCo integration |
 | [Microduck integration plan](microduck_integration_plan.md) | Active plan: boundaries, stages, evidence, failure cases |

@@ -1,6 +1,6 @@
 # Central World: acceptance and suggestion traceability
 
-Date: 2026-10-15
+Date: 2026-10-16
 Status: Planned acceptance requirements; only the Phase 1 baseline is delivered
 
 Use with the [master plan](central_world_engineering_plan.md) and
@@ -22,6 +22,7 @@ production contracts. A passing software test does not authorize a device.
 | CW-SIM-01 / CW-S01 | Supported fixed-base assembly compiles and matches native FK/mass/joint/actuator reference | Inferred joint axis, unsupported branch/root, invalid inertia, asset traversal, stale DRC/model digest | Generated model/source digest and native parity report |
 | CW-SIM-02 / CW-S02 | Named browser engine/profile reproduces the frozen reference within declared tolerances | Missing Wasm, version/build mismatch, numerical divergence, worker failure or unsupported model silently uses planar preview | Explicit runtime/profile and native/browser parity/failure report |
 | CW-SIM-03 / CW-S02 | dt/policy/render clocks and complete bounded capture survive a UI stall | Catch-up enlarges dt, queue/buffer overflow, hidden tab resumes old attempt, required samples lost | Clock/buffer/coverage trace and stop outcome |
+| CW-SIM-04 / CW-S02, CW-G01 | State-owning executor gates processed controls at each substep and discards stale async output | UI-only/raw-output hook misses command joints, external PD, reset/event/force mutation or an expired/revoked attempt; policy switch reuses admission | Mutation-path inventory, veto/coverage fixtures and generation/deadline trace; simulation enforcement does not establish hardware trust |
 | CW-POL-01 / CW-S03 | Correct pinned policy/model/adapter meets independent export/training and timing references | Changed body/joint order/normalization/home, missing checkpoint output, nonfinite/unbounded action, unsupported operator or inference deadline | Input/output vectors, artifact provenance and refusal report |
 | CW-MOM-01 / CW-S04 | Joint/LED gesture has declared units, interpolation and bounded extrema | Endpoints pass but intermediate curve exceeds bounds; loop/time-stretch/edit reuses old admission; undeclared camera/network output | Compiled behavior identity, extrema and edit-invalidation report |
 | CW-AUTH-01 / CW-G01 | Trusted service admits the exact reviewed build/behavior/endpoint under current delegation | Browser self-signs profile; missing registration/context; expired/future/forged/replayed/revoked/wrong-endpoint token; changed config/profile/payload | Existing-token admission/claim/dispatch trace; rejected cases dispatch no motion |
@@ -65,7 +66,7 @@ matrix merely to obtain a green result.
 | Automatic electrical wiring | Produce reviewable nets/findings per protocol, logic voltage and actual GPIO; unknown data blocks readiness | CW-A04 |
 | Power warning and distribution recommendation | Per-rail capacity/efficiency/derating; distribution alone does not supply more power | CW-A04 |
 | Dynamic MJCF from snapped parts | Compile a declared supported articulation subset and compare natively; part port normals alone cannot define joints | CW-S01 |
-| mjswan + existing mini-sim | Keep general MuJoCo Wasm separate from the existing planar engine; qualify source/build/model and worker parity | CW-S02 |
+| mjswan + existing mini-sim | Conditional 0.11.9 candidate; [assessment](mjswan_integration_assessment.md) requires engine-version reconciliation, worker/control/capture seams and parity; retain the planar engine | CW-S02 |
 | ONNX locomotion | Body/policy-specific adapter and independent references; missing Microduck checkpoint parity keeps that lane closed | CW-S03 |
 | Robot Moments timeline | Declarative bounded gestures/LED outputs, edit invalidation and retained replay; no unreviewed privileged scripts | CW-S04 |
 | Signed Hardware Capability Profile | Browser submits a candidate; enrolled trusted service validates/signs under reviewed policy; no authority from catalog self-assertion | CW-G01 |
