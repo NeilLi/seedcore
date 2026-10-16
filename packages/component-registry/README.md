@@ -1,6 +1,6 @@
 # SeedCore component registry
 
-Date: 2026-10-15
+Date: 2026-10-16
 Status: Phase 1 authoring foundation; 12 illustrative drafts, zero qualified hardware parts
 
 The [v1 schema](schema/v1.sc-part.schema.json) defines four strict blocks:
@@ -110,11 +110,12 @@ remote URLs are fetched by the validator or viewer. No firmware/configuration
 binary, signed profile, build ZIP or community publication is created here.
 
 The [source review](references/upstream-sources.json) pins URDF-Studio, mjswan
-and the motion-editor snapshots and inspected-file hashes. No upstream code was
-imported. The [Central World plan](../../docs/development/robotics/central_world_engineering_plan.md)
+and the motion-editor snapshots and inspected-file hashes. No code from those
+three projects was imported. The [Central World plan](../../docs/development/robotics/central_world_engineering_plan.md)
 owns the later assembly, DRC, simulation, governance and deployment stages.
 The [remaining schedule](../../docs/development/robotics/central_world_remaining_delivery_schedule.md)
-starts CW-A01's assembly/joint contract next; CW-D01 separately closes exact
+tracks the [assembly v2 implementation](assemblies/README.md) and CW-A02 handoff;
+CW-D01 separately closes exact
 physical data for the selected profile. Use the
 [acceptance matrix](../../docs/development/robotics/central_world_acceptance_matrix.md)
 for handoff evidence. These plans do not add fields or runtime bindings to the

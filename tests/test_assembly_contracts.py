@@ -1,296 +1,345 @@
-"""Central World CW-A01 Assembly Contract, Digest and Graph Topology Tests.
-
-Verifies:
-  - CW-ASM-01 positive case: Golden starter tabletop assembly passes schema,
-    topological, kinematic and electrical net checks with stable digest.
-  - CW-ASM-01 negative cases: Atomic rejection of invalid candidates (part hash mismatch,
-    cycles, multi-parent, port collisions, joint limit violations, bus conflicts).
-"""
+"""CW-ASM-01 conformance, exact provenance, mating and atomic import regressions."""
 
 from __future__ import annotations
 
 import copy
 import json
 import math
+import shutil
 from pathlib import Path
+
+from jsonschema import Draft202012Validator
+import numpy as np
 import pytest
 
 from seedcore.robotics.assembly import (
     ASSEMBLY_SCHEMA_VERSION,
+    AssemblyCatalog,
     assembly_schema,
     build_tabletop_starter_assembly,
     canonical_assembly_bytes,
     compute_assembly_digest,
     compute_node_world_transforms,
+    load_assembly_catalog,
+    mate_transform,
     validate_assembly,
+    validate_assembly_structure,
 )
 from seedcore.robotics.component_registry import (
     REGISTRY,
-    load_catalog,
     parse_json,
     read_local,
     sha256,
 )
 
+FIXTURES = Path(__file__).parent / "fixtures/assembly-v2"
+CASES = json.loads((FIXTURES / "conformance.json").read_text())["cases"]
+VECTORS = json.loads((FIXTURES / "canonical.json").read_text())["vectors"]
+GOLDEN = REGISTRY / "assemblies/tabletop-starter.sc-assembly.json"
 
-@pytest.fixture
+
+def patched(source, operations):
+    result = copy.deepcopy(source)
+    for operation in operations:
+        target = result
+        for key in operation["path"][:-1]:
+            target = target[key]
+        key = operation["path"][-1]
+        if operation["op"] == "remove":
+            if isinstance(target, list):
+                target.pop(key)
+            else:
+                del target[key]
+        elif isinstance(target, list) and key == len(target):
+            target.append(copy.deepcopy(operation["value"]))
+        else:
+            target[key] = copy.deepcopy(operation["value"])
+    return result
+
+
+@pytest.fixture(scope="module")
 def catalog():
-    cat = load_catalog(REGISTRY)
-    return {p["identity"]["part_id"]: p for p in cat}
+    return load_assembly_catalog()
 
 
 @pytest.fixture
-def golden_starter(catalog):
-    return build_tabletop_starter_assembly(catalog)
+def starter():
+    return parse_json(GOLDEN.read_bytes())
 
 
-def test_assembly_schema_conforms_to_draft202012():
-    schema = assembly_schema(REGISTRY)
-    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert schema["$id"] == "https://schemas.seedcore.ai/component/v1.sc-assembly.schema.json"
-    assert "root_node_id" in schema["required"]
-    assert "nodes" in schema["required"]
-    assert "mechanical_tree" in schema["required"]
-    assert "electrical_nets" in schema["required"]
+@pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
+def test_shared_structural_and_semantic_conformance(starter, catalog, case):
+    candidate = patched(starter, case["patch"])
+    before = copy.deepcopy(candidate)
+    retained_revision = copy.deepcopy(starter)
+    if "schema_valid" in case:
+        assert (
+            Draft202012Validator(assembly_schema()).is_valid(candidate)
+            is case["schema_valid"]
+        )
+    if case["structural_valid"]:
+        assert validate_assembly_structure(candidate) == candidate
+    else:
+        with pytest.raises(ValueError):
+            validate_assembly_structure(candidate)
+    if case["semantic_valid"]:
+        assert validate_assembly(candidate, catalog) == candidate
+    else:
+        with pytest.raises(ValueError):
+            validate_assembly(candidate, catalog)
+    assert candidate == before
+    assert starter == retained_revision
 
 
-def test_golden_starter_assembly_validates_and_reproduces_digest(golden_starter, catalog):
-    validated = validate_assembly(golden_starter, catalog)
-    assert validated["schema_version"] == ASSEMBLY_SCHEMA_VERSION
-    assert validated["identity"]["assembly_id"] == "tabletop.starter-arm-v1"
-    assert len(validated["nodes"]) == 5
-    assert len(validated["mechanical_tree"]) == 4
-    assert len(validated["electrical_nets"]) == 1
-
-    digest1 = compute_assembly_digest(validated)
-    raw_json = canonical_assembly_bytes(validated)
-    reloaded = parse_json(raw_json)
-    validated2 = validate_assembly(reloaded, catalog)
-    digest2 = compute_assembly_digest(validated2)
-
-    assert digest1 == digest2
-    # Check stable known digest from disk fixture
-    fixture_path = REGISTRY / "assemblies/tabletop-starter.sc-assembly.json"
-    assert fixture_path.exists()
-    disk_data = json.loads(fixture_path.read_text())
-    assert compute_assembly_digest(disk_data) == digest1
+@pytest.mark.parametrize("vector", VECTORS, ids=lambda v: v["name"])
+def test_independent_canonical_vectors(vector):
+    if vector.get("reject"):
+        with pytest.raises(ValueError):
+            canonical_assembly_bytes(vector["input"])
+    else:
+        assert canonical_assembly_bytes(vector["input"]) == vector["expected"].encode()
 
 
-def test_forward_world_transforms_compute_monotonically_ascending_chain(golden_starter):
-    transforms = compute_node_world_transforms(golden_starter)
-    assert len(transforms) == 5
-    assert transforms["base_0"]["position_m"] == [0.0, 0.0, 0.0]
-    assert transforms["base_0"]["quaternion_wxyz"] == [1.0, 0.0, 0.0, 0.0]
-
-    # All stacked links should stay centered in X/Y and ascend in Z
-    for node_id in ("bracket_0", "servo_0", "hat_0", "mcu_0"):
-        pos = transforms[node_id]["position_m"]
-        assert pos[0] == 0.0
-        assert pos[1] == 0.0
-        assert pos[2] >= 0.0
+@pytest.mark.parametrize(
+    "value",
+    [math.nan, math.inf, -math.inf, 10**400, {"x": object()}, {1: "not a string"}],
+)
+def test_reject_non_json_numbers_and_types(value):
+    with pytest.raises(ValueError):
+        canonical_assembly_bytes(value)
 
 
-def test_reject_changed_part_bytes_or_digest_mismatch(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["nodes"][0]["part_sha256"] = "0" * 64
+def test_reject_nesting_and_size_bounds():
+    value = []
+    for _ in range(34):
+        value = [value]
+    for bad in [value, "x" * 262145, [0] * 50001]:
+        with pytest.raises(ValueError):
+            canonical_assembly_bytes(bad)
+
+
+def test_golden_round_trip_byte_pins_and_new_digest(starter, catalog):
+    assert ASSEMBLY_SCHEMA_VERSION == "seedcore.assembly.v2"
+    assert build_tabletop_starter_assembly(catalog) == starter
+    assert (
+        validate_assembly(parse_json(canonical_assembly_bytes(starter)), catalog)
+        == starter
+    )
+    index = parse_json(read_local(REGISTRY, "catalog.json"))
+    pins = {p["part_id"]: p["sha256"] for p in index["parts"]}
+    assert all(
+        node["part_sha256"] == pins[node["part_id"]] for node in starter["nodes"]
+    )
+    assert (
+        compute_assembly_digest(starter)
+        == "2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb"
+    )
+
+
+def test_validation_returns_detached_candidate(starter, catalog):
+    accepted = validate_assembly(starter, catalog)
+    accepted["nodes"][0]["display_name"] = "changed copy"
+    assert starter["nodes"][0]["display_name"] == "Tabletop Base"
+
+
+def test_catalog_requires_actual_artifact_bytes(starter, catalog):
+    parsed = [parse_json(raw) for raw in catalog.artifacts]
+    with pytest.raises(ValueError, match="exact byte artifacts"):
+        validate_assembly(starter, parsed)
+    with pytest.raises(ValueError, match="verified catalog entry"):
+        validate_assembly(
+            starter,
+            AssemblyCatalog(
+                tuple(raw + b" " for raw in catalog.artifacts),
+                REGISTRY,
+                "verified_local_catalog",
+            ),
+        )
+
+
+def test_whitespace_edit_breaks_existing_artifact_pin(tmp_path, starter):
+    registry = tmp_path / "registry"
+    shutil.copytree(REGISTRY, registry)
+    index = parse_json(read_local(registry, "catalog.json"))
+    entry = next(p for p in index["parts"] if p["part_id"] == "seedcore.tabletop-base")
+    part_path = registry / entry["path"]
+    part_path.write_bytes(part_path.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="part digest mismatch"):
+        load_assembly_catalog(registry)
+    # Even a newly pinned catalog cannot retroactively change the old assembly pin.
+    entry["sha256"] = sha256(part_path.read_bytes())
+    (registry / "catalog.json").write_text(json.dumps(index))
     with pytest.raises(ValueError, match="part sha256 mismatch"):
-        validate_assembly(corrupted, catalog)
+        validate_assembly(starter, load_assembly_catalog(registry))
 
 
-def test_reject_part_version_mismatch(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["nodes"][0]["part_version"] = "9.9.9"
-    with pytest.raises(ValueError, match="part version mismatch"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_unknown_part_id(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["nodes"][0]["part_id"] = "unknown.custom-vendor.board-v1"
-    with pytest.raises(ValueError, match="unknown part_id"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_missing_or_invalid_root_node(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["root_node_id"] = "ghost_node_not_in_list"
-    with pytest.raises(ValueError, match="root_node_id.*not in nodes list"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_duplicate_node_ids(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    duplicate_node = copy.deepcopy(corrupted["nodes"][0])
-    corrupted["nodes"].append(duplicate_node)
-    with pytest.raises(ValueError, match="duplicate node_id"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_mechanical_tree_edge_count_mismatch(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"].pop()
-    with pytest.raises(ValueError, match="mechanical tree must have exactly N-1"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_root_node_as_child(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Set child of edge 1 (parent is bracket_0) to root base_0
-    corrupted["mechanical_tree"][1]["child_node_id"] = "base_0"
-    with pytest.raises(ValueError, match="root node.*cannot be a child"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_self_loop_edge(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][0]["child_node_id"] = "base_0"
-    corrupted["mechanical_tree"][0]["parent_node_id"] = "base_0"
-    with pytest.raises(ValueError, match="self-loop on node"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_multiple_parents(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Make edge 2 (parent is servo_0) target bracket_0 as child too (already child of base_0)
-    corrupted["mechanical_tree"][2]["child_node_id"] = "bracket_0"
-    with pytest.raises(ValueError, match="has multiple parents"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_disconnected_or_cyclic_graph(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Disconnect mcu_0 by making edge point between bracket_0 and servo_0 redundantly
-    corrupted["mechanical_tree"][3]["child_node_id"] = "servo_0"
-    with pytest.raises(ValueError, match="has multiple parents|disconnected or unreachable"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_duplicate_occupied_port(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Have bracket_0 and servo_0 both connect to base_0.mount.top
-    corrupted["mechanical_tree"][1]["parent_node_id"] = "base_0"
-    corrupted["mechanical_tree"][1]["parent_port_id"] = "mount.top"
-    with pytest.raises(ValueError, match="duplicate occupied port"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_nonexistent_snap_port(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][0]["parent_port_id"] = "nonexistent.port"
-    with pytest.raises(ValueError, match="parent port 'nonexistent.port' not found"):
-        validate_assembly(corrupted, catalog)
-
-
-def test_reject_rigid_mount_declaring_joint(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][0]["joint"] = {
-        "joint_id": "spurious_joint",
-        "kind": "revolute",
-        "axis": [0.0, 1.0, 0.0],
-        "pivot_m": [0.0, 0.0, 0.0],
-        "rest_angle_rad": 0.0,
-        "limits_rad": {"min_rad": -1.0, "max_rad": 1.0},
+def test_corrected_numeric_rest_geometry(starter):
+    poses = compute_node_world_transforms(starter)
+    expected = {
+        "base_0": 0,
+        "bracket_0": 0.011,
+        "servo_0": 0.036,
+        "hat_0": 0.060,
+        "mcu_0": 0.068,
     }
-    with pytest.raises(ValueError, match="rigid mount cannot declare a joint"):
-        validate_assembly(corrupted, catalog)
+    for node, z in expected.items():
+        np.testing.assert_allclose(
+            poses[node]["position_m"], [0, 0, z], atol=1e-12, rtol=0
+        )
+        np.testing.assert_allclose(
+            poses[node]["quaternion_wxyz"], [1, 0, 0, 0], atol=1e-12, rtol=0
+        )
+    assert poses["bracket_0"]["position_m"][2] - 0.005 == pytest.approx(0.006)
 
 
-def test_reject_articulated_joint_missing_joint_data(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    del corrupted["mechanical_tree"][2]["joint"]
-    with pytest.raises(ValueError, match="articulated joint must declare joint details|assembly schema"):
-        validate_assembly(corrupted, catalog)
+def test_rotated_port_mating_and_nonorigin_parent_pose(starter):
+    parent = {
+        "position_m": [1, 2, 3],
+        "quaternion_wxyz": [math.sqrt(0.5), 0, 0, math.sqrt(0.5)],
+    }
+    child = {"position_m": [0.2, 0, 0], "quaternion_wxyz": [0, 1, 0, 0]}
+    relative = mate_transform(parent, child)
+    np.testing.assert_allclose(relative["position_m"], [1, 1.8, 3], atol=1e-12)
+    np.testing.assert_allclose(
+        relative["quaternion_wxyz"], parent["quaternion_wxyz"], atol=1e-12
+    )
+    # World composition is tested independently from the port-mate helper.
+    first = starter["mechanical_tree"][0]["relative_transform"]
+    first["position_m"] = [1, 2, 3]
+    first["quaternion_wxyz"] = [math.sqrt(0.5), 0, 0, math.sqrt(0.5)]
+    second = starter["mechanical_tree"][1]["relative_transform"]
+    second["position_m"] = [0.1, 0, 0]
+    world = compute_node_world_transforms(starter)["servo_0"]
+    np.testing.assert_allclose(world["position_m"], [1, 2.1, 3], atol=1e-12)
 
 
-def test_reject_non_unit_joint_axis(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][2]["joint"]["axis"] = [0.0, 0.0, 0.0]
-    with pytest.raises(ValueError, match="rotation axis must be a unit vector"):
-        validate_assembly(corrupted, catalog)
+def test_geometry_helper_rejects_disconnected_cycle(starter):
+    cycle = next(c for c in CASES if c["name"] == "disconnected cycle")
+    with pytest.raises(ValueError, match="disconnected"):
+        compute_node_world_transforms(patched(starter, cycle["patch"]))
 
 
-def test_reject_reversed_joint_limits(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][2]["joint"]["limits_rad"]["min_rad"] = 0.5
-    corrupted["mechanical_tree"][2]["joint"]["limits_rad"]["max_rad"] = -0.5
-    with pytest.raises(ValueError, match="min_rad exceeds max_rad"):
-        validate_assembly(corrupted, catalog)
+def test_channel_cannot_drive_two_joints(starter):
+    edge = starter["mechanical_tree"][3]
+    edge.update(
+        parent_node_id="servo_0",
+        parent_port_id="another.output",
+        connection_type="articulated_joint",
+    )
+    edge["joint"] = copy.deepcopy(starter["mechanical_tree"][2]["joint"])
+    edge["joint"]["joint_id"] = "second_joint"
+    with pytest.raises(ValueError, match="assigned to multiple joints"):
+        validate_assembly_structure(starter)
 
 
-def test_reject_rest_angle_outside_limits(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][2]["joint"]["rest_angle_rad"] = 1.5
-    with pytest.raises(ValueError, match="rest_angle_rad.*outside limits"):
-        validate_assembly(corrupted, catalog)
+def synthetic(catalog, change):
+    parts = [parse_json(raw) for raw in catalog.artifacts]
+    for part in parts:
+        change(part)
+    return AssemblyCatalog(
+        tuple(json.dumps(p).encode() for p in parts), REGISTRY, "synthetic_fixture"
+    )
 
 
-def test_reject_joint_limits_exceeding_actuator_capability(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Feetech sts3215 simulation_limits is [-0.5, 0.5]
-    corrupted["mechanical_tree"][2]["joint"]["limits_rad"]["max_rad"] = 1.5
-    with pytest.raises(ValueError, match="exceed actuator capability limits"):
-        validate_assembly(corrupted, catalog)
+def with_pins(starter, catalog):
+    pins = {
+        parse_json(raw)["identity"]["part_id"]: sha256(raw) for raw in catalog.artifacts
+    }
+    for node in starter["nodes"]:
+        node["part_sha256"] = pins[node["part_id"]]
+    return starter
 
 
-def test_reject_actuator_node_lacking_actuator_capability(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Assign chassis base as actuator
-    corrupted["mechanical_tree"][2]["joint"]["actuator_node_id"] = "base_0"
-    with pytest.raises(ValueError, match="does not have 'actuator.joint_position' capability"):
-        validate_assembly(corrupted, catalog)
+def test_synthetic_catalog_is_explicit_and_unknown_actuator_bounds_reject(
+    starter, catalog
+):
+    def change(part):
+        if part["identity"]["part_id"] == "feetech.sts3215-draft":
+            part["hal_and_safety"]["simulation_limits"]["max_torque_nm"] = None
+
+    changed = synthetic(catalog, change)
+    with pytest.raises(ValueError, match="simulation joint limits must be complete"):
+        validate_assembly(with_pins(starter, changed), changed)
 
 
-def test_reject_electrical_net_missing_interface(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["electrical_nets"][0]["endpoints"][0]["interface_id"] = "phantom_bus"
-    with pytest.raises(ValueError, match="interface 'phantom_bus' not found"):
-        validate_assembly(corrupted, catalog)
+def test_multi_controller_bus_rejects(starter, catalog):
+    def change(part):
+        if part["identity"]["part_id"] == "feetech.sts3215-draft":
+            part["electrical"]["bus_interfaces"][0]["role"] = "controller"
+
+    changed = synthetic(catalog, change)
+    with pytest.raises(ValueError, match="at most one controller"):
+        validate_assembly(with_pins(starter, changed), changed)
 
 
-def test_reject_electrical_net_incompatible_bus_kind(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # ESP32-S3 interface "i2c" is kind "I2C", but net is "TTL_UART_BUS"
-    corrupted["electrical_nets"][0]["endpoints"][0]["interface_id"] = "i2c"
-    with pytest.raises(ValueError, match="incompatible interface"):
-        validate_assembly(corrupted, catalog)
+def test_power_ground_net_pin_roles_and_separation(starter, catalog):
+    def change(part):
+        interfaces = part["electrical"]["bus_interfaces"]
+        if part["identity"]["part_id"] in {
+            "feetech.sts3215-draft",
+            "espressif.esp32-s3-draft",
+        }:
+            interfaces.append(
+                {
+                    "interface_id": "power-rail",
+                    "kind": "POWER_RAIL",
+                    "role": "source"
+                    if part["identity"]["category"] == "mcu"
+                    else "sink",
+                    "protocol": None,
+                    "logic_min_v": None,
+                    "logic_max_v": None,
+                    "i2c_address": None,
+                    "pins": ["VCC", "GND"],
+                }
+            )
+
+    changed = synthetic(catalog, change)
+    with_pins(starter, changed)
+    starter["electrical_nets"] = [
+        {
+            "net_id": kind + "_rail",
+            "kind": kind,
+            "endpoints": [
+                {"node_id": node, "interface_id": "power-rail", "pins": [pin]}
+                for node in ["mcu_0", "servo_0"]
+            ],
+        }
+        for kind, pin in [("power", "VCC"), ("ground", "GND")]
+    ]
+    assert validate_assembly(starter, changed)
+    for net in starter["electrical_nets"]:
+        for ep in net["endpoints"]:
+            ep["pins"] = ["VCC"]
+    with pytest.raises(ValueError, match="reused across nets"):
+        validate_assembly(starter, changed)
 
 
-def test_reject_electrical_net_multiple_controllers(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    # Add a second ESP32-S3 node as controller to the net
-    second_mcu = copy.deepcopy(corrupted["nodes"][4])
-    second_mcu["node_id"] = "mcu_1"
-    # To avoid tree mismatch, replace a node or adjust
-    corrupted["nodes"].append(second_mcu)
-    corrupted["mechanical_tree"].append({
-        "edge_id": "edge_mcu_mcu1",
-        "parent_node_id": "mcu_0",
-        "parent_port_id": "mount.top",
-        "child_node_id": "mcu_1",
-        "child_port_id": "mount.bottom",
-        "connection_type": "rigid_mount",
-    })
-    corrupted["electrical_nets"][0]["endpoints"].append({
-        "node_id": "mcu_1",
-        "interface_id": "uart",
-    })
-    with pytest.raises(ValueError, match="has 2 controllers, bus allows at most one"):
-        validate_assembly(corrupted, catalog)
+@pytest.mark.parametrize(
+    "fault", ["mount_standard", "neutral_socket", "plug_plug", "plug_socket"]
+)
+def test_explicit_mount_mating_compatibility(starter, catalog, fault):
+    def change(part):
+        if part["identity"]["part_id"] == "seedcore.tabletop-base" and fault in {
+            "plug_plug",
+            "plug_socket",
+        }:
+            part["mechanical"]["snap_ports"][1]["gender"] = "plug"
+        if part["identity"]["part_id"] == "seedcore.link-bracket":
+            port = part["mechanical"]["snap_ports"][0]
+            if fault == "mount_standard":
+                port["mount_standard"] = "unsupported.mount"
+            elif fault == "plug_plug":
+                port["gender"] = "plug"
+            else:
+                port["gender"] = "socket"
 
-
-def test_reject_non_finite_float(golden_starter, catalog):
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["mechanical_tree"][2]["joint"]["rest_angle_rad"] = float("nan")
-    with pytest.raises(ValueError, match="non-finite float"):
-        canonical_assembly_bytes(corrupted)
-
-
-def test_atomic_rejection_leaves_source_unmutated(golden_starter, catalog):
-    original_copy = copy.deepcopy(golden_starter)
-    corrupted = copy.deepcopy(golden_starter)
-    corrupted["root_node_id"] = "invalid_root"
-    try:
-        validate_assembly(corrupted, catalog)
-    except ValueError:
-        pass
-    assert golden_starter == original_copy
+    changed = synthetic(catalog, change)
+    with_pins(starter, changed)
+    if fault == "plug_socket":
+        assert validate_assembly(starter, changed)
+    else:
+        with pytest.raises(
+            ValueError, match="incompatible mount standards|incompatible port genders"
+        ):
+            validate_assembly(starter, changed)

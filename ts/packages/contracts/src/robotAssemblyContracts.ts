@@ -1,55 +1,23 @@
-/**
- * Central World Robot Assembly Contract types and structural validation.
- *
- * Provides schema types, constants, and canonical serialization for CW-A01
- * versioned assembly graphs (seedcore.assembly.v1).
- */
+/** Offline assembly v2 authoring contract; never an execution grant. */
+import { Ajv2020 } from "ajv/dist/2020.js";
+import { ROBOT_ASSEMBLY_SCHEMA } from "./robotAssemblySchema.js";
 
+/** Historical draft identifier only; v1 is not accepted by this validator. */
 export const SEEDCORE_ASSEMBLY_SCHEMA_V1 = "seedcore.assembly.v1" as const;
-
-export const ASSEMBLY_ROLE_VALUES = [
-  "chassis",
-  "actuator",
-  "sensor",
-  "mcu",
-  "power",
-  "bracket",
-  "link",
-  "payload",
-  "other",
-] as const;
+export const SEEDCORE_ASSEMBLY_SCHEMA_V2 = "seedcore.assembly.v2" as const;
+export const ASSEMBLY_CANONICAL_PROFILE = "seedcore.jcs-safe-integers.v1" as const;
+export const ASSEMBLY_ROLE_VALUES = ["chassis", "actuator", "sensor", "mcu", "power", "bracket", "link", "payload", "other"] as const;
 export type AssemblyRole = (typeof ASSEMBLY_ROLE_VALUES)[number];
-
-export const CONNECTION_TYPE_VALUES = [
-  "rigid_mount",
-  "articulated_joint",
-] as const;
+export const CONNECTION_TYPE_VALUES = ["rigid_mount", "articulated_joint"] as const;
 export type ConnectionType = (typeof CONNECTION_TYPE_VALUES)[number];
-
-export const JOINT_KIND_VALUES = [
-  "revolute",
-  "fixed",
-  "continuous",
-  "prismatic",
-] as const;
+export const JOINT_KIND_VALUES = ["revolute"] as const;
 export type JointKind = (typeof JOINT_KIND_VALUES)[number];
-
-export const NET_KIND_VALUES = [
-  "TTL_UART_BUS",
-  "I2C",
-  "PWM",
-  "GPIO",
-  "power",
-  "ground",
-  "other",
-] as const;
+export const NET_KIND_VALUES = ["TTL_UART_BUS", "I2C", "PWM", "power", "ground"] as const;
 export type NetKind = (typeof NET_KIND_VALUES)[number];
-
 export interface RelativeTransform {
   position_m: [number, number, number];
   quaternion_wxyz: [number, number, number, number];
 }
-
 export interface AssemblyIdentity {
   assembly_id: string;
   version: string;
@@ -58,7 +26,6 @@ export interface AssemblyIdentity {
   created_at: string;
   notes: string;
 }
-
 export interface AssemblyNode {
   node_id: string;
   part_id: string;
@@ -67,177 +34,177 @@ export interface AssemblyNode {
   role: AssemblyRole;
   display_name?: string;
 }
-
 export interface JointLimits {
   min_rad: number;
   max_rad: number;
-  max_velocity_rad_s?: number | null;
-  max_torque_nm?: number | null;
+  max_velocity_rad_s: number;
+  max_torque_nm: number;
 }
-
 export interface JointRecord {
   joint_id: string;
   kind: JointKind;
+  frame: "parent_part";
   axis: [number, number, number];
   pivot_m: [number, number, number];
-  actuator_node_id?: string | null;
-  actuator_channel?: number | string | null;
+  actuator_node_id: string;
+  actuator_channel: number;
   rest_angle_rad: number;
   limits_rad: JointLimits;
 }
-
-export interface MechanicalEdge {
+export interface ActuatorOutput {
+  node_id: string;
+  port_id: string;
+  channel: number;
+  basis: "simulation_proxy";
+  axis: [number, number, number];
+  pivot_m: [number, number, number];
+}
+interface MechanicalEdgeBase {
   edge_id: string;
   parent_node_id: string;
   parent_port_id: string;
   child_node_id: string;
   child_port_id: string;
-  connection_type: ConnectionType;
-  relative_transform?: RelativeTransform;
-  joint?: JointRecord;
+  relative_transform: RelativeTransform;
 }
-
+export type MechanicalEdge = MechanicalEdgeBase & (
+  | { connection_type: "rigid_mount"; joint?: never }
+  | { connection_type: "articulated_joint"; joint: JointRecord }
+);
 export interface NetEndpoint {
   node_id: string;
   interface_id: string;
   pins?: string[];
 }
-
 export interface ElectricalNet {
   net_id: string;
   kind: NetKind;
   nominal_voltage_v?: number | null;
   endpoints: NetEndpoint[];
 }
-
 export interface RobotAssembly {
-  schema_version: typeof SEEDCORE_ASSEMBLY_SCHEMA_V1;
+  schema_version: typeof SEEDCORE_ASSEMBLY_SCHEMA_V2;
+  canonicalization: typeof ASSEMBLY_CANONICAL_PROFILE;
+  runtime_profile: "offline_proxy_no_actuation";
+  mating_convention: "opposed_z_rx_pi";
   identity: AssemblyIdentity;
   root_node_id: string;
   nodes: AssemblyNode[];
   mechanical_tree: MechanicalEdge[];
+  actuator_outputs: ActuatorOutput[];
   electrical_nets: ElectricalNet[];
-  metadata?: {
-    notes?: string;
-    generator?: string;
-  };
+  metadata?: { notes?: string; generator?: string };
 }
 
-/**
- * Return RFC-8785 style canonical JSON string for deterministic hashing.
- */
+/** RFC 8785 serialization, restricted to safe integral numbers and bounded JSON. */
 export function canonicalAssemblyString(data: unknown): string {
-  function sortKeys(value: unknown): unknown {
-    if (value === null || typeof value !== "object") {
-      if (typeof value === "number" && !Number.isFinite(value)) {
-        throw new Error(`Non-finite number in assembly: ${value}`);
+  let count = 0;
+  const encode = (value: unknown, depth: number): string => {
+    if (++count > 50000 || depth > 32) throw new Error("Assembly JSON nesting/node bound exceeded");
+    if (value === null) return "null";
+    if (typeof value === "string") {
+      if (value.length > 262144 || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)) {
+        throw new Error("Invalid Unicode or oversized assembly string");
       }
-      return value;
+      return JSON.stringify(value);
     }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new Error("Non-finite number in assembly");
+      if (Number.isInteger(value) && !Number.isSafeInteger(value)) throw new Error("Unsafe integer in assembly");
+      return JSON.stringify(value);
+    }
+    if (typeof value === "boolean") return JSON.stringify(value);
     if (Array.isArray(value)) {
-      return value.map(sortKeys);
+      // Array.map skips holes, which would silently change the serialized value.
+      return `[${Array.from(value, item => encode(item, depth + 1)).join(",")}]`;
     }
-    const sortedObj: Record<string, unknown> = {};
-    const keys = Object.keys(value as Record<string, unknown>).sort();
-    for (const key of keys) {
-      const val = (value as Record<string, unknown>)[key];
-      if (val !== undefined) {
-        sortedObj[key] = sortKeys(val);
-      }
+    if (typeof value === "object" && value !== null &&
+        (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)) {
+      if (Object.getOwnPropertySymbols(value).length) throw new Error("Non-JSON assembly key");
+      const object = value as Record<string, unknown>;
+      return `{${Object.keys(object).sort().map(key => `${encode(key, depth + 1)}:${encode(object[key], depth + 1)}`).join(",")}}`;
     }
-    return sortedObj;
-  }
-
-  return JSON.stringify(sortKeys(data));
+    throw new Error("Assembly contains a non-JSON value");
+  };
+  const result = encode(data, 0);
+  if (new TextEncoder().encode(result).length > 262144) throw new Error("Assembly JSON exceeds size bound");
+  return result;
 }
 
-/**
- * Validate structural requirements of a RobotAssembly object.
- */
+const ajv = new Ajv2020({ strict: true, strictRequired: false });
+const validateSchema = ajv.compile<RobotAssembly>(ROBOT_ASSEMBLY_SCHEMA);
+const keyFor = (node: string, port: string | number): string => `${node}:${port}`;
+const unit = (v: number[], label: string): void => {
+  if (Math.abs(v.reduce((s, n) => s + n*n, 0) - 1) > 1e-8) throw new Error(`${label} must be unit length`);
+};
+const near = (a: number[], b: number[]): boolean => a.every((n, i) => Math.abs(n-b[i]) <= 1e-8);
+
+/** Schema + catalog-independent graph checks. Catalog/geometry/DRC remain separate. */
 export function validateAssemblyStructure(raw: unknown): RobotAssembly {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("Assembly must be a non-null object");
-  }
-  const obj = raw as Record<string, unknown>;
-
-  if (obj.schema_version !== SEEDCORE_ASSEMBLY_SCHEMA_V1) {
-    throw new Error(`Invalid schema_version: ${obj.schema_version}`);
-  }
-
-  if (!obj.identity || typeof obj.identity !== "object") {
-    throw new Error("Missing or invalid identity block");
-  }
-  const idBlock = obj.identity as Record<string, unknown>;
-  if (typeof idBlock.assembly_id !== "string" || !idBlock.assembly_id) {
-    throw new Error("Invalid assembly_id");
-  }
-
-  if (typeof obj.root_node_id !== "string" || !obj.root_node_id) {
-    throw new Error("Invalid root_node_id");
-  }
-
-  if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
-    throw new Error("nodes must be a non-empty array");
-  }
-
-  const nodeIds = new Set<string>();
-  for (const n of obj.nodes) {
-    if (!n || typeof n !== "object") throw new Error("Invalid node entry");
-    const node = n as Record<string, unknown>;
-    if (typeof node.node_id !== "string" || !node.node_id) throw new Error("Invalid node_id");
-    if (nodeIds.has(node.node_id)) throw new Error(`Duplicate node_id: ${node.node_id}`);
-    nodeIds.add(node.node_id);
-
-    if (typeof node.part_id !== "string" || !node.part_id) throw new Error("Invalid part_id");
-    if (typeof node.part_sha256 !== "string" || node.part_sha256.length !== 64) {
-      throw new Error(`Invalid part_sha256 for node ${node.node_id}`);
+  canonicalAssemblyString(raw);
+  if (!validateSchema(raw)) throw new Error(`Assembly schema: ${ajv.errorsText(validateSchema.errors)}`);
+  const data = raw;
+  const nodes = new Set(data.nodes.map(n => n.node_id));
+  if (nodes.size !== data.nodes.length) throw new Error("Duplicate node_id");
+  if (!nodes.has(data.root_node_id)) throw new Error("root_node_id not present in nodes");
+  if (data.mechanical_tree.length !== nodes.size - 1) throw new Error("Mechanical tree must have N-1 edges");
+  const children = new Map([...nodes].map(id => [id, [] as string[]]));
+  const parents = new Set<string>(), edgeIds = new Set<string>(), joints = new Set<string>();
+  const ports = new Set<string>(), channels = new Set<string>();
+  for (const edge of data.mechanical_tree) {
+    const p = edge.parent_node_id, c = edge.child_node_id;
+    if (edgeIds.has(edge.edge_id)) throw new Error("Duplicate edge_id");
+    edgeIds.add(edge.edge_id);
+    if (!nodes.has(p) || !nodes.has(c)) throw new Error("Mechanical endpoint not in nodes");
+    if (p === c) throw new Error("Self-loop detected");
+    if (c === data.root_node_id) throw new Error("Root node cannot be a child");
+    if (parents.has(c)) throw new Error("Node has multiple parents");
+    parents.add(c); children.get(p)!.push(c);
+    for (const key of [keyFor(p, edge.parent_port_id), keyFor(c, edge.child_port_id)]) {
+      if (ports.has(key)) throw new Error("Duplicate occupied port");
+      ports.add(key);
+    }
+    unit(edge.relative_transform.quaternion_wxyz, "Transform quaternion");
+    if (edge.connection_type === "articulated_joint") {
+      const j = edge.joint, limits = j.limits_rad;
+      if (joints.has(j.joint_id)) throw new Error("Duplicate joint_id");
+      joints.add(j.joint_id); unit(j.axis, "Rotation axis");
+      if (limits.min_rad >= limits.max_rad) throw new Error("Joint range must have positive width");
+      if (j.rest_angle_rad < limits.min_rad || j.rest_angle_rad > limits.max_rad) throw new Error("Rest angle outside limits");
+      const key = keyFor(j.actuator_node_id, j.actuator_channel);
+      if (channels.has(key)) throw new Error("Actuator channel assigned to multiple joints");
+      channels.add(key);
+      if (j.actuator_node_id !== p) throw new Error("Actuator output must belong to parent node");
     }
   }
-
-  if (!nodeIds.has(obj.root_node_id as string)) {
-    throw new Error(`root_node_id '${obj.root_node_id}' not present in nodes`);
+  const visited = new Set<string>(), queue = [data.root_node_id];
+  while (queue.length) {
+    const node = queue.pop()!;
+    if (visited.has(node)) throw new Error("Mechanical cycle");
+    visited.add(node); queue.push(...children.get(node)!);
   }
-
-  if (!Array.isArray(obj.mechanical_tree)) {
-    throw new Error("mechanical_tree must be an array");
+  if (visited.size !== nodes.size) throw new Error("Disconnected or unreachable nodes");
+  const outputs = new Map<string, ActuatorOutput>(), outputPorts = new Set<string>();
+  for (const output of data.actuator_outputs) {
+    const key = keyFor(output.node_id, output.channel), port = keyFor(output.node_id, output.port_id);
+    if (!nodes.has(output.node_id) || outputs.has(key) || outputPorts.has(port)) throw new Error("Invalid or duplicate actuator output");
+    unit(output.axis, "Output axis"); outputs.set(key, output); outputPorts.add(port);
   }
-
-  const expectedEdges = obj.nodes.length - 1;
-  if (obj.mechanical_tree.length !== expectedEdges) {
-    throw new Error(
-      `mechanical_tree must have N-1 (${expectedEdges}) edges, got ${obj.mechanical_tree.length}`
-    );
-  }
-
-  const childIds = new Set<string>();
-  for (const e of obj.mechanical_tree) {
-    if (!e || typeof e !== "object") throw new Error("Invalid mechanical edge");
-    const edge = e as Record<string, unknown>;
-    const pNode = edge.parent_node_id as string;
-    const cNode = edge.child_node_id as string;
-
-    if (!nodeIds.has(pNode)) throw new Error(`Parent node not found: ${pNode}`);
-    if (!nodeIds.has(cNode)) throw new Error(`Child node not found: ${cNode}`);
-    if (pNode === cNode) throw new Error(`Self-loop detected on node ${pNode}`);
-    if (cNode === obj.root_node_id) throw new Error(`Root node cannot be a child: ${cNode}`);
-    if (childIds.has(cNode)) throw new Error(`Node has multiple parents: ${cNode}`);
-    childIds.add(cNode);
-
-    const connType = edge.connection_type as string;
-    if (connType === "rigid_mount") {
-      if (edge.joint) throw new Error(`Rigid mount edge '${edge.edge_id}' cannot declare a joint`);
-    } else if (connType === "articulated_joint") {
-      if (!edge.joint || typeof edge.joint !== "object") {
-        throw new Error(`Articulated joint edge '${edge.edge_id}' must declare joint details`);
-      }
-    } else {
-      throw new Error(`Unknown connection_type: ${connType}`);
+  for (const edge of data.mechanical_tree) {
+    if (edge.connection_type === "articulated_joint") {
+      const j = edge.joint, output = outputs.get(keyFor(j.actuator_node_id, j.actuator_channel));
+      if (!output || output.port_id !== edge.parent_port_id) throw new Error("Unknown actuator output/channel");
+      if (!near(output.axis, j.axis) || !near(output.pivot_m, j.pivot_m)) throw new Error("Joint frame differs from declared output");
+    } else if (outputPorts.has(keyFor(edge.parent_node_id, edge.parent_port_id))) {
+      throw new Error("Rotating output requires articulated_joint");
     }
+    if (outputPorts.has(keyFor(edge.child_node_id, edge.child_port_id))) throw new Error("Rotating output cannot be housing attachment");
   }
-
-  if (!Array.isArray(obj.electrical_nets)) {
-    throw new Error("electrical_nets must be an array");
+  const nets = new Set<string>();
+  for (const net of data.electrical_nets) {
+    if (nets.has(net.net_id)) throw new Error("Duplicate net_id");
+    nets.add(net.net_id);
+    for (const ep of net.endpoints) if (!nodes.has(ep.node_id)) throw new Error("Electrical endpoint not in nodes");
   }
-
-  return raw as RobotAssembly;
+  return structuredClone(data);
 }

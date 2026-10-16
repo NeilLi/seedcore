@@ -1,0 +1,471 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.seedcore.ai/component/v2.sc-assembly.schema.json",
+  "title": "SeedCore assembly v2 (offline proxy authoring, never execution authority)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "root_node_id",
+    "nodes",
+    "mechanical_tree",
+    "electrical_nets",
+    "runtime_profile",
+    "canonicalization",
+    "mating_convention",
+    "actuator_outputs"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "seedcore.assembly.v2"
+    },
+    "identity": {
+      "$ref": "#/$defs/identity"
+    },
+    "root_node_id": {
+      "$ref": "#/$defs/instance_id"
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "mechanical_tree": {
+      "type": "array",
+      "maxItems": 255,
+      "items": {
+        "$ref": "#/$defs/mechanical_edge"
+      }
+    },
+    "electrical_nets": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/electrical_net"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notes": {
+          "$ref": "#/$defs/text"
+        },
+        "generator": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "runtime_profile": {
+      "const": "offline_proxy_no_actuation"
+    },
+    "canonicalization": {
+      "const": "seedcore.jcs-safe-integers.v1"
+    },
+    "mating_convention": {
+      "const": "opposed_z_rx_pi"
+    },
+    "actuator_outputs": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/actuator_output"
+      }
+    }
+  },
+  "$defs": {
+    "instance_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{1,63}(?![\\s\\S])"
+    },
+    "part_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{2,95}(?![\\s\\S])"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?![\\s\\S])",
+      "maxLength": 32
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "vector3": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": -10,
+        "maximum": 10
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quaternion": {
+      "description": "Unit quaternion [w,x,y,z], active local-to-parent rotation.",
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": -1,
+        "maximum": 1
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position_m",
+        "quaternion_wxyz"
+      ],
+      "properties": {
+        "position_m": {
+          "$ref": "#/$defs/vector3"
+        },
+        "quaternion_wxyz": {
+          "$ref": "#/$defs/quaternion"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assembly_id",
+        "version",
+        "name",
+        "status",
+        "created_at",
+        "notes"
+      ],
+      "properties": {
+        "assembly_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "name": {
+          "$ref": "#/$defs/text"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "documented"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?(?![\\s\\S])"
+        },
+        "notes": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "part_id",
+        "part_version",
+        "part_sha256",
+        "role"
+      ],
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "part_id": {
+          "$ref": "#/$defs/part_id"
+        },
+        "part_version": {
+          "$ref": "#/$defs/version"
+        },
+        "part_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "role": {
+          "enum": [
+            "chassis",
+            "actuator",
+            "sensor",
+            "mcu",
+            "power",
+            "bracket",
+            "link",
+            "payload",
+            "other"
+          ]
+        },
+        "display_name": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "joint_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_rad",
+        "max_rad",
+        "max_velocity_rad_s",
+        "max_torque_nm"
+      ],
+      "properties": {
+        "min_rad": {
+          "type": "number",
+          "minimum": -6.28318530718,
+          "maximum": 6.28318530718
+        },
+        "max_rad": {
+          "type": "number",
+          "minimum": -6.28318530718,
+          "maximum": 6.28318530718
+        },
+        "max_velocity_rad_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "max_torque_nm": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "joint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "joint_id",
+        "kind",
+        "axis",
+        "pivot_m",
+        "rest_angle_rad",
+        "limits_rad",
+        "frame",
+        "actuator_node_id",
+        "actuator_channel"
+      ],
+      "properties": {
+        "joint_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "kind": {
+          "const": "revolute"
+        },
+        "axis": {
+          "$ref": "#/$defs/vector3"
+        },
+        "pivot_m": {
+          "$ref": "#/$defs/vector3"
+        },
+        "actuator_node_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "actuator_channel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "rest_angle_rad": {
+          "type": "number",
+          "minimum": -6.28318530718,
+          "maximum": 6.28318530718
+        },
+        "limits_rad": {
+          "$ref": "#/$defs/joint_limits"
+        },
+        "frame": {
+          "const": "parent_part"
+        }
+      },
+      "description": "Relative transform is the mated rest pose. Axis/pivot are in the parent part frame. T(q)=Translate(pivot)*Rotate(axis,q-rest_angle_rad)*Translate(-pivot)*T_rest."
+    },
+    "mechanical_edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "parent_node_id",
+        "parent_port_id",
+        "child_node_id",
+        "child_port_id",
+        "connection_type",
+        "relative_transform"
+      ],
+      "properties": {
+        "edge_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "parent_node_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "parent_port_id": {
+          "$ref": "#/$defs/part_id"
+        },
+        "child_node_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "child_port_id": {
+          "$ref": "#/$defs/part_id"
+        },
+        "connection_type": {
+          "enum": [
+            "rigid_mount",
+            "articulated_joint"
+          ]
+        },
+        "relative_transform": {
+          "$ref": "#/$defs/transform"
+        },
+        "joint": {
+          "$ref": "#/$defs/joint"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "connection_type": {
+                "const": "rigid_mount"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "joint"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "connection_type": {
+                "const": "articulated_joint"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "joint"
+            ]
+          }
+        }
+      ]
+    },
+    "net_endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "interface_id"
+      ],
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "interface_id": {
+          "$ref": "#/$defs/part_id"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        }
+      }
+    },
+    "electrical_net": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "net_id",
+        "kind",
+        "endpoints"
+      ],
+      "properties": {
+        "net_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "kind": {
+          "enum": [
+            "TTL_UART_BUS",
+            "I2C",
+            "PWM",
+            "power",
+            "ground"
+          ]
+        },
+        "nominal_voltage_v": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 48
+        },
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/net_endpoint"
+          }
+        }
+      }
+    },
+    "actuator_output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "port_id",
+        "channel",
+        "basis",
+        "axis",
+        "pivot_m"
+      ],
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/instance_id"
+        },
+        "port_id": {
+          "$ref": "#/$defs/part_id"
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "basis": {
+          "const": "simulation_proxy"
+        },
+        "axis": {
+          "$ref": "#/$defs/vector3"
+        },
+        "pivot_m": {
+          "$ref": "#/$defs/vector3"
+        }
+      },
+      "description": "Explicit authoring assumption for a rotating output at a declared part port. Axis and pivot are in that part frame; not manufacturer geometry or hardware qualification."
+    }
+  }
+}

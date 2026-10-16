@@ -17,7 +17,8 @@ browser MuJoCo/policy, timeline and deployment integration remain gated. The
 full Studio and public community service remain planned.
 
 The [remaining delivery schedule](central_world_remaining_delivery_schedule.md)
-now assigns the next assembly/joint contract to CW-A01, graph/canvas/DRC to
+records the CW-A01 v2 software candidate, assigns next authoring/store work to
+CW-A02 and graph/canvas/DRC across
 CW-A02–CW-A04, physics/policy/Robot Moments to CW-S01–CW-S04, live trust/replay
 and export to CW-G01–CW-E01, and curated fork/alpha review to CW-L01–CW-L03.
 Physical provisioning is conditional CW-F01/CW-F02. The

@@ -3,9 +3,11 @@
 Date: 2026-10-16
 Status: Canonical active execution queue — simulation-first candidate delivered; native/physical gates open
 
-The immediate product work is a versioned assembly/joint contract for one
-tabletop starter, progressing toward a bounded attempt with an understandable
-allow/deny/interruption timeline and sufficient verifier evidence. Use the
+The immediate product work is CW-A02's Mini Studio authoring shell and immutable
+assembly store, consuming the verified CW-A01 v2 candidate and one tabletop
+starter, progressing toward a bounded
+attempt with an understandable allow/deny/interruption timeline and sufficient
+verifier evidence. Use the
 [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 for Oct 2026–Mar 2028 targets and the dated 14 Oct–12 Nov tactical schedule.
 The [portfolio decision](application_directions.md) owns scope, while the
@@ -32,11 +34,19 @@ remain open. Keep native M0–M4 acceptance intact; CW assembly/DRC/simulation a
 deployment stages have separate gates. January's default target is an authoring
 and simulation alpha; hardware and publication depend on their own acceptance.
 
+The CW-A01 v1 draft is committed as `9c5aaf7`. Its
+[acceptance closure](robotics/central_world_cw_a01_acceptance_plan.md) now provides
+a v2 software candidate addressing all eight findings: shared canonical bytes,
+catalog-byte pins, schema/graph conformance and explicit connection semantics.
+Build-from-source acceptance passed 117 Python and 71 Node tests, including live
+cross-language parity. CW-A02 can use this
+documented v2 contract; no hardware, dynamics or live-execution gate is closed.
+
 The [mjswan source assessment](robotics/mjswan_integration_assessment.md)
 is complete. Version 0.11.9 is a conditional CW-S02/CW-S03 candidate, with
 engine/training version conflicts and missing public worker/control/capture
 seams to resolve first. No runtime was imported or benchmarked. This decision
-does not change CW-A01's priority or close Microduck training parity.
+does not block CW-A02 authoring or close Microduck training parity.
 
 For the native lane, obtain the missing training/export references and reconcile
 runtime/body/policy compatibility; bind the native boundary to live authority;
@@ -52,13 +62,15 @@ are available in the acceptance guide and [lesson](../application/seedcore_sessi
 The [remaining delivery schedule](robotics/central_world_remaining_delivery_schedule.md)
 owns detailed order and owner roles; the
 [acceptance matrix](robotics/central_world_acceptance_matrix.md) owns tests and
-measurement artifacts. All packages below remain planned/open.
+measurement artifacts. CW-A01 v2 has passing local software acceptance and a
+verified software candidate; the following implementation packages remain planned/open.
 
 | Order | Package | Next reviewable result | Dependency |
 | --- | --- | --- | --- |
-| 1 | CW-A01 | Assembly/joint/net schema, immutable revision/digest rules and invalid-graph fixtures | Delivered CW1 software; explicit proxy scope allowed |
+| Software exit passed | CW-A01 v2 | Corrected contract, starter and retained regression evidence | [Exit record](robotics/central_world_cw_a01_acceptance_plan.md); simulation/proxy scope |
 | Supporting data | CW-D01 | Exact board/servo/rail/drawing source register | Unknown facts remain open; needed for physical DRC/qualification |
-| 2 | CW-A02–CW-A04 | Mini Studio canvas/store, mating/snapping and worker DRC/BOM findings | CW-A01; physical pass also needs reviewed data |
+| 1 | CW-A02 | Authoring shell, v2 import/export, immutable revision store, selection, undo/redo and stale-load rejection | CW-A01 v2 candidate; raw import must reject duplicate keys; canvas dependency review |
+| 2 | CW-A03–CW-A04 | Magnetic snapping and worker DRC/BOM findings | CW-A01/CW-A02; physical pass also needs reviewed data |
 | 3 | CW-S01–CW-S04 | Restricted MJCF/native parity, browser worker and bounded gesture replay | Accepted assembly/DRC; trained-policy lane has separate compatibility/reference gates |
 | 4 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
 
@@ -85,7 +97,7 @@ meaning; skill packaging and commercial stages are separate follow-ons.
    roots, session/deadline semantics and command ingress. Record BOM quotes,
    hardware access and effort limits.
 2. **21–27 Oct:** reproduce the delivered read-only adapter, split-screen session
-   rehearsal and negative authority checks; begin CW-A01 contract preparation.
+   rehearsal and negative authority checks; progress CW-A02's authoring/store flow.
    Preserve distinct simulator, protocol-fixture and hardware labels.
 3. **28 Oct–3 Nov:** advance live native M2 admission/session/stop integration and
    minimum M3 requirements beyond the delivered host simulation. Bench checks

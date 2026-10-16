@@ -11,8 +11,8 @@ MuJoCo development workbench. Loading and simulation remain under
 The [component registry](../../../packages/component-registry/README.md) validates
 authoring parts and GLB proxies; it is a different contract from this compiled
 model package. Its schema pass does not define joints or create a MuJoCo model.
-[CW-A01/CW-S01](central_world_remaining_delivery_schedule.md) must declare
-articulation, compile only the supported subset and compare native FK, mass,
+[CW-A01 v2](central_world_cw_a01_acceptance_plan.md) now declares the initial
+proxy articulation subset. CW-S01 must compile supported models and compare native FK, mass,
 joint/actuator ordering and limits before CW-S02 browser use. A visual port
 normal or GLB URI cannot substitute for an explicit joint or qualified asset
 conversion. Preserve source rights and content identity through that handoff.

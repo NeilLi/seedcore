@@ -2,7 +2,7 @@
 
 Date: 2026-10-16
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
-Status: Phase 1 software foundation committed; remaining work packages and acceptance planned
+Status: Phase 1 committed; CW-A01 v2 software exit passed; CW-A02 next
 
 The product direction unifies component authoring, visual assembly, browser
 rehearsal and separately governed deployment inside the SeedCore monorepo.
@@ -13,8 +13,12 @@ This master plan owns the calendar and architecture. The
 [remaining delivery schedule](central_world_remaining_delivery_schedule.md)
 owns CW-A01 through CW-L03 work packages, owner roles and dependency handoffs;
 the [acceptance matrix](central_world_acceptance_matrix.md) owns required tests,
-measurement records and suggestion traceability. Start CW-A01's assembly/joint
-contract next; exact physical catalog data remains an independent open gate.
+measurement records and suggestion traceability. The CW-A01 assembly/joint
+v1 draft is committed as `9c5aaf7`. Its
+[v2 acceptance closure](central_world_cw_a01_acceptance_plan.md) now addresses
+all eight findings with passing local software checks. CW-A02's store/import
+implementation is next. Exact physical
+catalog data remains an independent open gate.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 retains the commercial horizon. [Microduck M0–M5](microduck_integration_plan.md)
@@ -108,6 +112,11 @@ behavior/joint bindings are distinct. Reject missing parts, changed hashes,
 disconnected required nodes and incompatible mount genders/standards. Undo/redo
 and import preserve exact revisions; never silently repair an invalid graph.
 
+The implemented [assembly v2 contract](../../../packages/component-registry/assemblies/README.md)
+provides this offline proxy subset, with exact catalog-byte pins and explicit
+proxy output declarations. CW-A02 adds immutable revision history, duplicate-key
+safe browser text import and stale asynchronous-result handling around it.
+
 ### 2. Magnetic assembly and DRC
 
 Use the 15 mm capture radius as a UI proposal, not evidence of a mechanical fit.
@@ -151,7 +160,7 @@ conditional interactive-runtime candidate for CW-S02/CW-S03. Its MuJoCo 3.11.0
 pin differs from this repository's 3.15.0 baseline; its DOM-bound public engine
 does not expose the required control veto or worker-owned state/capture contract.
 Prove those seams before adopting a runtime dependency. Its reviewed ONNX path
-uses Wasm, not WebGPU. CW-A01 remains the next implementation package.
+uses Wasm, not WebGPU. Follow the active queue for the current authoring package.
 
 The browser assembly compiler must define inertial/joint frames, axes/ranges,
 actuator mapping/gains/limits and fixed versus floating root behavior; sanitize

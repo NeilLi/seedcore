@@ -12,8 +12,9 @@ replace either existing simulator yet. The source review establishes useful
 capabilities and concrete integration gaps; it is not a browser benchmark or
 Microduck compatibility result.
 
-Keep CW-A01's assembly/joint/net contract next in the
-[delivery schedule](central_world_remaining_delivery_schedule.md). The
+Keep assembly authoring ahead of this runtime qualification in the
+[delivery schedule](central_world_remaining_delivery_schedule.md). CW-A01 now
+has a verified v2 software candidate; the active queue advances to CW-A02. The
 fixed-base tabletop gesture remains the first supported simulation target;
 Microduck locomotion retains its independent model/training gates. No hardware
 is connected, and this decision does not enable WebSerial or firmware release.

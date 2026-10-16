@@ -1,14 +1,15 @@
 # Central World: remaining delivery schedule
 
 Date: 2026-10-16
-Status: Planned work packages after the committed Phase 1 software foundation
+Status: CW-A01 v2 software exit passed; CW-A02 next
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
 remaining work-package order, owner roles, dependencies and review artifacts.
 The [acceptance matrix](central_world_acceptance_matrix.md) owns the required
-positive, negative and fault evidence. None of the planned packages below is an
-implemented API, schema, deployment or permission to operate hardware.
+positive, negative and fault evidence. CW-A01 has a verified v2 authoring candidate;
+the entries below describe required acceptance and remaining work. A draft
+schema or schedule does not grant permission to operate hardware.
 
 ## Baseline and execution order
 
@@ -19,8 +20,11 @@ including 29 registry checks. Local Chrome rendered all 12 meshes; desktop and
 mobile viewport checks passed. These are software/proxy checks, with no exact
 supplier data, physical fit, trained-policy compatibility or hardware approval.
 
-Start **CW-A01** next. It needs the delivered software foundation and can use
-explicit proxy fixtures. Keep **CW-D01** open in parallel for data collection;
+The [CW-A01 exit record](central_world_cw_a01_acceptance_plan.md) now addresses
+the eight findings from draft `9c5aaf7` in assembly v2. Local software acceptance
+passed 117 Python and 71 Node tests. Start
+**CW-A02's authoring shell and immutable store** next using that contract.
+Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
 Missing Microduck checkpoint outputs block its locomotion policy lane, not a
 separately declared fixed-base tabletop gesture simulation.
@@ -69,6 +73,13 @@ mapping and permitted ranges for the initial supported subset. The present
 component schema has no complete articulated-output model. Any needed extension
 requires a reviewed version and fixtures; do not infer these facts from a box
 mesh, port normal or part name.
+
+The [v2 implementation](../../../packages/component-registry/assemblies/README.md)
+meets the initial contract with assembly-owned, explicitly labeled proxy output
+declarations and direct-parent actuation. Component v1 stays unchanged; those
+declarations do not claim real servo-horn geometry or hardware channel ratings.
+CW-A02 must use v2 and add the browser text-import/immutable-store path; it must
+not treat the structural TypeScript validator as full catalog/DRC qualification.
 
 Freeze graph bounds, canonical number/property handling and cross-language hash
 fixtures before binding later admission to a build. Reference exact part bytes,

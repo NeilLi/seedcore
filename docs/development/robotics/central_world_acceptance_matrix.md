@@ -1,12 +1,19 @@
 # Central World: acceptance and suggestion traceability
 
 Date: 2026-10-16
-Status: Planned acceptance requirements; only the Phase 1 baseline is delivered
+Status: Phase 1 delivered; CW-A01 v2 local software exit passed; later gates open
 
 Use with the [master plan](central_world_engineering_plan.md) and
 [remaining delivery schedule](central_world_remaining_delivery_schedule.md).
 The IDs below are planning/review references, not runtime reason codes or new
 production contracts. A passing software test does not authorize a device.
+
+The CW-A01 draft `9c5aaf7` had eight reproduced review findings. The
+[v2 exit record](central_world_cw_a01_acceptance_plan.md) now maps each to passing
+regression evidence: 117 Python and 71 Node tests, independent numeric fixtures,
+live cross-language parity and a build with no preexisting contracts output.
+CW-ASM-01's initial offline software scope passes locally; CW-A02 browser/store,
+DRC, dynamics and hardware acceptance remain separate.
 
 ## Required evidence by work package
 

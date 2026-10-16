@@ -1,0 +1,1169 @@
+{
+  "schema_version": "seedcore.assembly-conformance.v1",
+  "cases": [
+    {
+      "name": "golden starter",
+      "patch": [],
+      "structural_valid": true,
+      "semantic_valid": true,
+      "schema_valid": true
+    },
+    {
+      "name": "Unicode name",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "identity",
+            "name"
+          ],
+          "value": "机器人 🦆"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": true,
+      "schema_valid": true
+    },
+    {
+      "name": "small rest angle",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "rest_angle_rad"
+          ],
+          "value": 1e-06
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": true,
+      "schema_valid": true
+    },
+    {
+      "name": "negative zero coordinate",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "relative_transform",
+            "position_m",
+            0
+          ],
+          "value": -0.0
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": true,
+      "schema_valid": true
+    },
+    {
+      "name": "missing identity field",
+      "patch": [
+        {
+          "op": "remove",
+          "path": [
+            "identity",
+            "version"
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "missing node version",
+      "patch": [
+        {
+          "op": "remove",
+          "path": [
+            "nodes",
+            0,
+            "part_version"
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "malformed hash",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            0,
+            "part_sha256"
+          ],
+          "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "null electrical net",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0
+          ],
+          "value": null
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "extra property",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "identity",
+            "unexpected"
+          ],
+          "value": true
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "unsupported schema",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "schema_version"
+          ],
+          "value": "seedcore.assembly.v1"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "missing rest transform",
+      "patch": [
+        {
+          "op": "remove",
+          "path": [
+            "mechanical_tree",
+            0,
+            "relative_transform"
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "missing joint",
+      "patch": [
+        {
+          "op": "remove",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint"
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "rigid mount contains joint",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "connection_type"
+          ],
+          "value": "rigid_mount"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "prismatic radians unsupported",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "kind"
+          ],
+          "value": "prismatic"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "zero actuator channel",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "actuator_channel"
+          ],
+          "value": 0
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "negative actuator channel",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "actuator_channel"
+          ],
+          "value": -17
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "unknown actuator channel",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "actuator_channel"
+          ],
+          "value": 2
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "missing torque bound",
+      "patch": [
+        {
+          "op": "remove",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_torque_nm"
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "zero torque bound",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_torque_nm"
+          ],
+          "value": 0
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    },
+    {
+      "name": "nonunit joint axis",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "axis"
+          ],
+          "value": [
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "nonunit quaternion",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "relative_transform",
+            "quaternion_wxyz"
+          ],
+          "value": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "reversed limits",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "min_rad"
+          ],
+          "value": 0.4
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_rad"
+          ],
+          "value": -0.4
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "zero width limits",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "min_rad"
+          ],
+          "value": 0
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_rad"
+          ],
+          "value": 0
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "rest angle outside bounds",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "rest_angle_rad"
+          ],
+          "value": 1
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "wrong root",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "root_node_id"
+          ],
+          "value": "missing_node"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "duplicate node ID",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            4,
+            "node_id"
+          ],
+          "value": "base_0"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "duplicate edge ID",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            1,
+            "edge_id"
+          ],
+          "value": "edge_base_bracket"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "edge count",
+      "patch": [
+        {
+          "op": "remove",
+          "path": [
+            "mechanical_tree",
+            3
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "self loop",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "child_node_id"
+          ],
+          "value": "base_0"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "root as child",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            1,
+            "child_node_id"
+          ],
+          "value": "base_0"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "multiple parents",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            3,
+            "child_node_id"
+          ],
+          "value": "bracket_0"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "occupied port",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            1,
+            "parent_node_id"
+          ],
+          "value": "base_0"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "disconnected cycle",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "parent_node_id"
+          ],
+          "value": "hat_0"
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "child_node_id"
+          ],
+          "value": "mcu_0"
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "connection_type"
+          ],
+          "value": "rigid_mount"
+        },
+        {
+          "op": "remove",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint"
+          ]
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            3,
+            "parent_node_id"
+          ],
+          "value": "mcu_0"
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            3,
+            "child_node_id"
+          ],
+          "value": "hat_0"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "remote actuator drives ancestor",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "connection_type"
+          ],
+          "value": "articulated_joint"
+        },
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "joint"
+          ],
+          "value": {
+            "joint_id": "ancestor_joint",
+            "kind": "revolute",
+            "frame": "parent_part",
+            "axis": [
+              0,
+              1,
+              0
+            ],
+            "pivot_m": [
+              0,
+              0,
+              0.02
+            ],
+            "actuator_node_id": "servo_0",
+            "actuator_channel": 1,
+            "rest_angle_rad": 0,
+            "limits_rad": {
+              "min_rad": -0.5,
+              "max_rad": 0.5,
+              "max_velocity_rad_s": 1,
+              "max_torque_nm": 0.2
+            }
+          }
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "duplicate output channel",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "actuator_outputs",
+            1
+          ],
+          "value": {
+            "node_id": "servo_0",
+            "port_id": "mount.bottom",
+            "channel": 1,
+            "basis": "simulation_proxy",
+            "axis": [
+              0,
+              1,
+              0
+            ],
+            "pivot_m": [
+              0,
+              0,
+              -0.02
+            ]
+          }
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "output frame differs",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "actuator_outputs",
+            0,
+            "axis"
+          ],
+          "value": [
+            1,
+            0,
+            0
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "output used as rigid mount",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "connection_type"
+          ],
+          "value": "rigid_mount"
+        },
+        {
+          "op": "remove",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint"
+          ]
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "duplicate net ID",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            1
+          ],
+          "value": {
+            "net_id": "net_servo_ttl",
+            "kind": "TTL_UART_BUS",
+            "endpoints": [
+              {
+                "node_id": "servo_0",
+                "interface_id": "servo-bus"
+              }
+            ]
+          }
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "electrical endpoint missing node",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "endpoints",
+            0,
+            "node_id"
+          ],
+          "value": "ghost_node"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false
+    },
+    {
+      "name": "unknown part",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            0,
+            "part_id"
+          ],
+          "value": "unknown.part"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "wrong version",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            0,
+            "part_version"
+          ],
+          "value": "9.9.9"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "wrong byte pin",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            0,
+            "part_sha256"
+          ],
+          "value": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "nonexistent mechanical port",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "parent_port_id"
+          ],
+          "value": "not_a_port"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "displaced mating ports",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "relative_transform",
+            "position_m"
+          ],
+          "value": [
+            5,
+            5,
+            5
+          ]
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "wrong mating orientation",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            0,
+            "relative_transform",
+            "quaternion_wxyz"
+          ],
+          "value": [
+            0,
+            1,
+            0,
+            0
+          ]
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "pivot away from port",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "pivot_m"
+          ],
+          "value": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "op": "set",
+          "path": [
+            "actuator_outputs",
+            0,
+            "pivot_m"
+          ],
+          "value": [
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "nonactuator output",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            2,
+            "part_id"
+          ],
+          "value": "seedcore.link-bracket"
+        },
+        {
+          "op": "set",
+          "path": [
+            "nodes",
+            2,
+            "part_sha256"
+          ],
+          "value": "d5e905d3ed8cace75c81f7f2a2e274acd0dd987eca4e1098f215cb193b561a1f"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "angle beyond capability",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_rad"
+          ],
+          "value": 1
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "velocity beyond capability",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_velocity_rad_s"
+          ],
+          "value": 100
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "torque beyond capability",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "mechanical_tree",
+            2,
+            "joint",
+            "limits_rad",
+            "max_torque_nm"
+          ],
+          "value": 100
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "wrong electrical interface",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "endpoints",
+            0,
+            "interface_id"
+          ],
+          "value": "missing_bus"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "wrong bus kind",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "endpoints",
+            0,
+            "interface_id"
+          ],
+          "value": "i2c"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "UART relabeled as power",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "kind"
+          ],
+          "value": "power"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "UART relabeled as ground",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "kind"
+          ],
+          "value": "ground"
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "undeclared GPIO pin",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "endpoints",
+            0,
+            "pins"
+          ],
+          "value": [
+            "not_a_pin"
+          ]
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "duplicate electrical endpoint",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            0,
+            "endpoints",
+            2
+          ],
+          "value": {
+            "node_id": "servo_0",
+            "interface_id": "servo-bus"
+          }
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "interface reused across nets",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "electrical_nets",
+            1
+          ],
+          "value": {
+            "net_id": "other_net",
+            "kind": "TTL_UART_BUS",
+            "endpoints": [
+              {
+                "node_id": "servo_0",
+                "interface_id": "servo-bus"
+              }
+            ]
+          }
+        }
+      ],
+      "structural_valid": true,
+      "semantic_valid": false,
+      "schema_valid": true
+    },
+    {
+      "name": "identifier trailing newline",
+      "patch": [
+        {
+          "op": "set",
+          "path": [
+            "identity",
+            "assembly_id"
+          ],
+          "value": "assembly.name\n"
+        }
+      ],
+      "structural_valid": false,
+      "semantic_valid": false,
+      "schema_valid": false
+    }
+  ]
+}

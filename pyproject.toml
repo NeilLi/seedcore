@@ -58,6 +58,7 @@ dependencies = [
     "aiorwlock==1.4.0",
     "aiofiles>=23.2.0",  # Required for async file operations in MCP tools
     "jsonschema>=4.22.0",
+    "rfc8785==0.1.4",  # Assembly v2 canonical bytes; existing receipt formats unchanged
     "wasmtime==41.0.0",  # WASM runtime for PKG policy evaluation
     # Note: OPA (Open Policy Agent) binary is required for PKG WASM compilation
     # OPA is not a Python package - it's a standalone binary that must be installed separately

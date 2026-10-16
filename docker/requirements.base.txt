@@ -33,6 +33,7 @@ prometheus_client==0.20.0
 aiorwlock==1.4.0
 aiofiles>=23.2.0
 jsonschema>=4.22.0
+rfc8785==0.1.4
 wasmtime==41.0.0
 
 # --- Data Handling ---

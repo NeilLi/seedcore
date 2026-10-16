@@ -1,8 +1,29 @@
 {
-  "schema_version": "seedcore.assembly.v1",
+  "schema_version": "seedcore.assembly.v2",
+  "canonicalization": "seedcore.jcs-safe-integers.v1",
+  "runtime_profile": "offline_proxy_no_actuation",
+  "mating_convention": "opposed_z_rx_pi",
+  "actuator_outputs": [
+    {
+      "node_id": "servo_0",
+      "port_id": "mount.top",
+      "channel": 1,
+      "basis": "simulation_proxy",
+      "axis": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "pivot_m": [
+        0.0,
+        0.0,
+        0.02
+      ]
+    }
+  ],
   "identity": {
     "assembly_id": "tabletop.starter-arm-v1",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "name": "SeedCore Tabletop Starter Arm - Golden Assembly",
     "status": "draft",
     "created_at": "2026-10-16T00:00:00Z",
@@ -14,7 +35,7 @@
       "node_id": "base_0",
       "part_id": "seedcore.tabletop-base",
       "part_version": "0.1.0",
-      "part_sha256": "e500752537740a2e79204cd8b36e5bfc50f637b6ad86cdd6b8433253076ce90e",
+      "part_sha256": "43ee3453f55752c371ae1b3bb135420183e8aa35e64fcc5ac4820abee0a2fb0a",
       "role": "chassis",
       "display_name": "Tabletop Base"
     },
@@ -22,7 +43,7 @@
       "node_id": "bracket_0",
       "part_id": "seedcore.link-bracket",
       "part_version": "0.1.0",
-      "part_sha256": "37ca824f56d094f25b72385859d40e696e71dd7b7f679f92610fb8ab09459f86",
+      "part_sha256": "d5e905d3ed8cace75c81f7f2a2e274acd0dd987eca4e1098f215cb193b561a1f",
       "role": "bracket",
       "display_name": "Link Bracket"
     },
@@ -30,7 +51,7 @@
       "node_id": "servo_0",
       "part_id": "feetech.sts3215-draft",
       "part_version": "0.1.0",
-      "part_sha256": "0eeacb71c145f09bce1a2e9a05a7ac0caeb3898f652feebf0a66daa5470d1303",
+      "part_sha256": "046cb29725fec98b6386fb41e26cee763acb4f6bc2af495b66b8a33788cbf3d0",
       "role": "actuator",
       "display_name": "Shoulder Pitch Servo"
     },
@@ -38,7 +59,7 @@
       "node_id": "hat_0",
       "part_id": "seedcore.sensor-hat",
       "part_version": "0.1.0",
-      "part_sha256": "d0d7d6dc1712fa5aef79203c986e6500ac9fb87610ee5c6805525c6efff7a112",
+      "part_sha256": "ef6f55e3957fe34f1bc228c5a2e8f55cadde3990137f62e045e98adccf247d8f",
       "role": "payload",
       "display_name": "Sensor Hat Link"
     },
@@ -46,7 +67,7 @@
       "node_id": "mcu_0",
       "part_id": "espressif.esp32-s3-draft",
       "part_version": "0.1.0",
-      "part_sha256": "cb42368f1c857c30873c5ca869c0433a821de9c0dea9dc11ca04eb997ebf85f9",
+      "part_sha256": "2d6fa5aa946d773f79fd962069b62373645885c92e8ff8e5a70c20b588b34e70",
       "role": "mcu",
       "display_name": "ESP32-S3 Controller"
     }
@@ -63,11 +84,11 @@
         "position_m": [
           0.0,
           0.0,
-          0.001
+          0.011
         ],
         "quaternion_wxyz": [
+          1.0,
           0.0,
-          -1.0,
           0.0,
           0.0
         ]
@@ -84,11 +105,11 @@
         "position_m": [
           0.0,
           0.0,
-          -0.015
+          0.025
         ],
         "quaternion_wxyz": [
+          1.0,
           0.0,
-          -1.0,
           0.0,
           0.0
         ]
@@ -105,11 +126,11 @@
         "position_m": [
           0.0,
           0.0,
-          0.016
+          0.024
         ],
         "quaternion_wxyz": [
+          1.0,
           0.0,
-          -1.0,
           0.0,
           0.0
         ]
@@ -117,6 +138,7 @@
       "joint": {
         "joint_id": "joint_shoulder_pitch",
         "kind": "revolute",
+        "frame": "parent_part",
         "axis": [
           0.0,
           1.0,
@@ -125,7 +147,7 @@
         "pivot_m": [
           0.0,
           0.0,
-          0.0
+          0.02
         ],
         "actuator_node_id": "servo_0",
         "actuator_channel": 1,
@@ -149,11 +171,11 @@
         "position_m": [
           0.0,
           0.0,
-          0.0
+          0.008
         ],
         "quaternion_wxyz": [
+          1.0,
           0.0,
-          -1.0,
           0.0,
           0.0
         ]
@@ -164,7 +186,7 @@
     {
       "net_id": "net_servo_ttl",
       "kind": "TTL_UART_BUS",
-      "nominal_voltage_v": 7.4,
+      "nominal_voltage_v": null,
       "endpoints": [
         {
           "node_id": "mcu_0",

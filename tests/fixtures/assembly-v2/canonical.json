@@ -1,0 +1,71 @@
+{
+  "profile": "seedcore.jcs-safe-integers.v1",
+  "source": "RFC 8785 sections 3.2.2/3.2.3 plus explicit safe-integral domain; expected strings frozen independently of SeedCore serializers",
+  "vectors": [
+    {
+      "name": "Unicode literal",
+      "input": {
+        "name": "\u673a\u5668\u4eba \ud83e\udd86"
+      },
+      "expected": "{\"name\":\"\u673a\u5668\u4eba \ud83e\udd86\"}"
+    },
+    {
+      "name": "number notation",
+      "input": [
+        0,
+        -0.0,
+        1e-06,
+        1e-07,
+        1e-05,
+        333333333.3333333,
+        4.5,
+        0.002,
+        1e-27
+      ],
+      "expected": "[0,0,0.000001,1e-7,0.00001,333333333.3333333,4.5,0.002,1e-27]"
+    },
+    {
+      "name": "numeric property order",
+      "input": {
+        "2": 2,
+        "10": 10
+      },
+      "expected": "{\"10\":10,\"2\":2}"
+    },
+    {
+      "name": "UTF16 property order",
+      "input": {
+        "\ue000": 1,
+        "\ud83d\ude00": 2,
+        "\r": 3,
+        "\u20ac": 4
+      },
+      "expected": "{\"\\r\":3,\"\u20ac\":4,\"\ud83d\ude00\":2,\"\ue000\":1}"
+    },
+    {
+      "name": "escaping",
+      "input": {
+        "x": "line\n\"\\/\u001f"
+      },
+      "expected": "{\"x\":\"line\\n\\\"\\\\/\\u001f\"}"
+    },
+    {
+      "name": "safe integer edge",
+      "input": [
+        9007199254740991,
+        -9007199254740991
+      ],
+      "expected": "[9007199254740991,-9007199254740991]"
+    },
+    {
+      "name": "unsafe integer",
+      "input": 9007199254740992,
+      "reject": true
+    },
+    {
+      "name": "lone surrogate",
+      "input": "\ud800",
+      "reject": true
+    }
+  ]
+}

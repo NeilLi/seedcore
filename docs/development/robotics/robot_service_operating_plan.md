@@ -258,7 +258,7 @@ work. A backlog is not a customer delivery promise.
 The [Central World remaining schedule](central_world_remaining_delivery_schedule.md)
 is an active, bounded authoring workstream alongside this service learning
 sequence. Owner roles and package handoffs do not assume additional staff.
-Start CW-A01 on explicit proxy data while exact part qualification stays open;
+Use the CW-A01 v2 software candidate for CW-A02 authoring/store work while exact part qualification stays open;
 maintain one active implementation package per implementer. CW-L02/CW-L03
 collect maker task, assistance, setup and support evidence before expanding the
 offer. Hardware and public publication remain separate reviewed activities.

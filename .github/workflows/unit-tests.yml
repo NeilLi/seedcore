@@ -69,7 +69,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install package and dev deps
         run: |
@@ -93,6 +93,9 @@ jobs:
         run: |
           cd ts
           npm ci
+
+      - name: Verify assembly v2 contracts and cross-language fixtures
+        run: node tools/robotics/verify-assembly.cjs --node-only
 
       - name: Start Postgres for RESULT_VERIFIER integration lane
         run: |

@@ -78,6 +78,8 @@ export {
 
 export {
   SEEDCORE_ASSEMBLY_SCHEMA_V1,
+  SEEDCORE_ASSEMBLY_SCHEMA_V2,
+  ASSEMBLY_CANONICAL_PROFILE,
   ASSEMBLY_ROLE_VALUES,
   CONNECTION_TYPE_VALUES,
   JOINT_KIND_VALUES,
@@ -87,6 +89,7 @@ export {
 } from "./robotAssemblyContracts.js";
 
 export type {
+  ActuatorOutput,
   AssemblyIdentity,
   AssemblyNode,
   AssemblyRole,
