@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.seedcore.ai/component/v1.sc-assembly.schema.json",
+  "title": "SeedCore assembly v1 (authoring contract, never execution authority)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "root_node_id",
+    "nodes",
+    "mechanical_tree",
+    "electrical_nets"
+  ],
+  "properties": {
+    "schema_version": {"const": "seedcore.assembly.v1"},
+    "identity": {"$ref": "#/$defs/identity"},
+    "root_node_id": {"$ref": "#/$defs/instance_id"},
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "mechanical_tree": {
+      "type": "array",
+      "maxItems": 255,
+      "items": {"$ref": "#/$defs/mechanical_edge"}
+    },
+    "electrical_nets": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/electrical_net"}
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notes": {"$ref": "#/$defs/text"},
+        "generator": {"$ref": "#/$defs/text"}
+      }
+    }
+  },
+  "$defs": {
+    "instance_id": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$"},
+    "part_id": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{2,95}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$", "maxLength": 32},
+    "text": {"type": "string", "minLength": 1, "maxLength": 512},
+    "vector3": {
+      "type": "array",
+      "items": {"type": "number", "minimum": -10, "maximum": 10},
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quaternion": {
+      "description": "Unit quaternion [w,x,y,z], active local-to-parent rotation.",
+      "type": "array",
+      "items": {"type": "number", "minimum": -1, "maximum": 1},
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_m", "quaternion_wxyz"],
+      "properties": {
+        "position_m": {"$ref": "#/$defs/vector3"},
+        "quaternion_wxyz": {"$ref": "#/$defs/quaternion"}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assembly_id", "version", "name", "status", "created_at", "notes"],
+      "properties": {
+        "assembly_id": {"$ref": "#/$defs/instance_id"},
+        "version": {"$ref": "#/$defs/version"},
+        "name": {"$ref": "#/$defs/text"},
+        "status": {"enum": ["draft", "documented"]},
+        "created_at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$"
+        },
+        "notes": {"$ref": "#/$defs/text"}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "part_id", "part_version", "part_sha256", "role"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/instance_id"},
+        "part_id": {"$ref": "#/$defs/part_id"},
+        "part_version": {"$ref": "#/$defs/version"},
+        "part_sha256": {"$ref": "#/$defs/sha256"},
+        "role": {
+          "enum": [
+            "chassis",
+            "actuator",
+            "sensor",
+            "mcu",
+            "power",
+            "bracket",
+            "link",
+            "payload",
+            "other"
+          ]
+        },
+        "display_name": {"$ref": "#/$defs/text"}
+      }
+    },
+    "joint_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_rad", "max_rad"],
+      "properties": {
+        "min_rad": {"type": "number", "minimum": -6.28318530718, "maximum": 6.28318530718},
+        "max_rad": {"type": "number", "minimum": -6.28318530718, "maximum": 6.28318530718},
+        "max_velocity_rad_s": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "max_torque_nm": {"type": ["number", "null"], "minimum": 0, "maximum": 100}
+      }
+    },
+    "joint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "joint_id",
+        "kind",
+        "axis",
+        "pivot_m",
+        "rest_angle_rad",
+        "limits_rad"
+      ],
+      "properties": {
+        "joint_id": {"$ref": "#/$defs/instance_id"},
+        "kind": {"enum": ["revolute", "fixed", "continuous", "prismatic"]},
+        "axis": {"$ref": "#/$defs/vector3"},
+        "pivot_m": {"$ref": "#/$defs/vector3"},
+        "actuator_node_id": {
+          "type": ["string", "null"],
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "actuator_channel": {"type": ["integer", "string", "null"]},
+        "rest_angle_rad": {
+          "type": "number",
+          "minimum": -6.28318530718,
+          "maximum": 6.28318530718
+        },
+        "limits_rad": {"$ref": "#/$defs/joint_limits"}
+      }
+    },
+    "mechanical_edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "parent_node_id",
+        "parent_port_id",
+        "child_node_id",
+        "child_port_id",
+        "connection_type"
+      ],
+      "properties": {
+        "edge_id": {"$ref": "#/$defs/instance_id"},
+        "parent_node_id": {"$ref": "#/$defs/instance_id"},
+        "parent_port_id": {"$ref": "#/$defs/part_id"},
+        "child_node_id": {"$ref": "#/$defs/instance_id"},
+        "child_port_id": {"$ref": "#/$defs/part_id"},
+        "connection_type": {"enum": ["rigid_mount", "articulated_joint"]},
+        "relative_transform": {"$ref": "#/$defs/transform"},
+        "joint": {"$ref": "#/$defs/joint"}
+      }
+    },
+    "net_endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "interface_id"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/instance_id"},
+        "interface_id": {"$ref": "#/$defs/part_id"},
+        "pins": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/text"},
+          "maxItems": 32
+        }
+      }
+    },
+    "electrical_net": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net_id", "kind", "endpoints"],
+      "properties": {
+        "net_id": {"$ref": "#/$defs/instance_id"},
+        "kind": {
+          "enum": [
+            "TTL_UART_BUS",
+            "I2C",
+            "PWM",
+            "GPIO",
+            "power",
+            "ground",
+            "other"
+          ]
+        },
+        "nominal_voltage_v": {"type": ["number", "null"], "minimum": 0, "maximum": 48},
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/net_endpoint"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "schema_version": "seedcore.assembly.v1",
+  "identity": {
+    "assembly_id": "tabletop.starter-arm-v1",
+    "version": "0.1.0",
+    "name": "SeedCore Tabletop Starter Arm - Golden Assembly",
+    "status": "draft",
+    "created_at": "2026-10-16T00:00:00Z",
+    "notes": "Golden reference tabletop assembly for CW-A01 qualification and testing."
+  },
+  "root_node_id": "base_0",
+  "nodes": [
+    {
+      "node_id": "base_0",
+      "part_id": "seedcore.tabletop-base",
+      "part_version": "0.1.0",
+      "part_sha256": "e500752537740a2e79204cd8b36e5bfc50f637b6ad86cdd6b8433253076ce90e",
+      "role": "chassis",
+      "display_name": "Tabletop Base"
+    },
+    {
+      "node_id": "bracket_0",
+      "part_id": "seedcore.link-bracket",
+      "part_version": "0.1.0",
+      "part_sha256": "37ca824f56d094f25b72385859d40e696e71dd7b7f679f92610fb8ab09459f86",
+      "role": "bracket",
+      "display_name": "Link Bracket"
+    },
+    {
+      "node_id": "servo_0",
+      "part_id": "feetech.sts3215-draft",
+      "part_version": "0.1.0",
+      "part_sha256": "0eeacb71c145f09bce1a2e9a05a7ac0caeb3898f652feebf0a66daa5470d1303",
+      "role": "actuator",
+      "display_name": "Shoulder Pitch Servo"
+    },
+    {
+      "node_id": "hat_0",
+      "part_id": "seedcore.sensor-hat",
+      "part_version": "0.1.0",
+      "part_sha256": "d0d7d6dc1712fa5aef79203c986e6500ac9fb87610ee5c6805525c6efff7a112",
+      "role": "payload",
+      "display_name": "Sensor Hat Link"
+    },
+    {
+      "node_id": "mcu_0",
+      "part_id": "espressif.esp32-s3-draft",
+      "part_version": "0.1.0",
+      "part_sha256": "cb42368f1c857c30873c5ca869c0433a821de9c0dea9dc11ca04eb997ebf85f9",
+      "role": "mcu",
+      "display_name": "ESP32-S3 Controller"
+    }
+  ],
+  "mechanical_tree": [
+    {
+      "edge_id": "edge_base_bracket",
+      "parent_node_id": "base_0",
+      "parent_port_id": "mount.top",
+      "child_node_id": "bracket_0",
+      "child_port_id": "mount.bottom",
+      "connection_type": "rigid_mount",
+      "relative_transform": {
+        "position_m": [
+          0.0,
+          0.0,
+          0.001
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "edge_id": "edge_bracket_servo",
+      "parent_node_id": "bracket_0",
+      "parent_port_id": "mount.top",
+      "child_node_id": "servo_0",
+      "child_port_id": "mount.bottom",
+      "connection_type": "rigid_mount",
+      "relative_transform": {
+        "position_m": [
+          0.0,
+          0.0,
+          -0.015
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "edge_id": "edge_servo_hat",
+      "parent_node_id": "servo_0",
+      "parent_port_id": "mount.top",
+      "child_node_id": "hat_0",
+      "child_port_id": "mount.bottom",
+      "connection_type": "articulated_joint",
+      "relative_transform": {
+        "position_m": [
+          0.0,
+          0.0,
+          0.016
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "joint": {
+        "joint_id": "joint_shoulder_pitch",
+        "kind": "revolute",
+        "axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "pivot_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "actuator_node_id": "servo_0",
+        "actuator_channel": 1,
+        "rest_angle_rad": 0.0,
+        "limits_rad": {
+          "min_rad": -0.5,
+          "max_rad": 0.5,
+          "max_velocity_rad_s": 1.0,
+          "max_torque_nm": 0.2
+        }
+      }
+    },
+    {
+      "edge_id": "edge_hat_mcu",
+      "parent_node_id": "hat_0",
+      "parent_port_id": "mount.top",
+      "child_node_id": "mcu_0",
+      "child_port_id": "mount.bottom",
+      "connection_type": "rigid_mount",
+      "relative_transform": {
+        "position_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "quaternion_wxyz": [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "electrical_nets": [
+    {
+      "net_id": "net_servo_ttl",
+      "kind": "TTL_UART_BUS",
+      "nominal_voltage_v": 7.4,
+      "endpoints": [
+        {
+          "node_id": "mcu_0",
+          "interface_id": "uart"
+        },
+        {
+          "node_id": "servo_0",
+          "interface_id": "servo-bus"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "notes": "Tabletop starter reference assembly satisfying CW-A01 contracts.",
+    "generator": "SeedCore CW-A01 reference generator"
+  }
+}

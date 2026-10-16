@@ -75,3 +75,29 @@ export {
   deriveReplayVerdict,
   validateOperatorCopilotBriefForLlm,
 } from "./operatorLegibility.js";
+
+export {
+  SEEDCORE_ASSEMBLY_SCHEMA_V1,
+  ASSEMBLY_ROLE_VALUES,
+  CONNECTION_TYPE_VALUES,
+  JOINT_KIND_VALUES,
+  NET_KIND_VALUES,
+  canonicalAssemblyString,
+  validateAssemblyStructure,
+} from "./robotAssemblyContracts.js";
+
+export type {
+  AssemblyIdentity,
+  AssemblyNode,
+  AssemblyRole,
+  ConnectionType,
+  ElectricalNet,
+  JointKind,
+  JointLimits,
+  JointRecord,
+  MechanicalEdge,
+  NetEndpoint,
+  NetKind,
+  RelativeTransform,
+  RobotAssembly,
+} from "./robotAssemblyContracts.js";
