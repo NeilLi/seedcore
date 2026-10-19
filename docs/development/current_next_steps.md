@@ -6,8 +6,9 @@ Status: Canonical active execution queue — simulation-first candidate delivere
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
 Its [entry and acceptance record](robotics/central_world_cw_a02_authoring.md)
-records the canvas decision and software evidence. The next product package is
-CW-A03 magnetic snapping/numeric placement on the verified proxy starter,
+records the canvas decision and software evidence. The [CW-A03 proxy placement slice](robotics/central_world_cw_a03_snapping.md) now
+adds magnetic candidates, non-committing ghosts and atomic numeric/subtree
+placement. The next product package is CW-A04 worker DRC and unknown-aware BOM,
 progressing toward a bounded
 attempt with an understandable allow/deny/interruption timeline and sufficient
 verifier evidence. Use the
@@ -66,15 +67,16 @@ The [remaining delivery schedule](robotics/central_world_remaining_delivery_sche
 owns detailed order and owner roles; the
 [acceptance matrix](robotics/central_world_acceptance_matrix.md) owns tests and
 measurement artifacts. CW-A01 v2 has passing local software acceptance and a
-verified software candidate. CW-A02 now has local software evidence; subsequent
-packages remain planned/open.
+verified software candidate. CW-A02 and CW-A03 now have local software evidence;
+subsequent packages remain planned/open.
 
 | Order | Package | Next reviewable result | Dependency |
 | --- | --- | --- | --- |
 | Software exit passed | CW-A01 v2 | Corrected contract, starter and retained regression evidence | [Exit record](robotics/central_world_cw_a01_acceptance_plan.md); simulation/proxy scope |
 | Supporting data | CW-D01 | [19 October source inventory](robotics/m0_cw_d01_register_2026_10_19.md) recorded before window boundary | Exact unit/drawing/pin/rail qualification remains open |
 | Local software slice passed | CW-A02 | [Mini Studio, raw import, immutable store and browser evidence](robotics/central_world_cw_a02_authoring.md) | Offline proxy scope; no runtime admission |
-| 1 | CW-A03–CW-A04 | Magnetic snapping and worker DRC/BOM findings | CW-A01/CW-A02; physical pass also needs reviewed data |
+| Local software slice passed | CW-A03 | [15 mm snapping, ghost/numeric placement and atomic reparenting](robotics/central_world_cw_a03_snapping.md) | Proxy-only CW-SNAP-01 evidence; explicit joints preserved |
+| 1 | CW-A04 | Worker DRC/net solver and unknown-aware BOM findings | CW-A01–CW-A03; physical pass also needs reviewed data |
 | 2 | CW-S01–CW-S04 | Restricted MJCF/native parity, browser worker and bounded gesture replay | Accepted assembly/DRC; trained-policy lane has separate compatibility/reference gates |
 | 3 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
 
@@ -101,7 +103,8 @@ meaning; skill packaging and commercial stages are separate follow-ons.
    roots, session/deadline semantics and command ingress. Record BOM quotes,
    hardware access and effort limits.
 2. **21–27 Oct:** reproduce the delivered read-only adapter, split-screen session
-   rehearsal and negative authority checks; progress CW-A02's authoring/store flow.
+   rehearsal and negative authority checks; begin CW-A04 DRC/BOM on the delivered
+   CW-A02/CW-A03 authoring/placement baseline.
    Preserve distinct simulator, protocol-fixture and hardware labels.
 3. **28 Oct–3 Nov:** advance live native M2 admission/session/stop integration and
    minimum M3 requirements beyond the delivered host simulation. Bench checks

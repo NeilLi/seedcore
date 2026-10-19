@@ -1,9 +1,9 @@
-// CW-ASM-02 source build, store/API checks and optional real-browser evidence.
+// CW-ASM-02 / CW-SNAP-01 source build, store/API checks and optional browser evidence.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'../..');
 const python=process.env.SEEDCORE_TEST_PYTHON || (fs.existsSync(path.join(root,'.venv/bin/python'))?path.join(root,'.venv/bin/python'):'python3');
-const report={scope:'offline_proxy_authoring',physical_acceptance:false,node:process.version,checks:[]};
+const report={scope:'offline_proxy_authoring',physical_acceptance:false,node:process.version,review_ids:['CW-ASM-02','CW-SNAP-01'],checks:[]};
 function run(label,command,args){
  const result=spawnSync(command,args,{cwd:root,encoding:'utf8',env:{...process.env,SEEDCORE_TEST_PYTHON:python}});
  process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');
@@ -28,8 +28,9 @@ finally{
  report.source_revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
  report.working_tree_dirty=Boolean(spawnSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).stdout.trim());
  const tracked=spawnSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.trim().split('\n');
- const prefixes=['ts/packages/robot-canvas/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-authoring','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json'];
+ const prefixes=['ts/packages/robot-canvas/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json'];
  report.inputs=tracked.filter(p=>prefixes.some(prefix=>p.startsWith(prefix))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
  report.outputs=['ts/apps/mini-studio/dist/app.js','ts/apps/mini-studio/dist/index.html','ts/apps/mini-studio/dist/app.css','ts/apps/mini-studio/dist/third-party-notices.txt'].filter(p=>fs.existsSync(path.join(root,p))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
- const target=path.join(root,'artifacts/robotics/cw-a02/verification.json');fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,JSON.stringify(report,null,2)+'\n');console.log(`CW-ASM-02: ${report.status}; artifacts/robotics/cw-a02/verification.json`);
+ for(const scope of ['cw-a02','cw-a03']){const target=path.join(root,`artifacts/robotics/${scope}/verification.json`);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,JSON.stringify(report,null,2)+'\n');}
+ console.log(`CW-ASM-02 / CW-SNAP-01: ${report.status}; artifacts/robotics/cw-a03/verification.json`);
 }

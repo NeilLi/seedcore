@@ -134,3 +134,8 @@ qualification, CW-A04 DRC and CW-S/CW-G runtime acceptance remain open.
 The review follow-up reads non-2xx response bodies directly through the same
 bounded reader. Empty errors retain the HTTP status; oversized errors reject
 without allocating an unbounded text response. No Response body is rewrapped.
+
+CW-A02 is committed as `4708e06`. The [CW-A03 follow-through](central_world_cw_a03_snapping.md)
+now adds proxy placement to the same authoring app. Current browser outputs
+are retained under `artifacts/robotics/cw-a03/`; the 58-test CW-A02 count above
+records the reviewed handoff, before the additional snapping cases.

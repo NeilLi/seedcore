@@ -117,5 +117,16 @@
     "One-servo stopping measurements before three-servo progression"
   ],
   "catalog_mutated": false,
-  "procurement_authorized": false
+  "procurement_authorized": false,
+  "follow_up_review": {
+    "window_start": "2026-10-26",
+    "window_end": "2026-11-01",
+    "owner_role": "Catalog/mechanical curator; trust/firmware lead",
+    "status": "open",
+    "items": [
+      "Reconcile STS3215 A/0 page 4 connector table against page 8 schematic and the actual harness; no polarity approved",
+      "Confirm the applicable unit revision and regulator setpoint against the documented input limit and source transients",
+      "Select and derate the servo BEC/rail, wiring, fuse, common signal reference and USB backfeed isolation before physical qualification"
+    ]
+  }
 }

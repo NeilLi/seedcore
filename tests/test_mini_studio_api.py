@@ -67,3 +67,18 @@ def test_bounded_same_origin_only(client):
 def test_no_deployment_or_arbitrary_asset_routes(client):
     for url in ["/api/admission", "/api/execute", "/api/flash", "/assets/missing.glb", "/catalog.json"]:
         assert client.get(url).status_code == 404
+
+
+def test_placement_palette_keeps_exact_catalog_and_part_bytes(client):
+    result = client.get("/api/placement-catalog")
+    assert result.status_code == 200
+    payload = result.json()
+    assert payload["scope"] == "offline_proxy_authoring"
+    assert payload["physical_acceptance"] is False
+    assert payload["catalog_raw_json"].encode() == read_local(REGISTRY, "catalog.json")
+    assert sha256(payload["catalog_raw_json"].encode()) == payload["catalog_sha256"]
+    pins = {part["part_id"]: part for part in json.loads(payload["catalog_raw_json"])["parts"]}
+    assert len(payload["part_documents"]) == len(pins) == 12
+    for item in payload["part_documents"]:
+        assert sha256(item["raw_json"].encode()) == pins[item["part_id"]]["sha256"]
+        assert json.loads(item["raw_json"])["hal_and_safety"]["execution_authority"] == "none"

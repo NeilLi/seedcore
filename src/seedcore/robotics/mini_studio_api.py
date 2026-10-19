@@ -27,7 +27,8 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
         meshes[Path(visual["uri"]).name] = data
     starter = read_local(registry, "assemblies/tabletop-starter.sc-assembly.json", MAX_BODY)
     validate_assembly(parse_json(starter), catalog, root=registry)
-    catalog_sha = sha256(read_local(registry, "catalog.json"))
+    catalog_raw = read_local(registry, "catalog.json")
+    catalog_sha = sha256(catalog_raw)
     web_root = web_root or ROOT / "ts/apps/mini-studio/dist"
     app = FastAPI(title="SeedCore offline Mini Studio", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -50,6 +51,14 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
     @app.get("/api/starter")
     def get_starter():
         return Response(starter, media_type="application/json")
+
+    @app.get("/api/placement-catalog")
+    def placement_catalog():
+        return {
+            "scope": "offline_proxy_authoring", "physical_acceptance": False,
+            "catalog_sha256": catalog_sha, "catalog_raw_json": catalog_raw.decode("utf-8"),
+            "part_documents": [{"part_id": key, "raw_json": raw.decode("utf-8")} for key, raw in sorted(documents.items())],
+        }
 
     @app.post("/api/assembly/validate")
     async def validate(request: Request):

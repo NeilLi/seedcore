@@ -73,3 +73,7 @@ native and fixture gates pass.
 Next review: 20 October inventory boundary, then the CW-D01 drawing/pin/rail
 qualification window (26 October–1 November). Missing hardware does not block
 CW-A02's offline proxy-authoring work.
+
+CW-A03 adds no physical qualification. The machine register now names the
+26 October–1 November follow-up for harness numbering, applicable input limits
+and regulated/derated servo rail/BEC design; all remain open.

@@ -8,8 +8,8 @@ Current packages:
 - `@seedcore/verification-console`: CLI that invokes `seedcore-verify summarize-transfer`
 - `@seedcore/verification-api`: TS verification facade over `seedcore-verify`
 - `@seedcore/proof-surface`: TS proof pages (`/transfer` and `/asset`)
-- `@seedcore/robot-canvas`: offline assembly store, hashed proxy asset loader and Three.js rest-pose adapter
-- `@seedcore/mini-studio`: localhost v2 assembly authoring, import/export, selection and undo/redo
+- `@seedcore/robot-canvas`: offline assembly store, verified proxy assets, pure mating proposals and a Three.js ghost/rest-pose adapter
+- `@seedcore/mini-studio`: localhost v2 assembly authoring, import/export, selection, undo/redo and numeric/magnetic placement
 - `@seedcore/operator-console`: TS operator workflow surface for Restricted Custody Transfer
 
 Quick start:

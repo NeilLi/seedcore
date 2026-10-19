@@ -1,7 +1,7 @@
 # Central World: acceptance and suggestion traceability
 
 Date: 2026-10-19
-Status: Phase 1, CW-A01 v2 and CW-A02 local offline software evidence available; later gates open
+Status: Phase 1, CW-A01 v2 and CW-A02/CW-A03 local offline software evidence available; later gates open
 
 Use with the [master plan](central_world_engineering_plan.md) and
 [remaining delivery schedule](central_world_remaining_delivery_schedule.md).
@@ -15,7 +15,9 @@ live cross-language parity and a build with no preexisting contracts output.
 CW-ASM-01's initial offline software scope passes locally. The
 [CW-A02 record](central_world_cw_a02_authoring.md) adds CW-ASM-02 store/browser
 evidence: immutable revisions, selection, undo/redo, raw import, stale/failed
-asset rejection and recovery. DRC, dynamics and hardware acceptance remain open.
+asset rejection and recovery. The [CW-A03 record](central_world_cw_a03_snapping.md)
+adds CW-SNAP-01 numeric/mating/preview/drop and undo evidence. DRC, dynamics and
+hardware acceptance remain open.
 The [19 October source inventory](m0_cw_d01_register_2026_10_19.md) records the
 window review without closing CW-CAT-01 qualification.
 
@@ -26,7 +28,7 @@ window review without closing CW-CAT-01 qualification.
 | CW-CAT-01 / CW-D01 | Exact revision, source and drawing/ratings resolve for the chosen board/servo/rails | Missing SKU, unknown rating, changed drawing/asset, unqualified mount | Versioned profile/source register; unknowns explicitly open |
 | CW-ASM-01 / CW-A01 | Same reviewed assembly serializes/imports with stable joint/part references and digest | Changed part bytes/version; missing node/root; cyclic/multiple-parent graph; duplicate occupied port; unsupported joint model | Contract/golden hash and atomic-import/edit report |
 | CW-ASM-02 / CW-A02 | Selection and undo/redo preserve immutable revision contents | Slow/failed asset fetch or stale async result overwrites a newer build | [CW-A02 browser/state report](central_world_cw_a02_authoring.md) with exact revision joins; local software slice passed |
-| CW-SNAP-01 / CW-A03 | Child aligns under a translated/rotated parent with declared mate transform | Quaternion order/norm error, incompatible gender/standard, bad normal/twist, invalid graph after drop | Numeric transform fixtures and visual/keyboard exercise |
+| CW-SNAP-01 / CW-A03 | Child aligns under a translated/rotated parent with declared mate transform | Quaternion order/norm error, incompatible gender/standard, bad normal/twist, invalid graph after drop | [CW-A03 numeric/native/browser report](central_world_cw_a03_snapping.md); local proxy slice passed |
 | CW-DRC-01 / CW-A04 | Compatible bus/protocol/voltage receives stable unique device IDs and valid resources | Mixed protocols, duplicate/unsupported IDs, unavailable/boot/USB/flash pin, duplicate I2C address or incompatible pull-up/logic voltage | Findings tied to build/net digest and field refs |
 | CW-DRC-02 / CW-A04 | Per-rail peak/continuous load fits reviewed derated conversion and wiring budget | Unknown load/rating, brownout margin missing, overloaded BEC/wire/fuse, double-counted MCU or summed currents at unlike voltages | Power calculation with explicit assumptions and blocked/conflict distinction |
 | CW-DRC-03 / CW-A04 | COM/inertias and BOM use common units and declared component transforms | Inertia about wrong origin/units; discarded off-diagonal terms; unknown price treated as free | Model/mass checks and cost subtotal plus unpriced count |

@@ -108,6 +108,7 @@ jobs:
           path: |
             artifacts/robotics/cw-a01/verification.json
             artifacts/robotics/cw-a02/verification.json
+            artifacts/robotics/cw-a03/verification.json
 
       - name: Start Postgres for RESULT_VERIFIER integration lane
         run: |
