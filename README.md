@@ -2,160 +2,196 @@
 
 [![Unit Tests](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/NeilLi/seedcore/actions/workflows/unit-tests.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Wasm ABI](https://img.shields.io/badge/Wasm%20Physics-ABI%201%20%7C%20ABI%202-success.svg)](packages/mini-physics/)
-[![Tests Passing](https://img.shields.io/badge/Simulator%20Tests-78%2F78%20passing-brightgreen.svg)](tools/mini-sim/verify.cjs)
+[![Wasm ABI](https://img.shields.io/badge/Wasm%20Physics-ABI%201%20%7C%20ABI%202%20(13.2%20KB)-success.svg)](packages/mini-physics/)
+[![SIM-3 Tests](https://img.shields.io/badge/SIM--3%20Tests-78%2F78%20passing-brightgreen.svg)](tools/mini-sim/verify.cjs)
+[![Assembly v2](https://img.shields.io/badge/CW--A01%20Assembly%20v2-117%20Py%20%2B%2071%20Node-brightgreen.svg)](tools/robotics/verify-assembly.cjs)
+[![Mini Studio](https://img.shields.io/badge/CW--A02%2F03%20Mini%20Studio-88%20TS%20%2B%2014%20API%20%2B%2018%20UI-brightgreen.svg)](tools/robotics/verify-authoring.cjs)
+[![Proof Kernel](https://img.shields.io/badge/Proof%20Kernel-Rust%20%2B%20Python-0f5132.svg)](rust/)
 
-**The Open Trust Runtime for Affordable Physical AI.**
+**The Open Trust Runtime for Affordable Physical AI.**  
+*Browser-first robot simulation · Canonical assembly authoring · Bounded execution authority · Verifiable action evidence.*
 
-SeedCore develops the boundary between AI proposals and robot execution:
-accountable agents, **scoped capability tokens**, local enforcement and
-**verifiable action evidence**. Browser-first maker and supervised education
-kits are the initial adoption focus. Microduck is the native-runtime reference;
-a small tabletop arm is the proposed MCU Fast Spine bench fixture.
+[Why SeedCore](#-why-seedcore) · [Delivered Now vs. Open Gates](#-delivered-now-vs-open-gates) · [System Architecture](#-system-architecture) · [Central World & Studios](#-central-world--browser-studios) · [Quickstart & Verification](#-quickstart--reproducible-verification) · [Repository Map](#-repository-map) · [Roadmap](#-roadmap--qualification-gates) · [Documentation](#-key-technical-documentation)
 
-The browser simulator, pinned Microduck body model and shared trust/proof
-components exist. A read-only Microduck adapter and bounded-session host
-simulation now provide observation/artifact replay and signed simulation
-evidence. Independent training parity, native Microduck motion, physical
-WebSerial, Fast Spine firmware and device-rooted receipts remain open. See the
-[simulation-first acceptance guide](docs/development/robotics/simulation_first_acceptance.md)
-for local policy paths, reproducible checks and the split-screen rehearsal.
+---
 
-The [Central World component foundation](packages/component-registry/README.md)
-adds a strict part schema, 12 illustrative draft components and a local read-only
-geometry/port viewer. The [12-week studio plan](docs/development/robotics/central_world_engineering_plan.md)
-stages assembly, DRC, browser MuJoCo and governed deployment. Qualified hardware
-data, the assembly IDE and physical provisioning remain open.
-The [remaining delivery schedule](docs/development/robotics/central_world_remaining_delivery_schedule.md)
-and [acceptance matrix](docs/development/robotics/central_world_acceptance_matrix.md)
-define the next assembly/joint contract and the later phase handoffs.
+## Why SeedCore
+
+Sub-kilogram mini-robots are inherently **safe by physics**—low mass, minimal inertia, and compliant actuators let makers, students, and researchers iterate on any desk without industrial safety cages. Yet as vision-language models and autonomous agents begin proposing real-world motion, **behavioral trust cannot rely on physical cages**.
+
+SeedCore builds the verifiable boundary between AI proposals and robot actuation:
+
+1. **Canonical Authoring (`Central World`):** Assemble byte-pinned robot components under `seedcore.assembly.v2` (`seedcore.jcs-safe-integers.v1` RFC 8785 canonical JSON) inside an immutable revision store with deterministic `15 mm` port snapping, accessible numeric placement, and automatic invalidation of prior runtime admission on every edit.
+2. **Bounded Authority (`Slow Brain, Fast Spine`):** High-level planners propose bounded action chunks (`ActionIntent`); the Policy Decision Point (PDP) issues **single-use session capability tokens** enforced with local deadlines, revocation fencing, and independent watchdog bounds.
+3. **Verifiable Evidence (`Python & Rust Proof Kernels`):** Every simulation rehearsal or governed attempt emits action-bound telemetry and cryptographic receipts verified by deterministic Python and Rust (`seedcore-verify`) kernels.
+
+> **Evidence Discipline:** SeedCore strictly separates **delivered software and simulation candidates** from **open physical hardware gates** (`physical_acceptance: false`). Simulation tokens, proxy assemblies, and draft catalog records never grant physical motor authority.
+
+---
+
+## Delivered Now vs. Open Gates
+
+Every delivered slice in this repository is backed by reproducible build-from-source verification runners:
+
+| Surface | Status | Verified Evidence & Test Coverage | Reproducible Command |
+| :--- | :--- | :--- | :--- |
+| **SIM-1–SIM-3 Browser Physics & 3D Tree Studio** | **Delivered Slice** | Zero-allocation C++17 planar 1/2/3-link dynamics compiled to 13,242-byte dual-ABI Wasm (`ABI 1` & `ABI 2`), 3D orbit viewport, live $M(q)$ & $\mathbf{J}(q)$ inspectors; **78/78 Node tests + 30 native/Wasm invariant groups passing**. | `node tools/mini-sim/verify.cjs` |
+| **CW1 Component Catalog Foundation** | **Delivered (Proxy Scope)** | Strict `.sc-part.json` v1 schema, 12 draft/proxy component records, original box-proxy GLB meshes, linter, and read-only part viewer; **107 passing registry/model tests**. | `pytest tests/test_component_registry.py -q` |
+| **CW-A01 Assembly v2 Contract** | **Software Exit Passed** | `seedcore.assembly.v2` schema, cross-language `seedcore.jcs-safe-integers.v1` canonical bytes, exact catalog byte pins, `opposed_z_rx_pi` rest poses, explicit proxy `actuator_outputs`, and 5-part `tabletop-starter.sc-assembly.json` (`0.2.0`); **117 Python + 71 Node conformance tests passing**. | `node tools/robotics/verify-assembly.cjs` |
+| **CW-A02 & CW-A03 Mini Studio, Immutable Store & Snapping** | **Local Slices Passed** | Strict duplicate-key raw JSON rejection, deep-frozen 32-entry / 2 MiB revision store, deterministic undo/redo, `authorityEpoch` invalidation, stale-load fencing, `15 mm` / `5°` candidate snapping (`CW-SNAP-01`), ghost preview, and keyboard/numeric placement; **88 TS + 14 FastAPI + 18 Chrome browser exercise groups passing**. | `node tools/robotics/verify-authoring.cjs --browser` |
+| **Simulation-First `M0` & Bounded Sessions** | **Delivered (Simulation Scope)** | Pinned **Microduck 0.1.0** MJCF ($0.737\text{ kg}$, 14 actuators, **88 Python tests**), read-only `microduck-sim-v1` HAL adapter (`61` obs / `14` actions / `15` servo channels), **16 upstream ONNX (`alpha_walking.onnx`) goldens**, localhost split-screen `fast-spine-v1` session rehearsal, and Python/Rust receipt checks. | `.venv/bin/python scripts/robotics/review_m0_pins.py` |
+| **M0 / CW-D01 Hardware Source Register** | **Inventory Recorded; Qualification Open** | Inventories `ESP32-S3-DevKitC-1-N8R8` and `Feetech STS3215` (TTL half-duplex spec `A/0`, `4–7.4 V` input) reference facts ([`m0_cw_d01_register_2026_10_19.md`](docs/development/robotics/m0_cw_d01_register_2026_10_19.md)). **No hardware is connected or qualified** (`STS3215` page 4 vs. page 8 pin numbering and regulated rail setpoints remain open). | `.venv/bin/python scripts/robotics/freeze_fast_spine_protocol.py` |
+
+### What Remains Open / Gated
+- **Central World Phase 2–5 (`CW-A04` → `CW-L03`):** `CW-A04` (pure DRC worker, routing proposals, field-linked findings & unknown-aware BOM) is the next active package, followed by `CW-S01–S04` (restricted assembly-to-MJCF compiler, browser MuJoCo worker where [`mjswan 0.11.9`](docs/development/robotics/mjswan_integration_assessment.md) is a conditional candidate, ONNX adapter, and Robot Moments gestures), `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification, and the January authoring/simulation alpha review.
+- **Native Microduck & Physical Hardware (`M1–M4` / `G0–G2`):** Independent training-checkpoint export parity (`M1`), live native `M2` velocity/stop sessions, hardware-enrolled signer receipts (`M3`), physical MCU firmware & WebSerial bridge, and measured 1-servo → 3-servo / biped stopping behavior (`M4`).
 
 ---
 
 ## Positioning And Adoption
 
-SeedCore combines open developer tools, qualified hardware profiles and
-verifiable execution. Its advantage must be demonstrated through cost,
-qualification, trusted releases and repeatable support.
+SeedCore combines open developer tools, qualified hardware profiles, and verifiable execution. Its advantage must be demonstrated through cost, qualification, trusted releases, and repeatable support.
 
-| Pillar | Proposed product value | First validation |
-| --- | --- | --- |
-| **SeedCore Inside** | Open reference firmware and browser lessons for supported affordable robot kits | One independently reproducible firmware/board/body profile |
-| **Auditable classroom governance** | Teacher roles, bounded motion, privacy/egress controls and explainable evidence | Allowed, denied and interrupted attempts with actual boundary enforcement |
-| **Opt-in sim-to-real telemetry** | Retained, versioned trajectories with action and signer provenance | Adult bench data improves calibration/evaluation under reviewed sharing rights |
+| Pillar | Proposed Product Value | Validation Requirement Before Commercial Claims |
+| :--- | :--- | :--- |
+| **A — SeedCore Inside** | Open Fast Spine reference firmware and browser lessons for supported affordable robot kits | An independent integrator flashes/enrolls one supported board, connects it, and reproduces allowed, denied, and interrupted attempts |
+| **B — Auditable Classroom Governance** | Teacher/operator roles, bounded sessions, privacy/egress controls, and replayable evidence | End-to-end enforcement, missing-evidence quarantine, privacy-path tests, and institutional acceptance for the named profile |
+| **C — Opt-In Sim-to-Real Telemetry** | Versioned trajectories tied to model, calibration, action, signer, and verifier disposition | Adult developer bench data first; rights/consent controls, gap accounting, and measurable calibration improvement |
 
-Selected kits below **$300** and a **$12 controller BOM** are design targets,
-excluding an existing host and with cost boundaries documented in the
-[execution plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md).
-They are not Microduck prices or supplier quotations. “Android + TrustZone”
-expresses an interface/isolation ambition, not an OS or safety certification.
-
-### Slow Brain, Fast Spine: Proposed Physical Bridge
-
-High-level planning produces bounded intent or action chunks; a native robot
-controller or qualified MCU handles local execution. The planned arm profile
-evaluates **200–500 Hz interpolation**, independently measuring servo-bus and
-telemetry rates. Microduck retains `robotd` control and bus ownership.
-
-PDP admission, continuous local limits/deadlines and asynchronous evidence
-closure have separate responsibilities. Local stop must work during browser
-or cloud loss. Measure revocation propagation and observed stopping; a fast
-lookup is not a physical-stop guarantee. Small robots still need profile-specific
-force, pinch, electrical and fall assessment.
-
-The current browser studio contains no hardware/gateway connection or signed
-robot receipts. Its physics covers fixed-base planar 1/2/3-link arms rendered
-with a 3D camera; native MuJoCo owns the separate pinned Microduck model path.
+Selected kits below **$300** and a **$12 controller BOM** are recurring volume design targets (excluding an existing host computer) with explicit cost boundaries in the [18-month execution plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)—they are not established Microduck prices or supplier quotations. “Android + TrustZone” expresses a portable interface and execution-isolation ambition, not an OS, Arm TrustZone on ESP32-S3, or certified safety.
 
 ---
 
-## Technical Stack Architecture
+## System Architecture
 
-SeedCore is structured in clean, decoupled layers separating governance, mathematical simulation, hardware abstraction, and cryptographic proofs:
+SeedCore decouples high-level cognitive planning and offline assembly authoring from deterministic execution and cryptographic verification.
 
-This diagram is the target integration architecture. The physical MCU bridge
-and Microduck action/evidence path are not yet delivered.
+### 1. End-to-End Trust & Execution Lifecycle (Target Integration Architecture)
+
+*Note: The simulation rehearsal, read-only Microduck adapter, and Python/Rust simulation receipt verifiers are delivered locally; the physical MCU bridge and live Microduck actuation path remain gated by `CW-D01`, `M1–M4`, and `G1–G2`.*
 
 ```mermaid
 flowchart TD
-    subgraph Cognitive ["1. Cognitive & Planning Layer"]
-        A[User / VLM / Policy Planner] -->|Proposes ActionIntent| B[SeedCore Agent Action Gateway]
+    subgraph AuthoringAndPlanning ["1. Authoring & Cognitive Planning"]
+        A0[Mini Studio CW-A02 / CW-A03<br/>seedcore.assembly.v2] -->|Canonical Digest & Scope| B
+        A1[User / VLM / Policy Planner] -->|Proposes Bounded ActionIntent| B[SeedCore Agent Action Gateway]
     end
 
-    subgraph Trust ["2. Trust Runtime & Policy Decision"]
+    subgraph TrustRuntime ["2. Trust Runtime & Policy Decision"]
         B --> C{Policy Decision Point - PDP}
-        C -->|Deny| D[Rejection Log]
-        C -->|Allow| E[Scoped ExecutionToken]
+        C -->|Out-of-Envelope / Stale| D[Deterministic Denial & Audit Log]
+        C -->|Admitted Scope| E[Single-Use Session ExecutionToken]
     end
 
-    subgraph ExecutionBridge ["3. SeedCore Execution Bridge"]
+    subgraph ExecutionBoundary ["3. Execution Boundary & Watchdog Fencing"]
         E --> F[Robot Execution Boundary]
-        F -->|Validate Token / Freshness / Revocation| G[Command Formatter & Chunk Dispatcher]
+        F -->|Verify Token / Freshness / Revocation / Deadline| G[Command Formatter & Chunk Dispatcher]
     end
 
-    subgraph SimulationOrHardware ["4. Physical & Simulated Embodiments"]
-        G -->|Option A: Proposed WebSerial Bridge| H[Edge MCU Fast Spine - ESP32-S3]
-        H -->|Qualified TTL Bus| I[Tabletop Arm Servos]
-        G -->|Option B: Native Microduck Path| P[Pinned RPC / robotd]
-        P --> Q[Microduck Local Control / Servo Bus]
-        G -->|Option C: Native Simulation| J[MuJoCo Pinned Model Engine]
-        G -->|Option D: Browser Integration Target| K[C++ Wasm Planar Tree Physics ABI 2]
+    subgraph Embodiments ["4. Simulated & Target Physical Embodiments"]
+        G -->|Delivered: fast-spine-v1 Rehearsal| H[Bounded Host Simulation & Watchdog]
+        G -->|Delivered: Read-Only M0 Replay| J[MuJoCo Pinned Microduck 0.1.0]
+        G -->|Delivered: Planar Wasm ABI 2| K[C++17 Wasm Tree Physics 1/2/3-Link]
+        G -.->|Target Gate: CW-D01 / CW-F01 / G1| M0[ESP32-S3 Fast Spine + STS3215 TTL Bus]
+        G -.->|Target Gate: Native M2-M4 / G2| P[Microduck Native robotd Controller]
     end
 
-    subgraph EvidencePipeline ["5. Evidence & Verification Layer"]
-        I & Q & J & K -->|Proprioception & Action Telemetry| L[Action-Bound Receipt Generator]
-        L --> M[Rust Proof Kernel / RESULT_VERIFIER]
-        M --> N[Verifiable Execution Receipt / Replay]
+    subgraph Verification ["5. Evidence & Cryptographic Verification"]
+        H & J & K & M0 & P -->|Action-Bound Telemetry & Signer Context| L[Session Receipt & Replay Bundle]
+        L --> M[Python & Rust Proof Kernels<br/>RESULT_VERIFIER / seedcore-verify]
+        M --> N[Verified Disposition or Quarantine]
     end
 ```
 
-### 1. Trust Runtime & Policy Decision Layer
-- **Agent Action Gateway:** [`agent_actions_router.py`](src/seedcore/api/routers/agent_actions_router.py) supplies the existing intent ingress.
-- **Policy Decision Point (PDP):** Evaluates intents and issues scoped `ExecutionToken` authority. Robot-specific session bindings require versioned review against the existing token and policy contracts.
-- **Revocation Custody:** [`execution_token_revocation.py`](src/seedcore/hal/custody/execution_token_revocation.py) supplies shared revocation checks; physical propagation and stopping remain profile-specific acceptance work.
+### 2. Central World (`CW1` → `CW-A03`) Authoring, Snapping & Verification Pipeline
 
-### 2. Hardware Abstraction Layer (HAL) & Drivers
-- **Base Interfaces (`src/seedcore/hal/interfaces.py`):** Unified [`BaseRobotDriver`](src/seedcore/hal/interfaces.py), [`ProprioceptionState`](src/seedcore/hal/interfaces.py), [`RobotCapabilities`](src/seedcore/hal/interfaces.py), and operational [`RobotState`](src/seedcore/hal/interfaces.py).
-- **Driver Implementations (`src/seedcore/hal/drivers/`):**
-  - [`robot_sim_driver.py`](src/seedcore/hal/drivers/robot_sim_driver.py): Extensible execution framework with in-memory and physics-backed profiles.
-  - [`microduck.py`](src/seedcore/hal/drivers/microduck.py): M1 read-only MuJoCo and explicit fake-I/O profiles; pinned 61/14 semantics, home/scaling and no startup actuation. Hardware selection fails without simulation fallback. Independent checkpoint/export parity remains open. Those dimensions are Microduck-specific.
+```mermaid
+flowchart LR
+    P1[CW1 Component Catalog<br/>12 .sc-part.json + Box GLBs] -->|Exact File-Byte SHA-256 Pins| A1[CW-A01 Assembly v2<br/>seedcore.jcs-safe-integers.v1]
+    A1 -->|parseStrictJson<br/>Reject Duplicate Keys & v1| A2[CW-A02 AssemblyStore<br/>Frozen Revisions · Undo/Redo]
+    A2 -->|CW-A03 15 mm / 5° Snapping<br/>Ghost Preview & Numeric Place| V1[Localhost FastAPI Validator<br/>+ Epoch & Byte/Mesh Recheck]
+    V1 -->|opposed_z_rx_pi Rest Poses| C1[Three.js Proxy Viewport<br/>http://127.0.0.1:8767]
+```
 
-### 3. Native MuJoCo Workbench & Model Packages
-- **Model Ingestion (`packages/models/`):** Validated, versioned model packages with SHA-256 integrity manifests. Includes the pinned **Microduck 0.1.0** MJCF model ([`packages/models/microduck/0.1.0/manifest.json`](packages/models/microduck/0.1.0/manifest.json), $0.737\text{ kg}$, $nq=21, nv=20, nu=14$).
-- **Integrity & Parity Verifier:** [`tests/test_model_package.py`](tests/test_model_package.py) verifies total mass, joint limits, kinematic trees, and dynamics against upstream CAD sources.
+---
 
-### 4. Zero-Allocation C++ Physics Kernel & WebAssembly Core
-- **Analytical C++ Physics (`packages/mini-physics/`):**
-  - [`include/mini_physics.h`](packages/mini-physics/include/mini_physics.h) & [`src/mini_physics.cpp`](packages/mini-physics/src/mini_physics.cpp): **ABI 1** planar two-joint dynamics core.
-  - [`include/mini_tree_physics.h`](packages/mini-physics/include/mini_tree_physics.h) & [`src/mini_tree_physics.cpp`](packages/mini-physics/src/mini_tree_physics.cpp): **ABI 2** general multi-link serial chain dynamics ($N \in \{1, 2, 3\}$). Features exact analytical mass matrix $M(q) = \sum \left( m_i J_{v, i}^T J_{v, i} + I_i J_{\omega, i}^T J_{\omega, i} \right)$, skew-symmetric Coriolis vector $c(q, v)$, gravity torque $g(q) = \nabla U(q)$, analytical $3\times 3$ Cramer matrix inversion, and RK4 integration. Zero heap allocations (`malloc`/`new`), zero exceptions, and caller-owned 64-double buffer.
-- **Dual-ABI WebAssembly Build (`apps/mini-robot-simulator/mini-physics.wasm`):**
-  - Compiled via Clang and `wasm-ld` (`tools/mini-sim/build-physics.cjs`).
-  - Exports: `mini_abi`, `mini_eval`, `mini_scratch` (ABI 1) and `mini_tree_abi`, `mini_tree_eval`, `mini_tree_scratch` (ABI 2).
-  - Current raw module size **13,242 bytes**; standalone host math imports (`sin`, `cos`). This is not MCU firmware size or whole-application memory use.
+## Central World & Browser Studios
 
-### 5. Simulator Contracts & Verification
-- **Schema Contracts (`packages/mini-sim-contracts/`):**
-  - [`schemas/tree-model.schema.json`](packages/mini-sim-contracts/schemas/tree-model.schema.json): Schema `seedcore.mini-sim.tree-model.v1`.
-  - [`src/index.ts`](packages/mini-sim-contracts/src/index.ts) & [`src/tree_contracts.ts`](packages/mini-sim-contracts/src/tree_contracts.ts): TypeScript bindings for model compilation, bounded ASCII/UTF-8 canonical SHA-256 digests, 3D forward kinematics, Jacobian, and Wasm buffer serialization.
-  - Built via locked `tsc` into zero-dependency [`sim-contracts.js`](apps/mini-robot-simulator/sim-contracts.js) and [`sim-contracts.d.ts`](apps/mini-robot-simulator/sim-contracts.d.ts).
+### 1. Central World Component Catalog & Mini Studio (`CW1`, `CW-A01 v2`, `CW-A02`, `CW-A03`)
+- **Component Registry ([`packages/component-registry/`](packages/component-registry/README.md)):** Strict v1 component schema, 12 draft/proxy records (`ESP32-S3`, `Feetech STS3215`, sensor hats, power rails, brackets), original box-proxy `.glb` meshes, and SHA-256 catalog index.
+- **Assembly v2 Contract ([`packages/component-registry/assemblies/`](packages/component-registry/assemblies/README.md), [`src/seedcore/robotics/assembly.py`](src/seedcore/robotics/assembly.py), [`ts/packages/contracts/`](ts/packages/contracts/src/robotAssemblyContracts.ts)):**
+  - Enforces RFC 8785 canonical serialization with safe-integer bounds (`seedcore.jcs-safe-integers.v1`), rooted tree topology, `opposed_z_rx_pi` mating rest transforms, and explicit `actuator_outputs` (`basis: simulation_proxy`).
+  - Reference starter: [`tabletop-starter.sc-assembly.json`](packages/component-registry/assemblies/tabletop-starter.sc-assembly.json) (version `0.2.0`, canonical digest `2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb`).
+- **Offline Mini Studio, Immutable Store & Proxy Snapping ([`ts/apps/mini-studio/`](ts/apps/mini-studio/), [`ts/packages/robot-canvas/`](ts/packages/robot-canvas/), [`src/seedcore/robotics/mini_studio_api.py`](src/seedcore/robotics/mini_studio_api.py)):**
+  - `parseStrictJson()` ([`assemblyText.ts`](ts/packages/contracts/src/assemblyText.ts)) enforces a 256 KiB UTF-8 cap, 32 nesting levels, and 50,000 nodes while rejecting duplicate decoded JSON keys before schema validation.
+  - `AssemblyStore` ([`store.ts`](ts/packages/robot-canvas/src/store.ts)) deep-freezes revisions, caps history at 32 entries / 2 MiB, increments `authorityEpoch` on every load/edit/undo/redo (`admission: null`), and fences stale or abort-ignoring async loads via monotonic generation tickets.
+  - `snapping.ts` ([`ts/packages/robot-canvas/src/snapping.ts`](ts/packages/robot-canvas/src/snapping.ts)) and `placement.ts` ([`ts/apps/mini-studio/src/placement.ts`](ts/apps/mini-studio/src/placement.ts)) provide deterministic `15 mm` / `5°` candidate capture under `seedcore.proxy_mount_v1`, non-committing green/red ghost preview, subtree reparenting, and accessible keyboard/numeric placement bound to the store's `authorityEpoch`.
 
-### 6. Zero-Install 3D Browser Studio & Workbench
-- **Planar Tree Studio with a 3D View ([`apps/mini-robot-simulator/tree-lab.html`](apps/mini-robot-simulator/tree-lab.html)):**
-  - Interactive 3D perspective viewport ([`tree-lab.js`](apps/mini-robot-simulator/tree-lab.js), [`tree-lab-ui.js`](apps/mini-robot-simulator/tree-lab-ui.js)) with drag-to-orbit camera controls, depth clipping, and perspective scaling.
-  - Preset models: 1-link pendulum, 2-link serial arm, 3-link articulated manipulator.
-  - Real-time analytical inspectors: live mass matrix $M(q)$, end-effector Jacobian $\mathbf{J}(q)$, kinetic/potential/total mechanical energy meters, and JSON experiment export.
-- **Planar Beginner Lessons ([`apps/mini-robot-simulator/index.html`](apps/mini-robot-simulator/index.html)):**
-  - WebWorker isolated simulation ([`simulation-worker.js`](apps/mini-robot-simulator/simulation-worker.js)) with resumable checkpoints, predictive learning challenges, and 480 Hz real-time stepping.
+### 2. Zero-Allocation C++17 Physics Kernel & 3D Tree Studio (`SIM-1`–`SIM-3`)
+- **Analytical C++ Physics ([`packages/mini-physics/`](packages/mini-physics/)):**
+  - **ABI 1 ([`mini_physics.h`](packages/mini-physics/include/mini_physics.h)):** Planar two-joint dynamics core.
+  - **ABI 2 ([`mini_tree_physics.h`](packages/mini-physics/include/mini_tree_physics.h)):** Multi-link serial chain dynamics ($N \in \{1, 2, 3\}$) with analytical mass matrix $M(q) = \sum (m_i J_{v,i}^T J_{v,i} + I_i J_{\omega,i}^T J_{\omega,i})$, skew-symmetric Coriolis vector $c(q, v)$, gravity gradient $g(q) = \nabla U(q)$, analytical $3\times 3$ Cramer inversion, and RK4 integration in a caller-owned 64-double buffer (zero `malloc`/`new`, zero exceptions).
+- **3D Kinematic Tree Studio ([`apps/mini-robot-simulator/tree-lab.html`](apps/mini-robot-simulator/tree-lab.html)) & 2D Planar Lab ([`index.html`](apps/mini-robot-simulator/index.html)):**
+  - Interactive 3D orbit viewport, 1/2/3-link presets, live $M(q)$ and $\mathbf{J}(q)$ matrix inspectors, mechanical energy conservation tracking, and WebWorker checkpoint continuation.
 
-### 7. Cryptographic Proof Kernel & Verifier
-- **Rust Proof Engine (`rust/`):** Rust proof kernel and offline CLI (`seedcore-verify`) with token, signature, receipt and replay verification.
-- Device enrollment, signed robot telemetry and Microduck `RESULT_VERIFIER` closure remain M3/M4 integration work; a verifier needs captured evidence from a configured signer.
-- **TypeScript Proof Surfaces (`ts/`):** Verification APIs, typed schema contracts, and operator console bindings.
+### 3. Native MuJoCo Workbench, Microduck `M0` Profile & Proof Kernels
+- **Pinned Microduck 0.1.0 & Read-Only HAL ([`packages/models/microduck/0.1.0/`](packages/models/microduck/0.1.0/manifest.json), [`src/seedcore/hal/drivers/microduck.py`](src/seedcore/hal/drivers/microduck.py)):**
+  - Validated 38-mesh, 14-actuator MJCF model ($0.737\text{ kg}$), [`microduck-sim-v1.json`](packages/robotics-profiles/microduck-sim-v1.json) (`61` observations / `14` policy actions / `15` physical servo channels), and 16 upstream-derived observation/ONNX (`alpha_walking.onnx`) replay goldens.
+- **Bounded Fast Spine Rehearsal & Verification ([`packages/robotics-profiles/fast-spine-v1/`](packages/robotics-profiles/fast-spine-v1/), [`rust/`](rust/)):**
+  - Single-use token claim, refresh, revocation, authenticated wire framing, host watchdog, split-screen rehearsal, and offline receipt verification in Python and Rust (`seedcore-verify`).
 
-### 8. Multi-Robot Team Orchestration
-- **Team Coordination (`src/seedcore/robotics/`):**
-  - [`coordinator.py`](src/seedcore/robotics/coordinator.py): Round barriers, uncertainty tracking, and execution halt controls.
-  - [`contracts.py`](src/seedcore/robotics/contracts.py): Cognitive proposals, organ reservations, and team mission definitions.
+---
+
+## Quickstart & Reproducible Verification
+
+### 1. Launch Central World Mini Studio (`CW-A02` / `CW-A03`) & Verify Assembly Contracts
+```bash
+# Install locked TypeScript workspace dependencies
+npm --prefix ts ci
+
+# Run CW-A01 v2 build-from-source conformance (117 Python + 71 Node tests)
+node tools/robotics/verify-assembly.cjs
+
+# Run CW-A02/CW-A03 authoring store, snapping, FastAPI boundary & Chrome browser exercises (88 TS + 14 API + 18 UI groups)
+node tools/robotics/verify-authoring.cjs --browser
+
+# Serve Mini Studio locally at http://127.0.0.1:8767
+.venv/bin/python scripts/robotics/serve_mini_studio.py --port 8767
+```
+
+### 2. Launch the Zero-Install 3D Kinematic Tree Studio (`SIM-3`)
+```bash
+# Serve the browser simulator locally
+python3 -m http.server 8080 --directory apps/mini-robot-simulator
+
+# Open in browser:
+# 3D Multi-Link Tree Studio: http://localhost:8080/tree-lab.html
+# 2D Planar Physics Lessons: http://localhost:8080/index.html
+```
+
+### 3. Run the C++ / Wasm Simulator Qualification Suite (`78/78 Tests`)
+```bash
+# Run locked TypeScript contract checks, C++/Wasm parity, and all 78 Node.js tests
+node tools/mini-sim/verify.cjs
+
+# Build & run native C++ CMake/CTest mathematical invariants directly
+cmake -B /tmp/mini-physics -S packages/mini-physics
+cmake --build /tmp/mini-physics
+ctest --test-dir /tmp/mini-physics --output-on-failure
+```
+
+### 4. Verify Microduck `M0` Pins, Fast Spine Schemas & Rust Proof Kernel
+```bash
+# Verify pinned Microduck runtime/RL/model hashes and Fast Spine v1 wire schemas offline
+.venv/bin/python scripts/robotics/review_m0_pins.py
+.venv/bin/python scripts/robotics/freeze_fast_spine_protocol.py
+
+# Run Python model package, MuJoCo workbench, and Mini Studio API suites
+.venv/bin/python -m pytest tests/test_model_package.py tests/test_mujoco_workbench.py tests/test_mini_studio_api.py -q
+
+# Run the Rust cryptographic proof kernel & receipt verification suite
+cargo test --workspace --manifest-path rust/Cargo.toml
+```
 
 ---
 
@@ -164,130 +200,70 @@ flowchart TD
 ```text
 seedcore/
 ├── apps/
-│   ├── mini-robot-simulator/       # Zero-install browser simulator: 2D lessons & 3D Tree Studio
-│   │   ├── index.html              # Planar beginner lessons UI
-│   │   ├── tree-lab.html           # SIM-3 3D Kinematic Tree Studio UI
-│   │   ├── tree-lab.js             # 3D Projector, preset models & controller
-│   │   ├── tree-lab-ui.js          # Orbit controls & live diagnostic inspectors
-│   │   ├── tree-physics-wasm.js    # High-level JS bridge for ABI 2 Wasm
-│   │   ├── mini-physics.wasm       # Dual-ABI (ABI 1 & ABI 2) compiled Wasm core
-│   │   └── sim-contracts.js        # Compiled TypeScript contracts runtime
-│   └── neighborhood-guide/         # Digital City Godot & Blender prototype
+│   ├── mini-robot-simulator/       # Zero-install SIM-1–SIM-3 browser simulator (2D lab & 3D Tree Studio)
+│   └── neighborhood-guide/         # Digital City prototype (deferred outside active reference lane)
 ├── packages/
-│   ├── mini-physics/               # C++ analytical physics engine (CMake / CTest)
-│   │   ├── include/                # mini_physics.h (ABI 1), mini_tree_physics.h (ABI 2)
-│   │   └── src/                    # Analytical kinematics, Coriolis, Jacobian, RK4
-│   ├── mini-sim-contracts/         # TypeScript schemas & compiler for robot models
-│   └── models/                     # Versioned robot packages (Microduck 0.1.0 MJCF)
+│   ├── component-registry/         # CW1 .sc-part.json catalog, box-proxy GLBs & CW-A01 v2 assembly schemas
+│   ├── mini-physics/               # Zero-allocation C++17 analytical dynamics engine (ABI 1 & ABI 2)
+│   ├── mini-sim-contracts/         # TypeScript schemas & canonical compiler for SIM-3 tree models
+│   ├── models/                     # Versioned robot MJCF packages (pinned Microduck 0.1.0)
+│   └── robotics-profiles/          # microduck-sim-v1, fast-spine-v1 wire schemas & M0/CW-D01 reviews
+├── scripts/robotics/               # serve_mini_studio.py, review_m0_pins.py, freeze_fast_spine_protocol.py
 ├── src/seedcore/
-│   ├── agents/                     # Agent Action Gateway and intent routing
-│   ├── hal/                        # Hardware Abstraction Layer & robot drivers
-│   │   ├── drivers/                # Robot simulation & physical adapters
-│   │   └── custody/                # Token validation and revocation registry
-│   ├── robotics/                   # Multi-robot team coordination & reservations
-│   ├── models/                     # Database models & identity entities
-│   └── security/                   # Policy Decision Point (PDP) and authz
-├── rust/                           # High-assurance proof kernel & CLI (seedcore-verify)
-├── ts/                             # TypeScript contracts, verification API & console
-├── tests/
-│   ├── mini-sim/                   # Tree contracts, Wasm physics & 3D lab tests
-│   ├── test_model_package.py       # Microduck MJCF integrity & dynamics tests
-│   └── test_mujoco_workbench.py    # MuJoCo development workbench tests
-├── tools/mini-sim/                 # Wasm compilation & verification test runners
-└── docs/development/robotics/      # Blueprints, execution contracts & specs
+│   ├── api/routers/                # Agent Action Gateway and intent ingress
+│   ├── hal/                        # Hardware Abstraction Layer, Microduck read-only driver & revocation custody
+│   ├── robotics/                   # Assembly v2 validator, Mini Studio FastAPI service & team coordination
+│   └── security/                   # Policy Decision Point (PDP) and scoped authorization
+├── ts/
+│   ├── apps/mini-studio/           # CW-A02/CW-A03 offline Mini Studio UI, placement & Playwright checks
+│   ├── packages/contracts/         # Assembly v2 TypeScript bindings, strict JSON parser & standalone Ajv
+│   ├── packages/robot-canvas/      # Immutable AssemblyStore, 15 mm snapping math, GLB loader & Three.js viewport
+│   └── tests/                      # CW-ASM-02 & CW-SNAP-01 store, snapping & stale-load regression suites
+├── rust/                           # High-assurance Rust proof kernel & CLI (seedcore-verify)
+├── tests/                          # Python & Node conformance suites (assembly-v2, mini-sim, MuJoCo, authz)
+├── tools/
+│   ├── mini-sim/                   # Wasm compiler & SIM-1–SIM-3 verification runner
+│   └── robotics/                   # verify-assembly.cjs, verify-authoring.cjs & schema codegen
+└── docs/development/               # Active queue, 18-month execution plan, Central World & Microduck specs
 ```
 
 ---
 
-## Active Robotics Milestones & Status
+## Roadmap & Qualification Gates
 
-| Stage | Focus Area | Status | Deliverables & Acceptance Gates |
-| --- | --- | --- | --- |
-| **SIM-1** | Worker Isolation | **Complete** | WebWorker isolation, versioned run/model/command contracts, reproducible checkpoints. |
-| **SIM-2** | C++ Wasm Planar Core | **Complete** | Zero-allocation C++ two-link dynamics (ABI 1), Wasm build, JS/native/Wasm parity (< 1e-12 error). |
-| **SIM-3** | Planar Tree & 3D Studio | **Delivered slice; broader gates open** | Fixed-base 1/2/3-link planar dynamics and orbit view; **78/78 Node.js tests passed 2026-10-14**. Branching/spatial dynamics, encoders, worker-v3 and MuJoCo comparisons remain open. |
-| **M0** | Microduck Model / Deployment Pins | **Model complete; deployment inventory open** | Microduck 0.1.0 MJCF ($0.737\text{ kg}$, 14 actuators), integrity/mass/joint parity. Runtime, policy, normalization and hardware/transport pins still required. |
-| **M1** | Microduck Simulation Driver | **Planned — Q4 2026** | Native MuJoCo HAL driver, golden 61/14 semantics and startup without unrequested motion. |
-| **M2** | Governed Motion Intent | **Planned — Q4 2026** | Bounded velocity/stop session via existing gateway/PDP/token/native controller. Arm MCU bridge is a separate fixture. |
-| **M3** | Evidence & Receipts | **Planned — Q4 2026–Q1 2027** | Action-bound telemetry, enrolled signer, replay and `RESULT_VERIFIER` closure; minimum evidence precedes a physical demo. |
-| **M4** | Supervised Hardware | **Planned — Q1 2027** | Native Microduck bring-up and measured local stop/fault behavior; arm WebSerial acceptance is separate. |
-| **M5** | Learning & Promotion | **Supporting offline lane** | Baseline/candidate comparison, export parity, reviewed promotion and rollback; training grants no motion authority. |
+### Immediate Central World & Native Queue ([`current_next_steps.md`](docs/development/current_next_steps.md))
 
-### 18-Month Planning Targets
+| Stage / Package | Focus Area | Current Status | Next Gate / Required Evidence |
+| :--- | :--- | :--- | :--- |
+| **`CW1` & `CW-A01 v2`** | Component Catalog & Assembly v2 Contract | **Passed Locally** | 107 catalog tests + 117 Python & 71 Node assembly v2 conformance checks passing. |
+| **`CW-A02` & `CW-A03`** | Mini Studio Store, Snapping & Numeric Placement | **Passed Locally** | 88 TS + 14 API + 18 Chrome browser exercise groups passing (`CW-ASM-02` & `CW-SNAP-01`). |
+| **`CW-D01`** | Qualified Hardware Source Register | **Inventory Recorded; Open** | [19 Oct register](docs/development/robotics/m0_cw_d01_register_2026_10_19.md) logged; reconcile `STS3215` A/0 connector pinout and regulated `4–7.4 V` rails before physical pass. |
+| **`CW-A04`** | Pure DRC Worker & Unknown-Aware BOM | **Next Active Package** | `CW-DRC-01–03` UART/I2C/GPIO/rail negative matrix, stale-worker rejection, and findings bound to build/net digest. |
+| **`CW-S01`–`CW-S04`** | MJCF Compiler, Browser MuJoCo & Gestures | **Planned (Weeks 6–8)** | Restricted fixed-base MJCF compiler, pinned browser MuJoCo worker ([`mjswan 0.11.9` assessment](docs/development/robotics/mjswan_integration_assessment.md)), and Robot Moments timeline. |
+| **`CW-G01`–`CW-L03`** | Live Admission, Build Pack & Alpha Review | **Planned (Weeks 9–12)** | Live PDP admission/replay, Build Pack ZIP/SVG exporter, conditional `CW-F01/F02` firmware lane, and January authoring/simulation alpha. |
+| **`M0`–`M4` (`G0`–`G2`)** | Native Microduck & Fast Spine Bench | **M0 Sim Delivered; M1–M4 Open** | Close independent checkpoint parity (`M1`), live native `M2` session stop, enrolled signer receipts (`M3`), and 1-servo → 3-servo / Microduck `M4` stop measurements. |
 
-| Window | Engineering / supply chain | Adoption / revenue validation |
-| --- | --- | --- |
-| **Q4 2026** | M1/M2 golden reference, minimum evidence, one ESP32-S3 / TTL arm fixture and quoted board BOM | Split-screen demo after its physical gates; OEM and lesson packets |
-| **Q1 2027** | Microduck M3/M4; staged 10 → 25 → up to 100 cumulative developer kits | One supervised pilot, then 3–5 sites after useful repeat delivery/support evidence |
-| **Q2–Q3 2027** | Conditional SIM-3 remainder / SIM-4–SIM-6; one LeRobot-family and one model proposal adapter | One OEM shipping profile first, then 2–3 OEM targets and scoped conformance badge |
-| **Q4 2027–Q1 2028** | Durable fleet authority/evidence; 3 → 10 → up to 30 robots; SoM only if demand justifies it | Paid Governance / Cloud Workbench with measured support and recurring costs |
+### 18-Month Strategic Horizon (October 2026–March 2028)
 
-Dates and adoption counts are targets. The
-[18-month execution plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
-owns gates, owners, costs and the **14 Oct–12 Nov 2026** tactical schedule.
-Keep local tools open; validate paid OEM provisioning/conformance/support and
-hosted governance. Telemetry contribution is optional and separately controlled.
-
----
-
-## Quickstart & Verification
-
-### 1. Launch the Zero-Install Browser Simulator
-Serve the simulator locally using any static web server:
-
-```bash
-# Using Python
-python3 -m http.server 8080 --directory apps/mini-robot-simulator
-
-# Open in browser:
-# 3D Multi-Link Studio: http://localhost:8080/tree-lab.html
-# 2D Beginner Lessons:  http://localhost:8080/index.html
-```
-
-### 2. Run the Comprehensive Simulator Test Suite
-Runs the locked TypeScript contract checks, syntax audits, native C++ invariants, and all 78 Node.js tests:
-
-```bash
-node tools/mini-sim/verify.cjs
-```
-
-### 3. Build & Test the C++ Physics Engine Natively
-Build with CMake and execute CTest native invariant assertions:
-
-```bash
-cmake -B /tmp/mini-physics -S packages/mini-physics
-cmake --build /tmp/mini-physics
-ctest --test-dir /tmp/mini-physics --output-on-failure
-```
-
-### 4. Run Python Robot Model & Workbench Tests
-Verify the pinned Microduck MJCF model and MuJoCo simulation workbench:
-
-```bash
-pytest tests/test_model_package.py tests/test_mujoco_workbench.py
-```
-
-### 5. Run the Rust Proof Kernel
-Execute the offline verification engine and transfer proof fixtures:
-
-```bash
-cargo test --workspace --manifest-path rust/Cargo.toml
-```
+| Window | Technical & Hardware Milestones | Ecosystem & Commercial Validation |
+| :--- | :--- | :--- |
+| **Phase 1: Q4 2026** | `M0/M1` parity, `M2` native governed motion/stop, `CW-A01–CW-S04` studio milestones, and 1-servo → 3-servo bench qualification | Split-screen bounded-session demo (simulation-first delivered; physical demo gated on `G1/G2`); OEM and supervised lesson packets |
+| **Phase 2: Q1 2027** | Complete Microduck `M3/M4` on native runtime; Central World authoring/simulation alpha; staged `10 → 25 → 100` developer kits after QA/support review | Start one adult-supervised school/maker pilot; expand toward 3–5 pilot sites after measured repeat delivery and support cost validation |
+| **Phase 3: Q2–Q3 2027** | Conditional `SIM-3` remainder / `SIM-4–SIM-6`; one pinned LeRobot/SO-100-family adapter and one model-provider proposal adapter | Qualify one OEM shipping profile first, then expand toward 2–3 OEM relationships under a versioned *SeedCore Verified* conformance profile |
+| **Phase 4: Q4 2027–Q1 2028** | Durable fleet enrollment, reservations, and per-robot closure across `3 → 10 → 30` robots; evaluate custom SoM / RP2350 secure partition only if volume justifies | Offer paid Governance / Cloud Workbench subscriptions to validated schools and labs while keeping local developer tools open |
 
 ---
 
 ## Key Technical Documentation
 
-- **[18-Month Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Product strategy, Q4 2026–Q1 2028 schedule, phase gates, first 30 days and revenue assumptions.
-- **[Physical AI Strategy](docs/development/robotics/physical_ai_strategy.md):** SeedCore Inside, auditable classroom governance and opt-in telemetry pillars.
-- **[Fast Spine Protocol Proposal](docs/development/robotics/fast_spine_protocol_spec.md):** M2/M4 WebSerial session, authentication, interruption, telemetry and flashing requirements; not implemented firmware.
-- **[OEM Partnership Brief](docs/application/oem_partnership_brief.md):** Draft design-in offer, responsibilities, conformance and staged production; not a partner agreement.
-- **[Mini-Robotics Developer Blueprint](docs/development/robotics/mini_robot_developer_blueprint.md):** Proposed reference profile, cost targets and qualified browser-to-hardware delivery sequence.
-- **[Embodied AI Architecture Reference](docs/development/robotics/embodied_ai_architecture_reference.md):** Deep-dive contrasting industrial robotics with DIY/mini-robotics, receding-horizon action chunking, and verifiable governance.
-- **[Mini-Robot Simulator Implementation Plan](docs/development/robotics/mini_robot_simulator_implementation_plan.md):** Engineering roadmap and qualification gates for SIM-1 through SIM-6.
-- **[Microduck Integration Plan](docs/development/robotics/microduck_integration_plan.md):** Milestones M0 through M4 for the reference bipedal embodiment.
-- **[Microduck RL & Sim2Real Study](docs/development/robotics/microduck_rl_study.md):** Technical analysis of the 61/14 tensor interface, observation normalization, and policy transfer.
-- **[Robot Execution Contract Proposal](docs/development/robotics/robot_execution_contract.md):** Reusable session bounds, local interruption, and evidence closure contracts.
+- **[Current Next Steps (Active Queue)](docs/development/current_next_steps.md):** Canonical execution order across Central World (`CW-A03` → `CW-A04`) and native `M0–M5` milestones.
+- **[18-Month Physical AI Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Oct 2026–Mar 2028 strategy, `G0–G5` gate definitions, Oct 14–Nov 12 tactical schedule, and cost/evidence discipline.
+- **[Central World Remaining Delivery Schedule](docs/development/robotics/central_world_remaining_delivery_schedule.md) & [Acceptance Matrix](docs/development/robotics/central_world_acceptance_matrix.md):** Owner roles, dependencies, and positive/negative/fault fixtures (`CW-CAT-01` through `CW-REL-01`).
+- **[CW-A03 Proxy Snapping & Numeric Placement](docs/development/robotics/central_world_cw_a03_snapping.md), [CW-A02 Mini Studio Store](docs/development/robotics/central_world_cw_a02_authoring.md) & [CW-A01 v2 Exit Plan](docs/development/robotics/central_world_cw_a01_acceptance_plan.md):** Implementation records for `15 mm` / `5°` candidate snapping, the immutable authoring store, Three.js proxy canvas, and `seedcore.assembly.v2` cross-language conformance.
+- **[M0 / CW-D01 Source-Register Review (2026-10-19)](docs/development/robotics/m0_cw_d01_register_2026_10_19.md):** Pinned Microduck commit verification and `ESP32-S3-DevKitC-1-N8R8` / `Feetech STS3215` (spec A/0) hardware qualification gaps.
+- **[Simulation-First Acceptance Record](docs/development/robotics/simulation_first_acceptance.md):** Read-only Microduck adapter, 16 ONNX goldens, localhost split-screen rehearsal, and Python/Rust receipt checks.
+- **[mjswan 0.11.9 Integration Assessment](docs/development/robotics/mjswan_integration_assessment.md):** Feasibility and version-reconciliation analysis for `CW-S02`/`CW-S03` browser MuJoCo integration.
+- **[Fast Spine Protocol Specification](docs/development/robotics/fast_spine_protocol_spec.md) & [Microduck Integration Plan](docs/development/robotics/microduck_integration_plan.md):** Session framing, watchdog semantics, and native `M0–M4` acceptance requirements.
 
 ---
 
