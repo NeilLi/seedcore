@@ -1,11 +1,14 @@
 # Current Next Steps
 
-Date: 2026-10-16
+Date: 2026-10-19
 Status: Canonical active execution queue — simulation-first candidate delivered; native/physical gates open
 
-The immediate product work is CW-A02's Mini Studio authoring shell and immutable
-assembly store, consuming the verified CW-A01 v2 candidate and one tabletop
-starter, progressing toward a bounded
+The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
+import/export, immutable revisions, selection, undo/redo and stale-load rejection.
+Its [entry and acceptance record](robotics/central_world_cw_a02_authoring.md)
+records the canvas decision and software evidence. The next product package is
+CW-A03 magnetic snapping/numeric placement on the verified proxy starter,
+progressing toward a bounded
 attempt with an understandable allow/deny/interruption timeline and sufficient
 verifier evidence. Use the
 [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
@@ -63,16 +66,17 @@ The [remaining delivery schedule](robotics/central_world_remaining_delivery_sche
 owns detailed order and owner roles; the
 [acceptance matrix](robotics/central_world_acceptance_matrix.md) owns tests and
 measurement artifacts. CW-A01 v2 has passing local software acceptance and a
-verified software candidate; the following implementation packages remain planned/open.
+verified software candidate. CW-A02 now has local software evidence; subsequent
+packages remain planned/open.
 
 | Order | Package | Next reviewable result | Dependency |
 | --- | --- | --- | --- |
 | Software exit passed | CW-A01 v2 | Corrected contract, starter and retained regression evidence | [Exit record](robotics/central_world_cw_a01_acceptance_plan.md); simulation/proxy scope |
-| Supporting data | CW-D01 | Exact board/servo/rail/drawing source register | Unknown facts remain open; needed for physical DRC/qualification |
-| 1 | CW-A02 | Authoring shell, v2 import/export, immutable revision store, selection, undo/redo and stale-load rejection | CW-A01 v2 candidate; raw import must reject duplicate keys; canvas dependency review |
-| 2 | CW-A03–CW-A04 | Magnetic snapping and worker DRC/BOM findings | CW-A01/CW-A02; physical pass also needs reviewed data |
-| 3 | CW-S01–CW-S04 | Restricted MJCF/native parity, browser worker and bounded gesture replay | Accepted assembly/DRC; trained-policy lane has separate compatibility/reference gates |
-| 4 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
+| Supporting data | CW-D01 | [19 October source inventory](robotics/m0_cw_d01_register_2026_10_19.md) recorded before window boundary | Exact unit/drawing/pin/rail qualification remains open |
+| Local software slice passed | CW-A02 | [Mini Studio, raw import, immutable store and browser evidence](robotics/central_world_cw_a02_authoring.md) | Offline proxy scope; no runtime admission |
+| 1 | CW-A03–CW-A04 | Magnetic snapping and worker DRC/BOM findings | CW-A01/CW-A02; physical pass also needs reviewed data |
+| 2 | CW-S01–CW-S04 | Restricted MJCF/native parity, browser worker and bounded gesture replay | Accepted assembly/DRC; trained-policy lane has separate compatibility/reference gates |
+| 3 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
 
 ## Native Reference Milestones
 

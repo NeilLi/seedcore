@@ -155,3 +155,10 @@ checks from catalog-dependent validation, reject duplicate keys in browser raw
 JSON import, and add the immutable store/undo/stale-load tests. The CW-A02 store,
 canvas/browser UX, DRC readiness, simulation dynamics, live authority and physical
 acceptance have not been delivered by this contract milestone.
+
+## 19 October handoff follow-through
+
+The [CW-A02 offline authoring slice](central_world_cw_a02_authoring.md) now
+consumes this v2 baseline with raw-text duplicate-key rejection, immutable
+history and local browser/state evidence. The original starter content digest
+and component bytes are unchanged. Later DRC, dynamics and physical gates remain open.

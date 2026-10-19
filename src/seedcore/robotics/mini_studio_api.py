@@ -1,0 +1,89 @@
+"""Local CW-A02 authoring service. Validation never grants runtime admission."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from jsonschema import ValidationError
+
+from .assembly import (
+    compute_assembly_digest, compute_node_world_transforms, load_assembly_catalog, validate_assembly,
+)
+from .component_registry import REGISTRY, ROOT, parse_json, read_local, sha256
+
+MAX_BODY = 262144
+
+
+def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
+    catalog = load_assembly_catalog(registry)
+    documents = {parse_json(raw)["identity"]["part_id"]: raw for raw in catalog.artifacts}
+    meshes = {}
+    for raw in catalog.artifacts:
+        visual = parse_json(raw)["mechanical"]["visual_mesh"]
+        data = read_local(registry, visual["uri"], 1024 * 1024)
+        if sha256(data) != visual["sha256"]:
+            raise ValueError("mesh changed during startup")
+        meshes[Path(visual["uri"]).name] = data
+    starter = read_local(registry, "assemblies/tabletop-starter.sc-assembly.json", MAX_BODY)
+    validate_assembly(parse_json(starter), catalog, root=registry)
+    catalog_sha = sha256(read_local(registry, "catalog.json"))
+    web_root = web_root or ROOT / "ts/apps/mini-studio/dist"
+    app = FastAPI(title="SeedCore offline Mini Studio", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.middleware("http")
+    async def local_only(request: Request, call_next):
+        if request.url.hostname not in {"127.0.0.1", "localhost", "testserver"}:
+            return JSONResponse({"detail": "localhost authoring only"}, status_code=403)
+        origin = request.headers.get("origin")
+        if origin is not None and origin != str(request.base_url).rstrip("/"):
+            return JSONResponse({"detail": "same-origin authoring only"}, status_code=403)
+        response = await call_next(request)
+        response.headers.update({
+            "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp",
+            "Cross-Origin-Resource-Policy": "same-origin", "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        })
+        return response
+
+    @app.get("/api/starter")
+    def get_starter():
+        return Response(starter, media_type="application/json")
+
+    @app.post("/api/assembly/validate")
+    async def validate(request: Request):
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+            raise HTTPException(415, "application/json required")
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_BODY:
+                raise HTTPException(413, "assembly exceeds 262144 bytes")
+        try:
+            assembly = validate_assembly(parse_json(bytes(body)), catalog, root=registry)
+        except (ValueError, ValidationError, UnicodeError, RecursionError) as error:
+            detail = error.message if isinstance(error, ValidationError) else str(error)
+            raise HTTPException(422, detail[:500]) from error
+        ids = sorted({node["part_id"] for node in assembly["nodes"]})
+        return {
+            "scope": "offline_proxy_authoring", "physical_acceptance": False,
+            "assembly_digest": compute_assembly_digest(assembly), "catalog_sha256": catalog_sha,
+            "part_documents": [{"part_id": key, "raw_json": documents[key].decode("utf-8")} for key in ids],
+            "transforms": compute_node_world_transforms(assembly),
+        }
+
+    @app.get("/assets/{name}")
+    def asset(name: str):
+        if name not in meshes:
+            raise HTTPException(404, "asset outside frozen catalog")
+        return Response(meshes[name], media_type="model/gltf-binary")
+
+    @app.get("/{page:path}")
+    def page(page: str):
+        name = page or "index.html"
+        if name not in {"index.html", "app.js", "app.css", "third-party-notices.txt", "favicon.svg"} or not (web_root / name).is_file():
+            raise HTTPException(404, "build Mini Studio before serving")
+        return FileResponse(web_root / name)
+
+    return app

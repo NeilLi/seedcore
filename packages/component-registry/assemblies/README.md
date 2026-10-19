@@ -124,3 +124,8 @@ canonical comparisons. It writes source/build hashes and check dispositions to
 lane after installing dependencies; the Python suite is covered by its test step.
 No ignored preexisting `dist` build is required. The software exit and remaining
 scope are recorded in the [acceptance plan](../../../docs/development/robotics/central_world_cw_a01_acceptance_plan.md).
+
+The [CW-A02 Mini Studio](../../../docs/development/robotics/central_world_cw_a02_authoring.md)
+now supplies bounded browser raw-text import with duplicate decoded-key rejection,
+local catalog/asset validation and immutable session history. V1 drafts still
+require an explicit migration decision; this viewer does not grant admission.

@@ -1,0 +1,121 @@
+{
+  "schema_version": "seedcore.development.source-register.v1",
+  "review_date": "2026-10-19",
+  "window_end": "2026-10-20",
+  "scope": "source_inventory_only",
+  "physical_acceptance": false,
+  "hardware_access": "none",
+  "owner_role": "Catalog/mechanical curator; integration lead",
+  "decision": "Record the window inventory; retain all native, electrical and physical qualification gates.",
+  "pin_inputs": [
+    {
+      "path": "packages/robotics-profiles/microduck-sim-v1.json",
+      "sha256": "8794d1b069364b90d113e4b2135bdc7152a5b416feb0e419dab5b6e0b1af7a38"
+    },
+    {
+      "path": "packages/models/microduck/0.1.0/manifest.json",
+      "sha256": "31018dfaa996b9a4ae519f121134b40331be2ef9b92835bb9274c5f777444371"
+    },
+    {
+      "path": "packages/robotics-profiles/fast-spine-v1/chunk.schema.json",
+      "sha256": "a06d73f561c5d5e950c66a2e26e984c0ed6d50c9e886e16ee6d03b0c88ef501d"
+    },
+    {
+      "path": "packages/robotics-profiles/fast-spine-v1/control.schema.json",
+      "sha256": "2344492fd0c5ea87fa2dd54e25396a3c891d11680670e7c75256380ae4dff3ec"
+    },
+    {
+      "path": "packages/robotics-profiles/fast-spine-v1/open.schema.json",
+      "sha256": "c79b4ed8fe88f35b8aee2621360cc875cb880e76faf0d9ccc1fdfbaa02951f47"
+    },
+    {
+      "path": "packages/robotics-profiles/fast-spine-v1/profile.json",
+      "sha256": "f26b2e03a4de7829a4d005a5c9b4cca58dc9c5bea52e0a3512fe1cc56f89eb6a"
+    },
+    {
+      "path": "packages/robotics-profiles/fast-spine-v1/session.schema.json",
+      "sha256": "567366c9280c37166ab776261d241821011e21086b2b5dc6d3a1fa43dd0978b7"
+    },
+    {
+      "path": "packages/robotics-profiles/fast-spine-v1/wire-golden.json",
+      "sha256": "c8433b26f23e3581277430af0f2c9c0d19639e9863f69bae2dce56ce2e89b51b"
+    }
+  ],
+  "runtime_revision": "2703e0900da3e3d84114461ca91400c374d1d741",
+  "rl_revision": "cb70b792312d559a4da09064d92009079671815f",
+  "policy_revision": "665ae4eb20bfe13bca1ef4ea6d4bb6b4a096e448",
+  "source_documents": [
+    {
+      "id": "esp32-guide-v1.0",
+      "url": "https://documentation.espressif.com/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.0.html",
+      "edition": "board v1.0; historical guide; v1.1 also exists",
+      "status": "reference_only_not_physical_revision_selection"
+    },
+    {
+      "id": "sts3215-a0",
+      "url": "https://www.feetechrc.com/Data/feetechrc/upload/file/20200611/6372749961523760249976542.pdf",
+      "edition": "A/0, 2020-04-10",
+      "sha256": "eeac0fb6b73bf2215974d8f73fb7db0f09d59a59f5affff99aa89fee64948286",
+      "status": "reference_only_not_unit_or_supplier_qualification"
+    }
+  ],
+  "candidates": [
+    {
+      "item": "controller",
+      "candidate": "ESP32-S3-DevKitC-1-N8R8 / ESP32-S3-WROOM-1-N8R8",
+      "known": [
+        "Official ordering code and memory variant identified",
+        "USB GPIO19/20; octal-memory GPIO35/36/37 restrictions in referenced guide"
+      ],
+      "open": [
+        "Owned unit and PCB revision",
+        "Reviewed schematic/layout/dimensions and document byte pins",
+        "GPIO/boot/debug ownership",
+        "TTL half-duplex transceiver/direction/voltage compatibility",
+        "Quote and recurring BOM"
+      ]
+    },
+    {
+      "item": "servo",
+      "candidate": "Feetech STS3215; exact supplier SKU and unit revision unselected",
+      "known": [
+        "Manufacturer A/0 specification and drawing pages identified",
+        "TTL half-duplex, not RS-485",
+        "A/0 lists 4-7.4 V input; operating-point columns 6 V and 7.4 V",
+        "A/0 table and example schematic use differing connector numbering; numbering/view must be reconciled against the actual harness"
+      ],
+      "open": [
+        "Current supplier/order code and applicable revision",
+        "Actual connector orientation and harness mapping",
+        "Qualified limits/home/backlash/load envelope",
+        "Sustained and transient rail measurements",
+        "A/0 page 4 table versus page 8 schematic numbering; no pin polarity approved",
+        "A/0 input limit versus example schematic supply label; conservative limit until applicable revision confirmed"
+      ]
+    },
+    {
+      "item": "rails",
+      "candidate": null,
+      "known": [
+        "No battery, BEC, fuse or wire SKU selected",
+        "Servo supply must be evaluated separately from USB/MCU supply; shared signal reference requires reviewed topology"
+      ],
+      "open": [
+        "Source full-charge voltage",
+        "Regulated servo rail setpoint and transients",
+        "Continuous/peak BEC capacity, efficiency, thermal derating",
+        "Wire/connectors/fuse/e-stop and USB backfeed isolation",
+        "Measured brownout and stop behavior"
+      ]
+    }
+  ],
+  "open_gates": [
+    "Independent training/checkpoint/export outputs",
+    "Runtime/body/policy compatibility and native adapter parity",
+    "Exact physical board/servo/rails and drawings",
+    "MCU firmware/enrollment/ingress isolation",
+    "One-servo stopping measurements before three-servo progression"
+  ],
+  "catalog_mutated": false,
+  "procurement_authorized": false
+}

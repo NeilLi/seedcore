@@ -1,0 +1,35 @@
+// CW-ASM-02 source build, store/API checks and optional real-browser evidence.
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {spawnSync}=require('node:child_process');
+const root=path.resolve(__dirname,'../..');
+const python=process.env.SEEDCORE_TEST_PYTHON || (fs.existsSync(path.join(root,'.venv/bin/python'))?path.join(root,'.venv/bin/python'):'python3');
+const report={scope:'offline_proxy_authoring',physical_acceptance:false,node:process.version,checks:[]};
+function run(label,command,args){
+ const result=spawnSync(command,args,{cwd:root,encoding:'utf8',env:{...process.env,SEEDCORE_TEST_PYTHON:python}});
+ process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');
+ const count=result.stdout?.match(/(?:# tests|ℹ tests) (\d+)/)||result.stdout?.match(/(\d+) passed/);
+ report.checks.push({label,exit_code:result.status,tests:count?Number(count[1]):null});
+ if(result.status!==0) throw new Error(`${label} failed: ${result.error?.message||result.status}`);
+}
+try{
+ run('generated schema and CSP validator',process.execPath,['tools/robotics/generate-assembly-schema.cjs','--check']);
+ for(const workspace of ['contracts','robot-canvas','mini-studio']) {
+  fs.rmSync(path.join(root,`ts/${workspace==='mini-studio'?'apps':'packages'}/${workspace}/dist`),{recursive:true,force:true});
+  run(`${workspace} source build`,'npm',['--prefix','ts','run','--workspace',`@seedcore/${workspace}`,'build']);
+ }
+ run('workspace typecheck','npm',['--prefix','ts','run','typecheck']);
+ run('workspace and authoring regressions','npm',['--prefix','ts','test']);
+ if(!process.argv.includes('--skip-python')) run('local authoring API',python,['-m','pytest','tests/test_mini_studio_api.py','-q']);
+ if(process.argv.includes('--browser')) run('Chrome authoring exercise','npm',['--prefix','ts','run','--workspace','@seedcore/mini-studio','test:browser']);
+ report.status='checks_passed';
+}catch(error){report.status='checks_failed';report.failure=error.message;process.exitCode=1;}
+finally{
+ report.browser_included=process.argv.includes('--browser');report.python_included=!process.argv.includes('--skip-python');
+ report.source_revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
+ report.working_tree_dirty=Boolean(spawnSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).stdout.trim());
+ const tracked=spawnSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.trim().split('\n');
+ const prefixes=['ts/packages/robot-canvas/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-authoring','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json'];
+ report.inputs=tracked.filter(p=>prefixes.some(prefix=>p.startsWith(prefix))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
+ report.outputs=['ts/apps/mini-studio/dist/app.js','ts/apps/mini-studio/dist/index.html','ts/apps/mini-studio/dist/app.css','ts/apps/mini-studio/dist/third-party-notices.txt'].filter(p=>fs.existsSync(path.join(root,p))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
+ const target=path.join(root,'artifacts/robotics/cw-a02/verification.json');fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,JSON.stringify(report,null,2)+'\n');console.log(`CW-ASM-02: ${report.status}; artifacts/robotics/cw-a02/verification.json`);
+}

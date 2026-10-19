@@ -1,8 +1,8 @@
 # Central World: Mini Robotics Studio engineering plan
 
-Date: 2026-10-16
+Date: 2026-10-19
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
-Status: Phase 1 committed; CW-A01 v2 software exit passed; CW-A02 next
+Status: Phase 1 and CW-A01 v2 delivered; CW-A02 offline slice implemented; CW-A03 next
 
 The product direction unifies component authoring, visual assembly, browser
 rehearsal and separately governed deployment inside the SeedCore monorepo.
@@ -16,9 +16,10 @@ the [acceptance matrix](central_world_acceptance_matrix.md) owns required tests,
 measurement records and suggestion traceability. The CW-A01 assembly/joint
 v1 draft is committed as `9c5aaf7`. Its
 [v2 acceptance closure](central_world_cw_a01_acceptance_plan.md) now addresses
-all eight findings with passing local software checks. CW-A02's store/import
-implementation is next. Exact physical
-catalog data remains an independent open gate.
+all eight findings with passing local software checks. The
+[CW-A02 offline store/import slice](central_world_cw_a02_authoring.md) is now
+implemented with local browser/store evidence; CW-A03 snapping is next. Exact
+physical catalog data remains an independent open gate.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 retains the commercial horizon. [Microduck M0–M5](microduck_integration_plan.md)

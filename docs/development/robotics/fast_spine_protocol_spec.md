@@ -3,6 +3,11 @@
 Date: 2026-10-15
 Status: Host simulation v1 framing/schemas/session/evidence implemented; MCU firmware and physical WebSerial bridge remain open
 
+The [19 October M0/CW-D01 inventory](m0_cw_d01_register_2026_10_19.md) rechecks
+the unchanged simulation profile and source/policy pins. Board GPIOs, harness
+polarity and rail capacity remain unqualified; the manufacturer reference
+requires connector/voltage reconciliation before hardware use.
+
 ## Implemented Simulation Freeze
 
 The [simulation-first acceptance guide](simulation_first_acceptance.md) records

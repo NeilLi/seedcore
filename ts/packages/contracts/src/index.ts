@@ -104,3 +104,5 @@ export type {
   RelativeTransform,
   RobotAssembly,
 } from "./robotAssemblyContracts.js";
+
+export { parseStrictJson, parseAssemblyText } from './assemblyText.js';

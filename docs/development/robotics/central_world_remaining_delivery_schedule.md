@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-10-16
-Status: CW-A01 v2 software exit passed; CW-A02 next
+Date: 2026-10-19
+Status: CW-A01 v2 and CW-A02 offline software slices passed locally; CW-A03 next
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -22,8 +22,10 @@ supplier data, physical fit, trained-policy compatibility or hardware approval.
 
 The [CW-A01 exit record](central_world_cw_a01_acceptance_plan.md) now addresses
 the eight findings from draft `9c5aaf7` in assembly v2. Local software acceptance
-passed 117 Python and 71 Node tests. Start
-**CW-A02's authoring shell and immutable store** next using that contract.
+passed 117 Python and 71 Node tests. The
+[CW-A02 entry/acceptance record](central_world_cw_a02_authoring.md) now records
+the bounded offline authoring slice, dependency/license decision and browser/store
+evidence. **CW-A03 magnetic snapping/numeric placement** is next.
 Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
 Missing Microduck checkpoint outputs block its locomotion policy lane, not a
@@ -49,7 +51,7 @@ the calendar. No spending, procurement or external contact is authorized here.
 
 | ID | Deliverable / owner | Entry and review evidence | State |
 | --- | --- | --- | --- |
-| CW-D01 | Exact first ESP32-S3 board, servo, power and chassis records; catalog/mechanical curator | Identify SKU/revision, dated source/quote, pin ownership, connectors/rails, tolerances, source rights, sensor frames and hard limits. Preserve current drafts; create new reviewed revisions rather than mutating saved-build identities. | Open: source/drawing/ratings unavailable |
+| CW-D01 | Exact first ESP32-S3 board, servo, power and chassis records; catalog/mechanical curator | Identify SKU/revision, dated source/quote, pin ownership, connectors/rails, tolerances, source rights, sensor frames and hard limits. Preserve current drafts; create new reviewed revisions rather than mutating saved-build identities. | [19 Oct inventory recorded](m0_cw_d01_register_2026_10_19.md); exact unit/drawing/ratings qualification open |
 
 CW-D01 closes only for the selected profile. Do not require all 12 families to
 be qualified before the first tabletop alpha. Tuya T5, SG90/camera variants and
@@ -61,7 +63,7 @@ development fixture and must remain visibly unqualified.
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
 | CW-A01 · W2–W3 | Versioned assembly contract, canonical digest rules and fixtures; component-registry schemas with additive TS contract bindings | CW1 software | Integration + Studio: schema/golden report for nodes, occupied ports, mechanical tree, electrical nets and explicit joints; graph edits/imports reject invalid candidates atomically |
-| CW-A02 · W3 | Mini Studio shell, immutable draft store, selection, undo/redo and canvas adapter; `ts/apps/mini-studio` and `ts/packages/robot-canvas` | CW-A01 | Studio: dependency/license decision, first starter import/export, keyboard selection, stale-asset failure and browser report |
+| CW-A02 · W3 | Mini Studio shell, immutable draft store, selection, undo/redo and canvas adapter; `ts/apps/mini-studio` and `ts/packages/robot-canvas` | CW-A01 | Studio: [19 Oct local slice](central_world_cw_a02_authoring.md) includes dependency/license decision, first starter import/export, keyboard selection, stale-asset failure and browser report; later authoring/DRC/physics remain separate |
 | CW-A03 · W4 | 15 mm candidate snapping, mating transform, ghost preview and accessible numeric placement | CW-A01, CW-A02 | Studio + mechanical curator: transformed-parent, opposing-normal, allowed-twist, occupied-port and cycle tests; deterministic candidate choice and undo |
 | CW-A04 · W5 | Pure DRC worker, routing proposals, field-linked findings and unknown-aware BOM; `ts/packages/drc-solver` | CW-A01, CW-A02; CW-D01 for physical pass | Studio + reviewer: UART/I2C/GPIO/rail/mass negative matrix, stale-worker rejection and reviewed starter findings; synthetic fixtures labeled as such |
 

@@ -1,6 +1,6 @@
 /** Offline assembly v2 authoring contract; never an execution grant. */
-import { Ajv2020 } from "ajv/dist/2020.js";
-import { ROBOT_ASSEMBLY_SCHEMA } from "./robotAssemblySchema.js";
+import type { ValidateFunction } from "ajv";
+import generatedValidator from "./robotAssemblyValidator.js";
 
 /** Historical draft identifier only; v1 is not accepted by this validator. */
 export const SEEDCORE_ASSEMBLY_SCHEMA_V1 = "seedcore.assembly.v1" as const;
@@ -131,8 +131,7 @@ export function canonicalAssemblyString(data: unknown): string {
   return result;
 }
 
-const ajv = new Ajv2020({ strict: true, strictRequired: false });
-const validateSchema = ajv.compile<RobotAssembly>(ROBOT_ASSEMBLY_SCHEMA);
+const validateSchema = generatedValidator as ValidateFunction<RobotAssembly>;
 const keyFor = (node: string, port: string | number): string => `${node}:${port}`;
 const unit = (v: number[], label: string): void => {
   if (Math.abs(v.reduce((s, n) => s + n*n, 0) - 1) > 1e-8) throw new Error(`${label} must be unit length`);
@@ -142,7 +141,7 @@ const near = (a: number[], b: number[]): boolean => a.every((n, i) => Math.abs(n
 /** Schema + catalog-independent graph checks. Catalog/geometry/DRC remain separate. */
 export function validateAssemblyStructure(raw: unknown): RobotAssembly {
   canonicalAssemblyString(raw);
-  if (!validateSchema(raw)) throw new Error(`Assembly schema: ${ajv.errorsText(validateSchema.errors)}`);
+  if (!validateSchema(raw)) throw new Error(`Assembly schema: ${validateSchema.errors?.map(e => `${e.instancePath} ${e.message}`).join("; ")}`);
   const data = raw;
   const nodes = new Set(data.nodes.map(n => n.node_id));
   if (nodes.size !== data.nodes.length) throw new Error("Duplicate node_id");

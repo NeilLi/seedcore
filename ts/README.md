@@ -8,6 +8,8 @@ Current packages:
 - `@seedcore/verification-console`: CLI that invokes `seedcore-verify summarize-transfer`
 - `@seedcore/verification-api`: TS verification facade over `seedcore-verify`
 - `@seedcore/proof-surface`: TS proof pages (`/transfer` and `/asset`)
+- `@seedcore/robot-canvas`: offline assembly store, hashed proxy asset loader and Three.js rest-pose adapter
+- `@seedcore/mini-studio`: localhost v2 assembly authoring, import/export, selection and undo/redo
 - `@seedcore/operator-console`: TS operator workflow surface for Restricted Custody Transfer
 
 Quick start:
@@ -47,3 +49,12 @@ Then open:
 - `http://127.0.0.1:7072/transfer?dir=rust/fixtures/transfers/allow_case`
 - `http://127.0.0.1:7072/asset?dir=rust/fixtures/transfers/allow_case`
 - `http://127.0.0.1:7073/`
+
+Mini Studio (offline proxy authoring):
+
+```bash
+node tools/robotics/verify-authoring.cjs
+.venv/bin/python scripts/robotics/serve_mini_studio.py --port 8767
+```
+
+Open `http://127.0.0.1:8767`. See the [scope and acceptance record](../docs/development/robotics/central_world_cw_a02_authoring.md).

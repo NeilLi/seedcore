@@ -97,6 +97,18 @@ jobs:
       - name: Verify assembly v2 contracts and cross-language fixtures
         run: node tools/robotics/verify-assembly.cjs --node-only
 
+      - name: Verify offline Mini Studio authoring from source
+        run: node tools/robotics/verify-authoring.cjs --skip-python
+
+      - name: Retain assembly authoring verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assembly-authoring-verification
+          path: |
+            artifacts/robotics/cw-a01/verification.json
+            artifacts/robotics/cw-a02/verification.json
+
       - name: Start Postgres for RESULT_VERIFIER integration lane
         run: |
           docker run -d \
