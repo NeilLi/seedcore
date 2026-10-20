@@ -8,6 +8,14 @@ identified by `seedcore.assembly.v2`. It supports one rooted mechanical tree,
 rigid mounts and directly actuated revolute joints, and declared electrical
 net proposals. It grants no execution authority or hardware qualification.
 
+## Versioning a Serial Family of DIY Mini-Robots
+
+Builders can iterate through supported proxy robot designs on a local computer,
+with optional remote LLM drafting assistance:
+
+- **Canonical content identity:** an accepted assembly serializes under `seedcore.jcs-safe-integers.v1` to a deterministic SHA-256 `assemblyDigest`. Identical content has the same digest; history entries and physical device identities are separate.
+- **Validated draft import:** strict raw-text parsing, structural validation and the Python catalog-aware semantic path check the candidate before it replaces the store revision. CW-A04 DRC then reports electrical, mass and cost findings. A `blocked` draft can remain in the offline store; DRC is not a physical approval or a precondition for accepting every edit.
+
 ## Versions and identity
 
 The unaccepted v1 draft remains in Git at `9c5aaf7`, with canonical starter digest

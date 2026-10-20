@@ -32,7 +32,7 @@ providers against this product direction. Its first diligence candidates are
 D-Robotics, Orbbec and Viam; the [roadmap](robotics_ecosystem_integration_roadmap.md)
 adds bounded research and conditional adapter experiments within the existing
 schedule. SeedCore's role remains governed execution and evidence, with native
-controllers retaining local control. CW-A04 and Microduck acceptance retain priority.
+controllers retaining local control. CW-S01 and Microduck acceptance retain priority.
 
 ## Delivery Responsibilities
 

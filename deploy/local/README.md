@@ -1,8 +1,32 @@
 # Local Host-Mode Helpers
 
-This folder holds host-native SeedCore bring-up scripts for macOS/Linux development.
+This folder holds host-native SeedCore bring-up scripts for macOS/Linux
+development. A local development computer can run the authoring and prepared
+simulation tools without a remote LLM account. The full API/HAL stack has
+separate configuration and service dependencies.
 
-Use these when you want to run SeedCore directly on your machine without Kubernetes:
+## Local AI Station Surface Map (Mini-Robotics vs. Full Trust Runtime)
+
+Builders can run lightweight zero-database robotics studios directly on `127.0.0.1`, or bring up the full local PDP/HAL/Verification host stack:
+
+| Local Station Service | Default Local URL / Port | Command (from repo root) | Purpose in DIY Mini-Robot Workflow |
+| :--- | :--- | :--- | :--- |
+| **Central World Mini Studio (`CW-A02..04`)** | `http://127.0.0.1:8767` | `.venv/bin/python scripts/robotics/serve_mini_studio.py --port 8767` | Author/import `seedcore.assembly.v2` builds, snap parts (`15 mm`), and run pure DRC/BOM (`@seedcore/drc-solver`). |
+| **Component Catalog Viewer (`CW1`)** | `http://127.0.0.1:8770` | `.venv/bin/python scripts/robotics/serve_component_catalog.py` | Inspect SHA-256-pinned `.sc-part.json` drafts, GLB proxy meshes, and port frames. |
+| **Mini Robot Lab & Session Lab (`SIM-1..3`)** | `http://127.0.0.1:8766/studio/session-lab.html` | `.venv/bin/python scripts/robotics/serve_session_lab.py` | Bounded host simulation with a separate Wasm preview; `/studio/tree-lab.html` serves the planar tree lesson. Native MuJoCo is a separate tool. |
+| **SeedCore Host API & PDP** | `http://127.0.0.1:8002` | `bash deploy/local/run-api.sh` | Evaluate `ActionIntent`s from remote LLM/agent proposers and issue scoped `ExecutionToken`s. |
+| **SeedCore HAL Service (simulation)** | `http://127.0.0.1:8003` | `HAL_REQUIRE_EXECUTION_TOKEN=true bash deploy/local/run-hal.sh` | Enable token requirements for the simulation HAL. The helper otherwise defaults this flag to `false`; this setting does not qualify physical execution. |
+| **Verification API** | `http://127.0.0.1:7071` | `bash deploy/local/run-verification-api.sh` | Read the configured runtime verification surfaces and invoke the verifier where supported. |
+| **Proof Surface** | `http://127.0.0.1:7072` | `npm --prefix ts run serve:proof-surface` | Separate web process using the verification API; start after installing the TS workspace dependencies. |
+
+The three robotics studio servers bind explicitly to loopback. The verification
+API and Proof Surface currently use `server.listen(port)` without an explicit
+host; the URLs above are local client addresses, not a loopback-only binding
+guarantee. Session Lab uses its own simulation issuer and does not call the
+production PDP. Launching these services does not connect the authoring studio
+to physical hardware.
+
+Use the scripts in `deploy/local/` when you want to run the full SeedCore trust runtime directly on your machine without Kubernetes:
 
 - `init-full-db-direct.sh`
 - `run-api.sh`

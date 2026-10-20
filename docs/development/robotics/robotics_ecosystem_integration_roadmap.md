@@ -15,8 +15,9 @@ acceptance gates or permission grants.
 
 ## Preserve the current delivery order
 
-As inspected on 20 October, CW-A01 v2 and CW-A02/CW-A03 have local offline
-software evidence. CW-A04 worker DRC and unknown-aware BOM is the next package.
+As refreshed on 20 October against `01c9af0`, CW-A01 v2 through CW-A04 have local
+offline software evidence, including worker DRC and unknown-aware BOM. CW-S01
+restricted assembly-to-MJCF compilation is the next package.
 The component catalog has twelve draft/proxy records, with exact first-fixture
 qualification open. Microduck remains the native reference; the Fast Spine
 one-to-three-servo fixture remains a bounded bench package. No hardware is
@@ -24,7 +25,7 @@ connected or qualified in the current source-register baseline.
 
 Cooperation work should first improve the next package's evidence requirements
 and future adapter decisions. None of the ten candidates is a prerequisite for
-CW-A04, the January authoring/simulation alpha or Microduck training parity.
+CW-S01, the January authoring/simulation alpha or Microduck training parity.
 Keep one active implementation package per implementer and one supported
 physical profile/one live pilot initially. A Linux inference-host evaluation
 does not qualify a second robot or replace the chosen MCU.
@@ -38,7 +39,7 @@ targets; conditional work moves with its dependencies.
 | ID / target review | Scope and owner role | Entry conditions | Reviewable exit artifact | Current state |
 | --- | --- | --- | --- | --- |
 | **COOP-00 / 20 Oct 2026** | Source assessment, architecture and pilot drafts; integration lead | Current repo/plan inspection and official-source review | This four-document packet, all-ten candidate assessment, corrections and unresolved facts | Documentation prepared; vendor qualification open |
-| **COOP-01 / 21 Oct–12 Nov** | Fit/source record for D-Robotics, Orbbec and Viam; integration lead + reviewer | Existing CW-A04/M0 work retains priority | Three short records with exact product/interface references, known/unknown fields, access/dependency/license gaps and a go/defer decision | Proposed supporting research; no SDK import or new catalog parts |
+| **COOP-01 / 21 Oct–12 Nov** | Fit/source record for D-Robotics, Orbbec and Viam; integration lead + reviewer | Existing CW-S01/M0 work retains priority | Three short records with exact product/interface references, known/unknown fields, access/dependency/license gaps and a go/defer decision | Proposed supporting research; no SDK import or new catalog parts |
 | **COOP-02 / by 10 Jan 2027 alpha review** | Review reusable observation/proposal/ingress requirements against accepted CW and session contracts; runtime reviewer | CW-A04 findings available; owner/capacity confirmed | Contract-gap matrix and one offline fixture design for the highest-value gap; extend existing contracts only if required | Conditional design work; January alpha does not depend on it |
 | **COOP-03 / Apr–Sep 2027 ecosystem review** | At most one D-Robotics compute experiment; inference/integration owner | Measured existing-host gap; exact board/toolchain access, permitted sample data and capped effort; capacity decision | CPU baseline vs selected runtime parity/performance report, version pins, late-output handling and cost/support estimate | Candidate; board access, budget and need unknown |
 | **COOP-04 / Apr–Sep 2027 ecosystem review** | Choose one Orbbec capture experiment **or** one Viam connectivity experiment; observation/runtime owner | COOP-01 fit review, a named user need and capacity after the current integration | Licensed recording with calibration/coverage/replay report, or simulated/read-only machine mapping with complete mutation-ingress assessment | Candidate alternative to COOP-03; a second experiment needs a new queue/capacity decision |

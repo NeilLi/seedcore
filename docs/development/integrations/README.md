@@ -13,6 +13,15 @@ extends this boundary to candidate compute, sensor, middleware and behavior
 providers. It is a proposal with read-only/offline entry points; no partner
 adapter or physical qualification is established.
 
+## Remote LLM Accounts + Local AI Station Boundary
+
+A builder may use an optional remote LLM to propose designs or tasks while
+running authoring and verification on a local development computer:
+
+- **Proposal boundary:** candidate `seedcore.assembly.v2` JSON can be imported through the existing raw-text validation path. A remote model must not receive signing keys or direct motor access; a general provider-to-studio integration is not implied.
+- **Authoring boundary:** strict parsing, catalog byte pins and semantic checks precede acceptance into the store. DRC then reports `pass`, `blocked` or `conflict`; blocked drafts remain usable for offline authoring.
+- **Execution boundary:** governed live attempts require the accountable Agent, PDP, scoped token and qualified executor. Session Lab currently uses an explicit simulation issuer, and standalone physics lessons do not invoke the production PDP. The assembly-to-simulation handoff remains planned.
+
 ## Documents
 
 - [Robotics partner integration architecture](robotics_partner_integration_architecture.md)

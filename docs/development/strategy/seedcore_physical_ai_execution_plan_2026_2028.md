@@ -105,7 +105,7 @@ three concurrent integrations. Selecting an alternative to the planned
 LeRobot/model-provider package requires an explicit queue/capacity decision.
 Industrial arms, tactile manipulation, hands
 and general robot brains require a separate scope/profile decision. Q4 work
-continues to prioritize CW-A04, exact fixture data and native acceptance;
+continues to prioritize CW-S01 after CW-A04's offline completion, exact fixture data and native acceptance;
 the January authoring/simulation alpha has no new supplier dependency.
 
 ## Gate Definitions

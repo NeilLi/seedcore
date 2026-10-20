@@ -170,7 +170,7 @@ records as supporting research under COOP-01 in the
 [ecosystem roadmap](robotics/robotics_ecosystem_integration_roadmap.md), with a
 proposed two-person-day total cap only when capacity is available after
 committed work. Use the [pilot briefs](../application/robotics_component_partner_pilot_briefs.md)
-to record exact versions, access, interface and rights gaps. CW-A04 remains
+to record exact versions, access, interface and rights gaps. CW-S01 remains
 the next implementation package; no vendor SDK, new body or additional pilot
 becomes a prerequisite. Select at most one later adapter experiment against a
 measured need and the existing CW/M/G gates.

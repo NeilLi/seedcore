@@ -28,7 +28,16 @@ The [component cooperation strategy](strategy/robotics_component_cooperation_str
 assesses ten robotics suppliers against this foundation. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) prioritizes
 bounded diligence on D-Robotics, Orbbec and Viam within the existing schedule;
-vendor integrations remain conditional and CW-A04 retains immediate priority.
+vendor integrations remain conditional and CW-S01 retains immediate priority
+after local CW-A04 closure.
+
+## Target builder workflow: local station, optional LLM and successive designs
+
+The proposed builder workflow uses these roles:
+
+1. **Local development computer:** runs Mini Studio (`:8767`), Session Lab (`:8766`), the component viewer (`:8770`) and separately invoked native model/proof tools. Session Lab uses a simulation issuer; production PDP integration is separate. See the [service map](../../deploy/local/README.md).
+2. **Optional remote LLM:** drafts candidate assembly JSON or task requests as an untrusted proposer. Offline authoring and prepared lessons require no provider account. Generated content must pass the relevant local validation and admission boundaries.
+3. **Successive DIY designs:** reuse versioned draft component records and inspect each assembly digest and DRC/BOM result. Custom-build simulation and physical execution follow CW-S01 onward and the applicable hardware gates. Microduck retains its separate native model/profile.
 
 Start with the [physical AI strategy](robotics/physical_ai_strategy.md), the
 [active queue](current_next_steps.md), the

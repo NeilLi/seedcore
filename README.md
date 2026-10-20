@@ -11,21 +11,77 @@
 **The Open Trust Runtime for Affordable Physical AI.**  
 *Browser-first robot simulation · Canonical assembly authoring · Bounded execution authority · Verifiable action evidence.*
 
-[Why SeedCore](#-why-seedcore) · [Delivered Now vs. Open Gates](#-delivered-now-vs-open-gates) · [System Architecture](#-system-architecture) · [Central World & Studios](#-central-world--browser-studios) · [Quickstart & Verification](#-quickstart--reproducible-verification) · [Repository Map](#-repository-map) · [Roadmap](#-roadmap--qualification-gates) · [Documentation](#-key-technical-documentation)
+[Why SeedCore](#why-seedcore) · [Target Builder Setup](#target-builder-setup-local-ai-station--remote-llm--diy-robot-series) · [Delivered Now vs. Open Gates](#delivered-now-vs-open-gates) · [System Architecture](#system-architecture) · [Central World & Studios](#central-world--browser-studios) · [Quickstart & Verification](#quickstart--reproducible-verification) · [Repository Map](#repository-map) · [Roadmap](#roadmap--qualification-gates) · [Documentation](#key-technical-documentation)
 
 ---
 
 ## Why SeedCore
 
-Sub-kilogram mini-robots are inherently **safe by physics**—low mass, minimal inertia, and compliant actuators let makers, students, and researchers iterate on any desk without industrial safety cages. Yet as vision-language models and autonomous agents begin proposing real-world motion, **behavioral trust cannot rely on physical cages**.
+Small robots make supervised experiments more accessible. Each physical build
+still needs reviewed mechanical, electrical and stopping limits. As models and
+agents begin proposing motion, SeedCore makes the authority to act and the
+evidence of the attempt explicit.
 
 SeedCore builds the verifiable boundary between AI proposals and robot actuation:
 
 1. **Canonical Authoring (`Central World`):** Assemble byte-pinned robot components under `seedcore.assembly.v2` (`seedcore.jcs-safe-integers.v1` RFC 8785 canonical JSON) inside an immutable revision store with deterministic `15 mm` port snapping, accessible numeric placement, and automatic invalidation of prior runtime admission on every edit.
 2. **Bounded Authority (`Slow Brain, Fast Spine`):** High-level planners propose bounded action chunks (`ActionIntent`); the Policy Decision Point (PDP) issues **single-use session capability tokens** enforced with local deadlines, revocation fencing, and independent watchdog bounds.
-3. **Verifiable Evidence (`Python & Rust Proof Kernels`):** Every simulation rehearsal or governed attempt emits action-bound telemetry and cryptographic receipts verified by deterministic Python and Rust (`seedcore-verify`) kernels.
+3. **Verifiable Evidence (`Python & Rust Proof Kernels`):** The bounded host rehearsal emits signed simulation receipts checked by Python and Rust (`seedcore-verify`). Action-bound physical capture and signer enrollment remain qualification work.
 
 > **Evidence Discipline:** SeedCore strictly separates **delivered software and simulation candidates** from **open physical hardware gates** (`physical_acceptance: false`). Simulation tokens, proxy assemblies, and draft catalog records never grant physical motor authority.
+
+---
+
+## Target Builder Setup: Local AI Station + Remote LLM + DIY Robot Series
+
+The target workflow combines **one local development computer**, an **optional
+remote LLM account**, and successive DIY robot designs. Start with the existing
+computer and the dependencies for the chosen tool. Offline authoring and prepared
+simulation lessons require no cloud account; this topology is not a hardware
+purchase recommendation or a validated multi-robot deployment.
+
+```mermaid
+flowchart LR
+    subgraph CloudLLM ["1. Optional Remote LLM"]
+        LLM["Untrusted assembly or task proposal"]
+    end
+
+    subgraph LocalStation ["2. Local Development Computer"]
+        MS["Mini Studio (:8767)<br/>Assembly v2 + 15 mm Snapping + Pure DRC/BOM"]
+        SIM["Session Lab (:8766)<br/>Bounded host simulation + Wasm preview"]
+        NATIVE["Separate native MuJoCo / ONNX workbench"]
+        PDP["Target live admission boundary<br/>Agent + PDP + qualified executor"]
+        PROOF["Python / Rust evidence verification"]
+        MS -.->|"Planned CW-S01 build compilation"| NATIVE
+        SIM -->|"Simulation receipts"| PROOF
+    end
+
+    subgraph DIYSeries ["3. Physical Targets - Qualification Open"]
+        R1["Bounded fixture: one servo, then three<br/>Exact board, bus and regulated rails required"]
+        R2["Future sensor-head or arm designs<br/>Separate profile and support decision"]
+        R4["Microduck native reference<br/>14 policy actions / 15 servo channels"]
+    end
+
+    LLM -->|"Candidate JSON import"| MS
+    LLM -.->|"Target accountable intent path"| PDP
+    PDP -.->|"After applicable CW/M/G gates"| DIYSeries
+```
+
+| Tier | Builder setup | Available scope / intended role | Boundary |
+| :--- | :--- | :--- | :--- |
+| **1. Optional remote LLM** | A separately configured provider account | Draft candidate assembly JSON or high-level task requests; the studio supports raw JSON import | Treat output as untrusted. Provider credentials, signing keys, capture/egress permissions and motor authority have distinct ownership. |
+| **2. Local AI station** | Existing development computer with the relevant Python, Node, Rust and simulator dependencies | Run local authoring/DRC, prepared simulations, native model evaluation and offline receipt verification | Session Lab uses a simulation issuer, not the production PDP. Its configured watchdog poll is **5 ms**, not a physical stop-time guarantee. Live admission and physical enforcement remain gated. |
+| **3. Successive DIY designs** | Draft component records for boards, servos, sensors, power and brackets | Each accepted assembly revision has a canonical digest and can receive a DRC/BOM report | Proxy data remains unqualified. Automatic custom-build simulation is CW-S01 onward; physical profiles and action evidence need separate acceptance. Microduck is a separately pinned native model. |
+
+### The 5-Step DIY Robot Loop on Your Local Station
+
+1. **Pick Reusable Parts (`packages/component-registry/`):** Browse the SHA-256-pinned part catalog (`:8770`) across MCUs, servos, sensors, power rails, and brackets.
+2. **Author or LLM-Draft the Next Robot (`ts/apps/mini-studio/`):** Snap parts at `15 mm` / `5°` in Mini Studio (`:8767`) or import an LLM-proposed `seedcore.assembly.v2` JSON draft—strictly rejecting duplicate keys, invalid rest poses, or unpinned catalog hashes.
+3. **Inspect DRC & BOM (`ts/packages/drc-solver/`):** Review bus, GPIO, power, mass/inertia and cost findings. The starter is currently `blocked`; a report does not authorize wiring or battery connection.
+4. **Rehearse a Supported Simulation (`apps/mini-robot-simulator/`, `packages/models/`):** Use prepared planar lessons, the bounded `fast-spine-v1` session rehearsal, or the separate native Microduck workbench. Compiling the custom assembly into simulation remains CW-S01 work.
+5. **Inspect Evidence (`src/seedcore/`, `rust/`):** Verify Session Lab's signed simulation receipts. Physical attempts require the accepted Agent/PDP/executor path and hardware evidence gates.
+
+See the [local service map](deploy/local/README.md) for exact URLs and commands.
 
 ---
 
@@ -73,7 +129,7 @@ SeedCore decouples high-level cognitive planning and offline assembly authoring 
 ```mermaid
 flowchart TD
     subgraph AuthoringAndPlanning ["1. Authoring & Cognitive Planning"]
-        A0[Mini Studio CW-A02 / CW-A03<br/>seedcore.assembly.v2] -->|Canonical Digest & Scope| B
+        A0[Mini Studio CW-A02..CW-A04<br/>seedcore.assembly.v2] -.->|Planned live admission of digest and scope| B
         A1[User / VLM / Policy Planner] -->|Proposes Bounded ActionIntent| B[SeedCore Agent Action Gateway]
     end
 
@@ -89,15 +145,17 @@ flowchart TD
     end
 
     subgraph Embodiments ["4. Simulated & Target Physical Embodiments"]
-        G -->|Delivered: fast-spine-v1 Rehearsal| H[Bounded Host Simulation & Watchdog]
-        G -->|Delivered: Read-Only M0 Replay| J[MuJoCo Pinned Microduck 0.1.0]
-        G -->|Delivered: Planar Wasm ABI 2| K[C++17 Wasm Tree Physics 1/2/3-Link]
+        FIXTURE[Delivered simulation fixture issuer] --> H[Bounded Host Simulation & Watchdog]
+        G -.->|Target live integration| H
+        J[Separate delivered read-only M0 replay<br/>MuJoCo Pinned Microduck 0.1.0]
+        K[Separate delivered planar Wasm ABI 2<br/>C++17 Tree Physics 1/2/3-Link]
         G -.->|Target Gate: CW-D01 / CW-F01 / G1| M0[ESP32-S3 Fast Spine + STS3215 TTL Bus]
         G -.->|Target Gate: Native M2-M4 / G2| P[Microduck Native robotd Controller]
     end
 
     subgraph Verification ["5. Evidence & Cryptographic Verification"]
-        H & J & K & M0 & P -->|Action-Bound Telemetry & Signer Context| L[Session Receipt & Replay Bundle]
+        H -->|Delivered signed simulation evidence| L[Session Receipt & Replay Bundle]
+        M0 & P -.->|Target qualified capture and signer| L
         L --> M[Python & Rust Proof Kernels<br/>RESULT_VERIFIER / seedcore-verify]
         M --> N[Verified Disposition or Quarantine]
     end
@@ -124,7 +182,7 @@ flowchart LR
   - Reference starter: [`tabletop-starter.sc-assembly.json`](packages/component-registry/assemblies/tabletop-starter.sc-assembly.json) (version `0.2.0`, canonical digest `2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb`).
 - **Offline Mini Studio, Immutable Store, Proxy Snapping & Pure DRC/BOM ([`ts/apps/mini-studio/`](ts/apps/mini-studio/), [`ts/packages/robot-canvas/`](ts/packages/robot-canvas/), [`ts/packages/drc-solver/`](ts/packages/drc-solver/), [`src/seedcore/robotics/mini_studio_api.py`](src/seedcore/robotics/mini_studio_api.py)):**
   - `parseStrictJson()` ([`assemblyText.ts`](ts/packages/contracts/src/assemblyText.ts)) enforces a 256 KiB UTF-8 cap, 32 nesting levels, and 50,000 nodes while rejecting duplicate decoded JSON keys before schema validation.
-  - `AssemblyStore` ([`store.ts`](ts/packages/robot-canvas/src/store.ts)) deep-freezes revisions, caps history at 32 entries / 2 MiB, increments `authorityEpoch` on every load/edit/undo/redo (`admission: null`), and fences stale or abort-ignoring async loads via monotonic generation tickets.
+  - `AssemblyStore` ([`store.ts`](ts/packages/robot-canvas/src/store.ts)) deep-freezes revisions, caps history at 32 entries / 2 MiB, increments `authorityEpoch` on accepted assembly changes (`admission: null`), and fences stale or abort-ignoring async loads via monotonic generation tickets. Selection and rejected imports do not create accepted assembly revisions.
   - `snapping.ts` ([`ts/packages/robot-canvas/src/snapping.ts`](ts/packages/robot-canvas/src/snapping.ts)) and `placement.ts` ([`ts/apps/mini-studio/src/placement.ts`](ts/apps/mini-studio/src/placement.ts)) provide deterministic `15 mm` / `5°` candidate capture under `seedcore.proxy_mount_v1`, non-committing green/red ghost preview, subtree reparenting, and accessible keyboard/numeric placement bound to the store's `authorityEpoch`.
   - `solver.ts` ([`ts/packages/drc-solver/src/solver.ts`](ts/packages/drc-solver/src/solver.ts)) and `worker.ts` ([`ts/packages/drc-solver/src/worker.ts`](ts/packages/drc-solver/src/worker.ts)) evaluate `CW-DRC-01..03` (TTL UART protocol/ID/voltage checks, I2C address/pull-up checks, ESP32-S3 reserved GPIO checks, power rail conversion/derating/brownout checks, 3D rotated/parallel-axis mass/COM/inertia, and unknown-aware BOM) with epoch-fenced worker coordination in [`drc.ts`](ts/apps/mini-studio/src/drc.ts).
 
@@ -145,7 +203,7 @@ flowchart LR
 
 ## Quickstart & Reproducible Verification
 
-### 1. Launch Central World Mini Studio (`CW-A02` / `CW-A03`) & Verify Assembly Contracts
+### 1. Launch Central World Mini Studio (`CW-A02`–`CW-A04`) & Verify Assembly Contracts
 ```bash
 # Install locked TypeScript workspace dependencies
 npm --prefix ts ci
@@ -163,7 +221,7 @@ node tools/robotics/verify-authoring.cjs --browser
 ### 2. Launch the Zero-Install 3D Kinematic Tree Studio (`SIM-3`)
 ```bash
 # Serve the browser simulator locally
-python3 -m http.server 8080 --directory apps/mini-robot-simulator
+python3 -m http.server 8080 --bind 127.0.0.1 --directory apps/mini-robot-simulator
 
 # Open in browser:
 # 3D Multi-Link Tree Studio: http://localhost:8080/tree-lab.html

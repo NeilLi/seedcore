@@ -1,10 +1,16 @@
 # SeedCore Rust Workspace
 
-Status checked: 2026-10-14. This workspace contains implemented token, policy,
+Status checked: 2026-10-20. This workspace contains implemented token, policy,
 approval, signature/receipt and replay-verification code, fixture tooling and
 the [seedcore-verify CLI](crates/seedcore-verify/src/main.rs). The
 [workspace proposal](../docs/development/infrastructure/rust_workspace_proposal.md)
 describes responsibilities; source code determines the implemented scope.
+
+In the local builder workflow, `seedcore-verify` checks supported token, receipt
+and replay artifacts using independently supplied bindings and trust context.
+An optional cloud planner supplies proposals, not verification authority. Build
+and run the workspace checks on the actual target environment; this README
+does not establish qualification across every CPU/OS combination.
 
 The [proof core](crates/seedcore-proof-core/src/lib.rs) provides canonical
 hashing, signing abstractions and verification with key/trust resolution.

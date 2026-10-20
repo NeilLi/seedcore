@@ -12,18 +12,28 @@ Customer work starts with a person's desired outcome. The team helps assess
 the need, select hardware, customize functions, validate results and provide
 support. Microduck is the reference integration, not a mandatory customer choice.
 
+## Reference builder workflow
+
+For builders, researchers and supervised STEM work, the target workflow has
+three roles. Offline authoring and prepared lessons need no cloud account:
+
+- **Optional remote proposer:** drafts candidate assembly JSON or task intents. Authoring validation, DRC findings and execution admission have separate responsibilities.
+- **Local development computer:** runs Mini Studio (`:8767`), Session Lab (`:8766`), native MuJoCo/ONNX tools and Python/Rust verification. Session Lab's issuer is simulation-only; live Agent/PDP integration remains a separate gate.
+- **Successive robot designs:** begin with proxy authoring; the one-to-three-servo fixture requires separate qualification. Sensor-head and arm variants need explicit profile/support decisions. Microduck is a separately pinned native reference with 14 policy actions and 15 physical channels; it is not assembled from the draft catalog. Custom-build simulation and physical receipts remain gated.
+
 | Document | Role |
 | --- | --- |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
 | [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
 | [Component cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md) | Official-source assessment of ten ecosystem candidates; prioritize edge compute, perception and bounded middleware diligence |
-| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Proposed COOP-00–06 backlog mapped to CW/M/G acceptance; CW-A04 remains next and vendor implementation is conditional |
+| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Proposed COOP-00–06 backlog mapped to CW/M/G acceptance; CW-S01 is next after CW-A04 local closure and vendor implementation is conditional |
 | [Partner integration architecture](../integrations/robotics_partner_integration_architecture.md) | Proposed source/profile, observation, proposal, execution and evidence boundaries; no new runtime schemas or adapters |
 | [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
 | [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
-| [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan component/assembly/DRC/browser/governance workstream; Phase 1 foundation delivered, later stages gated |
-| [Central World remaining schedule](central_world_remaining_delivery_schedule.md) | CW-A01–CW-L03 work packages, owner roles, dependencies and deliverables for phases 2–5; next is CW-A02 authoring/store |
+| [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan component/assembly/DRC/browser/governance workstream; Phase 1 & Phase 2 offline scope delivered, later stages gated |
+| [Central World remaining schedule](central_world_remaining_delivery_schedule.md) | CW-A01–CW-L03 work packages, owner roles, dependencies and deliverables for phases 2–5; Phase 2 (`CW-A01..A04`) passed locally, next is `CW-S01` |
 | [CW-A01 acceptance closure](central_world_cw_a01_acceptance_plan.md) | Assembly v2 candidate addresses eight findings; local software exit passed with reproducible evidence; CW-A02 handoff |
+| [CW-A02 authoring store](central_world_cw_a02_authoring.md), [CW-A03 snapping](central_world_cw_a03_snapping.md) & [CW-A04 DRC/BOM](central_world_cw_a04_drc.md) | Delivered Phase 2 offline authoring store, `15 mm` / `5°` proxy snapping, pure worker DRC, 3D rotated inertia, and unknown-aware BOM |
 | [Central World acceptance matrix](central_world_acceptance_matrix.md) | Required negative/fault/parity/measurement evidence and traceability for the suggested features |
 | [Component registry](../../../packages/component-registry/README.md) | Strict four-block schema, 12 illustrative drafts, hashed GLBs, semantic linter and local read-only viewer; no qualified hardware or execution authority |
 | [Day-30 review sheet](day30_simulation_review.md) | Early evidence inventory, missing physical measurements and go/rescope/defer criteria |

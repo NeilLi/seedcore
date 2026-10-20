@@ -1,12 +1,19 @@
 # Mini Studio
 
 Local CW-A02/CW-A03/CW-A04 authoring shell for frozen assembly v2 and original proxy geometry.
+Run it on a local development computer at `http://127.0.0.1:8767` to design
+successive proxy robot assemblies. Snap parts interactively or import candidate
+JSON from another tool, including an optional LLM. No cloud account is required.
+
 Imports are atomic: raw JSON, catalog semantics and pinned assets must validate
-before the candidate replaces the visible draft. The Place parts tab adds 15 mm proxy snapping, translucent ghosts, numeric
-placement and subtree moves through the immutable store. The DRC & BOM tab runs
+before the candidate replaces the visible draft. The **Place parts** tab adds 15 mm proxy snapping, translucent ghosts, numeric
+placement and subtree moves through the immutable store. The **DRC & BOM** tab runs
 the epoch-fenced pure DRC worker (`@seedcore/drc-solver`), surfacing routing
 proposals, 3D rotated/parallel-axis mass/COM/inertia, unknown-aware BOM and
-field-linked findings. No runtime admission or
+field-linked findings. Accepted assembly changes advance `authorityEpoch` and
+clear admission; stale async results cannot replace the current revision.
+Selection and failed imports are distinct from accepted assembly changes.
+No runtime admission or
 hardware routes are supplied.
 
 From the repository root:

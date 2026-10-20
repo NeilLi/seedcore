@@ -1,6 +1,6 @@
 # SeedCore component registry
 
-Date: 2026-10-16
+Date: 2026-10-20
 Status: Phase 1 authoring foundation; 12 illustrative drafts, zero qualified hardware parts
 
 The [v1 schema](schema/v1.sc-part.schema.json) defines four strict blocks:
@@ -9,6 +9,14 @@ The [v1 schema](schema/v1.sc-part.schema.json) defines four strict blocks:
 each part pins its original local GLB. Unknown prices, supplier SKUs, electrical
 ratings, pinouts and hard hardware limits remain unknown. A schema pass grants
 no HAL binding, execution token, firmware compatibility or hardware approval.
+
+## Role in a DIY Mini-Robot Series (Local AI Station + Remote LLM)
+
+The catalog supports successive offline designs on a local development
+computer, with optional LLM drafting assistance:
+
+- **Reusable draft records:** boards, servos, sensors, power and brackets can be referenced in multiple supported proxy assemblies. Sensor-head and arm examples remain design candidates; the records do not establish physical interchangeability or a wiring plan.
+- **Exact source identity:** every [`seedcore.assembly.v2`](assemblies/README.md) node must resolve its part ID, version and file-byte SHA-256 against the catalog. This rejects missing or altered references. Hash pinning preserves recorded data; it does not establish the truth of electrical specifications. Unknowns remain explicit and block physical readiness.
 
 ## Check and inspect
 

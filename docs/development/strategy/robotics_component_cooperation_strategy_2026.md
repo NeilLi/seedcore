@@ -3,6 +3,7 @@
 Date: 2026-10-20
 Status: Source-reviewed strategy proposal; partner access, compatibility and commercial demand unvalidated
 Repository baseline: `7f9d846`; local source and current planning documents inspected
+Delivery status refreshed against `01c9af0`: CW-A04 offline DRC/BOM complete; CW-S01 next
 
 ## Recommendation
 
@@ -20,8 +21,8 @@ It does not select a board, replace the ESP32-S3 fixture or start three integrat
 
 Prepare force/tactile evidence requirements for Bota Systems and Contactile.
 Keep industrial modular arms, dexterous hands and proprietary general robot
-brains as conditional expansion. The next implementation package remains
-CW-A04; Microduck's native M0–M4 gates remain open.
+brains as conditional expansion. After CW-A04's offline completion, the next
+implementation package is CW-S01; Microduck's native M0–M4 gates remain open.
 
 Use the [integration architecture](../integrations/robotics_partner_integration_architecture.md),
 [development roadmap](../robotics/robotics_ecosystem_integration_roadmap.md) and
@@ -90,7 +91,7 @@ commercial access remain unknown for every candidate.
 | Inspected surface | Available foundation | Gap a cooperation must close |
 | --- | --- | --- |
 | [Component registry](../../../packages/component-registry/README.md) | Twelve draft/proxy parts, strict schema and exact asset/catalog pins | No qualified supplier parts; new exact revisions and source rights need review |
-| [Assembly v2](../../../packages/component-registry/assemblies/README.md) and [Mini Studio](../../../ts/apps/mini-studio/README.md) | Canonical assemblies, immutable revisions and proxy placement | CW-A04 DRC/BOM and later import/simulation/admission remain separately gated |
+| [Assembly v2](../../../packages/component-registry/assemblies/README.md) and [Mini Studio](../../../ts/apps/mini-studio/README.md) | Canonical assemblies, immutable revisions, proxy placement and offline CW-A04 DRC/BOM | Custom-build simulation and live admission remain separately gated; DRC does not qualify hardware |
 | [Microduck driver](../../../src/seedcore/hal/drivers/microduck.py) | Explicit read-only adapter; hardware profile rejects | Native controlled motion, independent training parity and M2–M4 remain open |
 | [Fast Spine session](../../../src/seedcore/robotics/fast_spine/session.py) and [profile](../../../packages/robotics-profiles/fast-spine-v1/profile.json) | In-process simulation session, token/watchdog/framing foundation | MCU firmware, execution ingress isolation, enrollment and physical measurements |
 | [Simulation evidence](../../../src/seedcore/robotics/fast_spine/evidence.py) and [Rust kernel](../../../rust/README.md) | Scoped host-signed simulation receipts and verification | Sensor/vendor capture is a different assurance class; hardware claims need an accepted capture/signer path |
@@ -117,7 +118,7 @@ assumed. SeedCore's existing open/paid boundaries remain in the
 
 ## Decisions for the next review
 
-1. Keep CW-A04, exact first-fixture data and native Microduck acceptance as the
+1. Keep CW-S01, exact first-fixture data and native Microduck acceptance as the
    implementation priorities. Review cooperation evidence alongside those tasks.
 2. Use the pilot briefs to collect missing interface/version/access facts for
    the three prepare candidates; retain an explicit unknown where evidence is absent.

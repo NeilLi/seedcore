@@ -1,6 +1,12 @@
 # SeedCore Mini Robot Lab
 
-Status: Local browser research prototype; SIM-1/SIM-2 delivered and the narrow SIM-3 planar 1/2/3-link orbit studio slice implemented. Broader SIM-3 gates remain open. Status checked 2026-10-14.
+Status: Local browser research prototype; SIM-1/SIM-2 delivered and the narrow SIM-3 planar 1/2/3-link orbit studio slice implemented. Broader SIM-3 gates remain open. Status checked 2026-10-20.
+
+Mini Robot Lab runs prepared physics lessons (`index.html`, `tree-lab.html`)
+and a separate bounded host rehearsal (`session-lab.html`) on a local computer.
+Once dependencies and assets are installed, these paths need no cloud account.
+Session Lab exercises fixed lesson proposals with simulation tokens and local
+watchdog checks; it does not connect a remote LLM or physical robot.
 
 The additional `session-lab.html` pairs the tree studio with a localhost-only
 bounded controller rehearsal. It requires the Python host below; the original
