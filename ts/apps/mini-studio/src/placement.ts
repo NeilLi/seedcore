@@ -13,11 +13,12 @@ export function setupPlacement(store:AssemblyStore<ProxyScene>,canvas:RobotCanva
     request=undefined;proposal=undefined;binding=undefined;candidates=[];select('snap-candidate').replaceChildren();select('snap-candidate').disabled=true;button('commit-placement').disabled=true;
     canvas?.setGhost(null);if(!keepDrag)canvas?.setPlacementDrag(undefined);if(text)message(text);
   };
-  const activate=(name:'inspect'|'placement')=>{
-    for(const pane of ['inspect','placement']){const active=pane===name;el(`${pane}-panel`).hidden=!active;button(`${pane}-tab`).setAttribute('aria-selected',String(active));button(`${pane}-tab`).tabIndex=active?0:-1;}
+  const tabs=['inspect','placement','drc'] as const;
+  const activate=(name:(typeof tabs)[number])=>{
+    for(const pane of tabs){const active=pane===name;el(`${pane}-panel`).hidden=!active;button(`${pane}-tab`).setAttribute('aria-selected',String(active));button(`${pane}-tab`).tabIndex=active?0:-1;}
   };
-  for(const name of ['inspect','placement'] as const){button(`${name}-tab`).onclick=()=>activate(name);button(`${name}-tab`).onkeydown=event=>{
-    if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const next=event.key==='Home'?'inspect':event.key==='End'?'placement':name==='inspect'?'placement':'inspect';activate(next);button(`${next}-tab`).focus();}
+  for(const name of tabs){button(`${name}-tab`).onclick=()=>activate(name);button(`${name}-tab`).onkeydown=event=>{
+    if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const idx=tabs.indexOf(name);const next=event.key==='Home'?tabs[0]:event.key==='End'?tabs[tabs.length-1]:event.key==='ArrowRight'?tabs[(idx+1)%tabs.length]:tabs[(idx+tabs.length-1)%tabs.length];activate(next);button(`${next}-tab`).focus();}
   };}
   const source=():PlacementSource=>{
     const current=store.getState().current;if(!current||!catalog)throw new Error('Load a build and its catalog first');

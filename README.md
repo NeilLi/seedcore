@@ -5,7 +5,7 @@
 [![Wasm ABI](https://img.shields.io/badge/Wasm%20Physics-ABI%201%20%7C%20ABI%202%20(13.2%20KB)-success.svg)](packages/mini-physics/)
 [![SIM-3 Tests](https://img.shields.io/badge/SIM--3%20Tests-78%2F78%20passing-brightgreen.svg)](tools/mini-sim/verify.cjs)
 [![Assembly v2](https://img.shields.io/badge/CW--A01%20Assembly%20v2-117%20Py%20%2B%2071%20Node-brightgreen.svg)](tools/robotics/verify-assembly.cjs)
-[![Mini Studio](https://img.shields.io/badge/CW--A02%2F03%20Mini%20Studio-88%20TS%20%2B%2014%20API%20%2B%2018%20UI-brightgreen.svg)](tools/robotics/verify-authoring.cjs)
+[![Mini Studio](https://img.shields.io/badge/CW--A02..04%20Mini%20Studio%20%2B%20DRC-97%20TS%20%2B%2014%20API%20%2B%2021%20UI-brightgreen.svg)](tools/robotics/verify-authoring.cjs)
 [![Proof Kernel](https://img.shields.io/badge/Proof%20Kernel-Rust%20%2B%20Python-0f5132.svg)](rust/)
 
 **The Open Trust Runtime for Affordable Physical AI.**  
@@ -38,12 +38,12 @@ Every delivered slice in this repository is backed by reproducible build-from-so
 | **SIM-1–SIM-3 Browser Physics & 3D Tree Studio** | **Delivered Slice** | Zero-allocation C++17 planar 1/2/3-link dynamics compiled to 13,242-byte dual-ABI Wasm (`ABI 1` & `ABI 2`), 3D orbit viewport, live $M(q)$ & $\mathbf{J}(q)$ inspectors; **78/78 Node tests + 30 native/Wasm invariant groups passing**. | `node tools/mini-sim/verify.cjs` |
 | **CW1 Component Catalog Foundation** | **Delivered (Proxy Scope)** | Strict `.sc-part.json` v1 schema, 12 draft/proxy component records, original box-proxy GLB meshes, linter, and read-only part viewer; **107 passing registry/model tests**. | `pytest tests/test_component_registry.py -q` |
 | **CW-A01 Assembly v2 Contract** | **Software Exit Passed** | `seedcore.assembly.v2` schema, cross-language `seedcore.jcs-safe-integers.v1` canonical bytes, exact catalog byte pins, `opposed_z_rx_pi` rest poses, explicit proxy `actuator_outputs`, and 5-part `tabletop-starter.sc-assembly.json` (`0.2.0`); **117 Python + 71 Node conformance tests passing**. | `node tools/robotics/verify-assembly.cjs` |
-| **CW-A02 & CW-A03 Mini Studio, Immutable Store & Snapping** | **Local Slices Passed** | Strict duplicate-key raw JSON rejection, deep-frozen 32-entry / 2 MiB revision store, deterministic undo/redo, `authorityEpoch` invalidation, stale-load fencing, `15 mm` / `5°` candidate snapping (`CW-SNAP-01`), ghost preview, and keyboard/numeric placement; **88 TS + 14 FastAPI + 18 Chrome browser exercise groups passing**. | `node tools/robotics/verify-authoring.cjs --browser` |
+| **CW-A02–CW-A04 Mini Studio, Snapping, DRC & Unknown-Aware BOM** | **Phase 2 Offline Passed** | Strict duplicate-key raw JSON rejection, deep-frozen 32-entry / 2 MiB revision store, deterministic undo/redo, `authorityEpoch` invalidation, stale-load fencing, `15 mm` / `5°` candidate snapping (`CW-SNAP-01`), pure worker DRC (`CW-DRC-01..03`), routing proposals, 3D rotated/parallel-axis mass/inertia, and unknown-aware BOM; **97 TS + 14 FastAPI + 21 Chrome browser exercise groups passing**. | `node tools/robotics/verify-authoring.cjs --browser` |
 | **Simulation-First `M0` & Bounded Sessions** | **Delivered (Simulation Scope)** | Pinned **Microduck 0.1.0** MJCF ($0.737\text{ kg}$, 14 actuators, **88 Python tests**), read-only `microduck-sim-v1` HAL adapter (`61` obs / `14` actions / `15` servo channels), **16 upstream ONNX (`alpha_walking.onnx`) goldens**, localhost split-screen `fast-spine-v1` session rehearsal, and Python/Rust receipt checks. | `.venv/bin/python scripts/robotics/review_m0_pins.py` |
 | **M0 / CW-D01 Hardware Source Register** | **Inventory Recorded; Qualification Open** | Inventories `ESP32-S3-DevKitC-1-N8R8` and `Feetech STS3215` (TTL half-duplex spec `A/0`, `4–7.4 V` input) reference facts ([`m0_cw_d01_register_2026_10_19.md`](docs/development/robotics/m0_cw_d01_register_2026_10_19.md)). **No hardware is connected or qualified** (`STS3215` page 4 vs. page 8 pin numbering and regulated rail setpoints remain open). | `.venv/bin/python scripts/robotics/freeze_fast_spine_protocol.py` |
 
 ### What Remains Open / Gated
-- **Central World Phase 2–5 (`CW-A04` → `CW-L03`):** `CW-A04` (pure DRC worker, routing proposals, field-linked findings & unknown-aware BOM) is the next active package, followed by `CW-S01–S04` (restricted assembly-to-MJCF compiler, browser MuJoCo worker where [`mjswan 0.11.9`](docs/development/robotics/mjswan_integration_assessment.md) is a conditional candidate, ONNX adapter, and Robot Moments gestures), `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification, and the January authoring/simulation alpha review.
+- **Central World Phase 3–5 (`CW-S01` → `CW-L03`):** Phase 2 offline assembly and DRC (`CW-A01 v2`–`CW-A04`) are complete locally. `CW-S01` (restricted assembly-to-MJCF compiler and native MuJoCo comparison in `ts/packages/wasm-sim-bridge`) is the next active package, followed by `CW-S02–S04` (browser MuJoCo worker where [`mjswan 0.11.9`](docs/development/robotics/mjswan_integration_assessment.md) is a conditional candidate, ONNX adapter, and Robot Moments gestures), `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification, and the January authoring/simulation alpha review.
 - **Native Microduck & Physical Hardware (`M1–M4` / `G0–G2`):** Independent training-checkpoint export parity (`M1`), live native `M2` velocity/stop sessions, hardware-enrolled signer receipts (`M3`), physical MCU firmware & WebSerial bridge, and measured 1-servo → 3-servo / biped stopping behavior (`M4`).
 
 ---
@@ -103,29 +103,30 @@ flowchart TD
     end
 ```
 
-### 2. Central World (`CW1` → `CW-A03`) Authoring, Snapping & Verification Pipeline
+### 2. Central World (`CW1` → `CW-A04`) Authoring, Snapping, DRC & Verification Pipeline
 
 ```mermaid
 flowchart LR
     P1[CW1 Component Catalog<br/>12 .sc-part.json + Box GLBs] -->|Exact File-Byte SHA-256 Pins| A1[CW-A01 Assembly v2<br/>seedcore.jcs-safe-integers.v1]
     A1 -->|parseStrictJson<br/>Reject Duplicate Keys & v1| A2[CW-A02 AssemblyStore<br/>Frozen Revisions · Undo/Redo]
     A2 -->|CW-A03 15 mm / 5° Snapping<br/>Ghost Preview & Numeric Place| V1[Localhost FastAPI Validator<br/>+ Epoch & Byte/Mesh Recheck]
-    V1 -->|opposed_z_rx_pi Rest Poses| C1[Three.js Proxy Viewport<br/>http://127.0.0.1:8767]
+    V1 -->|CW-A04 Pure DRC Worker<br/>Routing · 3D Inertia · BOM| C1[Three.js Proxy Viewport & DRC<br/>http://127.0.0.1:8767]
 ```
 
 ---
 
 ## Central World & Browser Studios
 
-### 1. Central World Component Catalog & Mini Studio (`CW1`, `CW-A01 v2`, `CW-A02`, `CW-A03`)
+### 1. Central World Component Catalog & Mini Studio (`CW1`, `CW-A01 v2`, `CW-A02`, `CW-A03`, `CW-A04`)
 - **Component Registry ([`packages/component-registry/`](packages/component-registry/README.md)):** Strict v1 component schema, 12 draft/proxy records (`ESP32-S3`, `Feetech STS3215`, sensor hats, power rails, brackets), original box-proxy `.glb` meshes, and SHA-256 catalog index.
 - **Assembly v2 Contract ([`packages/component-registry/assemblies/`](packages/component-registry/assemblies/README.md), [`src/seedcore/robotics/assembly.py`](src/seedcore/robotics/assembly.py), [`ts/packages/contracts/`](ts/packages/contracts/src/robotAssemblyContracts.ts)):**
   - Enforces RFC 8785 canonical serialization with safe-integer bounds (`seedcore.jcs-safe-integers.v1`), rooted tree topology, `opposed_z_rx_pi` mating rest transforms, and explicit `actuator_outputs` (`basis: simulation_proxy`).
   - Reference starter: [`tabletop-starter.sc-assembly.json`](packages/component-registry/assemblies/tabletop-starter.sc-assembly.json) (version `0.2.0`, canonical digest `2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb`).
-- **Offline Mini Studio, Immutable Store & Proxy Snapping ([`ts/apps/mini-studio/`](ts/apps/mini-studio/), [`ts/packages/robot-canvas/`](ts/packages/robot-canvas/), [`src/seedcore/robotics/mini_studio_api.py`](src/seedcore/robotics/mini_studio_api.py)):**
+- **Offline Mini Studio, Immutable Store, Proxy Snapping & Pure DRC/BOM ([`ts/apps/mini-studio/`](ts/apps/mini-studio/), [`ts/packages/robot-canvas/`](ts/packages/robot-canvas/), [`ts/packages/drc-solver/`](ts/packages/drc-solver/), [`src/seedcore/robotics/mini_studio_api.py`](src/seedcore/robotics/mini_studio_api.py)):**
   - `parseStrictJson()` ([`assemblyText.ts`](ts/packages/contracts/src/assemblyText.ts)) enforces a 256 KiB UTF-8 cap, 32 nesting levels, and 50,000 nodes while rejecting duplicate decoded JSON keys before schema validation.
   - `AssemblyStore` ([`store.ts`](ts/packages/robot-canvas/src/store.ts)) deep-freezes revisions, caps history at 32 entries / 2 MiB, increments `authorityEpoch` on every load/edit/undo/redo (`admission: null`), and fences stale or abort-ignoring async loads via monotonic generation tickets.
   - `snapping.ts` ([`ts/packages/robot-canvas/src/snapping.ts`](ts/packages/robot-canvas/src/snapping.ts)) and `placement.ts` ([`ts/apps/mini-studio/src/placement.ts`](ts/apps/mini-studio/src/placement.ts)) provide deterministic `15 mm` / `5°` candidate capture under `seedcore.proxy_mount_v1`, non-committing green/red ghost preview, subtree reparenting, and accessible keyboard/numeric placement bound to the store's `authorityEpoch`.
+  - `solver.ts` ([`ts/packages/drc-solver/src/solver.ts`](ts/packages/drc-solver/src/solver.ts)) and `worker.ts` ([`ts/packages/drc-solver/src/worker.ts`](ts/packages/drc-solver/src/worker.ts)) evaluate `CW-DRC-01..03` (TTL UART protocol/ID/voltage checks, I2C address/pull-up checks, ESP32-S3 reserved GPIO checks, power rail conversion/derating/brownout checks, 3D rotated/parallel-axis mass/COM/inertia, and unknown-aware BOM) with epoch-fenced worker coordination in [`drc.ts`](ts/apps/mini-studio/src/drc.ts).
 
 ### 2. Zero-Allocation C++17 Physics Kernel & 3D Tree Studio (`SIM-1`–`SIM-3`)
 - **Analytical C++ Physics ([`packages/mini-physics/`](packages/mini-physics/)):**
@@ -152,7 +153,7 @@ npm --prefix ts ci
 # Run CW-A01 v2 build-from-source conformance (117 Python + 71 Node tests)
 node tools/robotics/verify-assembly.cjs
 
-# Run CW-A02/CW-A03 authoring store, snapping, FastAPI boundary & Chrome browser exercises (88 TS + 14 API + 18 UI groups)
+# Run CW-A02..CW-A04 authoring store, snapping, DRC/BOM, FastAPI boundary & Chrome browser exercises (97 TS + 14 API + 21 UI groups)
 node tools/robotics/verify-authoring.cjs --browser
 
 # Serve Mini Studio locally at http://127.0.0.1:8767
@@ -215,10 +216,11 @@ seedcore/
 │   ├── robotics/                   # Assembly v2 validator, Mini Studio FastAPI service & team coordination
 │   └── security/                   # Policy Decision Point (PDP) and scoped authorization
 ├── ts/
-│   ├── apps/mini-studio/           # CW-A02/CW-A03 offline Mini Studio UI, placement & Playwright checks
+│   ├── apps/mini-studio/           # CW-A02–CW-A04 offline Mini Studio UI, placement, DRC/BOM & Playwright checks
 │   ├── packages/contracts/         # Assembly v2 TypeScript bindings, strict JSON parser & standalone Ajv
+│   ├── packages/drc-solver/        # CW-A04 pure DRC/routing/3D-inertia/BOM solver & epoch-fenced worker coordinator
 │   ├── packages/robot-canvas/      # Immutable AssemblyStore, 15 mm snapping math, GLB loader & Three.js viewport
-│   └── tests/                      # CW-ASM-02 & CW-SNAP-01 store, snapping & stale-load regression suites
+│   └── tests/                      # CW-ASM-02, CW-SNAP-01 & CW-DRC-01..03 regression suites
 ├── rust/                           # High-assurance Rust proof kernel & CLI (seedcore-verify)
 ├── tests/                          # Python & Node conformance suites (assembly-v2, mini-sim, MuJoCo, authz)
 ├── tools/
@@ -236,10 +238,9 @@ seedcore/
 | Stage / Package | Focus Area | Current Status | Next Gate / Required Evidence |
 | :--- | :--- | :--- | :--- |
 | **`CW1` & `CW-A01 v2`** | Component Catalog & Assembly v2 Contract | **Passed Locally** | 107 catalog tests + 117 Python & 71 Node assembly v2 conformance checks passing. |
-| **`CW-A02` & `CW-A03`** | Mini Studio Store, Snapping & Numeric Placement | **Passed Locally** | 88 TS + 14 API + 18 Chrome browser exercise groups passing (`CW-ASM-02` & `CW-SNAP-01`). |
+| **`CW-A02`–`CW-A04`** | Mini Studio Store, Snapping, DRC & Unknown-Aware BOM | **Phase 2 Offline Passed** | 97 TS + 14 API + 21 Chrome browser exercise groups passing (`CW-ASM-02`, `CW-SNAP-01` & `CW-DRC-01..03`). |
 | **`CW-D01`** | Qualified Hardware Source Register | **Inventory Recorded; Open** | [19 Oct register](docs/development/robotics/m0_cw_d01_register_2026_10_19.md) logged; reconcile `STS3215` A/0 connector pinout and regulated `4–7.4 V` rails before physical pass. |
-| **`CW-A04`** | Pure DRC Worker & Unknown-Aware BOM | **Next Active Package** | `CW-DRC-01–03` UART/I2C/GPIO/rail negative matrix, stale-worker rejection, and findings bound to build/net digest. |
-| **`CW-S01`–`CW-S04`** | MJCF Compiler, Browser MuJoCo & Gestures | **Planned (Weeks 6–8)** | Restricted fixed-base MJCF compiler, pinned browser MuJoCo worker ([`mjswan 0.11.9` assessment](docs/development/robotics/mjswan_integration_assessment.md)), and Robot Moments timeline. |
+| **`CW-S01`–`CW-S04`** | MJCF Compiler, Browser MuJoCo & Gestures | **Next Active (`CW-S01`)** | Restricted fixed-base MJCF compiler (`ts/packages/wasm-sim-bridge`), pinned browser MuJoCo worker ([`mjswan 0.11.9` assessment](docs/development/robotics/mjswan_integration_assessment.md)), and Robot Moments timeline. |
 | **`CW-G01`–`CW-L03`** | Live Admission, Build Pack & Alpha Review | **Planned (Weeks 9–12)** | Live PDP admission/replay, Build Pack ZIP/SVG exporter, conditional `CW-F01/F02` firmware lane, and January authoring/simulation alpha. |
 | **`M0`–`M4` (`G0`–`G2`)** | Native Microduck & Fast Spine Bench | **M0 Sim Delivered; M1–M4 Open** | Close independent checkpoint parity (`M1`), live native `M2` session stop, enrolled signer receipts (`M3`), and 1-servo → 3-servo / Microduck `M4` stop measurements. |
 
@@ -256,10 +257,10 @@ seedcore/
 
 ## Key Technical Documentation
 
-- **[Current Next Steps (Active Queue)](docs/development/current_next_steps.md):** Canonical execution order across Central World (`CW-A03` → `CW-A04`) and native `M0–M5` milestones.
+- **[Current Next Steps (Active Queue)](docs/development/current_next_steps.md):** Canonical execution order across Central World (`CW-A04` → `CW-S01`) and native `M0–M5` milestones.
 - **[18-Month Physical AI Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Oct 2026–Mar 2028 strategy, `G0–G5` gate definitions, Oct 14–Nov 12 tactical schedule, and cost/evidence discipline.
 - **[Central World Remaining Delivery Schedule](docs/development/robotics/central_world_remaining_delivery_schedule.md) & [Acceptance Matrix](docs/development/robotics/central_world_acceptance_matrix.md):** Owner roles, dependencies, and positive/negative/fault fixtures (`CW-CAT-01` through `CW-REL-01`).
-- **[CW-A03 Proxy Snapping & Numeric Placement](docs/development/robotics/central_world_cw_a03_snapping.md), [CW-A02 Mini Studio Store](docs/development/robotics/central_world_cw_a02_authoring.md) & [CW-A01 v2 Exit Plan](docs/development/robotics/central_world_cw_a01_acceptance_plan.md):** Implementation records for `15 mm` / `5°` candidate snapping, the immutable authoring store, Three.js proxy canvas, and `seedcore.assembly.v2` cross-language conformance.
+- **[CW-A04 Worker DRC & Unknown-Aware BOM](docs/development/robotics/central_world_cw_a04_drc.md), [CW-A03 Proxy Snapping](docs/development/robotics/central_world_cw_a03_snapping.md), [CW-A02 Mini Studio Store](docs/development/robotics/central_world_cw_a02_authoring.md) & [CW-A01 v2 Exit Plan](docs/development/robotics/central_world_cw_a01_acceptance_plan.md):** Implementation records for `CW-DRC-01..03` pure DRC/routing/3D-inertia/BOM, `15 mm` / `5°` candidate snapping, the immutable authoring store, Three.js proxy canvas, and `seedcore.assembly.v2` cross-language conformance.
 - **[M0 / CW-D01 Source-Register Review (2026-10-19)](docs/development/robotics/m0_cw_d01_register_2026_10_19.md):** Pinned Microduck commit verification and `ESP32-S3-DevKitC-1-N8R8` / `Feetech STS3215` (spec A/0) hardware qualification gaps.
 - **[Simulation-First Acceptance Record](docs/development/robotics/simulation_first_acceptance.md):** Read-only Microduck adapter, 16 ONNX goldens, localhost split-screen rehearsal, and Python/Rust receipt checks.
 - **[mjswan 0.11.9 Integration Assessment](docs/development/robotics/mjswan_integration_assessment.md):** Feasibility and version-reconciliation analysis for `CW-S02`/`CW-S03` browser MuJoCo integration.

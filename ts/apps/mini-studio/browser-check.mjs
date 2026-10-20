@@ -1,13 +1,15 @@
-// Real-browser CW-ASM-02 acceptance. Starts a temporary localhost service.
+// Real-browser CW-ASM-02 / CW-SNAP-01 / CW-DRC-01..03 acceptance. Starts a temporary localhost service.
 import {chromium} from 'playwright';
 import {exerciseSnapping} from './snapping-browser.mjs';
+import {exerciseDrc} from './drc-browser.mjs';
 import {spawn} from 'node:child_process';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../../',import.meta.url));
-const output=path.join(root,'artifacts/robotics/cw-a03');await mkdir(output,{recursive:true});
+const output=path.join(root,'artifacts/robotics/cw-a04');await mkdir(output,{recursive:true});
+const compatOutput=path.join(root,'artifacts/robotics/cw-a03');await mkdir(compatOutput,{recursive:true});
 const report={scope:'offline_proxy_authoring',physical_acceptance:false,checks:[],errors:[]};
 const port=process.env.SEEDCORE_STUDIO_TEST_PORT||'8768',base=`http://127.0.0.1:${port}`;
 const python=process.env.SEEDCORE_TEST_PYTHON||path.join(root,'.venv/bin/python');
@@ -50,10 +52,10 @@ try {
   await page.route('**/assets/*.glb',route=>route.fulfill({status:503,body:'synthetic fixture failure'}));
   await page.locator('#starter').click();await page.waitForFunction(()=>document.querySelector('#status')?.dataset.error==='true');assert.equal(await page.locator('#content-digest').textContent(),newer);assert.equal(await page.locator('canvas').getAttribute('data-mesh-state'),'verified');await page.unroute('**/assets/*.glb');passed('asset failure preserves previous build and scene');
   await page.locator('#raw').fill(raw);await page.locator('#import-text').click();await page.waitForFunction(()=>document.querySelector('#build-name')?.textContent==='CW-A02 browser revision');passed('recovery by valid raw-text import');
-  await page.locator('.raw summary').click();await exerciseSnapping(page,output,passed);await page.screenshot({path:path.join(output,'desktop.png'),fullPage:true});
+  await page.locator('.raw summary').click();await exerciseSnapping(page,output,passed);await exerciseDrc(page,output,passed);await page.screenshot({path:path.join(output,'desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.waitForTimeout(250);await page.screenshot({path:path.join(output,'mobile.png')});
   await page.locator('.inspector').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,'mobile-inspector.png')});passed('desktop and mobile layout; no horizontal overflow');
   assert.deepEqual(report.errors,[]);passed('strict CSP and no browser exceptions');report.status='checks_passed';
 } catch(error) {report.status='checks_failed';report.failure=String(error.stack||error);process.exitCode=1;console.error(report.failure);}
-finally {await browser?.close();server.kill('SIGTERM');await writeFile(path.join(output,'browser-verification.json'),JSON.stringify(report,null,2)+'\n');await writeFile(path.join(output,'server.log'),log);}
+finally {await browser?.close();server.kill('SIGTERM');for(const dir of [output,compatOutput]){await writeFile(path.join(dir,'browser-verification.json'),JSON.stringify(report,null,2)+'\n');await writeFile(path.join(dir,'server.log'),log);}}

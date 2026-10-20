@@ -140,8 +140,10 @@ owns work-package roles and dependencies, and the
 review evidence. CW-A01 v2 and the
 [CW-A02 offline authoring slice](../robotics/central_world_cw_a02_authoring.md)
 have local software evidence. The [CW-A03 placement slice](../robotics/central_world_cw_a03_snapping.md)
-adds local proxy-mating evidence; CW-A04 DRC is next. Exact physical data is
-CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
+adds local proxy-mating evidence, and the
+[CW-A04 DRC/BOM slice](../robotics/central_world_cw_a04_drc.md) closes Phase 2's
+offline software scope; Phase 3 CW-S01 restricted assembly-to-MJCF compilation is
+next. Exact physical data is CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
 that may extend beyond its target, not an automatic November release promise.
 
 **15 October simulation-first checkpoint:** no hardware is connected. The
@@ -156,7 +158,7 @@ native Microduck M2–M4, MCU release, physical stop measurements or G2.
 | Dates | Primary owner role | Concrete output | Acceptance / next decision |
 | --- | --- | --- | --- |
 | 14–20 Oct | Project / integration lead | [19 Oct inventory recorded](../robotics/m0_cw_d01_register_2026_10_19.md); reconcile candidate M0 pins and delivered artifact goldens; request independent checkpoint/export references; record missing board/fixture facts and review [Fast Spine protocol](../robotics/fast_spine_protocol_spec.md) | Units/ordering and unknowns explicit; no unmeasured hardware freeze; record effort, quotations and availability as known or open |
-| 21–27 Oct | Runtime / robotics lead | Reproduce delivered read-only/session/negative fixtures; continue CW-A04 from the accepted CW-A01–CW-A03 offline boundary | Startup remains read-only; rejected authority cannot dispatch; fixture scope stays distinct from live native integration |
+| 21–27 Oct | Runtime / robotics lead | Reproduce delivered read-only/session/negative fixtures; advance CW-S01 restricted MJCF compilation from the accepted CW-A01–CW-A04 Phase 2 offline boundary | Startup remains read-only; rejected authority cannot dispatch; fixture scope stays distinct from live native integration |
 | 28 Oct–3 Nov | Firmware / verification lead | Advance live native M2 and minimum M3 integration beyond the host rehearsal; define conditional one-servo → three-servo bench acceptance | Physical tests require a fixture and G1; public physical demo requires G2; offline CW work can proceed independently |
 | 4–10 Nov | Browser / delivery lead | Firmware/source/toolchain/board readiness review, existing packet preparer and recovery requirements; refresh OEM packet and delivered lesson | Real release binary/installer only after qualified source/build/enrollment/recovery evidence; CW-F01/CW-F02 remain conditional later work |
 | 11–12 Nov | Project lead / reviewer | Day-30 review pack: demo trace, denied/revoked cases, verifier dispositions, BOM quotes, onboarding timings, support assumptions and next-month backlog | Go/rescope/defer based on evidence; identify one OEM design-in candidate and one pilot candidate without assuming agreements |

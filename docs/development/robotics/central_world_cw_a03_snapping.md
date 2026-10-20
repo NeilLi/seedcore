@@ -120,8 +120,9 @@ No two-minute maker-task timing or frame-rate guarantee is claimed.
 
 ## Remaining work
 
-CW-A04 is next: a pure worker DRC/net solver and unknown-aware BOM, with findings
-bound to the exact assembly/electrical-plan digest. CW-D01's
+CW-A04 is now implemented in the [CW-A04 DRC/BOM record](central_world_cw_a04_drc.md):
+a pure worker DRC/net solver and unknown-aware BOM, with findings bound to the
+exact assembly/electrical-plan digest. CW-D01's
 [dated source register](m0_cw_d01_register_2026_10_19.md) retains the Feetech A/0
 connector-numbering and rail/BEC questions for **26 October–1 November**.
 The [machine register](../../../packages/robotics-profiles/reviews/2026-10-19-m0-cw-d01.json)

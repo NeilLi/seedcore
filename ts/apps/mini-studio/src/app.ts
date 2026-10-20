@@ -1,4 +1,5 @@
 import {setupPlacement} from './placement.js';
+import {setupDrc} from './drc.js';
 import {canonicalAssemblyString} from '@seedcore/contracts';
 import {AssemblyStore, RobotCanvas, prepareProxyScene, fetchAssemblyText, type ProxyScene, type Frozen, type StoreState, type Selection} from '@seedcore/robot-canvas';
 const element = <T extends HTMLElement>(id:string) => document.getElementById(id) as T;
@@ -59,7 +60,8 @@ button('export').onclick = ()=>{
   const anchor=document.createElement('a'); anchor.href=url; anchor.download='assembly.sc-assembly.json'; anchor.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 const disposePlacement=setupPlacement(store,canvas);
-window.addEventListener('pagehide',()=>{disposePlacement();store.dispose();canvas?.dispose();},{once:true});
+const disposeDrc=setupDrc(store);
+window.addEventListener('pagehide',()=>{disposePlacement();disposeDrc();store.dispose();canvas?.dispose();},{once:true});
 let restored:string|null=null; try{restored=localStorage.getItem(storageKey);}catch{storageError=' · Browser storage unavailable; export your draft.';}
 if(restored) void store.loadText(restored);
 else void store.loadFrom(signal=>fetchAssemblyText('/api/starter',signal));
