@@ -1,179 +1,249 @@
-# Robotics partner integration architecture
+# Mini-robotics partner integration architecture
 
 Date: 2026-10-20
-Status: Proposed integration design; no partner adapters, new schemas or token fields implemented
+Status: Proposed design for small desktop fixtures; no new adapters, schemas or physical qualification
 
-This design implements the boundaries required by the
-[cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md).
+This revision narrows the [cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md)
+to small servos, printable structures and selected compact/open joint research.
 The [robot execution contract](../robotics/robot_execution_contract.md),
 [policy matrix](../policy_gate_matrix.md) and existing token/replay contracts
 remain authoritative. The [roadmap](../robotics/robotics_ecosystem_integration_roadmap.md)
-owns proposed work; the [pilot briefs](../../application/robotics_component_partner_pilot_briefs.md)
-own experiment scope.
+owns sequencing; the [pilot briefs](../../application/robotics_component_partner_pilot_briefs.md)
+own bounded experiment proposals.
 
-## Integration shape
+## Smallest useful integration
 
-Keep authoring, observation, proposal generation, execution and research export
-as explicit interfaces. A supplier may occupy several interfaces, but does not
-acquire authority merely by supplying the hardware, model or SDK.
+Use one existing local computer, a directly connected qualified controller and
+one desktop fixture. A cloud LLM is an optional untrusted proposer. A camera,
+GPU board, middleware service, ROS deployment or fleet manager is not required
+by the first integration. Preserve the existing native Microduck lane separately.
 
 ```mermaid
 flowchart TD
-    CAT[Supplier documents and licensed assets] --> BUILD[Central World candidate build]
-    BUILD --> REVIEW[DRC, model checks and trusted profile review]
-    SENS[Sensor or licensed recording] --> CAP[Observation adapter and coverage journal]
-    CAP --> PROP[Model or application proposal]
-    PROP --> AGENT[Accountable Agent and ActionIntent]
-    REVIEW --> PDP[PDP with independently resolved profile context]
-    AGENT --> PDP
-    PDP --> TOKEN[Scoped ExecutionToken]
-    TOKEN --> EDGE[Execution boundary: claim, scope, freshness and revocation]
-    EDGE --> LOCAL[Native controller or qualified MCU]
-    LOCAL --> ATTEMPT[Bounded attempt]
-    STOP[Local stop and watchdog] --> LOCAL
-    ATTEMPT --> EVID[Action-bound evidence]
-    CAP --> EVID
-    EVID --> VERIFY[Existing replay and verifier surfaces]
-    VERIFY --> EXPORT[Separately permitted research export]
+    SOURCES[Exact servo or open-design source record] --> DRAFT[Mini Studio assembly candidate]
+    DRAFT --> DRC[Delivered offline DRC and BOM]
+    DRC -.->|Planned CW-S01 onward| SIM[Custom-build simulation and comparison]
+    SIM -.-> REVIEW[Trusted profile and hardware qualification]
+    PROP[Local application or optional LLM proposal] --> AGENT[Accountable Agent and PDP]
+    REVIEW --> AGENT
+    AGENT --> TOKEN[Scoped ExecutionToken]
+    TOKEN -.-> EDGE[Target qualified MCU or native controller]
+    EDGE --> JOINT[One joint then three-joint fixture]
+    STOP[Local limits and stop independent of cloud] --> EDGE
+    JOINT --> CAP[Declared physical capture and signer]
+    CAP --> VERIFY[Replay and evidence verification]
+    REHEARSAL[Delivered Fast Spine host simulation] --> SIMPROOF[Simulation receipts and verifiers]
 ```
 
-This is a target integration diagram. Current Fast Spine dispatch terminates
-in a mathematical simulation; the physical route is not delivered. Imported
-human demonstrations enter the observation/research lane and have no robot
-action or motor-authority claim.
+This diagram distinguishes delivered offline tools and rehearsal from the
+planned custom-build and physical paths. Neither a valid assembly nor a
+simulation token grants motor authority. Scaling to a small arm or leg needs
+new physical acceptance for that exact body.
 
-## Reuse the existing seams
+## Reusable desktop dock and attachment discovery
 
-| Existing surface | Proposed use | Boundary to preserve |
+The proposed **Fast Spine Desktop Dock** centralizes controller/USB transport,
+reviewed power distribution, local stop and watchdog circuitry in one reusable
+bench unit. Attachments reuse that unit within one qualified mechanism family;
+servos may remain on, or be moved between, attachments. A fixed four-actuator
+base is not assumed. The [product/pricing analysis](../strategy/mini_robotics_base_attachment_product_analysis.md)
+defines the complete starter offer and incremental attachment economics.
+
+| Boundary | Proposed responsibility | Open before a hardware design or catalog record |
 | --- | --- | --- |
-| [Component schema/catalog](../../../packages/component-registry/README.md) and [registry validator](../../../src/seedcore/robotics/component_registry.py) | Describe a reviewed supplier part using the supported schema; retain sources and unknowns | Do not insert speculative runtime bindings or silently change pinned part bytes |
-| [Assembly implementation](../../../src/seedcore/robotics/assembly.py), [TS contracts](../../../ts/packages/contracts/src/robotAssemblyContracts.ts) and [authoring store](../../../ts/packages/robot-canvas/src/store.ts) | Pin build identity and invalidate admission after edits | `seedcore.assembly.v2` remains authoritative; proxy mounts do not establish commercial fit |
-| [Model package loader](../../../src/seedcore/robotics/model_package/loader.py) | Review licensed URDF/MJCF/assets and explicit frame/joint mapping | Model import does not establish real dynamics, policy parity or hardware qualification |
-| [HAL interfaces](../../../src/seedcore/hal/interfaces.py) and [read-only Microduck driver](../../../src/seedcore/hal/drivers/microduck.py) | Reuse lifecycle/observation conventions; implement only the needed device-specific adapter | A driver class or capability flag is not an execution gate; preserve read-only startup |
-| [ActionIntent/ExecutionToken](../../../src/seedcore/models/action_intent.py), [PDP](../../../src/seedcore/coordinator/core/governance.py) and [Fast Spine authority](../../../src/seedcore/robotics/fast_spine/authority.py) | Bind the exact behavior/profile payload through reviewed existing fields | No arbitrary additions to frozen constraints, token shape or deny codes |
-| [Fast Spine sessions](../../../src/seedcore/robotics/fast_spine/session.py) and [simulation evidence](../../../src/seedcore/robotics/fast_spine/evidence.py) | Reuse lifecycle/negative-case patterns and compare verifier behavior | These implementations deliberately enforce simulation-only scope; do not relabel them as hardware adapters |
-| [Physical telemetry proposal](../evidence/physical_telemetry_processing_contract.md) and [Rust verification](../../../rust/README.md) | Design action-bound capture and independent disposition | Vendor logs and host signatures need explicit assurance/provenance; no fabricated device attestation |
+| Local computer | Authoring, optional model proposals, preview and verification | Supported browser/serial setup; no mandatory cloud account |
+| Dock | Controller/bridge, reviewed supply/distribution, physical local stop, local deadline/watchdog and sole mutation ingress | Exact circuit, firmware, rail ratings, current capacity, protection, device identity and measured stop/holding behavior |
+| Attachment | Printed/mechanical parts, declared actuator/sensor set, mount/axis map and calibration | Process/load qualification, applicable harness, complete cost and compatibility with dock limits |
+| Source/profile record | Separately pin dock and attachment revisions plus their combined build/model/calibration context | Versioned composite binding and trusted registry resolution; no new fields are implemented here |
 
-Proposed adapter locations are `src/seedcore/hal/drivers/` for robot/device
-translation and a reviewed robotics observation module for sensor-only input.
-Use a separate optional dependency group for any selected vendor SDK. Paths,
-types and package names must be reviewed in the implementation package; this
-document creates none of them and does not expand `BaseRobotDriver` prematurely.
+First review a **wired, externally supplied bench dock**. Charging/battery,
+speaker/display and automatic ID hardware are optional later features, not
+first-kit cost assumptions. USB-C is a connector/transport choice, not proof
+that a host port can supply servo load or that USB Power Delivery is supported.
 
-## Candidate-specific responsibilities
+The proposed 5 V and 7.4 V rails are **not frozen**. The current STS3215 source
+range ends at 7.4 V; a nominal 7.4 V output cannot ignore tolerance, transient
+overshoot or source/battery maximum. Set the servo rail only after exact-part
+review, including current, wiring, protection and load tests. Keep 3.3 V and
+5 V logic domains distinct, with level handling and any USB backfeed controls
+reviewed. A physical stop button is not a certified emergency-stop system;
+its electrical interruption and load-holding behavior need measured acceptance.
 
-| Candidate / layer | Proposed boundary | First implementation scope |
+### Physical interface proposal
+
+`seedcore.proxy_mount_v1` and **15 mm / 5°** specify candidate capture distance
+and angular alignment in software. They do not define a manufactured 15 mm or
+20 mm hole grid, connector geometry or physical tolerance. Review grid pitch,
+fasteners, stiffness, retention, print clearances and load cases independently.
+
+Prefer a simple keyed cable and mechanical fastener for the first fixture.
+JST-GH-style or pogo/magnetic systems are candidates, not selected pinouts.
+For each exact connector, review current/contact rating, polarity/orientation,
+keying, wear, exposed-contact faults and mating sequence. Initially require
+actuator power disabled for changes; **no hot-swap claim** is made. TTL servo
+power/data and sensor logic/I2C need explicit domains and grounding/level rules;
+sharing one connector cannot imply arbitrary sensor compatibility. Pin numbers,
+connector SKUs, rail setpoints and PCB footprints remain unknown.
+
+### Discovery proposes a build; it does not authorize it
+
+Begin with manual selection or a label/QR referencing an approved build record.
+A later EEPROM, 1-Wire memory or ESP32 NVS value may provide a candidate
+`assemblyDigest`; a passive chip needs a reader, and the dock can report the
+value over a reviewed USB protocol. None of these storage methods is by itself
+an authenticated device identity or evidence that the attached mechanics still
+match the stored digest.
+
+```text
+connect / attachment change -> motors disabled and prior session fenced
+read bounded candidate ID (or select manifest manually)
+resolve trusted exact build, dock and attachment revisions
+check current catalog/DRC bindings, controller limits and calibration
+load compatible pinned preview only if its compiler/model path is supported
+operator reconciles physical build; accepted profile and enrollment checked
+accountable Agent/PDP admits a fresh bounded attempt
+qualified local executor claims token -> enable only within admitted limits
+```
+
+Digest matching can prepare a read-only preview and candidate policy request.
+It cannot mint authority, establish a DRC pass from a chip's assertion, certify
+a physical build, or silently choose a fallback model. Custom-build simulation
+is still CW-S01 onward. Include boot/session identity, firmware, calibration,
+combined build/profile and freshness in the reviewed binding; do not invent
+fields in frozen token contracts. Read untrusted IDs with explicit size/format
+limits and map them to trusted records, not executable scripts or arbitrary URLs.
+
+Unknown, cloned, stale or unsupported records keep motor enable unavailable.
+Attachment removal/change, a power/firmware/calibration change or reconnect
+invalidates the applicable admission and queued commands even when the USB
+device remains connected. Review how a physical change is detected; absent a
+qualified presence/identity mechanism, require explicit reconciliation rather
+than assuming software can observe a changed bracket. A stored digest and an
+enrolled dock identity cannot independently attest to every printed part.
+
+This concept is the proposed **dock source/design record**. Keep it in design
+review until topology, schema representation and source/asset assumptions are
+reviewed. A later illustrative `.sc-part.json` must retain unknown ratings,
+draft geometry and no execution authority; updating the catalog also requires
+new asset/index pins and relevant registry checks. Do not convert this paragraph
+into a documented or qualified dual-rail part by filling speculative numbers.
+
+## Three integration paths
+
+| Path | Initial scope | Additional work before physical execution |
 | --- | --- | --- |
-| D-Robotics / host compute | Linux inference/proposal host; robotd or an independently qualified MCU retains motor control | Offline recorded-input parity and performance; no motor connection |
-| Orbbec / perception and capture | Observation producer, with explicit source clock, calibration and loss accounting | One licensed local recording; derived depth kept distinct from raw measured streams |
-| Viam / device middleware | Read-only resource adapter first; governed mutation requires enforcement below every accessible motion ingress | Simulated machine status/observations and an ingress map; no production credentials or live motors |
-| Bota / wrench; Contactile / tactile | Sensor-specific observations and calibrated predicates; gripper local control declared separately | Licensed replay of force/slip samples on a future manipulation task |
-| RobCo / Inovo / modular arms | Explicit topology/configuration revision plus a qualified native controller boundary | Model/configuration study; physical reconfiguration invalidates prior acceptance |
-| Mimic / hand platform | Hand/controller and demonstration mapping require a new embodiment profile | Access/semantics study; no assumed universal wrist or policy compatibility |
-| Skild / Field AI / behavior provider | High-level requests are proposals; any low-level policy must sit upstream of the actual governed actuator boundary | One documented bounded skill/mission interface only after access and local stop semantics are established |
+| Existing STS3215 TTL fixture | Complete exact board/servo/harness/source record; use current simulation and offline contracts | Qualified half-duplex interface, reviewed rails/pinout, firmware, isolated command ingress, enrollment and measured stop/fault behavior |
+| Compact integrated joint: CubeMars or conditional WHJ03 / BCSA / igus | Exact module/driver/protocol and mechanical-model study; no live bus | Task-specific profile, supported bus and adapter, feedback/units, controller-owned limits, supply/regen review and complete CW/M/G evidence |
+| Open actuator: ODRI; OpenQDD as larger research reference | Pin CAD/BOM/electronics/code and record fabrication/calibration dependencies | Reproducible build record, driver and encoder calibration, manufacturing inspection, electrical protection and physical characterization |
 
-These placements are SeedCore design proposals. Vendor product evidence and
-access uncertainties are recorded in the [strategy assessment](../strategy/robotics_component_cooperation_strategy_2026.md#assessment-of-all-ten-candidates).
+CAN and CAN FD are absent from the current component bus enum, assembly nets
+and DRC routing model. Keep unsupported joint interfaces in a review sidecar;
+do not relabel them `TTL_UART_BUS`. A future implementation needs a versioned
+contract/validator/DRC/driver change with explicit frame sizes, bitrate,
+termination, node identity, error behavior and stale-command handling. A USB
+bridge or vendor GUI alone does not provide these guarantees. BCSA's interface
+remains unknown until an applicable datasheet is available.
 
-## Records to design before writing an adapter
+RP1/ROMOMO, industrial arm integrations and general robot brains are outside
+these paths. Small family fixtures do not inherit their controllers, policies
+or acceptance evidence.
 
-The following are conceptual review records, **not new JSON schemas**. A first
-implementation may use a reviewed sidecar/source register. Decide its schema,
-canonicalization, size limits and migration rules before making it authoritative.
-Do not attach undocumented fields to strict component or assembly schemas.
+## Reuse existing contracts
 
-| Record | Required concepts | Admission and evidence role |
+| Surface | Reuse | Limit |
 | --- | --- | --- |
-| Supplier source record | Product/SKU/revision, dated manuals, SDK/firmware/artifact hashes, license/asset rights, support and unverified claims | Discovery evidence only; a vendor declaration cannot approve itself |
-| Reviewed integration profile | Exact endpoint/body/controller, command ingress, capabilities, immutable local limits, firmware/config/model/adapter/calibration pins and qualification references | Trusted service resolves the accepted profile independently; browser submissions remain candidates |
-| Observation description | Stream IDs, SI units, axes/frames, raw/derived provenance, sample ordering, source/host timestamps, clock error, calibration and validity | Determines whether required context is present/fresh; unavailable semantics remain unsupported |
-| Behavior/provider binding | Skill/mission identity, provider version/artifact, input/action mapping, allowed transformations, parameter extrema and deadline | Signed action/payload binding covers exact semantics; model/provider changes invalidate prior admission |
-| Capture/closure record | Action/session/boot/endpoint joins when applicable, coverage/gaps, source and signer assurance, expected predicate, closure deadline and verifier disposition | Distinguishes simulated, host-observed, vendor-reported and accepted device-rooted evidence |
-| Data-use record | Capture and egress permissions, purpose, permitted recipients/reuse, retention/deletion and recording/license references | Export admission is separate from motion authority and successful evidence verification |
+| [Component registry](../../../packages/component-registry/README.md) and [validator](../../../src/seedcore/robotics/component_registry.py) | Versioned part/source identity, byte-pinned assets and explicit unknowns | Twelve existing entries are illustrative; supported schema fields only |
+| [Assembly implementation](../../../src/seedcore/robotics/assembly.py), [TS contracts](../../../ts/packages/contracts/src/robotAssemblyContracts.ts) and [store](../../../ts/packages/robot-canvas/src/store.ts) | Rooted topology, axis/rest transforms, exact content identity and change invalidation | Proxy mating does not establish hole patterns, bearings or load capacity |
+| [DRC solver](../../../ts/packages/drc-solver/README.md) | Supported bus/power checks, supplied mass/inertia and unknown-aware cost | No current CAN/CAN FD, regeneration, printed-fatigue or physical stop qualification |
+| [Model loader](../../../src/seedcore/robotics/model_package/loader.py) | Licensed model/assets and explicit joint/frame mapping | CW-S01 compilation is planned; model validity does not establish real dynamics |
+| [HAL](../../../src/seedcore/hal/interfaces.py) and [Microduck driver](../../../src/seedcore/hal/drivers/microduck.py) | Lifecycle/observation conventions and read-only startup patterns | Do not stretch Microduck's 61 observations / 14 actions / 15 channels to another body |
+| [ActionIntent](../../../src/seedcore/models/action_intent.py), [PDP](../../../src/seedcore/coordinator/core/governance.py) and [Fast Spine authority](../../../src/seedcore/robotics/fast_spine/authority.py) | Reviewed action/profile binding, single-use session and negative cases | No undocumented token fields, arbitrary constraint additions or authority from an LLM |
+| [Fast Spine session](../../../src/seedcore/robotics/fast_spine/session.py), [evidence](../../../src/seedcore/robotics/fast_spine/evidence.py) and [Rust verifier](../../../rust/README.md) | Rehearsal lifecycle and verifier patterns | Simulation-only scope; physical capture/signing requires reviewed contracts |
 
-Preserve `seedcore.jcs-safe-integers.v1` for the existing assembly contract.
-Sensor values need a separately specified numeric encoding; do not silently
-force arbitrary floating-point streams through assembly canonicalization.
-Keep private keys, credentials and personal recordings out of public manifests.
+## Power and mechanical review
 
-## Command and control requirements
+Choose a supply **after** selecting the exact actuator revision and fixture.
+“12 V versus 24 V” is not a universal menu for all mini joints. The existing
+[source register](../robotics/m0_cw_d01_register_2026_10_19.md) records STS3215
+A/0 at 4–7.4 V; neither 12 V nor 24 V is an accepted direct rail for that
+candidate. No power supply, BEC, fuse, harness or pinout is selected. Keep MCU
+and actuator rails explicit, with reviewed signal reference/backfeed behavior.
 
-1. Inventory every mutating ingress: SDK RPCs, raw commands, motion services,
-   teleoperation, vendor UI, scripts, module/config updates, startup routines,
-   diagnostics and direct bus/debug access. Reuse the accepted native boundary
-   where possible. A Python wrapper around one method is insufficient if another
-   path can still move the same actuator.
-2. Admit one scoped session through the accountable Agent/PDP path. Bind the
-   endpoint and exact profile/behavior payload using reviewed token semantics.
-   If existing fields cannot express the binding, stop at read-only operation
-   until a versioned contract extension is reviewed across Python/Rust/TS.
-3. Claim a single-use token once. Refresh commands use authenticated session
-   identity and monotonic sequence; they cannot widen limits, extend expiry or
-   reopen a terminal session. Reject stale inference and changed profile epochs.
-4. Enforce local deadlines and stop without browser/cloud/PDP availability.
-   A valid token cannot override native interlocks. Define observed physical
-   stopping separately from request cancellation and watchdog response initiation.
-5. Fence an attempt on controller/config/model changes, restart, reconnect,
-   revocation or loss of required fresh context. Clear queued commands; resume
-   needs state reconciliation and fresh admission. Updates do not inherit old grants.
+For any future compact BLDC joint, record its documented operating range,
+continuous/peak load, duty cycle, thermal conditions, startup/inrush and energy
+returned during braking. Supply current limits, derating, overvoltage handling,
+fusing and wire/connector limits need actual component data and measurements.
+Motor phase current is not automatically DC-supply current. A worm gear,
+software brake, torque-disable command and power removal can produce different
+holding/falling behavior; define the required stopped state on the fixture.
+See the source-linked [candidate assessment](../strategy/robotics_component_cooperation_strategy_2026.md#assessment-of-the-seven-supplied-initiatives).
 
-For Viam, evaluate its actual session semantics alongside SeedCore's. The
-[session documentation](https://docs.viam.com/dev/reference/apis/sessions/)
-describes heartbeats, safety-monitored resources and last-user behavior; a live
-client heartbeat does not establish fresh SeedCore intent. Include multiple
-clients, reconnection and resource handoff in testing. Its
-[generic API](https://docs.viam.com/reference/apis/components/generic/)
-also exposes model-specific commands, so fencing ordinary motion methods alone
-would leave a material review gap. These are documented interfaces, not a
-finding of a defect in Viam.
+For printed structures or an open joint, record CAD revision/units, material,
+printer/process, orientation, layer/profile settings, inserts, bearings,
+fasteners and required machined parts. Inspect fit/concentricity, backlash,
+belt/gear setup, encoder alignment, thermal behavior and replacement intervals.
+A STEP/STL download does not demonstrate that an arbitrary home printer can
+produce a loaded actuator. Use the selected upstream version's instructions;
+qualify substitutions explicitly rather than issuing a universal filament or
+infill prescription.
 
-For low-level model providers, do not convert arbitrary torques into a nominal
-high-level proposal and claim governance. Either intercept and enforce the real
-dispatch/control envelope on the supported body or keep the evaluation offline.
-Never stretch Microduck's 61 observations / 14 actions / 15 physical channels
-to cover another hand, arm or mobile chassis.
+## Source, build and profile records
 
-## Sensor and model assurance
+Use review documents/sidecars initially, not unversioned fields in strict JSON.
 
-Declare force/torque frames, tare/gravity compensation, saturation and calibration;
-declare tactile taxel layout, slip/friction estimator version and confidence;
-declare camera intrinsics/extrinsics, depth scale, missing pixels, dropped frames
-and clock mapping. Freeze acceptable age and uncertainty for the actual task.
-These concepts become mandatory only in a reviewed profile that uses them.
-
-Required stale, missing or contradictory observations must prevent admission or
-trigger the profile's local stop/uncertain closure behavior. Optional streams
-can be absent without inventing measurements. An unavailable or saturated
-sensor is not zero force or proof of no contact. Independent reference tests
-are needed for any claim of measured force, speed, grip or object state.
-
-Treat quantized/compiled models as new artifacts. D-Robotics documents a
-[conversion/performance/accuracy workflow](https://developer.d-robotics.cc/rdk_x_doc/en/Advanced_development/toolchain_development/intermediate/ptq_process);
-ONNX import alone cannot establish output parity or BPU acceleration. Retain
-the original baseline, conversion settings, calibration data rights and CPU/BPU
-placement. Measure complete input-to-proposal latency and rejected late outputs,
-alongside inference-only timing, power and thermal behavior.
-
-## Minimum conformance evidence
-
-| Case | Required result / retained evidence |
+| Record | Required content |
 | --- | --- |
-| Read-only discovery/startup | No actuation or unsolicited capture/egress; exact device/resource revision and permissions visible |
-| Wrong/unknown profile or unsupported required constraint | Refuse the requested operation; no optimistic capability fallback |
-| Invalid, expired, forged, replayed, revoked or wrong-endpoint authority | Zero motion dispatches; preserve decision/claim/dispatch evidence |
-| Alternate UI/RPC/raw command or second client | Cannot bypass the accepted execution boundary; otherwise remain read-only |
-| Fresh heartbeat but stale proposal/authority | Local fence within frozen deadlines; no extension from connectivity |
-| Crash, stall, reconnect, reset or update | Stop/fence as specified; no queued motion or automatic resume |
-| Reconfigured assembly, policy, calibration or firmware | Prior admission invalidated; changed inputs independently reviewed |
-| Clock jump, out-of-order frame, missing/saturated sensor | Explicit freshness/validity failure and correct task disposition |
-| Late, malformed or nonfinite model output | Reject before dispatch; preserve original provider/artifact identity |
-| Capture overflow, missing signer or conflicting evidence | Required closure fails or quarantines; stop does not wait for export |
-| Host log presented as device-rooted evidence | Reject the stronger assurance claim; retain true capture class |
-| Research export without required rights/permission | No export; basic local lesson remains usable |
+| Source/fit | Exact SKU or upstream commit, dated manual/CAD/code/BOM hashes, applicable licenses and redistribution permissions, claimed versus measured values, access/support/price unknowns |
+| Fabricated unit | Printed/machined parts, process settings, substitutions, inspection, encoder zero/direction, gearing, assembly/rework and actual unit identity |
+| Trusted profile | Assembly/model/controller/firmware/calibration revisions, ingress inventory, joint units/sign/limits, supply/mount/load and qualification references |
+| Attempt/capture | Principal, endpoint/session/boot joins, command and observation timing, coverage/gaps, source/signer assurance and verifier disposition |
 
-Freeze numeric thresholds, sample plan, units and test conditions before each
-experiment. Reuse CW/M/G acceptance rather than introducing a separate badge.
-An authenticated receipt proves integrity under the declared key assumptions;
-it does not prove sensor truth or physical task success. Existing simulation
-receipt formats cannot accept new physical streams without reviewed schema
-and verifier work. Preserve original artifacts and existing RCT regressions.
+A public repository's description is not a license grant for all of its assets.
+Record per-artifact terms and required notices before copying or redistribution.
+Freeze numeric encoding and canonicalization before any new record becomes
+authoritative. Existing assembly safe-integer canonicalization is not a
+floating-point telemetry format. Keep credentials and private keys out of
+public build records.
+
+## Command, stop and evidence boundaries
+
+Admit a bounded attempt through the accountable Agent/PDP path and independently
+resolved profile. The local executor validates authority, freshness, sequence,
+revocation and endpoint binding. A model can propose a position/velocity/torque
+only when that exact mode and mapping are supported and qualified; a position
+servo does not acquire torque control through a generic API name.
+
+Inventory vendor GUIs, USB/CAN tools, raw commands, calibration, startup,
+diagnostics, firmware/config changes and direct bus access. The accepted motor
+boundary must fence every accessible mutation route. One wrapper around a
+vendor method is insufficient. Keep discovery/read-only operation until the
+actual ingress and local interruption paths are accepted.
+
+The executor owns deadline and stop behavior without browser/cloud availability.
+Reset, reconnect, revision change, command expiry or revocation must fence
+queued commands; reconciliation and fresh admission precede resume. A torque
+disable may release a gravity load, so measure the required fixture behavior.
+The simulation's 5 ms watchdog poll is not a physical stopping measurement.
+
+Retain command/feedback identity, timing, missing samples, intervention and
+uncertain outcomes. Host-signed observations remain host-observed evidence;
+vendor feedback is not automatically calibrated load sensing or device-rooted
+attestation. A verified receipt establishes integrity within its declared
+capture/trust assumptions, not physical safety or task success.
+
+## Minimum acceptance cases
+
+| Case | Required evidence |
+| --- | --- |
+| Discovery/startup, unsupported bus or missing source data | No motion; accurate known/unknown and capability reporting |
+| Wrong, expired, forged, replayed or revoked authority | Zero accepted motion dispatch; retained decision/claim/dispatch record |
+| Alternate tool, second client or calibration command | Accepted boundary cannot be bypassed; otherwise remain read-only |
+| Browser loss, executor stall, stale command, reset or reconnect | Measured local fence and specified holding/stopped state; no automatic resume |
+| Brownout, supply fault or returned braking energy where applicable | Observed behavior within the frozen fixture limits; no successful closure from missing evidence |
+| Changed CAD, printed part, gearing, encoder zero, firmware or model | Prior acceptance/admission invalidated at the applicable boundary |
+| Missing/nonfinite feedback or incomplete capture/signer | Explicit failure/uncertain closure; original artifacts retained |
+
+Freeze limits, sample plan and fixture conditions before testing; map evidence
+to existing CW/M/G gates. No family label, vendor protection feature, open-source
+license or partner logo overrides those gates. This document performs no
+procurement, hardware connection or contract migration.

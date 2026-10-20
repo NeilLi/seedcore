@@ -41,6 +41,20 @@ does not establish compatible firmware.
 
 ## Cost And Electrical Register
 
+The [base/attachment product proposal](../strategy/mini_robotics_base_attachment_product_analysis.md)
+packages the existing bench direction as one reusable dock and successive
+printable desktop projects. It is an extension to evaluate, not a delivered
+board. Keep the existing computer separate from the dock, include a useful
+first lesson in the starter and identify every added servo/sensor when changing
+mechanisms. Only one supported attachment is active at a time initially.
+
+The [dock/discovery design](../integrations/robotics_partner_integration_architecture.md#reusable-desktop-dock-and-attachment-discovery)
+keeps physical pitch, connectors and power rails unselected. The software's
+15 mm capture radius is not a manufactured hole grid. A reported assembly
+digest may select a candidate preview; operator reconciliation, trusted profile
+resolution and fresh authority still precede physical motion. Disconnect or
+attachment change cannot reuse the previous session.
+
 | Item | Planning assumption | Evidence before freezing |
 | --- | --- | --- |
 | Controller | $12 recurring board parts BOM target at quoted volume | Itemize MCU/module, USB, TTL interface, watchdog/stop input, protection and connectors; record assembly/test/yield separately |

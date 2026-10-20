@@ -1,150 +1,147 @@
-# Robotics component cooperation: draft pilot briefs
+# Mini-robotics component cooperation: draft pilot briefs
 
 Date: 2026-10-20
-Status: Internal drafts; no contact, partner agreement, procurement or deployment
+Status: Revised internal drafts; no outreach, supplier agreement, procurement or deployment
 
-These briefs support the [cooperation strategy](../development/strategy/robotics_component_cooperation_strategy_2026.md)
-and [integration roadmap](../development/robotics/robotics_ecosystem_integration_roadmap.md).
-They complement the [SeedCore Inside OEM brief](oem_partnership_brief.md), which
-continues to own the first affordable-kit design-in. None of the ten assessed
-companies is an established SeedCore partner.
+These briefs implement the revised [strategy](../development/strategy/robotics_component_cooperation_strategy_2026.md)
+and [roadmap](../development/robotics/robotics_ecosystem_integration_roadmap.md).
+They replace the earlier D-Robotics, Orbbec and Viam-first proposals. The
+[SeedCore Inside OEM brief](oem_partnership_brief.md) still owns the affordable-kit
+design-in. No listed supplier or open-source maintainer is an established partner.
 
 ## Common proposal
 
-SeedCore is building an open trust runtime for affordable physical AI. Current
-foundations include browser simulation, canonical component/assembly authoring,
-a read-only Microduck adapter and bounded host-simulation evidence. Native
-governed motion, MCU firmware/enrollment and physical qualification remain open.
+Help a builder assemble, understand and repeat **one small desktop robot lesson**
+using an existing computer, a serviceable mechanism and clear local start/stop
+behavior. Family/STEM is a supervised use scenario, not an established child-safe
+product category. Optional LLM drafting stays outside motor authority.
 
-The proposed cooperation is a **small, reproducible integration on one named
-profile**, with clear responsibilities and an independent evidence packet.
-Begin with offline or read-only evaluation. Scale only after useful repeat
-delivery and accepted support/update responsibilities.
+SeedCore currently provides browser authoring/simulation, offline DRC/BOM and
+bounded host-simulation evidence. Custom-build simulation, physical MCU
+firmware/enrollment and qualification remain open. Begin source/model reviews
+without connecting hardware; a physical phase needs its exact accepted profile.
 
-The partner benefit to test is lower integration and institutional-adoption
-effort. SeedCore's benefit is a reusable, supportable profile. Neither benefit
-is established by an attractive demo or by preparing this brief.
+A potential supplier contributes applicable documentation, test access and
+repair/update support. A research maintainer can clarify source artifacts and
+reproduction requirements. SeedCore contributes reviewed build/interface
+mappings, a bounded lesson and an independent setup/evidence packet. Lower
+integration/support effort is the hypothesis to test, not an established benefit.
 
-## Brief A: D-Robotics local-compute feasibility
+## Brief A: Existing one-to-three-servo mini fixture
 
-**User problem to validate:** a named perception/proposal workload cannot meet
-its latency, power or connectivity needs on the current host. If the existing
-host meets the lesson's needs, defer this pilot.
+**User outcome:** build and repeat one bounded tabletop motion lesson before
+adding an arm, leg or advanced joint family.
 
-**Proposal:** compare the same permitted recorded inputs and pinned model
-semantics on the existing CPU baseline and one exact RDK configuration. X5 is
-a diligence candidate, subject to model fit and access. Review the official
-[RDK suite](https://developer.d-robotics.cc/rdk_x_doc/en/RDK) and
-[conversion workflow](https://developer.d-robotics.cc/rdk_x_doc/en/Advanced_development/toolchain_development/intermediate/ptq_process)
-before selecting hardware or claiming acceleration.
+**Proposal:** close the current ESP32-S3 / STS3215 TTL fixture facts using the
+[CW-D01 register](../development/robotics/m0_cw_d01_register_2026_10_19.md).
+Progress from one servo to three only after the applicable acceptance evidence.
+Reuse current contracts; this brief does not choose a replacement controller.
 
-| Responsibility | Draft scope |
-| --- | --- |
-| Partner contribution to request | Exact board/module revision, supported OS/SDK/toolchain versions, conversion examples, license/redistribution terms, support route and test access |
-| SeedCore work | Baseline/candidate harness, versioned input/output mapping, late-output rejection and performance/evidence report |
-| Deliverables | Pinned model/conversion/runtime manifest, accuracy/parity report, end-to-end timing and resource measurements, cost/support estimate and go/defer recommendation |
-| Completion decision | Frozen parity/deadline requirements met on the named configuration and a measurable advantage over the baseline; otherwise preserve the baseline |
-
-Questions for a future technical discussion: which operators and tensor formats
-run on the BPU, which remain on CPU, what conversion changes numeric behavior,
-what artifacts may be redistributed, and how are OS/runtime updates pinned and
-rolled back? Record price, lead time, board access and specialist support as
-unknown until evidenced.
-
-**Scope limit:** no motor bus, robot motion, replacement Fast Spine firmware or
-new hardware trust-root claim. Compute can generate proposals; the accepted
-native controller/MCU boundary retains execution ownership.
-
-## Brief B: Orbbec calibrated observation replay
-
-**User problem to validate:** a specific perception/evaluation task needs
-calibrated depth or synchronized observations absent from the current path.
-
-**Proposal:** evaluate one licensed adult bench recording from an exact
-shipping RGB-D device and SDK. Record source timestamps, clock relation,
-intrinsics/extrinsics, depth scale, raw/derived lineage and missing samples.
-The [Orbbec capture announcement](https://www.orbbec.com/news/scaling-real-world-data-for-physical-ai-orbbec-showcases-robot-free-data-collection-hardware-platform-at-roscon-jp-2026/)
-describes several capture configurations; a Dual-Ego prototype is not a
-substitute for confirmed access to a supported product.
+Evaluate packaging the same fixture as a **reusable dock starter kit** plus
+printable attachment designs. Keep one complete first lesson in the starter;
+review a passive shape change before promising a new actuated mechanism. The
+[product analysis](../development/strategy/mini_robotics_base_attachment_product_analysis.md)
+separates price hypotheses from actual starter/attachment costs, while the
+[dock design](../development/integrations/robotics_partner_integration_architecture.md#reusable-desktop-dock-and-attachment-discovery)
+keeps rails, connectors, mounting and discovery provisional. No new physical
+profile or customer study is launched by this brief.
 
 | Responsibility | Draft scope |
 | --- | --- |
-| Partner contribution to request | Exact device/firmware/SDK, calibration and timestamp documentation, sample recording with explicit evaluation rights, export format and support route |
-| SeedCore work | Read-only recording adapter, validity/coverage checks, replay projection and provenance report with true capture assurance |
-| Deliverables | Versioned recording/calibration manifest, clock/gap report, replay example, permitted-use record and useful-task comparison |
-| Completion decision | Required metadata and rights exist; deliberate frame loss, stale calibration and changed-stream cases are detected; the recording improves the named evaluation |
+| Supplier/integrator contribution to request | Exact board/servo revision, current drawings and connector views, electrical/load data, harness/supply options, source terms and repair/support route |
+| SeedCore work | Known/unknown source record, assembly/model mapping, firmware/session/ingress plan and qualification fixtures |
+| Deliverables | Dock concept/source gap record, reviewed rail/pin/harness plan when supported by evidence, complete starter versus incremental attachment costs, lesson/setup guide and allow/deny/interruption evidence for each accepted scope |
+| Completion | Exact fixture passes the applicable CW/M/G gates, with local stop behavior and independent setup recorded; otherwise remain simulation-only |
 
-Questions: are device and host timestamps both available, how is synchronization
-validated, which depth values are measured versus model-enhanced, what happens
-at drop/overflow, and can recordings be exported and deleted without a required
-cloud dependency? Confirm the selected product's actual terms and behavior.
+Open questions include the connector-numbering conflict, regulated supply and
+peak load, USB backfeed, torque/holding behavior on timeout, exact unit access
+and actual kit cost. Do not apply a generic 12 V/24 V recommendation to this
+servo. Neither browser DRC nor the $12 controller-parts target is a wiring plan
+or a supplier quote.
 
-**Scope limit:** no child-facing capture, default cloud egress, bulk dataset
-collection or robot actuation. A later adult EGO study needs a named learning
-objective, accessible hardware, consent/recording rights and a separately
-budgeted retargeting/evaluation design. Human video is not a robot action trace.
+## Brief B: ODRI open mini-actuator source and fabrication study
 
-## Brief C: Viam interoperability and overlap assessment
+**User outcome:** an academic or experienced maker can understand and reproduce
+one small torque-controlled joint with a realistic tool/process budget.
 
-**User problem to validate:** the current adapter imposes repeated device-setup
-work or blocks a distribution path that Viam could materially improve.
-
-**Proposal:** map one simulated or read-only Viam machine's resources and
-configuration revision into SeedCore's observation/profile conventions. In
-parallel, inventory all paths that could mutate hardware before considering
-governed motion. Review Viam's [platform architecture](https://docs.viam.com/operate/reference/architecture/)
-and [session behavior](https://docs.viam.com/dev/reference/apis/sessions/).
+**Proposal:** select one upstream actuator revision, starting from the
+[ODRI project](https://open-dynamic-robot-initiative.github.io/) and
+[hardware source](https://github.com/open-dynamic-robot-initiative/open_robot_actuator_hardware).
+Study one actuator/test stand, its controller/encoder/calibration chain and
+printed/machined dependencies. Begin with source/model feasibility; this is
+not a commitment to a Solo robot or a home-printer-only build.
 
 | Responsibility | Draft scope |
 | --- | --- |
-| Partner contribution to request | Supported module/SDK versions, simulator/read-only setup, resource/configuration semantics, session/stop behavior, export/deployment terms and engineering contact |
-| SeedCore work | Small observation/resource adapter, ingress/ownership map, setup comparison and governance-overlap assessment |
-| Deliverables | Resource-to-profile mapping, version pins, revision-change fixtures, session/reconnect review and go/defer decision |
-| Completion decision | Reproducible read-only integration and measurable setup/distribution benefit; live feasibility proceeds only if every relevant mutating ingress can be fenced |
+| Maintainer/community facts to establish | Exact source version, applicable notices, build instructions, required electronics/tooling and known reproduction issues |
+| SeedCore work | Source manifest, fabrication/inspection record design, joint/axis/unit mapping and unsupported-contract gap review |
+| Deliverables | Pinned CAD/BOM/code references, process/tool access and cost/effort record, single-joint model/comparison plan and go/defer recommendation |
+| Completion | Independent reproduction appears feasible within the named lab's process, mass and budget; any built unit has an inspection/calibration record before powered qualification |
 
-Questions: how are raw/generic commands, motion services, UI teleoperation,
-module installation and configuration updates controlled? What happens when
-two clients use one resource, a client reconnects or an update changes a module?
-Can original logs and records be exported under acceptable terms?
+Do not substitute arbitrary filament, printer settings, motor, encoder or
+gearing while retaining an acceptance claim for the original design. Record
+failed prints, machined work and rework in costs. Physical closed-loop control
+and evidence remain a later accepted phase; an open license supplies no motion
+authority.
 
-The commercial question is explicit: which customer needs SeedCore's independent
-verification or institution-specific authority records in addition to Viam's
-native capabilities? If no distinct need emerges, defer the extra dependency.
-**Scope limit:** no claim that middleware authentication/session heartbeats
-implement SeedCore's action admission, freshness or evidence contract.
+## Brief C: Compact commercial-joint feasibility, CubeMars first
 
-## Later sensing and industrial briefs
+**User outcome:** a named small arm or leg test stand needs a capability that
+the small-servo baseline demonstrably cannot provide.
 
-| Candidates | First bounded cooperation concept | Evidence required before a pilot is committed |
+**Proposal:** investigate one exact AK40-10 configuration, using the
+[source-reviewed comparison](../development/strategy/robotics_component_cooperation_strategy_2026.md#assessment-of-the-seven-supplied-initiatives).
+Disambiguate revision, driver inclusion, protocol/firmware and control mode.
+Begin with a source/model/interface study. COOP-03 and the ODRI COOP-04 study
+are alternatives for the first later implementation experiment.
+
+| Responsibility | Draft scope |
+| --- | --- |
+| Supplier facts/access to establish | Applicable datasheet/CAD/manual, firmware/control-mode revision, bus/bridge details, loaded limits, local stop semantics, price/availability and repair route |
+| SeedCore work | Whole-build mass/cost comparison, axis/feedback mapping, supply/thermal/ingress analysis and proposed contract gaps |
+| Deliverables | Exact source/profile candidate, read-only/offline fixture, unsupported-bus review and measured-gap versus complexity decision |
+| Completion | Candidate fits the named lesson's total mass, complete system budget and support needs; live bench work waits for accepted bus/driver/profile and power/stop evidence |
+
+No current CAN/CAN FD schema/routing support is implied. Vendor protection or
+MIT/servo mode names do not establish accepted local authority, calibrated
+output torque or a stopping bound. Keep direct vendor tools and alternate bus
+paths in the ingress inventory.
+
+## Conditional mini-mechanism options
+
+| Candidate | Appropriate first concept | Facts needed before an experiment |
 | --- | --- | --- |
-| Bota Systems / Contactile | Licensed force/tactile replay, then one accepted contact/grasp task if needed | Exact sensor/gripper revision, raw/derived semantics, calibration/range/saturation, timestamps, control ownership and replacement/support costs |
-| RobCo / Inovo | Configuration/model study for one actual industrial customer task | Current supply/support, licensed CAD/URDF, controller ingress, interrupt/recovery semantics, task budget and accountable cell integrator |
-| Mimic | One hand demonstration/control feasibility study | Accessible hardware/API, joint/action mapping, wearable/recording rights and an independent local-stop/evidence interface |
-| Skild AI / Field AI | One provider skill/mission boundary study on a supported body | Developer access, high-/low-level control ownership, bounded cancellation, model/version pins and independent telemetry/outcome export |
+| RealMan WHJ03 | One compact precision joint for a lab desktop arm | Exact model/controller/CAN FD, feedback and stopping/holding behavior, supply/regeneration handling, CAD and complete cost |
+| Bonsystems BCSA Micro | Finger-sized mechanism feasibility | Revisioned mass/voltage/torque data, driver/protocol, mounting, actual access, replacement and support terms |
+| igus Apiro or exact ReBeL module | Modular low-load teaching mechanism | Separate gearbox from integrated joint, exact motor/encoder/controller, mount/weight, bus, CAD rights and actual cost |
+| OpenQDD V1 | Larger DIY actuator design/assembly reference | Resolve artifact terms and complete build/process costs; do not present it as the micro or under-$100 family baseline |
+| RP1/ROMOMO | Documentation/test-method reference only | No humanoid or 48 V joint integration allocated to the current mini offer |
 
-No general-purpose hand, industrial arm or outdoor inspection profile is added
-to SeedCore's current supported offer through these concepts. Source evidence
-and qualification gaps for every candidate are in the strategy assessment.
+Primary sources, corrections and unverified facts are maintained in the
+[strategy](../development/strategy/robotics_component_cooperation_strategy_2026.md).
+The previous compute, RGB-D capture, middleware, tactile and industrial-arm
+briefs are deferred; a later named mini task and capacity decision are required
+to reopen any of them.
 
-## Common review and commercial terms to resolve
+## Review and handoff
 
-Before an experiment, assign an owner, comparison baseline, numeric limits,
-sample plan, effort cap, next review and access/recording permissions. Before
-physical work, also establish the profile's G0–G2-equivalent evidence, enrolled
-identity where required, local stop and repair/support ownership.
+Assign an owner, baseline lesson, numeric requirements, sample plan, effort cap,
+process/test access and next review before an experiment. Use the roadmap's
+bounded research caps. Review complete cost and repair/setup effort; historical
+project BOMs and vendor headlines are not current landed-kit quotations.
 
-The draft cooperation record should cover artifact/data ownership and licenses,
-engineering-sample terms, supported versions, factory/enrollment responsibility
-where relevant, update/rollback and end-of-support, incident escalation,
-reproducible acceptance, public claims and any badge use. Do not assume free
-samples, volume discounts, exclusivity, co-marketing or revenue sharing.
+Before any physical phase, establish exact unit/build identity, accepted
+controller and mutation ingress, source and signal rails, local stop behavior,
+required capture/signer assurance and applicable CW/M/G evidence. Adult bench
+qualification precedes a proposed supervised lesson; public product claims
+follow the accepted scope.
 
-Track integration/setup/support hours, actual resource and hardware costs,
-eligible-task results, denied/interrupted/uncertain attempts and independent
-reproduction. Propose paid integration or conformance maintenance only when
-these measurements support a useful offer. Research export remains optional
-and separately controlled.
+Resolve artifact ownership/notices, redistribution, supported revisions,
+manufacturing/QA where relevant, update/rollback, repair, end-of-support and
+incident responsibilities. No free samples, badge, exclusivity, co-marketing or
+revenue share is assumed. Propose paid integration or conformance maintenance
+only after repeat useful delivery and support measurements.
 
-The prepared handoff is the selected brief plus its source/fit record, scope,
-version pins, failure cases, evidence requirements and go/rescope/defer review.
-These are local draft documents; no messages have been sent.
+The handoff is one selected brief plus source/fit record, scope, version pins,
+failure cases, cost/effort evidence, open gates and go/rescope/defer decision.
+These are local drafts; no external messages have been sent.

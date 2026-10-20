@@ -24,12 +24,19 @@ For the small-team delivery process, use the
 [service operating plan](robotics/robot_service_operating_plan.md): one supported
 profile and live pilot initially, with explicit scope, support and expansion gates.
 
-The [component cooperation strategy](strategy/robotics_component_cooperation_strategy_2026.md)
-assesses ten robotics suppliers against this foundation. Its
-[integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) prioritizes
-bounded diligence on D-Robotics, Orbbec and Viam within the existing schedule;
-vendor integrations remain conditional and CW-S01 retains immediate priority
-after local CW-A04 closure.
+The [mini-robotics cooperation strategy](strategy/robotics_component_cooperation_strategy_2026.md)
+replaces the earlier compute/middleware-first shortlist with the existing small
+TTL fixture, printable structures, ODRI open-design study and exact CubeMars
+compact-joint feasibility. It assesses all seven newly supplied initiatives and
+reclassifies the earlier ten candidates. Its
+[integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
+CW-S01 immediately next after CW-A04; new joints and physical profiles remain
+conditional, with no industrial-cell or humanoid expansion.
+
+The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)
+proposes a complete affordable starter and modular printable attachments,
+with explicit price tests and separate shared/incremental costs. Its dock and
+digest-discovery flow remain engineering proposals, not automatic admission.
 
 ## Target builder workflow: local station, optional LLM and successive designs
 

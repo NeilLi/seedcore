@@ -26,7 +26,8 @@ are not the current queue.
 ## Documents
 
 - [Physical AI Execution Plan: Q4 2026–Q1 2028](seedcore_physical_ai_execution_plan_2026_2028.md) — active dates, phase gates, 30-day work, economics and capacity
-- [Robotics component cooperation strategy](robotics_component_cooperation_strategy_2026.md) — source-reviewed assessment of ten candidates, priority industries, cooperation models and conditional integration choices
+- [Mini-robotics component cooperation strategy](robotics_component_cooperation_strategy_2026.md) — seven joint/open-hardware initiatives assessed; small TTL fixture first, ODRI/CubeMars studies, conditional miniature mechanisms and prior ten candidates reclassified
+- [Reusable base and printable attachments](mini_robotics_base_attachment_product_analysis.md) — Robosen reference/claim review, two-tier pricing hypotheses, complete-cost/contribution model and product validation
 - [North Star: The Genuine Environment for Autonomous Trade](north_star_autonomous_trade_environment.md)
 - [SeedCore 2026 Execution Plan](seedcore_2026_execution_plan.md)
 - [SeedCore 2027 Significant Direction](seedcore_2027_high_vertical_direction.md)

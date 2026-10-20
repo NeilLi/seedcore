@@ -1,139 +1,129 @@
-# Robotics ecosystem integration roadmap
+# Mini-robotics ecosystem integration roadmap
 
 Date: 2026-10-20
-Status: Proposed cooperation backlog integrated with existing CW/M/G gates; no vendor implementation scheduled as an immediate prerequisite
+Status: Revised supporting backlog; research only until separately selected for implementation
 
-Use with the [cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md),
-[integration architecture](../integrations/robotics_partner_integration_architecture.md)
-and [pilot briefs](../../application/robotics_component_partner_pilot_briefs.md).
-The [active queue](../current_next_steps.md) owns immediate execution;
-the [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
-owns dates and G0–G5; the [CW schedule](central_world_remaining_delivery_schedule.md)
-and [acceptance matrix](central_world_acceptance_matrix.md) own authoring gates.
-COOP identifiers below are planning references, not new runtime reason codes,
-acceptance gates or permission grants.
+The [strategy](../strategy/robotics_component_cooperation_strategy_2026.md)
+now prioritizes the existing small TTL fixture, ODRI open-design study and exact
+CubeMars compact-joint feasibility. The [architecture](../integrations/robotics_partner_integration_architecture.md)
+and [pilot briefs](../../application/robotics_component_partner_pilot_briefs.md)
+define boundaries and experiment scope. This replaces the prior compute,
+capture and middleware-first cooperation sequence.
 
-## Preserve the current delivery order
+The [base/attachment product analysis](../strategy/mini_robotics_base_attachment_product_analysis.md)
+adds two-tier starter/attachment pricing, a Robosen reference review and a
+shared-dock hypothesis. It changes packaging/validation questions, not the
+implementation order or the existing research caps.
 
-As refreshed on 20 October against `01c9af0`, CW-A01 v2 through CW-A04 have local
-offline software evidence, including worker DRC and unknown-aware BOM. CW-S01
-restricted assembly-to-MJCF compilation is the next package.
-The component catalog has twelve draft/proxy records, with exact first-fixture
-qualification open. Microduck remains the native reference; the Fast Spine
-one-to-three-servo fixture remains a bounded bench package. No hardware is
-connected or qualified in the current source-register baseline.
+## Preserve the delivery order
 
-Cooperation work should first improve the next package's evidence requirements
-and future adapter decisions. None of the ten candidates is a prerequisite for
-CW-S01, the January authoring/simulation alpha or Microduck training parity.
-Keep one active implementation package per implementer and one supported
-physical profile/one live pilot initially. A Linux inference-host evaluation
-does not qualify a second robot or replace the chosen MCU.
+At `ba0d132`, CW-A01 v2 through CW-A04 have local offline evidence. CW-S01
+restricted assembly-to-MJCF compilation is next. The catalog contains twelve
+draft/proxy parts; Fast Spine is simulation-only and exact fixture qualification
+is open. Microduck retains its separately pinned native M0–M4 lane.
 
-## Work packages and review artifacts
+The [active queue](../current_next_steps.md), [remaining CW schedule](central_world_remaining_delivery_schedule.md)
+and [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
+continue to own implementation order, dates and staffing. No new joint, camera,
+compute board or middleware is a prerequisite for the January authoring/simulation
+alpha. Keep one active implementation package per implementer and one supported
+physical profile/live pilot initially.
 
-Owner roles are proposed responsibilities, not staffing assignments. Confirm an
-actual owner and effort budget before implementation. Windows are review
-targets; conditional work moves with its dependencies.
+## Revised work packages
 
-| ID / target review | Scope and owner role | Entry conditions | Reviewable exit artifact | Current state |
+The COOP IDs are retained for continuity, but their scopes below supersede the
+previous versions. In particular, COOP-03/04 no longer mean a D-Robotics,
+Orbbec or Viam adapter. Proposed review windows are not delivery promises.
+
+| ID / review window | Scope and owner role | Entry / dependencies | Reviewable exit | State |
 | --- | --- | --- | --- | --- |
-| **COOP-00 / 20 Oct 2026** | Source assessment, architecture and pilot drafts; integration lead | Current repo/plan inspection and official-source review | This four-document packet, all-ten candidate assessment, corrections and unresolved facts | Documentation prepared; vendor qualification open |
-| **COOP-01 / 21 Oct–12 Nov** | Fit/source record for D-Robotics, Orbbec and Viam; integration lead + reviewer | Existing CW-S01/M0 work retains priority | Three short records with exact product/interface references, known/unknown fields, access/dependency/license gaps and a go/defer decision | Proposed supporting research; no SDK import or new catalog parts |
-| **COOP-02 / by 10 Jan 2027 alpha review** | Review reusable observation/proposal/ingress requirements against accepted CW and session contracts; runtime reviewer | CW-A04 findings available; owner/capacity confirmed | Contract-gap matrix and one offline fixture design for the highest-value gap; extend existing contracts only if required | Conditional design work; January alpha does not depend on it |
-| **COOP-03 / Apr–Sep 2027 ecosystem review** | At most one D-Robotics compute experiment; inference/integration owner | Measured existing-host gap; exact board/toolchain access, permitted sample data and capped effort; capacity decision | CPU baseline vs selected runtime parity/performance report, version pins, late-output handling and cost/support estimate | Candidate; board access, budget and need unknown |
-| **COOP-04 / Apr–Sep 2027 ecosystem review** | Choose one Orbbec capture experiment **or** one Viam connectivity experiment; observation/runtime owner | COOP-01 fit review, a named user need and capacity after the current integration | Licensed recording with calibration/coverage/replay report, or simulated/read-only machine mapping with complete mutation-ingress assessment | Candidate alternative to COOP-03; a second experiment needs a new queue/capacity decision |
-| **COOP-05 / after repeat delivery, review at phase 3** | One external integrator reproduces an accepted adapter; delivery + verification roles | Applicable M/G and CW gates pass; maintainer, support/update route and commercial scope assigned | Independent setup, negative authority/closure cases, release pins, recovery and setup/support hours | Conditional; no OEM agreement or badge granted |
-| **COOP-06 / phase 4 or separately funded feasibility** | Force/tactile, industrial arm, hand or general-brain expansion; portfolio owner | Repeated customer need, existing offer supportable, separate profile/budget and accessible interfaces | One bounded task comparison and go/rescope/defer decision under unchanged authority/evidence gates | Deferred; Bota, Contactile, RobCo, Inovo, Mimic, Skild and Field AI remain research candidates |
+| **COOP-00 / 20 Oct 2026** | Mini-category and base/attachment product analysis; integration lead | Current repo and primary-source review | Revised cooperation packet, Robosen evidence/limits and two-tier pricing hypotheses; seven supplied initiatives assessed, earlier ten reclassified | Documentation prepared; product demand and hardware/vendor qualification open |
+| **COOP-01 / 21 Oct–12 Nov** | Existing TTL fixture/shared-dock gap and cost record; ODRI and exact CubeMars source/fit records; integration lead + reviewer | Capacity after CW-S01/native commitments | Dock concept/source gaps, complete starter versus incremental attachment costs, two concise candidate records and go/defer decision | Proposed supporting diligence; no parts/SDK imports, orders or customer outreach |
+| **COOP-02 / by 10 Jan 2027 alpha review** | Mini-joint/dock interface and fabrication-gap review; runtime/mechanical reviewers | CW-A04 findings; source records and available capacity | One offline fixture design, mount/rail/connector unknowns, non-authoritative discovery flow, supported-schema/CAN gaps and reproduction dependencies | Conditional design review; no new live body or automatic motor enable |
+| **COOP-03 / Apr–Sep 2027 ecosystem review** | One compact commercial-joint feasibility study, initially CubeMars; integration owner | Named gap in small-servo baseline; exact revision/docs/access and effort cap | Pinned model/protocol/source packet, complete system BOM, load/thermal/stop requirements and offline/read-only comparison | Candidate; a physical bench phase needs a separate accepted profile |
+| **COOP-04 / same ecosystem window, alternative to COOP-03** | One ODRI actuator reproduction/model study; research + mechanical owner | Pinned upstream version, rights, electronics/calibration plan and fabrication access | Reproduction plan or unit build record, modeled/measured distinction, actual fabrication effort/cost and single-joint comparison | Candidate alternative; not a full Solo build or OpenQDD replacement commitment |
+| **COOP-05 / after repeat accepted delivery** | External starter/attachment reproduction; delivery + verification roles | Applicable CW/M/G gates, support/repair/update owner and useful lesson | Independent first lesson and second-attachment use, changed-build admission tests, real setup/support hours and unit contribution | Conditional; no OEM/badge granted or assumed repeat-purchase rate |
+| **COOP-06 / later named mini-task review** | WHJ03, BCSA Micro or exact igus module feasibility; portfolio owner | Current offer supportable; explicit miniature task, mass/cost/supply constraints and capacity | One source/interface/task comparison and go/rescope/defer decision | Conditional; OpenQDD/ROMOMO retained as background references, industrial cells excluded |
 
-COOP-03/04 are alternatives for the first experiment: select compute, capture
-or connectivity. They do not commit the team to a sequence of vendor adapters.
-Choosing an alternative to the 18-month plan's LeRobot/model-provider work
-requires an explicit queue/capacity decision. A second experiment needs its own
-review after the first result.
+Select **COOP-03 or COOP-04**, not both as an automatic sequence. A later
+experiment competes for the existing ecosystem/adapter budget. Replacing the
+planned LeRobot/model-provider package requires a recorded queue/capacity
+decision; a second experiment needs its own review after the first result.
+Bringing an experiment forward requires a measured blocker and explicit queue
+allocation, not vendor novelty.
 
-COOP-03/04 can be brought forward only by a recorded active-queue and capacity
-decision tied to a measured blocker or accepted customer need. This is not an
-automatic early-start option. If the host baseline works, defer compute. If
-perception is unnecessary for the first lesson, defer capture. If Viam adds no
-measured value beyond the existing adapter, defer that dependency.
+Keep the proposed COOP-01 cap at **two person-days total**, shared across the
+fixture gap update and both candidate records, only after committed work.
+COOP-02 has a proposed **one-person-day** review cap. At the cap, leave facts
+unknown and defer; do not assume free access, printing, samples or engineering.
+These are effort limits, not procurement authorization.
 
-## First review: evidence to collect
+Dock review and pricing-study design share those caps; reduce or defer other
+supporting research when they consume the available time. A customer study,
+new catalog part, hardware prototype or additional attachment requires an
+explicit selected work package and the applicable access/capacity decision.
 
-Use one fit record per prepare candidate:
+## First source/fit record
 
 ```text
-Candidate and intended user outcome:
-Exact product/SKU and public documentation revision:
-SDK/runtime/firmware/toolchain versions and licenses: known / unknown
-Observation/command APIs, units and frames:
-Timestamp, calibration, loss/validity and evidence export support:
-All mutating ingress and local interruption ownership:
-Offline operation, update/rollback and support route:
-Available test access and permitted recordings: known / unknown
-Baseline comparison and measurable gap:
-Expected engineering/support effort and actual cost evidence:
-Unresolved questions, owner role, next review:
-Decision: prepare / offline feasibility / defer
+User / lesson and why the current small-servo baseline is insufficient:
+Exact module/SKU/revision or upstream commit and source hashes:
+Required reach, payload, total mass, motion mode and duty cycle:
+Claimed vs measured mass, torque (rated vs peak), speed and backlash:
+Voltage range, supply vs phase current, thermal and regeneration requirements:
+Bus/driver/firmware, command units/sign, feedback and local stop ownership:
+CAD/mount/axis mapping, printed/machined parts and inspection dependencies:
+Licenses, redistribution, supported versions and repair/update route:
+Complete BOM and setup/fabrication/support effort: known / unknown
+Shared dock/starter costs vs incremental passive or active attachment costs:
+First-use contents, proposed price test and complete customer cost boundary:
+Documentation/test access and exact-unit availability: known / unknown
+Current schema/DRC/model gaps; unavailable checks:
+Owner role, effort cap, next review and prepare / offline feasibility / defer:
 ```
 
-For D-Robotics, record the exact host workload and why the existing computer
-cannot meet it. For Orbbec, select between ordinary perception and wearable
-demonstrations; do not treat them as one interchangeable camera product. For
-Viam, identify the precise distribution/connectivity benefit and control-plane
-overlap before writing an SDK wrapper. The pilot briefs specify the questions.
+The existing fixture uses its [CW-D01 source register](m0_cw_d01_register_2026_10_19.md).
+For ODRI, select one actuator version and enumerate tooling/electronics rather
+than assuming generic FDM reproduction. For CubeMars, disambiguate AK40-10
+revisions and driver inclusion before comparing mass/cost or a supply. The
+strategy contains the source evidence and corrections for every other candidate.
 
-Proposed capacity caps for the next review are **two person-days total** for
-COOP-01 and **one person-day** for the COOP-02 design review, only if available
-after committed work. These are planning caps, not assumed capacity or spending
-approval. Reduce or defer them when CW/native delivery needs that time.
-At the cap, unresolved supplier facts stay unknown; record a defer decision.
+## Acceptance mapping
 
-## Map cooperation work to existing acceptance
-
-| Integration requirement | Existing owner / acceptance | Additional experiment evidence |
+| Requirement | Existing owner / acceptance | Mini-joint evidence |
 | --- | --- | --- |
-| Exact supplier part, drawing, electrical and source rights | CW-D01 / CW-CAT-01 | New reviewed part revision, actual source/quote where relevant; no qualification by marketing claim |
-| Canonical configuration and reconfiguration invalidation | CW-A01–CW-A03 / CW-ASM-01/02 | Vendor-config-to-build mapping, changed-input and stale-admission cases |
-| Unknown-aware cost, power and compatibility | CW-A04 / CW-DRC-01–03 | Preserve unknown load/rail/price; never report an unpriced sensor/board as free |
-| Model import and numeric parity | CW-S01–CW-S03 / CW-SIM-01, CW-POL-01; Microduck M1 separately | New-body/model mapping and independent reference; compute conversion cannot close training parity |
-| Admission, execution ingress and local fencing | CW-G01 / CW-AUTH-01/02; G0/G1; native M2 or fixture equivalent | Alternate RPC/UI/config paths, SDK sessions, second-client handoff and reconnection |
-| Capture, signer and outcome coverage | CW-G02 / CW-EVID-01; M3 and G2 as applicable | Sensor clock/calibration/loss and capture-assurance record; original vendor/host artifacts preserved |
-| Physical stop/fault qualification | CW-F01/F02 / CW-HW-01; native M4 and G2 | Measured behavior on the exact controller/body; a sensor or SDK check gives no hardware credit |
-| External adoption and maintenance | G3/G4; service operating plan | Independent setup, recovery/update, repair and support-cost evidence |
-| Paid fleet use | G5 | Actual multi-device fault isolation, retained evidence, recurring cost and repeat-use demand |
+| Exact part, source, drawing, electrical and rights | CW-D01 / CW-CAT-01 | Dated manual/unit revision, pin/rail review, artifact permissions and real price basis |
+| Build/configuration identity | CW-A01–A03 / CW-ASM-01/02; live CW-G01/F01/F02 separately | Exact mount/axis/gearing and combined dock/attachment context; cloned/stale ID, changed-build and stale-admission cases; chip digest is a candidate, fabricated unit distinct from CAD |
+| Unknown-aware power, cost and compatibility | CW-A04 / CW-DRC-01–03 | Known vs unknown complete BOM and supply loads; unsupported CAN/CAN FD remains a design gap |
+| Assembly model and numeric comparison | CW-S01–S03 / CW-SIM-01, CW-POL-01 | Joint map/units, mass/inertia assumptions and independent reference; native Microduck M1 remains separate |
+| Execution ingress and local fencing | CW-G01 / CW-AUTH-01/02; G0/G1 | Vendor tools, raw bus, calibration, second client, deadline/reconnect and all real mutation paths |
+| Capture and outcome coverage | CW-G02 / CW-EVID-01; M3/G2 as applicable | Command/feedback clock, calibration/gaps and honest signer/capture class |
+| Physical stop/fault qualification | CW-F01/F02 / CW-HW-01; M4/G2 as applicable | Exact fixture load/mount, observed stop/hold, power faults and returned braking energy where relevant |
+| Reproduction and sustainable support | G3/G4 | Independent setup/repair, process substitutions, actual costs and repeat lesson demand |
 
-An offline recording or simulated machine can complete its own experiment
-without satisfying physical gates. Report skipped/unavailable checks as gaps.
-No new cooperation score or partner logo overrides an existing gate.
+An offline model, source review or read-only bus experiment can pass its own
+scope while physical gates remain open. Preserve failed/uncertain attempts and
+unavailable measurements in the report. No supplier score or small-robot label
+substitutes for existing acceptance.
 
-## Experiment selection and success measures
+## Experiment measures and handoff
 
-Select one experiment with the largest **demonstrated** gap it can resolve per
-unit of available effort. Set thresholds and a sample plan before evaluation;
-do not invent acceptance numbers from vendor TOPS, frame rates or videos.
+Compare against the simplest accepted small-servo implementation of the same
+task. Freeze required ranges/tolerances, numeric limits, sample plan and cost
+boundary before evaluating. Measure useful task outcomes, complete robot mass,
+setup/repair time, actual BOM, controller/thermal load, observed stopping and
+capture completeness when the experiment reaches the relevant physical scope.
+Rated torque, peak holding torque and continuous duty are separate quantities;
+current-derived torque estimates are not calibrated load measurements.
 
-| Experiment | Baseline and primary measure | Other required observations | Stop/defer condition |
-| --- | --- | --- | --- |
-| Edge compute | Same pinned inputs/model semantics on current host vs candidate; output error and input-to-proposal p50/p95/p99 | Late-output rejection, load/thermal duration, peak memory, measured power, exact hardware and price/support basis | Incompatible model/operators, unmet frozen tolerance/deadline or no useful improvement |
-| RGB-D capture | Existing recording path vs one permitted sensor recording; valid calibrated samples and gap accounting | Clock error, calibration reproducibility, raw/derived lineage, loss/storage burden and replay determinism under declared tolerance | Required metadata/rights absent, unreliable coverage or no task need |
-| Viam connectivity | Existing SeedCore adapter vs simulated/read-only Viam path; independent setup effort and mapping completeness | Revision changes, resource naming, sessions, every mutation route, offline/export and ongoing dependency/support cost | Unfenceable motor ingress or no incremental user/integrator value |
-| Later tactile/industrial work | Same accepted task without added capability vs candidate; eligible-task outcomes and damage/drop/error observations | Calibration/uncertainty, intervention, stop and closure results, actual support/fixture cost | New embodiment exceeds approved scope or cannot enforce/observe required limits |
+For open designs, also retain printing/machining failures, inspection/rework,
+encoder/gearing calibration and substitution history. For integrated joints,
+retain exact firmware/control mode and vendor-tool/bridge dependencies. Defer
+when the mass, budget, fabrication access or interface burden defeats the
+mini-robot lesson, even if a vendor benchmark is impressive.
 
-Retain failed attempts and uncertain closure in reported denominators. Separate
-expected policy denials from valid-task failures. Evidence verification and
-customer usefulness each need to pass; neither compensates for the other.
-
-## Decision and handoff
-
-Every review records source/artifact pins, scope, positive/negative evidence,
-unavailable checks, measurements versus frozen limits, actual hours/cost,
-support owner and go/rescope/defer decision. A selected implementation becomes
-one explicit item in the active queue. Repeated deterministic failures invoke
-the existing verifier/runbook review process.
-
-Successful offline work may lead to an adapter proposal. Physical admission,
-device enrollment, procurement, outreach, releases and public claims retain
-their existing authorization and acceptance processes. Drafting this roadmap
-establishes none of those activities. No additional bodies, SoM or telemetry
-marketplace is added to the current offer.
+Each handoff records scope, source/artifact pins, positive/negative evidence,
+open gates, actual hours/cost, support owner and go/rescope/defer decision. A
+selected implementation becomes one explicit active-queue item. Industrial
+cells, humanoid expansion, dedicated AI boards, wearable datasets and fleet
+middleware receive no new work allocation through this revision.

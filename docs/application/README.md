@@ -20,7 +20,8 @@ determine actual release and scale.
 - [One-page overview](seedcore_one_page_overview.md): product, pillars, differentiation, present evidence and business model.
 - [Investor application copy](investor_application_copy.md): current narrative, milestone targets, open/paid boundaries and support sought.
 - [OEM partnership brief](oem_partnership_brief.md): draft design-in scope, conformance, responsibilities, economics and staged distribution.
-- [Component partner pilot briefs](robotics_component_partner_pilot_briefs.md): draft edge-compute, perception and middleware experiments with scope, responsibilities, acceptance and open questions.
+- [Mini-robotics component pilot briefs](robotics_component_partner_pilot_briefs.md): existing TTL fixture, ODRI source/fabrication study and conditional CubeMars compact-joint feasibility, with scope, responsibilities and open acceptance gates.
+- [Reusable base and printable attachments](../development/strategy/mini_robotics_base_attachment_product_analysis.md): proposed affordable complete starter plus modular attachments, with Robosen reference, price tests, complete costs and validation plan.
 - [Physical AI demo script](demo_presentation_script.md): proposed split-screen allow/deny/revoke/evidence walkthrough; only show accepted capabilities.
 
 ## Supporting Custody Reference

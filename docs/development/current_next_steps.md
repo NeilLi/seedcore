@@ -164,16 +164,27 @@ Use the [delivery model](robotics/robot_solution_delivery.md) and
 OEMs, pilots, incorporation and grant funding are not established agreements.
 Preparing a packet does not authorize contacting prospects or placing orders.
 
-The [component cooperation assessment](strategy/robotics_component_cooperation_strategy_2026.md)
-adds ten source-reviewed candidates. Review D-Robotics, Orbbec and Viam fit
-records as supporting research under COOP-01 in the
-[ecosystem roadmap](robotics/robotics_ecosystem_integration_roadmap.md), with a
-proposed two-person-day total cap only when capacity is available after
-committed work. Use the [pilot briefs](../application/robotics_component_partner_pilot_briefs.md)
-to record exact versions, access, interface and rights gaps. CW-S01 remains
-the next implementation package; no vendor SDK, new body or additional pilot
-becomes a prerequisite. Select at most one later adapter experiment against a
-measured need and the existing CW/M/G gates.
+The revised [mini-robotics cooperation assessment](strategy/robotics_component_cooperation_strategy_2026.md)
+prioritizes the existing TTL fixture gap record, ODRI source/fabrication study
+and exact CubeMars compact-joint feasibility. These share the proposed
+two-person-day COOP-01 research cap in the
+[ecosystem roadmap](robotics/robotics_ecosystem_integration_roadmap.md), only when
+capacity remains after committed work. Use the
+[pilot briefs](../application/robotics_component_partner_pilot_briefs.md) to
+record exact versions, complete mass/power/cost, fabrication, interface and
+rights gaps. CW-S01 remains next; unsupported CAN/CAN FD work, a new joint/body
+or an extra pilot is not a prerequisite. Select at most one later commercial
+or open-joint experiment against a measured mini-task need and existing CW/M/G
+gates. The prior compute/capture/middleware-first sequence is superseded;
+industrial cells and large humanoids receive no new allocation here.
+
+Within the same research cap, use the
+[base/attachment product analysis](strategy/mini_robotics_base_attachment_product_analysis.md)
+to review reusable-dock packaging, complete starter cost and incremental
+print/active-pack cost. Keep rails/connectors unselected and ID discovery
+non-authoritative; no dock PCB, catalog part, survey or hardware build is added
+to the implementation queue. Optional gesture JSON drafting remains a CW-S04
+candidate; CW-S01 still comes first.
 
 Opt-in telemetry begins with adult bench data. Keep capture and external camera
 egress disabled by default; separately review permissions, retained samples,

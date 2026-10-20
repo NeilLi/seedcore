@@ -8,10 +8,18 @@ Microduck workflow. They carry requests and context; admission remains with
 the PDP and execution boundary. Exact upstream robot RPC translation belongs
 in the Microduck adapter plan.
 
-The [robotics partner integration design](robotics_partner_integration_architecture.md)
-extends this boundary to candidate compute, sensor, middleware and behavior
-providers. It is a proposal with read-only/offline entry points; no partner
-adapter or physical qualification is established.
+The [mini-robotics partner integration design](robotics_partner_integration_architecture.md)
+applies this boundary to small TTL fixtures, printable structures and conditional
+compact/open joint modules. It covers power, fabrication, local control and
+evidence, including the current CAN/CAN FD contract gap. Entry is offline or
+read-only; no new adapter or physical qualification is established.
+
+The [desktop dock/discovery proposal](robotics_partner_integration_architecture.md#reusable-desktop-dock-and-attachment-discovery)
+reuses power/control across a supported attachment family. A physical ID can
+suggest a build; it cannot authenticate mechanics or authorize motion. Rail,
+connector and mounting choices remain open. The
+[product analysis](../strategy/mini_robotics_base_attachment_product_analysis.md)
+owns starter-versus-attachment pricing hypotheses.
 
 ## Remote LLM Accounts + Local AI Station Boundary
 

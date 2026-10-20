@@ -98,6 +98,16 @@ precedes a physical demo, regardless of the marketing calendar.
 
 ## Commercial Architecture
 
+The proposed consumer hardware offer has **two tiers**: a complete affordable
+base-station starter kit, followed by modular, 3D-printable attachments with
+optional supplied mechanical/active packs. Reuse the same reviewed dock within
+one supported family. Distinguish passive prints from additional servos/sensors
+and show all first-use requirements. The
+[Robosen reference and pricing analysis](../development/strategy/mini_robotics_base_attachment_product_analysis.md)
+defines test prices and contribution assumptions; no retail price, attachment
+rate, free printing or $20–$50 active-pack cost is established. Evaluate the
+starter on its own economics and retain a ready-to-use option for non-printers.
+
 Keep the basic runtime/firmware open under the intended Apache-2.0 model,
 subject to dependency/license review. Open hardware files need an explicitly
 chosen license. No mandatory royalty is required to use Apache-licensed code.
@@ -117,12 +127,15 @@ and support terms before granting it.
 
 ## Target Ecosystems And Evidence Packet
 
-The [component partner pilot briefs](robotics_component_partner_pilot_briefs.md)
-add candidate compute, perception and middleware cooperation. They complement
-this affordable-kit design-in: D-Robotics, Orbbec and Viam are unqualified
-technical-diligence candidates, not selected kit OEMs or established partners.
-Their [integration roadmap](../development/robotics/robotics_ecosystem_integration_roadmap.md)
-uses the existing qualification and capacity gates.
+The revised [mini-robotics component briefs](robotics_component_partner_pilot_briefs.md)
+complement this affordable-kit design-in with the existing small TTL fixture,
+ODRI source/fabrication study and conditional CubeMars compact-joint feasibility.
+Other miniature mechanisms remain task-dependent; dedicated compute, capture
+and middleware are deferred. These are unqualified research candidates, not
+selected kit OEMs or established partners. Their
+[integration roadmap](../development/robotics/robotics_ecosystem_integration_roadmap.md)
+uses the existing qualification and capacity gates; no new bus/body or supplier
+dependency is required by the first kit.
 
 Seeed Studio and M5Stack are initial ecosystem candidates. Waveshare, Hiwonder, Yahboom and other kit vendors are additional
 unqualified candidates. No endorsement, compatible current SKU or agreement

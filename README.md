@@ -83,6 +83,17 @@ flowchart LR
 
 See the [local service map](deploy/local/README.md) for exact URLs and commands.
 
+The [mini-robotics cooperation strategy](docs/development/strategy/robotics_component_cooperation_strategy_2026.md)
+prioritizes the existing one-to-three-servo fixture, printable structures and
+bounded ODRI/CubeMars source studies. Compact BLDC joints are conditional future
+profiles; CAN/CAN FD, fabrication, power and stop behavior need separate work.
+The [two-tier product proposal](docs/development/strategy/mini_robotics_base_attachment_product_analysis.md)
+starts with an affordable, complete dock-and-first-lesson kit, followed by
+printable attachments and optional supplied packs. It tests reuse and pricing;
+the dock, discovery flow and retail prices remain proposals.
+The family/STEM direction assumes supervised use and reviewed limits for each
+physical build. Industrial cells and large humanoids are outside this backlog.
+
 ---
 
 ## Delivered Now vs. Open Gates
@@ -315,6 +326,7 @@ seedcore/
 
 ## Key Technical Documentation
 
+- **[Reusable Base & Printable Attachments](docs/development/strategy/mini_robotics_base_attachment_product_analysis.md):** Robosen reference, two-tier pricing hypotheses, complete-kit/attachment economics and product validation.
 - **[Current Next Steps (Active Queue)](docs/development/current_next_steps.md):** Canonical execution order across Central World (`CW-A04` → `CW-S01`) and native `M0–M5` milestones.
 - **[18-Month Physical AI Execution Plan](docs/development/strategy/seedcore_physical_ai_execution_plan_2026_2028.md):** Oct 2026–Mar 2028 strategy, `G0–G5` gate definitions, Oct 14–Nov 12 tactical schedule, and cost/evidence discipline.
 - **[Central World Remaining Delivery Schedule](docs/development/robotics/central_world_remaining_delivery_schedule.md) & [Acceptance Matrix](docs/development/robotics/central_world_acceptance_matrix.md):** Owner roles, dependencies, and positive/negative/fault fixtures (`CW-CAT-01` through `CW-REL-01`).

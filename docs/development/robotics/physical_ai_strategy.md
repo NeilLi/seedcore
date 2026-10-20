@@ -26,13 +26,23 @@ The [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md
 owns the dated schedule, gate definitions and revenue assumptions. The
 [active queue](../current_next_steps.md) owns immediate work.
 
-The [component cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md)
-assesses external compute, sensing, middleware, modular hardware and behavior
-providers against this product direction. Its first diligence candidates are
-D-Robotics, Orbbec and Viam; the [roadmap](robotics_ecosystem_integration_roadmap.md)
-adds bounded research and conditional adapter experiments within the existing
-schedule. SeedCore's role remains governed execution and evidence, with native
-controllers retaining local control. CW-S01 and Microduck acceptance retain priority.
+The revised [component cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md)
+focuses on lightweight desktop and supervised family/STEM robotics: the existing
+small TTL fixture first, printable structures, ODRI open-design study and exact
+CubeMars compact-joint feasibility. Other micro mechanisms are conditional;
+dedicated AI boards, middleware, industrial cells and large humanoids are
+deferred or outside the mini backlog. The [roadmap](robotics_ecosystem_integration_roadmap.md)
+keeps research bounded within the existing schedule. SeedCore owns governed
+execution and evidence; controllers retain local control. CW-S01 and native
+Microduck acceptance retain priority, with no automatic new body or bus support.
+
+The [base/attachment product analysis](../strategy/mini_robotics_base_attachment_product_analysis.md)
+adds a two-tier packaging hypothesis: an affordable complete starter with a
+reusable dock, followed by original printable attachments and optional packs.
+Evaluate actual second-design use, complete cost and support contribution;
+Robosen's reusable-base pattern is a reference, not proof of demand or a reason
+to claim superior physical safety. Dock/discovery and retail prices remain
+proposals under the same qualification and capacity gates.
 
 ## Delivery Responsibilities
 

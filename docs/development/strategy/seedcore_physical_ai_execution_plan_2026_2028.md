@@ -95,18 +95,30 @@ prerequisite for the first governed hardware demonstration.
 
 ## Component ecosystem cooperation
 
-The [component cooperation strategy](robotics_component_cooperation_strategy_2026.md)
+The revised [mini-robotics cooperation strategy](robotics_component_cooperation_strategy_2026.md)
 and [ecosystem roadmap](../robotics/robotics_ecosystem_integration_roadmap.md)
-provide candidate choices for the existing phase 3 ecosystem lane. D-Robotics,
-Orbbec and Viam receive bounded technical diligence first; one later
-offline/read-only experiment requires a measured need and available capacity.
-These candidates compete for the existing adapter budget rather than adding
-three concurrent integrations. Selecting an alternative to the planned
-LeRobot/model-provider package requires an explicit queue/capacity decision.
-Industrial arms, tactile manipulation, hands
-and general robot brains require a separate scope/profile decision. Q4 work
-continues to prioritize CW-S01 after CW-A04's offline completion, exact fixture data and native acceptance;
-the January authoring/simulation alpha has no new supplier dependency.
+prioritize the existing one-to-three-servo TTL fixture, printable structures,
+ODRI open-design study and exact CubeMars compact-joint feasibility. One later
+commercial-joint or open-actuator experiment requires a measured mini-task
+need and available capacity; other miniature mechanisms remain conditional.
+Complete robot mass, supply, fabrication, landed cost and repair/support effort
+determine fit. No joint procurement or CAN/CAN FD implementation is implied.
+
+These candidates compete for the existing phase 3 adapter budget. Selecting an
+alternative to the planned LeRobot/model-provider package requires an explicit
+queue/capacity decision. Dedicated edge compute, depth capture and middleware
+are deferred until required by a named small-robot task; industrial cells and
+large humanoids are outside this cooperation backlog. Q4 work still prioritizes
+CW-S01 after CW-A04's offline completion, exact fixture data and native
+Microduck acceptance. The January authoring/simulation alpha has no new supplier
+dependency; existing dates, cost targets and CW/M/G gates remain in force.
+
+The [base/attachment product analysis](mini_robotics_base_attachment_product_analysis.md)
+proposes an affordable complete starter using a reusable desktop dock, followed
+by original printable attachments and optional supplied packs. Price points
+are research hypotheses; the complete first lesson, actual shared/incremental
+costs, repair/support burden and second-design use determine viability. This
+adds no new retail commitment, dock PCB, power setpoint or catalog qualification.
 
 ## Gate Definitions
 
@@ -209,6 +221,7 @@ authorized activity; no partner contact is implied by preparing them.
 | Offer | Free / open boundary | Paid value to validate |
 | --- | --- | --- |
 | Local developer tools | Existing Apache-2.0 Wasm core, contracts and proposed basic firmware; local lessons remain usable | Optional supported setup and training |
+| Starter base + attachments | Basic local lesson and original printable files under explicitly selected licenses; existing host owned separately | Complete affordable starter kit, optional supplied attachment/active packs and supported repair/setup; validate each SKU's unit contribution without assuming repeat purchase |
 | Hardware / OEM | Open interfaces and basic firmware do not require a mandatory software royalty | Co-branded QA, conformance maintenance, factory provisioning/identity and contracted support; hardware license and badge terms specified separately |
 | Governance / Cloud Workbench | Local authority enforcement and interruption remain effective during cloud loss | Hosted policy administration, school/lab roles, managed fleet records, verified replay and supported model routing; per-device or institution pricing tested with buyers |
 | Telemetry | Contribution is optional and separately controlled | Later licensed adult/research datasets or calibration services only after quality, rights and buyer-demand validation |

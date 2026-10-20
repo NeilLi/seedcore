@@ -142,6 +142,18 @@ the action space of an arbitrary custom robot. Do not change frozen tolerances
 to force WebGPU/Wasm parity. A keyframed tabletop gesture provides a useful
 alpha path without claiming a balancing biped or a trained-policy transfer.
 
+Within CW-S04, optionally import an LLM-drafted **declarative gesture JSON**
+through the same bounded parser and compilation path as manual edits. Resolve
+the named attachment/build and joint IDs, explicit units and interpolation;
+check full-curve position/velocity/acceleration extrema and any supported
+mode-specific bounds, loops and time scaling. A prompt such as “tilt the head
+15 degrees” still needs an unambiguous joint/frame and feasible trajectory.
+Keep camera/network effects separate and declared. DRC supplies assembly/power
+readiness findings; it does not verify arbitrary motion or contact. Recompile
+and invalidate admission after any draft edit. Native/browser model checks
+cover declared tolerances; physical motion still needs CW-G01 and hardware
+acceptance. A cloud account or LLM connector is not an alpha prerequisite.
+
 The reviewed mjswan policy backend is Wasm-only. Its mjlab 1.6.0 exporter also
 differs from the inspected Microduck training pin, mjlab 1.3.0. Preflight exact
 task/actuator semantics and independent outputs in an isolated environment;

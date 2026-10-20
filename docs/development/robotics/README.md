@@ -25,9 +25,10 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 | --- | --- |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
 | [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
-| [Component cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md) | Official-source assessment of ten ecosystem candidates; prioritize edge compute, perception and bounded middleware diligence |
-| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Proposed COOP-00–06 backlog mapped to CW/M/G acceptance; CW-S01 is next after CW-A04 local closure and vendor implementation is conditional |
-| [Partner integration architecture](../integrations/robotics_partner_integration_architecture.md) | Proposed source/profile, observation, proposal, execution and evidence boundaries; no new runtime schemas or adapters |
+| [Mini-robotics cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md) | Seven supplied joint/open-hardware initiatives assessed; existing TTL fixture first, ODRI/CubeMars source studies and earlier ten candidates reclassified |
+| [Reusable base and printable attachments](../strategy/mini_robotics_base_attachment_product_analysis.md) | Two-tier complete starter/attachment proposal, Robosen evidence/limits, price tests and complete cost/contribution analysis |
+| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Revised COOP-00–06 mini-fixture/joint backlog mapped to CW/M/G; CW-S01 remains next and later commercial/open-joint experiments are alternatives |
+| [Partner integration architecture](../integrations/robotics_partner_integration_architecture.md) | Small-fixture control/evidence, supply and fabrication boundaries; CAN/CAN FD remains an unsupported-contract gap |
 | [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
 | [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
 | [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan component/assembly/DRC/browser/governance workstream; Phase 1 & Phase 2 offline scope delivered, later stages gated |
@@ -65,7 +66,7 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 | [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation: industrial giants vs DIY mini-robotics paradigm shift, "slow brain, fast spine" receding-horizon action chunking, and Microduck milestone focus |
 | [Mini-robotics developer blueprint](mini_robot_developer_blueprint.md) | Proposed board/TTL fixture, quoted cost targets, authenticated firmware/session requirements and gated browser-to-hardware workflow |
 | [OEM partnership brief](../../application/oem_partnership_brief.md) | Draft SeedCore Inside design-in, open/paid boundaries, QA, support and staged kit distribution |
-| [Component partner pilot briefs](../../application/robotics_component_partner_pilot_briefs.md) | Draft D-Robotics compute, Orbbec capture and Viam interoperability experiments, plus conditional sensing/industrial studies |
+| [Component partner pilot briefs](../../application/robotics_component_partner_pilot_briefs.md) | Existing TTL fixture, ODRI source/fabrication study and conditional CubeMars compact-joint feasibility; other mini mechanisms remain task-dependent |
 
 ## Repository Starting Points
 
