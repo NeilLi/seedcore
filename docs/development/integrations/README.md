@@ -1,6 +1,6 @@
 # Agent And Protocol Integrations
 
-Date: 2026-09-17
+Date: 2026-10-20
 Status: Supporting interfaces and research
 
 Reuse these ingress and capability interfaces when connecting an agent to the
@@ -8,8 +8,14 @@ Microduck workflow. They carry requests and context; admission remains with
 the PDP and execution boundary. Exact upstream robot RPC translation belongs
 in the Microduck adapter plan.
 
+The [robotics partner integration design](robotics_partner_integration_architecture.md)
+extends this boundary to candidate compute, sensor, middleware and behavior
+providers. It is a proposal with read-only/offline entry points; no partner
+adapter or physical qualification is established.
+
 ## Documents
 
+- [Robotics partner integration architecture](robotics_partner_integration_architecture.md)
 - [Agent Capability & Skills Quick Reference](agent_capability_skills_quick_reference.md)
 - [Agent Capability and Skills Relationships Summary](agent_capability_skills_relationships.md)
 - [AP2 And SeedCore RCT Alignment Memo](ap2_seedcore_rct_alignment_memo.md)

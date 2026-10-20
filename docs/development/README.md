@@ -1,6 +1,6 @@
 # SeedCore Development Docs
 
-Date: 2026-10-14
+Date: 2026-10-20
 Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
@@ -24,6 +24,12 @@ For the small-team delivery process, use the
 [service operating plan](robotics/robot_service_operating_plan.md): one supported
 profile and live pilot initially, with explicit scope, support and expansion gates.
 
+The [component cooperation strategy](strategy/robotics_component_cooperation_strategy_2026.md)
+assesses ten robotics suppliers against this foundation. Its
+[integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) prioritizes
+bounded diligence on D-Robotics, Orbbec and Viam within the existing schedule;
+vendor integrations remain conditional and CW-A04 retains immediate priority.
+
 Start with the [physical AI strategy](robotics/physical_ai_strategy.md), the
 [active queue](current_next_steps.md), the
 [Microduck integration plan](robotics/microduck_integration_plan.md), and the
@@ -42,7 +48,7 @@ maintained, or deferred.
 | [Operations](operations/README.md) | Local environment, rollout, failure drills, remediation | Simulator and supervised hardware bring-up |
 | [Reports](reports/README.md) | Dated test analyses and engineering reports | Supporting reference; claims retain their source and verification status |
 | [Infrastructure](infrastructure/README.md) | Edge architecture, proof kernels, transport, hardware identity | Select work needed by the integration |
-| [Integrations](integrations/README.md) | External agents, SDKs, ingress, capability interfaces | Reuse existing ingress |
+| [Integrations](integrations/README.md) | External agents, SDKs, robotics partner boundaries, ingress and capability interfaces | Reuse existing ingress; qualify any new device/control path |
 | [Applications](applications/README.md) | RCT, city/producer, journey and creative tracks | RCT regression baseline; other expansion deferred |
 | [Strategy](strategy/README.md) | Active 18-month schedule and historical annual plans | Current planning targets; the active queue owns next work |
 | [Archive](archive/README.md) | Superseded queues, frozen records, sign-offs | Historical |

@@ -1,6 +1,7 @@
 # SeedCore Physical AI Strategy
 
 Date: 2026-10-15
+Component cooperation addendum: 2026-10-20
 Status: Active product direction; hardware, adoption, costs and commercial outcomes require validation
 
 ## Product Thesis
@@ -24,6 +25,14 @@ understand why it moved or stopped.**
 The [18-month plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 owns the dated schedule, gate definitions and revenue assumptions. The
 [active queue](../current_next_steps.md) owns immediate work.
+
+The [component cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md)
+assesses external compute, sensing, middleware, modular hardware and behavior
+providers against this product direction. Its first diligence candidates are
+D-Robotics, Orbbec and Viam; the [roadmap](robotics_ecosystem_integration_roadmap.md)
+adds bounded research and conditional adapter experiments within the existing
+schedule. SeedCore's role remains governed execution and evidence, with native
+controllers retaining local control. CW-A04 and Microduck acceptance retain priority.
 
 ## Delivery Responsibilities
 

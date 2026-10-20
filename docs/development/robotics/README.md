@@ -1,6 +1,6 @@
 # Robotics Development
 
-Date: 2026-10-15
+Date: 2026-10-20
 Status: Primary development area; native reference, Fast Spine fixture and supervised STEM/OEM delivery
 
 SeedCore's robotics direction is a reusable trust runtime for physical AI.
@@ -16,6 +16,9 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | --- | --- |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
 | [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
+| [Component cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md) | Official-source assessment of ten ecosystem candidates; prioritize edge compute, perception and bounded middleware diligence |
+| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Proposed COOP-00–06 backlog mapped to CW/M/G acceptance; CW-A04 remains next and vendor implementation is conditional |
+| [Partner integration architecture](../integrations/robotics_partner_integration_architecture.md) | Proposed source/profile, observation, proposal, execution and evidence boundaries; no new runtime schemas or adapters |
 | [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
 | [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
 | [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan component/assembly/DRC/browser/governance workstream; Phase 1 foundation delivered, later stages gated |
@@ -52,6 +55,7 @@ support. Microduck is the reference integration, not a mandatory customer choice
 | [Embodied AI architecture reference](embodied_ai_architecture_reference.md) | Reviewed research interpretation: industrial giants vs DIY mini-robotics paradigm shift, "slow brain, fast spine" receding-horizon action chunking, and Microduck milestone focus |
 | [Mini-robotics developer blueprint](mini_robot_developer_blueprint.md) | Proposed board/TTL fixture, quoted cost targets, authenticated firmware/session requirements and gated browser-to-hardware workflow |
 | [OEM partnership brief](../../application/oem_partnership_brief.md) | Draft SeedCore Inside design-in, open/paid boundaries, QA, support and staged kit distribution |
+| [Component partner pilot briefs](../../application/robotics_component_partner_pilot_briefs.md) | Draft D-Robotics compute, Orbbec capture and Viam interoperability experiments, plus conditional sensing/industrial studies |
 
 ## Repository Starting Points
 

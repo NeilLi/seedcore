@@ -1,6 +1,7 @@
 # SeedCore Inside: OEM Partnership Brief
 
 Date: 2026-10-15
+Component ecosystem supplement: 2026-10-20
 Status: Draft for partner review; no outreach, agreement, kit availability or commercial terms are established
 
 ## Partner Proposal
@@ -115,6 +116,13 @@ product/regulatory obligations. Define badge use, withdrawal, version changes
 and support terms before granting it.
 
 ## Target Ecosystems And Evidence Packet
+
+The [component partner pilot briefs](robotics_component_partner_pilot_briefs.md)
+add candidate compute, perception and middleware cooperation. They complement
+this affordable-kit design-in: D-Robotics, Orbbec and Viam are unqualified
+technical-diligence candidates, not selected kit OEMs or established partners.
+Their [integration roadmap](../development/robotics/robotics_ecosystem_integration_roadmap.md)
+uses the existing qualification and capacity gates.
 
 Seeed Studio and M5Stack are initial ecosystem candidates. Waveshare, Hiwonder, Yahboom and other kit vendors are additional
 unqualified candidates. No endorsement, compatible current SKU or agreement

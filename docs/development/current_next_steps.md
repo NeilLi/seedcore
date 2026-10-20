@@ -1,6 +1,6 @@
 # Current Next Steps
 
-Date: 2026-10-19
+Date: 2026-10-20
 Status: Canonical active execution queue — simulation-first candidate delivered; native/physical gates open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
@@ -160,6 +160,17 @@ Use the [delivery model](robotics/robot_solution_delivery.md) and
 [service operating plan](robotics/robot_service_operating_plan.md). Candidate
 OEMs, pilots, incorporation and grant funding are not established agreements.
 Preparing a packet does not authorize contacting prospects or placing orders.
+
+The [component cooperation assessment](strategy/robotics_component_cooperation_strategy_2026.md)
+adds ten source-reviewed candidates. Review D-Robotics, Orbbec and Viam fit
+records as supporting research under COOP-01 in the
+[ecosystem roadmap](robotics/robotics_ecosystem_integration_roadmap.md), with a
+proposed two-person-day total cap only when capacity is available after
+committed work. Use the [pilot briefs](../application/robotics_component_partner_pilot_briefs.md)
+to record exact versions, access, interface and rights gaps. CW-A04 remains
+the next implementation package; no vendor SDK, new body or additional pilot
+becomes a prerequisite. Select at most one later adapter experiment against a
+measured need and the existing CW/M/G gates.
 
 Opt-in telemetry begins with adult bench data. Keep capture and external camera
 egress disabled by default; separately review permissions, retained samples,

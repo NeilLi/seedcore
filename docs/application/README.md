@@ -1,6 +1,6 @@
 # SeedCore Application And Partner Pack
 
-Date: 2026-10-14
+Date: 2026-10-20
 Status: Current affordable physical AI positioning; earlier custody materials retained as supporting references
 
 The current narrative is **an open trust runtime for affordable physical AI**,
@@ -20,6 +20,7 @@ determine actual release and scale.
 - [One-page overview](seedcore_one_page_overview.md): product, pillars, differentiation, present evidence and business model.
 - [Investor application copy](investor_application_copy.md): current narrative, milestone targets, open/paid boundaries and support sought.
 - [OEM partnership brief](oem_partnership_brief.md): draft design-in scope, conformance, responsibilities, economics and staged distribution.
+- [Component partner pilot briefs](robotics_component_partner_pilot_briefs.md): draft edge-compute, perception and middleware experiments with scope, responsibilities, acceptance and open questions.
 - [Physical AI demo script](demo_presentation_script.md): proposed split-screen allow/deny/revoke/evidence walkthrough; only show accepted capabilities.
 
 ## Supporting Custody Reference

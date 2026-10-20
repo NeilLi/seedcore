@@ -1,6 +1,7 @@
 # SeedCore Physical AI Execution Plan: Q4 2026–Q1 2028
 
 Date: 2026-10-14
+Cooperation addendum: 2026-10-20
 Status: Canonical 18-month planning schedule; dates, costs and adoption counts are targets, not completed milestones or commitments
 
 ## Positioning And First Offer
@@ -91,6 +92,21 @@ exceed phase 3 capacity; a qualified native MuJoCo path can serve an adapter
 while browser dynamics research continues. Do not represent the current planar
 Wasm engine as a Microduck digital twin or make general contact simulation a
 prerequisite for the first governed hardware demonstration.
+
+## Component ecosystem cooperation
+
+The [component cooperation strategy](robotics_component_cooperation_strategy_2026.md)
+and [ecosystem roadmap](../robotics/robotics_ecosystem_integration_roadmap.md)
+provide candidate choices for the existing phase 3 ecosystem lane. D-Robotics,
+Orbbec and Viam receive bounded technical diligence first; one later
+offline/read-only experiment requires a measured need and available capacity.
+These candidates compete for the existing adapter budget rather than adding
+three concurrent integrations. Selecting an alternative to the planned
+LeRobot/model-provider package requires an explicit queue/capacity decision.
+Industrial arms, tactile manipulation, hands
+and general robot brains require a separate scope/profile decision. Q4 work
+continues to prioritize CW-A04, exact fixture data and native acceptance;
+the January authoring/simulation alpha has no new supplier dependency.
 
 ## Gate Definitions
 
