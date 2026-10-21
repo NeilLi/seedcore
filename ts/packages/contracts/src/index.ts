@@ -106,3 +106,4 @@ export type {
 } from "./robotAssemblyContracts.js";
 
 export { parseStrictJson, parseAssemblyText } from './assemblyText.js';
+export { assertComponentStructure } from './robotComponentContracts.js';

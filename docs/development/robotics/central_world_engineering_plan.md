@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
-Status: Phase 1 and Phase 2 (CW-A01 v2, CW-A02, CW-A03, CW-A04) offline slices implemented; Phase 3 CW-S01 next
+Status: Phase 1/2 offline and first CW-S01 compiler/native-parity slice implemented; real starter readiness and browser/live/hardware gates open
 
 The product direction unifies component authoring, visual assembly, browser
 rehearsal and separately governed deployment inside the SeedCore monorepo.
@@ -23,8 +23,14 @@ implemented with local browser/store evidence. The
 ghosts and atomic numeric/subtree placement; the
 [CW-A04 DRC/BOM slice](central_world_cw_a04_drc.md) adds pure worker DRC,
 routing proposals, field-linked findings and unknown-aware BOM, closing Phase 2's
-offline software scope. CW-S01 restricted assembly-to-MJCF compilation is next.
+offline software scope. CW-S01 now supplies the first restricted compiler slice.
 Exact physical catalog data remains an independent open gate.
+
+The [21 October CW-S01 record](central_world_cw_s01_mjcf.md) adds a restricted
+primitive compiler and synthetic native parity. A separate versioned offline
+readiness check defers only proxy physical fit; the full DRC report and actual
+starter remain blocked. This does not deliver a browser MuJoCo worker or close
+the real-source/Studio handoff.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 retains the commercial horizon. [Microduck M0–M5](microduck_integration_plan.md)
@@ -56,7 +62,7 @@ capacity weekly, keeping the existing enforcement/evidence gates intact.
 | `packages/skill-packages/` | Behavior/policy manifests, observations/actions, compatible model/calibration, licenses and retained evaluation artifacts | Planned; do not duplicate the existing ignored ONNX cache into a distribution |
 | `ts/packages/robot-canvas/` | Immutable store, rendering/selection/ghost adapter and pure port alignment proposals, independent of policy state | CW-A02/CW-A03 proxy slice implemented |
 | `ts/packages/drc-solver/` | Pure deterministic assembly/electrical/mass checks, typed findings and bounded worker messages | CW-A04 offline slice implemented |
-| `ts/packages/wasm-sim-bridge/` | Versioned compiler/runtime adapters, worker lifecycle, clocks and telemetry provenance | Planned in CW3 |
+| `ts/packages/wasm-sim-bridge/` | Versioned compiler/runtime adapters, worker lifecycle, clocks and telemetry provenance | CW-S01 restricted compiler/native parity implemented; CW-S02 worker/runtime adapter remains planned |
 | `ts/apps/mini-studio/` | Local Central World shell: assembly authoring, placement and DRC/BOM; timeline remains later work | CW-A02–CW-A04 localhost slice; not a deployed site |
 | `src/seedcore/robotics/component_registry.py` | Read-only structural, semantic and integrity validation | Implemented; creates no authority |
 | Existing Agent Gateway/PDP/HAL and Rust verifier | Independently admitted execution, device enforcement and evidence closure | Shared foundations; custom-build/native/hardware integration still gated |

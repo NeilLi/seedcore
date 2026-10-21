@@ -100,6 +100,12 @@ jobs:
       - name: Verify offline Mini Studio authoring from source
         run: node tools/robotics/verify-authoring.cjs --skip-python
 
+      - name: Install pinned native robotics simulation extra
+        run: python -m pip install -e ".[robotics-sim]"
+
+      - name: Verify restricted MJCF compiler and native parity
+        run: node tools/robotics/verify-mjcf.cjs
+
       - name: Retain assembly authoring verification reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -110,6 +116,7 @@ jobs:
             artifacts/robotics/cw-a02/verification.json
             artifacts/robotics/cw-a03/verification.json
             artifacts/robotics/cw-a04/verification.json
+            artifacts/robotics/cw-s01/verification.json
 
       - name: Start Postgres for RESULT_VERIFIER integration lane
         run: |

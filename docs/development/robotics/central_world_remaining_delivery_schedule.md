@@ -121,6 +121,13 @@ mesh-conversion path. Broader branched/floating-base/CAD imports need separate
 support and parity evidence. Keep native Microduck as an imported pinned model;
 do not rebuild it with STS3215/ESP32 draft parts or change its controller ownership.
 
+The [21 October CW-S01 record](central_world_cw_s01_mjcf.md) delivers the local
+compiler/native-parity slice on synthetic sources. The user-approved separate
+offline readiness policy defers only `MECHANICAL_PROXY_UNQUALIFIED`; the full
+DRC result stays unchanged and all other findings block compilation. The real
+starter remains blocked; resolving its data/handoff is separate from passing
+the synthetic slice. CW-S02/browser and hardware acceptance remain open.
+
 CW-S02 explicitly distinguishes the current planar custom engine from general
 MuJoCo Wasm. Freeze engine version, compiler options, model digest, physics dt,
 policy cadence and capture units. Simulation workers own state; rendering and

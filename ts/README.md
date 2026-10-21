@@ -15,6 +15,7 @@ simulation and live admission remain subsequent packages.
 - `@seedcore/contracts`: typed contracts + runtime parsers for Rust verifier JSON outputs and `seedcore.assembly.v2` (`parseStrictJson` with duplicate-key rejection and `seedcore.jcs-safe-integers.v1` canonicalization)
 - `@seedcore/robot-canvas`: offline `AssemblyStore` (32-entry / 2 MiB history, `authorityEpoch` fencing), verified proxy assets, pure `15 mm` / `5°` mating proposals (`CW-SNAP-01`) and a Three.js ghost/rest-pose adapter
 - `@seedcore/drc-solver`: pure deterministic assembly/electrical/mass DRC solver (`CW-DRC-01..03`), point-to-point/star routing proposals, 3D rotated/parallel-axis inertia, unknown-aware BOM and epoch-fenced worker coordinator (`CW-A04`)
+- `@seedcore/wasm-sim-bridge`: CW-S01 restricted primitive MJCF compiler with separately versioned offline simulation readiness and native parity tests; actual starter stays blocked, browser worker remains CW-S02
 - `@seedcore/mini-studio`: localhost v2 assembly authoring shell (`http://127.0.0.1:8767`) with import/export, selection, undo/redo, numeric/magnetic placement and worker DRC/BOM inspector
 
 ### 2. Trust & Proof Surfaces

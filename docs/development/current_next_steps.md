@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-10-20
-Status: Canonical active execution queue — simulation-first and Central World Phase 2 (CW-A01..A04) offline candidates delivered; native/physical gates open
+Date: 2026-10-21
+Status: Canonical active execution queue — Phase 2 offline and CW-S01 compiler/parity slices delivered locally; real starter readiness, browser/live and physical gates open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -11,7 +11,11 @@ adds magnetic candidates, non-committing ghosts and atomic numeric/subtree
 placement. The [CW-A04 DRC/BOM slice](robotics/central_world_cw_a04_drc.md) closes
 Phase 2's offline software scope with pure worker DRC, routing proposals,
 field-linked findings, 3D rotated/parallel-axis mass/inertia and unknown-aware BOM.
-The next product package is Phase 3 CW-S01 restricted assembly-to-MJCF compilation,
+The [CW-S01 compiler/native-parity slice](robotics/central_world_cw_s01_mjcf.md)
+is now implemented for synthetic supported serial-tabletop fixtures. A separate
+versioned offline simulation-readiness result defers only proxy physical fit;
+the full DRC report and actual starter remain blocked. CW-S01 real-source
+readiness/handoff remains open before broader CW-S02 browser integration,
 progressing toward a bounded
 attempt with an understandable allow/deny/interruption timeline and sufficient
 verifier evidence. Use the
@@ -80,7 +84,8 @@ subsequent Phase 3–5 packages remain planned/open.
 | Local software slice passed | CW-A02 | [Mini Studio, raw import, immutable store and browser evidence](robotics/central_world_cw_a02_authoring.md) | Offline proxy scope; no runtime admission |
 | Local software slice passed | CW-A03 | [15 mm snapping, ghost/numeric placement and atomic reparenting](robotics/central_world_cw_a03_snapping.md) | Proxy-only CW-SNAP-01 evidence; explicit joints preserved |
 | Local software slice passed | CW-A04 | [Pure worker DRC, routing proposals, 3D mass/inertia and unknown-aware BOM](robotics/central_world_cw_a04_drc.md) | Offline CW-DRC-01..03 passed; physical pass awaits CW-D01 |
-| 1 | CW-S01–CW-S04 | Restricted MJCF/native parity, browser worker and bounded gesture replay | Accepted Phase 2 assembly/DRC; trained-policy lane has separate compatibility/reference gates |
+| Local compiler/parity slice passed | CW-S01 | [Deterministic primitive MJCF, separate offline readiness and native parity](robotics/central_world_cw_s01_mjcf.md) | Synthetic positive fixtures only; actual starter remains blocked, no browser/physical acceptance |
+| 1 | CW-S01 handoff, then CW-S02–CW-S04 | Resolve real-source readiness, browser worker and bounded gesture replay | Separate simulation readiness preserves full DRC; trained-policy lane has independent compatibility/reference gates |
 | 2 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
 
 ## Native Reference Milestones

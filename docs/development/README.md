@@ -30,7 +30,7 @@ TTL fixture, printable structures, ODRI open-design study and exact CubeMars
 compact-joint feasibility. It assesses all seven newly supplied initiatives and
 reclassifies the earlier ten candidates. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
-CW-S01 immediately next after CW-A04; new joints and physical profiles remain
+CW-S01 real-source handoff active after its synthetic compiler/parity slice; new joints and physical profiles remain
 conditional, with no industrial-cell or humanoid expansion.
 
 The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)
@@ -39,6 +39,10 @@ with explicit price tests and separate shared/incremental costs. Its dock and
 digest-discovery flow remain engineering proposals, not automatic admission.
 
 ## Target builder workflow: local station, optional LLM and successive designs
+
+The [21 October CW-S01 slice](robotics/central_world_cw_s01_mjcf.md) now provides
+the restricted compiler and synthetic native parity checks. Real starter
+readiness remains blocked; browser worker/live hardware paths are still gated.
 
 The proposed builder workflow uses these roles:
 
