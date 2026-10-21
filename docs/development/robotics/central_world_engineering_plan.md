@@ -168,7 +168,11 @@ MJCF or simulate biped ground contact. Do not relabel a planar preview as a
 Microduck digital twin or supply a silent fallback when general simulation fails.
 
 The [mjswan assessment](mjswan_integration_assessment.md) selects 0.11.9 as a
-conditional interactive-runtime candidate for CW-S02/CW-S03. Its MuJoCo 3.11.0
+conditional interactive-runtime candidate for CW-S02/CW-S03, and the
+[browser robotics studio stack assessment](browser_robotics_studio_stack_architecture.md)
+defines the five-layer browser architecture, three-clock worker pacing,
+transferable snapshot ring buffers, memory bounds, and declarative scripting
+sandboxing across `CW-S02–CW-S04`. mjswan's MuJoCo 3.11.0
 pin differs from this repository's 3.15.0 baseline; its DOM-bound public engine
 does not expose the required control veto or worker-owned state/capture contract.
 Prove those seams before adopting a runtime dependency. Its reviewed ONNX path

@@ -102,7 +102,10 @@ here does not promote it to an implemented feature.
    proposed beginner learning experience with lessons from the PKG and hotel
    simulators. The [mini simulator implementation plan](robotics/mini_robot_simulator_implementation_plan.md)
    develops the browser/custom-engine direction with a C++/Wasm core, assets,
-   sensors and numerical gates. Blender/Godot remain authoring/reference tools.
+   sensors and numerical gates, while the
+   [browser robotics studio stack architecture](robotics/browser_robotics_studio_stack_architecture.md)
+   evaluates the five-layer browser OLP/HIL ecosystem and maps optimizations
+   onto `CW-S02–CW-S04`. Blender/Godot remain authoring/reference tools.
    Local lesson prototypes may accompany M0–M3; live execution follows the
    integration gates.
 8. [Robot design toolkit assessment](robotics/robot_design_toolkit_assessment.md):
