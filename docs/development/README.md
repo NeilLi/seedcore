@@ -54,6 +54,14 @@ original mini-workbench Draco tiles with bounded HLOD/cache scheduling and
 origin rebasing, while a separate synthetic robot retains its own Wasm state.
 It is visual-only; texture-bearing assets and arbitrary CAD import remain gated.
 
+The [academic open-robotics ecosystem assessment](robotics/academic_open_robotics_ecosystem_assessment.md)
+defines how SeedCore reuses CPU-efficient academic stacks—pinned **DeepMind MuJoCo**
+(`3.15.0` native + `CW-S02` Wasm candidate), optional local-station **MIT Drake**
+(`Toppra` trajectory retiming, constrained IK, and `SpatialInertia` system ID for
+`CW-S04` / Pillar C), and **ROS 2 / Foxglove `MCAP`** formats at the replay and
+export edges (`CW-G02`, `CW-E01`)—while preserving zero-install browser authoring
+for beginners and keeping execution authority inside SeedCore's PDP and proof kernels.
+
 The proposed builder workflow uses these roles:
 
 1. **Local development computer:** runs Mini Studio (`:8767`), Session Lab (`:8766`), the component viewer (`:8770`) and separately invoked native model/proof tools. Session Lab uses a simulation issuer; production PDP integration is separate. See the [service map](../../deploy/local/README.md).

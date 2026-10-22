@@ -17,7 +17,11 @@ Implementation update, 22 October: the separate
 renderer, original Draco HLOD assets, bounded SSE/frustum/LRU streaming and
 origin rebasing beside an independent planar actor. Its source/fault/precision
 record owns this limited visual profile; KTX2/Basis textures, external CAD,
-general browser dynamics and hardware qualification remain separate.
+general browser dynamics and hardware qualification remain separate. For the
+companion evaluation of CPU-first open-source academic ecosystems (**DeepMind
+MuJoCo**, **MIT Drake**, and **ROS 2 / Foxglove MCAP**) across the browser tab
+and Local AI Station, see
+[`academic_open_robotics_ecosystem_assessment.md`](academic_open_robotics_ecosystem_assessment.md).
 
 Browser-based robotics platforms have evolved from passive 3D visualizers into simulation, offline programming (OLP), and hardware-in-the-loop (HIL) environments. Shifting traditional desktop stacks into browser runtimes removes local OS setup friction, but **zero-install convenience does not establish numerical fidelity, execution authority, or physical safety**.
 
