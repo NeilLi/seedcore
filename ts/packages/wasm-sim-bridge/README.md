@@ -1,5 +1,12 @@
 # Restricted assembly-to-MJCF compiler
 
+This package also exports experimental, visual-only `frameTransport`,
+`FixedTickClock` and `PlanarLab` utilities used by Mini Studio's separate
+[browser performance lab](../../../docs/development/robotics/browser_performance_pipeline.md).
+They provide bounded transferable/shared snapshots and a pinned synthetic SIM-3
+fixture. They do not run compiled MJCF or implement the CW-S02 MuJoCo adapter.
+The CW-S01 compiler API and readiness policy below remain unchanged.
+
 CW-S01 / CW-SIM-01, 2026-10-21. This package compiles the supported assembly v2
 subset to deterministic, asset-free MJCF and a digest-bound manifest. It has no
 browser worker, UI endpoint, hardware route or execution authority. CW-S02 owns

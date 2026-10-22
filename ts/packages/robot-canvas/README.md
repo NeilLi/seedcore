@@ -19,3 +19,10 @@ See the [CW-A02 record](../../../docs/development/robotics/central_world_cw_a02_
 
 The [CW-A03 record](../../../docs/development/robotics/central_world_cw_a03_snapping.md)
 defines supported ports, angular capture, ghost isolation and drop evidence.
+
+The `@seedcore/robot-canvas/static` subpath exports the separate visual-only
+static manifest, asset/topology/Draco-GLB validation and SSE/RTC math used by
+the [static scene lab](../../../docs/development/robotics/static_scene_streaming.md).
+It does not change `AssemblyStore`, authoring assets or physics. The lab pins
+`3d-tiles-renderer@0.5.3`; its worker compatibility override and closed texture-free
+profile are documented in that record.

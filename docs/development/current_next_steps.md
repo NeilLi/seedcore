@@ -37,6 +37,19 @@ No hardware is connected. Independent training-checkpoint outputs, native
 Microduck governed motion, MCU firmware and physical WebSerial remain open.
 The simulation-only profile does not close full G0/G1/G2 or Microduck M2–M4.
 
+An opt-in [browser performance lab](robotics/browser_performance_pipeline.md)
+now exercises separate scalar Wasm physics and OffscreenCanvas/WebGPU render
+workers, bounded transferable/shared snapshots and WGSL display FK. Its actual
+device measurements and faults support future runtime work; this synthetic
+planar profile does not consume CW-S01 MJCF, close CW-S02 or qualify hardware.
+Use its stack-adoption table for SIMD/pthreads, ONNX/WebNN and remote simulation
+experiments; keep engine/model/capture gates ahead of editor-wide migration.
+
+On 22 October the supporting [static scene lab](robotics/static_scene_streaming.md)
+adds pinned NASA HLOD traversal, original Draco meshes, cache/download/decode
+bounds, fixed-origin display rebasing and degraded coarse fallback. It is a
+separate visual experiment; it does not add collision geometry or close CW-S02.
+
 The user-selected next product workstream is the
 [Central World Phase 1 foundation and 12-week plan](robotics/central_world_engineering_plan.md).
 Its strict component schema, 12 draft/proxy records, source pins, linter and

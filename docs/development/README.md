@@ -44,6 +44,16 @@ The [21 October CW-S01 slice](robotics/central_world_cw_s01_mjcf.md) now provide
 the restricted compiler and synthetic native parity checks. Real starter
 readiness remains blocked; browser worker/live hardware paths are still gated.
 
+The optional [browser performance lab](robotics/browser_performance_pipeline.md)
+now measures separate scalar Wasm physics/render workers, transferable or
+atomically protected shared snapshots, and WebGPU display FK on a synthetic
+planar fixture. It does not close general MuJoCo browser/runtime acceptance.
+
+The separate [static scene lab](robotics/static_scene_streaming.md) now streams
+original mini-workbench Draco tiles with bounded HLOD/cache scheduling and
+origin rebasing, while a separate synthetic robot retains its own Wasm state.
+It is visual-only; texture-bearing assets and arbitrary CAD import remain gated.
+
 The proposed builder workflow uses these roles:
 
 1. **Local development computer:** runs Mini Studio (`:8767`), Session Lab (`:8766`), the component viewer (`:8770`) and separately invoked native model/proof tools. Session Lab uses a simulation issuer; production PDP integration is separate. See the [service map](../../deploy/local/README.md).

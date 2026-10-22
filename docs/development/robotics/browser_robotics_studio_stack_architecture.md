@@ -4,6 +4,21 @@ Date: 2026-10-21
 Status: Architectural reference and stack evaluation for SIM-1–SIM-6 and Central World (CW-A01–CW-L03); no new runtime dependency or hardware authority is granted by this document
 Baseline: `293ebbe` (`CW-S01` restricted assembly-to-MJCF compiler and native MuJoCo 3.15.0 parity)
 
+Implementation update, 21 October: the optional
+[browser performance lab](browser_performance_pipeline.md) now implements
+separate scalar Wasm physics and OffscreenCanvas/WebGPU rendering, bounded
+transferable/shared snapshots and WGSL display FK. That record corrects broad
+zero-copy, solver, SIMD-speedup and remote-latency claims and owns the measured
+device evidence and adoption gates. The assessment below remains the wider
+architectural reference; no general browser MuJoCo or physical gate is closed.
+
+Implementation update, 22 October: the separate
+[static scene lab](static_scene_streaming.md) now adds the pinned NASA 3D Tiles
+renderer, original Draco HLOD assets, bounded SSE/frustum/LRU streaming and
+origin rebasing beside an independent planar actor. Its source/fault/precision
+record owns this limited visual profile; KTX2/Basis textures, external CAD,
+general browser dynamics and hardware qualification remain separate.
+
 Browser-based robotics platforms have evolved from passive 3D visualizers into simulation, offline programming (OLP), and hardware-in-the-loop (HIL) environments. Shifting traditional desktop stacks into browser runtimes removes local OS setup friction, but **zero-install convenience does not establish numerical fidelity, execution authority, or physical safety**.
 
 This document evaluates the five-layer browser robotics studio stack against SeedCore's delivered engineering slices (`SIM-1–SIM-3`, `CW1`, `CW-A01–CW-A04`, `CW-S01`, and `fast-spine-v1` session rehearsal) and defines concrete optimizations for upcoming `CW-S02–CW-S04`, `CW-G01/G02`, and `SIM-4–SIM-6` work packages.

@@ -108,6 +108,16 @@ does not close CW-D01, native M2 or physical G2.
 
 ## Phase 3: physics, policies and Robot Moments (Weeks 6–8, 23 November–13 December)
 
+The optional [browser performance lab](browser_performance_pipeline.md) now
+provides transport/display infrastructure evidence on the existing synthetic
+planar backend. It is a supporting experiment, not completion of CW-S02's
+MuJoCo/model/control/capture acceptance. Its stack table records later SIMD,
+policy and remote-compute qualification without changing these dependencies.
+
+The supporting [static scene lab](static_scene_streaming.md) now adds pinned
+Draco HLOD streaming and origin rebasing on original visual-only mini-workbench
+data. Static rendering is independent of model/control/capture qualification.
+
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
 | CW-S01 · W6 | Restricted assembly-to-MJCF compiler; `ts/packages/wasm-sim-bridge` | CW-A01, CW-A04; explicit joint model | Simulation: first fixed-base tabletop subset, generated primitive geometry/inertials/actuators, native MuJoCo compile/FK/mass/range comparison and unsupported-subset report |

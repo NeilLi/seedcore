@@ -115,6 +115,17 @@ documents the implemented compiler/native-parity slice and the approved
 simulation-readiness policy. It defers only proxy physical fit; the original
 DRC report stays unchanged and other unresolved findings still block compilation.
 
+Mini Studio also offers an optional [browser performance lab](docs/development/robotics/browser_performance_pipeline.md)
+at `/performance.html`: compare separate Wasm/render workers, protected shared
+snapshots and WebGPU display FK on a bounded synthetic planar workload. It
+exports actual device measurements; general browser MuJoCo and physical gates
+remain open.
+
+The separate [static scene lab](docs/development/robotics/static_scene_streaming.md)
+at `/scene.html` streams original Draco workbench tiles with HLOD, bounded
+caches and origin rebasing beside an independent synthetic robot. Static
+visuals remain outside collision, DRC and execution authority.
+
 ### What Remains Open / Gated
 - **Central World Phase 3–5 (`CW-S01` → `CW-L03`):** Phase 2 offline assembly/DRC and the CW-S01 synthetic compiler/native-parity slice are complete locally. CW-S01 real-source readiness and Studio handoff remain open. Subsequent work is `CW-S02–S04` (browser MuJoCo worker where [`mjswan 0.11.9`](docs/development/robotics/mjswan_integration_assessment.md) is a conditional candidate, ONNX adapter and Robot Moments), `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification and the January alpha review.
 - **Native Microduck & Physical Hardware (`M1–M4` / `G0–G2`):** Independent training-checkpoint export parity (`M1`), live native `M2` velocity/stop sessions, hardware-enrolled signer receipts (`M3`), physical MCU firmware & WebSerial bridge, and measured 1-servo → 3-servo / biped stopping behavior (`M4`).

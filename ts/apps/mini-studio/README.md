@@ -16,6 +16,34 @@ Selection and failed imports are distinct from accepted assembly changes.
 No runtime admission or
 hardware routes are supplied.
 
+The optional [browser performance lab](../../../docs/development/robotics/browser_performance_pipeline.md)
+at `/performance.html` runs the pinned synthetic planar Wasm fixture in a physics
+worker and WebGPU in an OffscreenCanvas render worker. Compare transferable
+matrices, atomically protected shared matrices, and shared angles with WGSL
+display FK. Select load/500–1000 Hz target/duration and export measured results.
+This page does not simulate the authored assembly or close CW-S02 acceptance.
+An unavailable WebGPU adapter fails explicitly; the authoring page remains usable.
+
+```bash
+node tools/robotics/verify-browser-performance.cjs --browser
+```
+
+Run that command from the repository root. It requires a real Chrome WebGPU
+adapter; omitting `--browser` explicitly reports that GPU/browser checks did not
+run. See the linked record for capability, copy, timing and authority boundaries.
+
+The [static scene lab](../../../docs/development/robotics/static_scene_streaming.md)
+at `/scene.html` adds pinned NASA 3D Tiles HLOD traversal, background Draco
+decoding, an OffscreenCanvas WebGL2 renderer, bounded caches and origin rebasing.
+Its original mini-workbench visuals stay separate from one synthetic Wasm actor.
+Corrupt detail latches a degraded coarse view while physics continues; static
+visuals never become collision, DRC or motor data. The first profile is texture
+free; KTX2/Basis and external CAD ingestion remain separate work.
+
+```bash
+node tools/robotics/verify-static-scene.cjs --browser
+```
+
 From the repository root:
 
 ```bash

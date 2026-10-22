@@ -23,6 +23,17 @@ evidence. Dynamics and hardware acceptance remain open.
 The [19 October source inventory](m0_cw_d01_register_2026_10_19.md) records the
 window review without closing CW-CAT-01 qualification.
 
+The [browser performance lab](browser_performance_pipeline.md) adds local
+synthetic transport/clock/OffscreenCanvas/WebGPU evidence, including real-worker
+contention, GPU display-FK parity, pinned-Wasm rejection and interruption. It
+does not close CW-SIM-02/03/04: the general MuJoCo model adapter, complete capture
+and per-substep authority enforcement remain separate acceptance work.
+
+The [static scene record](static_scene_streaming.md) adds original Draco fixture
+reproducibility, exact resource pins, HLOD/cache/fallback browser checks and
+native-decode/SSE/RTC tests. These qualify only the closed visual profile,
+not general CAD import, collision geometry, simulation fidelity or hardware.
+
 ## Required evidence by work package
 
 | Review ID / owner package | Positive case | Required rejection or fault case | Retained review artifact |

@@ -161,6 +161,17 @@ as zero or a permissive voltage range. Findings cannot authorize deployment.
 
 ### 3. Browser simulation, policy and motion timeline
 
+The opt-in [browser performance pipeline](browser_performance_pipeline.md)
+implements a synthetic planar load fixture with separate Wasm/render workers,
+atomic shared or transferable snapshots and WGSL FK feeding instanced WebGPU.
+Its measured results and explicit stack-adoption gates inform CW-S02 without
+substituting this fixture for a verified MJCF runtime or signed capture.
+
+The supporting [static scene lab](static_scene_streaming.md) applies HLOD,
+background Draco decoding and local-origin precision to a separate visual-only
+group. Preserve that distinction when adding a future workbench backdrop;
+streamed visuals are not collision, inertial or execution-authority data.
+
 Keep two explicit backends: the existing custom planar 1–3-link Wasm engine for
 its supported lessons, and a separately pinned MuJoCo-Wasm adapter for general
 MJCF/contact/floating-base models. `tools/mini-sim` does not accept arbitrary
