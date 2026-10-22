@@ -106,6 +106,12 @@ jobs:
       - name: Verify restricted MJCF compiler and native parity
         run: node tools/robotics/verify-mjcf.cjs
 
+      - name: Verify browser pipeline transport and bounded pacing
+        run: node tools/robotics/verify-browser-performance.cjs --skip-python
+
+      - name: Verify bounded static HLOD ingestion and RTC
+        run: node tools/robotics/verify-static-scene.cjs --skip-python
+
       - name: Retain assembly authoring verification reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -117,6 +123,8 @@ jobs:
             artifacts/robotics/cw-a03/verification.json
             artifacts/robotics/cw-a04/verification.json
             artifacts/robotics/cw-s01/verification.json
+            artifacts/robotics/browser-performance/verification.json
+            artifacts/robotics/static-scene/verification.json
 
       - name: Start Postgres for RESULT_VERIFIER integration lane
         run: |
