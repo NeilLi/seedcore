@@ -64,6 +64,20 @@ try {
   await page.click('#run');await page.waitForFunction(()=>document.querySelector('#status').dataset.state==='running');
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{value:true,configurable:true});document.dispatchEvent(new Event('visibilitychange'));});
   assert.equal((await result(page)).records.at(-1).outcome,'interrupted');await page.evaluate(()=>{delete document.hidden;});passed('hidden-page event fences the simulation measurement');
+  for(const missing of ['shared-constructor','isolation']) {
+    const limited=await context.newPage();limited.on('pageerror',e=>report.errors.push(e.message));
+    await limited.addInitScript(missing=>Object.defineProperty(globalThis,missing==='isolation'?'crossOriginIsolated':'SharedArrayBuffer',{value:missing==='isolation'?false:undefined,configurable:true}),missing);
+    await limited.goto(base+'/performance.html');await limited.waitForFunction(()=>document.querySelector('#capabilities').textContent.length>0);
+    assert.equal(await limited.locator('#compare').isDisabled(),true);
+    // Playwright's isDisabled() does not expose native <option>.disabled here.
+    assert.deepEqual(await limited.locator('#mode').evaluate(select=>Array.from(select.options).filter(option=>!option.disabled).map(option=>option.value)),['transfer']);
+    assert.match(await limited.locator('#status').textContent(),/Shared memory is unavailable/);
+    await limited.selectOption('#chains','1');await limited.selectOption('#seconds','2');await limited.click('#run');
+    await limited.waitForFunction(()=>document.querySelectorAll('#results tr').length===1&&!document.querySelector('#run').disabled,null,{timeout:10000});
+    const r=(await result(limited)).records[0];assert.equal(r.config.mode,'transfer');assert.equal(r.outcome,'complete');assert.equal(r.physics.tick,1000);assert.equal(r.render.tick,1000);assert.equal(await limited.locator('#compare').isDisabled(),true);
+    await limited.close();
+  }
+  passed('missing shared memory or isolation keeps comparison disabled and transferable runs usable');
   const unsupported=await context.newPage();await unsupported.addInitScript(()=>Object.defineProperty(HTMLCanvasElement.prototype,'transferControlToOffscreen',{value:undefined}));await unsupported.goto(base+'/performance.html');await unsupported.click('#run');await unsupported.waitForFunction(()=>document.querySelector('#status').dataset.state==='failed');assert.match(await unsupported.locator('#status').textContent(),/OffscreenCanvas/);await unsupported.goto(base);await unsupported.waitForFunction(()=>document.querySelector('#content-digest').textContent.length===64);passed('unavailable capability fails explicitly; authoring still loads');
   assert.deepEqual(report.errors,[]);report.status='checks_passed';
 }catch(error){report.status='checks_failed';report.failure=String(error.stack||error);console.error(report.failure);process.exitCode=1;}

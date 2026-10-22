@@ -23,6 +23,9 @@ matrices, atomically protected shared matrices, and shared angles with WGSL
 display FK. Select load/500–1000 Hz target/duration and export measured results.
 This page does not simulate the authored assembly or close CW-S02 acceptance.
 An unavailable WebGPU adapter fails explicitly; the authoring page remains usable.
+Without shared memory or isolation, shared modes and **Compare all three** are
+disabled; **Run measurement** can still exercise transferable matrices with
+worker WebGPU. No unavailable mode is counted as a successful comparison.
 
 ```bash
 node tools/robotics/verify-browser-performance.cjs --browser

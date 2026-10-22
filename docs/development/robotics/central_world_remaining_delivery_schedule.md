@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-10-20
-Status: Phase 2 (CW-A01 v2, CW-A02, CW-A03, CW-A04) offline slices passed locally; Phase 3 CW-S01 next
+Date: 2026-10-22
+Status: Phase 2 offline and CW-S01 synthetic compiler/native-parity slices passed locally; CW-S01 real-source handoff and CW-S02 browser acceptance remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -29,8 +29,10 @@ evidence. The [CW-A03 placement record](central_world_cw_a03_snapping.md) now
 adds local snapping/ghost/numeric/subtree evidence. The
 [CW-A04 DRC/BOM record](central_world_cw_a04_drc.md) closes Phase 2's offline
 software scope with pure worker DRC, routing proposals, field-linked findings,
-3D rotated/parallel-axis mass/inertia and unknown-aware BOM. **CW-S01 restricted
-assembly-to-MJCF compiler** is next.
+3D rotated/parallel-axis mass/inertia and unknown-aware BOM. The **CW-S01 restricted
+assembly-to-MJCF compiler/native-parity slice** is implemented on synthetic
+supported serial-tabletop fixtures; real-source readiness/handoff is next,
+followed by separately pinned CW-S02 browser runtime qualification.
 Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
 Missing Microduck checkpoint outputs block its locomotion policy lane, not a
@@ -125,7 +127,7 @@ data. Static rendering is independent of model/control/capture qualification.
 | CW-S03 · W7–W8 | Compatible ONNX adapter and skill manifest candidate; `packages/skill-packages` | CW-S02 plus independent policy/model references | Simulation/policy: policy bytes/license/export provenance, explicit observation/action map and input/output/timing parity; unsupported body/policy combinations refuse to run |
 | CW-S04 · W8 | Joint/LED gesture timeline, bounded interpolation, simulation trace and replay projection | CW-A01, CW-S02; CW-S03 only for policy-driven behaviors | Studio + verification: authored wave/tilt fixture, curve-extrema/loop/edit tests, stop/fault/coverage report and scoped outcome display |
 
-Start CW-S01 with declared primitive geometry and at most the reviewed tabletop
+Keep CW-S01 within declared primitive geometry and at most the reviewed tabletop
 joint subset. GLB visualization alone is not a valid MuJoCo articulation or
 mesh-conversion path. Broader branched/floating-base/CAD imports need separate
 support and parity evidence. Keep native Microduck as an imported pinned model;

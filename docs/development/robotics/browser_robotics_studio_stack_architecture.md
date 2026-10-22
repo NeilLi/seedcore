@@ -182,7 +182,7 @@ A general browser robotics studio decouples user interface, 3D rendering, physic
 When implementing the next Central World Phase 3 packages (`CW-S02` browser MuJoCo worker, `CW-S03` ONNX policy adapter, and `CW-S04` Robot Moments gesture timeline), apply the following checklist:
 
 1. **`CW-S02` (Pinned Browser MuJoCo Worker in `ts/packages/wasm-sim-bridge`):**
-   - Consume only verified `CW-S01` compiled MJCF bundles (`seedcore.cw-s01.mjcf.v1`) with matching `assemblyDigest`, `catalogDigest`, and `electricalPlanDigest`.
+   - Consume only current `CW-S01` compiled model bundles (`seedcore.cw-s01.model.v1`). Use `assertCompiledModelCurrent` with independently retained `assemblyDigest`, `catalogDigest`, `drcDigest` and `modelDigest`; preserve the bundle's `electricalPlanDigest` binding.
    - Run the physics step inside a dedicated Web Worker owning state (`q`, `v`, `act`, `time`), exposing a 3-buffer `Transferable` snapshot ring and enforcing the three-clock contract (`dt_physics`, `dt_policy`, `dt_render`).
    - Implement the `CW-SIM-04` state-owning control gate inside the worker substep loop so expired, revoked, or out-of-epoch commands are vetoed before `mj_step`.
 2. **`CW-S03` (Model-Bound ONNX Policy Adapter):**
@@ -191,3 +191,27 @@ When implementing the next Central World Phase 3 packages (`CW-S02` browser MuJo
 3. **`CW-S04` (Declarative Robot Moments Timeline & Optional IK Helper):**
    - Implement the bounded joint/LED keyframe schema with analytical velocity/acceleration/jerk extrema validation (`CW-MOM-01`) and automatic `authorityEpoch` invalidation on any curve edit.
    - If adding an interactive IK target handle, run Damped Least Squares IK as a pure client-side keyframe proposer that feeds into `CW-S04` extrema validation rather than driving actuators directly.
+
+## 22 October review decisions
+
+The review of `cbe826e` through `2dd11d4` supports retaining the two opt-in labs
+and the boundary between streamed visuals and model/physics truth. Passing
+synthetic verification does not complete the following product integrations.
+
+| Review suggestion or claim | Decision and required evidence |
+| --- | --- |
+| Reuse the bounded transport and integer clock for CW-S02 | Reuse the ownership/pacing design after freezing the MuJoCo model's snapshot layout and dt. The current transport is a visual-only, single-producer/single-consumer protocol with planar payload sizes; do not send controls through it or use dropped visual snapshots as complete capture. A stalled runtime must stop explicitly. |
+| Build a pinned browser MuJoCo worker next | Accept as the next runtime slice after the CW-S01 source/handoff gate. Pin engine source/version/build/bytes; consume the compiler's actual model bundle and joint/actuator order. Compare native/browser FK, mass/inertia and short rollouts with frozen tolerances, then exercise per-substep control veto, complete capture, stale-generation rejection, stop, hidden-page and worker failure. The planar lab is no fallback for an unsupported model. |
+| Add an optional workbench backdrop to assembly authoring | Defer editor adoption until named-device measurements and view integration evidence exist. The backdrop must leave assembly bytes/digest, revision, DRC/BOM and authored picking/snapping unchanged; test delayed/corrupt tiles during edits, undo/redo and draft replacement. Start off by default, with keyboard controls and a visible return to the plain view. |
+| Add beginner Robot Moments | Accept under CW-S04 after its bounded runtime dependency. Start with one explicit joint gesture, visible units, manual keyframes, analytical position/velocity/acceleration/jerk bounds, edit invalidation and stop/replay evidence. Optional LLM drafting uses the same validator; neither LLM nor ONNX is required for the first lesson. |
+| Claim Chromebook/tablet survival or a freeze-free main thread | Do not adopt the claim from desktop functional tests. Record named hardware/browser, available APIs, peak memory where measurable, UI task/frame distributions, pacing failures and thermal/load conditions. Offscreen workers reduce work on the UI thread but still compete for device resources. Capability checks alone are not device qualification. |
+| Describe the 2 MiB cache as a strict total-memory bound | Correct the interpretation: it is an estimated tile-content budget. Decoder heaps, encoded in-flight data, renderer resources, GPU allocations and browser overhead are additional. The [static scene record](static_scene_streaming.md#resource-and-fault-behavior) owns the limits and reported measurements. |
+| Infer deterministic real-time operation from fixed ticks or a lock-free ring | Retain integer simulation time and atomic ownership; make no hard real-time, cross-device bitwise-determinism or physical-stop guarantee. The existing [performance record](browser_performance_pipeline.md) already limits these claims; no engine rewrite is justified by this review. |
+| Treat Google Earth's exact internal stack as established | Keep the documented C++/Wasm and background-streaming precedent from [Google's case study](https://web.dev/case-studies/earth-webassembly). Public OGC support in a Google Maps API does not establish all Earth internals; current WebGPU/SIMD, exact triangle counts and zero-GC assertions remain unverified. No dependency change follows from that analogy. |
+
+One immediate compatibility fix follows from the beginner-device review:
+the performance lab disables **Compare all three** when SAB or isolation is
+unavailable and retains explicit transferable measurement. Its browser checks
+cover both missing capabilities without recording unavailable pipelines as
+successful runs. Broader MuJoCo, backdrop and timeline work remains in the
+[delivery schedule](central_world_remaining_delivery_schedule.md).

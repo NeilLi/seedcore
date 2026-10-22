@@ -105,6 +105,14 @@ adapter, OffscreenCanvas or API fails explicitly; the authoring editor remains
 available. Transfer mode avoids SAB, but still needs worker WebGPU. No fallback
 changes the numerical engine or reports a different backend under the same name.
 
+When shared memory or isolation is unavailable, shared pipeline choices and
+**Compare all three** are disabled with an explanation. **Run measurement**
+continues to offer transferable matrices, subject to the same worker/WebGPU
+requirements. Completing that run does not imply the shared pipelines ran.
+Browser regression checks exercise both a missing SAB constructor and missing
+isolation, including successful transferable completion and disabled comparison
+afterward. This capability behavior is not a Chromebook/tablet qualification.
+
 Build-time and worker-startup SHA-256 checks bind the exact existing Wasm bytes.
 The performance document and physics worker receive CSP `'wasm-unsafe-eval'`; no
 JavaScript `'unsafe-eval'` or inline scripts are allowed. The editor's original

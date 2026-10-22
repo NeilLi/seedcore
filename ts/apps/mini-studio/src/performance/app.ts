@@ -5,10 +5,12 @@ const records:Record<string,unknown>[]=[];
 let generation=0,active=false,abort:((reason:string)=>void)|undefined;
 let latestPhysics:Record<string,any>={},latestRender:Record<string,any>={};
 const capabilities={secureContext:isSecureContext,crossOriginIsolated,sharedMemory:typeof SharedArrayBuffer!=='undefined',offscreen:typeof HTMLCanvasElement.prototype.transferControlToOffscreen==='function',webgpu:'gpu' in navigator};
-el('capabilities').textContent=`WebGPU ${capabilities.webgpu?'exposed':'unavailable'} · OffscreenCanvas ${capabilities.offscreen?'available':'unavailable'} · shared memory ${capabilities.crossOriginIsolated&&capabilities.sharedMemory?'available':'unavailable'}`;
-for(const option of el<HTMLSelectElement>('mode').options)if(option.value!=='transfer'&&(!capabilities.crossOriginIsolated||!capabilities.sharedMemory))option.disabled=true;
+const sharedAvailable=capabilities.secureContext&&capabilities.crossOriginIsolated&&capabilities.sharedMemory;
+el('capabilities').textContent=`WebGPU ${capabilities.webgpu?'exposed':'unavailable'} · OffscreenCanvas ${capabilities.offscreen?'available':'unavailable'} · shared memory ${sharedAvailable?'available':'unavailable'}`;
+for(const option of el<HTMLSelectElement>('mode').options)if(option.value!=='transfer'&&!sharedAvailable)option.disabled=true;
+compare.title=sharedAvailable?'Run the three pipelines in sequence.':'Comparing all three requires shared memory. Run transferable matrices on this browser.';
 function status(text:string,state:string) {el('status').textContent=text;el('status').dataset.state=state;}
-function controls(busy:boolean) {active=busy;start.disabled=compare.disabled=busy;stopButton.disabled=!busy;el<HTMLFieldSetElement>('settings').disabled=busy;exportButton.disabled=busy||!records.length;}
+function controls(busy:boolean) {active=busy;start.disabled=busy;compare.disabled=busy||!sharedAvailable;stopButton.disabled=!busy;el<HTMLFieldSetElement>('settings').disabled=busy;exportButton.disabled=busy||!records.length;}
 function config():LabConfig {return validateLabConfig({mode:el<HTMLSelectElement>('mode').value,chains:Number(el<HTMLSelectElement>('chains').value),hz:Number(el<HTMLSelectElement>('hz').value),seconds:Number(el<HTMLSelectElement>('seconds').value)});}
 function format(n:unknown,digits=1) {return typeof n==='number'&&Number.isFinite(n)?n.toFixed(digits):'—';}
 function display() {
@@ -85,6 +87,7 @@ async function run(c:LabConfig):Promise<boolean> {
 }
 start.onclick=async()=>{controls(true);try{await run(config());}finally{controls(false);}};
 compare.onclick=async()=>{
+  if(!sharedAvailable)return;
   controls(true);
   try {const c=config();for(const mode of ['transfer','shared','gpu'] as const)if(!await run({...c,mode}))break;}
   finally{controls(false);}
@@ -96,3 +99,4 @@ exportButton.onclick=()=>{
   const url=URL.createObjectURL(new Blob([JSON.stringify(report(),null,2)+'\n'],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='seedcore-browser-performance.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 controls(false);updateRecords();
+if(!sharedAvailable)status('Shared memory is unavailable here. Run transferable matrices or return to assembly authoring.','idle');

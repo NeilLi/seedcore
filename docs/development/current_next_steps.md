@@ -1,6 +1,6 @@
 # Current Next Steps
 
-Date: 2026-10-21
+Date: 2026-10-22
 Status: Canonical active execution queue — Phase 2 offline and CW-S01 compiler/parity slices delivered locally; real starter readiness, browser/live and physical gates open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
@@ -49,6 +49,10 @@ On 22 October the supporting [static scene lab](robotics/static_scene_streaming.
 adds pinned NASA HLOD traversal, original Draco meshes, cache/download/decode
 bounds, fixed-origin display rebasing and degraded coarse fallback. It is a
 separate visual experiment; it does not add collision geometry or close CW-S02.
+The [22 October review decisions](robotics/browser_robotics_studio_stack_architecture.md#22-october-review-decisions)
+retain CW-S02 engine/model/control/capture qualification as the next runtime
+slice. An editor backdrop remains optional view work; beginner Robot Moments
+follow the bounded runtime and gesture checks, without requiring a trained policy.
 
 The user-selected next product workstream is the
 [Central World Phase 1 foundation and 12-week plan](robotics/central_world_engineering_plan.md).
