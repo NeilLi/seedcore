@@ -87,6 +87,33 @@ def test_performance_lab_static_allowlist_and_wasm_csp(tmp_path):
     assert lab.get("/performance/../secret.js").status_code == 404
 
 
+def test_static_scene_is_local_pinned_data_not_an_execution_or_general_file_route(client, tmp_path):
+    result = client.get("/scene-assets/scene.json")
+    assert result.status_code == 200
+    manifest = result.json()
+    assert manifest["scope"] == "visual_only"
+    assert manifest["physicalAcceptance"] is False
+    assert manifest["executionAuthority"] == "none"
+    for asset in [manifest["tileset"], *manifest["assets"]]:
+        response = client.get("/scene-assets/" + asset["uri"])
+        assert response.status_code == 200
+        assert len(response.content) == asset["bytes"]
+        assert sha256(response.content) == asset["sha256"]
+    for name in ["secret.json", "arbitrary.glb", "../AGENTS.md", "coarse.stl"]:
+        assert client.get("/scene-assets/" + name).status_code == 404
+    assert client.get("/scene-assets/scene.json", headers={"Origin": "https://outside.example"}).status_code == 403
+    for name in ["scene.html", "scene-worker.js", "scene.js", "index.html"]:
+        (tmp_path / name).write_bytes(b"fixture")
+    lab = TestClient(create_app(web_root=tmp_path))
+    for name in ["scene.html", "scene-worker.js"]:
+        response = lab.get("/" + name)
+        csp = response.headers["Content-Security-Policy"]
+        assert "worker-src 'self' blob:" in csp and "'wasm-unsafe-eval'" in csp
+        assert "'unsafe-eval'" not in csp
+        assert response.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
+    assert "worker-src 'self' blob:" not in lab.get("/").headers["Content-Security-Policy"]
+
+
 def test_placement_palette_keeps_exact_catalog_and_part_bytes(client):
     result = client.get("/api/placement-catalog")
     assert result.status_code == 200

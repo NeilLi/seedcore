@@ -1,0 +1,123 @@
+{
+  "asset": {
+    "version": "1.1"
+  },
+  "geometricError": 0.06,
+  "root": {
+    "boundingVolume": {
+      "box": [
+        0,
+        0,
+        -0.04,
+        0.6,
+        0,
+        0,
+        0,
+        0.6,
+        0,
+        0,
+        0,
+        0.04
+      ]
+    },
+    "geometricError": 0.06,
+    "refine": "REPLACE",
+    "content": {
+      "uri": "coarse.glb"
+    },
+    "children": [
+      {
+        "boundingVolume": {
+          "box": [
+            -0.3,
+            -0.3,
+            -0.04,
+            0.29,
+            0,
+            0,
+            0,
+            0.29,
+            0,
+            0,
+            0,
+            0.04
+          ]
+        },
+        "geometricError": 0,
+        "refine": "REPLACE",
+        "content": {
+          "uri": "detail-0.glb"
+        }
+      },
+      {
+        "boundingVolume": {
+          "box": [
+            0.3,
+            -0.3,
+            -0.04,
+            0.29,
+            0,
+            0,
+            0,
+            0.29,
+            0,
+            0,
+            0,
+            0.04
+          ]
+        },
+        "geometricError": 0,
+        "refine": "REPLACE",
+        "content": {
+          "uri": "detail-1.glb"
+        }
+      },
+      {
+        "boundingVolume": {
+          "box": [
+            -0.3,
+            0.3,
+            -0.04,
+            0.29,
+            0,
+            0,
+            0,
+            0.29,
+            0,
+            0,
+            0,
+            0.04
+          ]
+        },
+        "geometricError": 0,
+        "refine": "REPLACE",
+        "content": {
+          "uri": "detail-2.glb"
+        }
+      },
+      {
+        "boundingVolume": {
+          "box": [
+            0.3,
+            0.3,
+            -0.04,
+            0.29,
+            0,
+            0,
+            0,
+            0.29,
+            0,
+            0,
+            0,
+            0.04
+          ]
+        },
+        "geometricError": 0,
+        "refine": "REPLACE",
+        "content": {
+          "uri": "detail-3.glb"
+        }
+      }
+    ]
+  }
+}

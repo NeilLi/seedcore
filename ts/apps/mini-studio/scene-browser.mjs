@@ -1,0 +1,63 @@
+// Real-browser qualification of the bounded static scene, not a CAD-scale benchmark.
+import {chromium} from 'playwright';
+import {spawn} from 'node:child_process';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+const root=fileURLToPath(new URL('../../../',import.meta.url)),out=path.join(root,'artifacts/robotics/static-scene');await mkdir(out,{recursive:true});
+const report={scope:'synthetic_visual_streaming',physicalAcceptance:false,executionAuthority:'none',checks:[],errors:[],expectedFaultLogs:[]};
+const port=process.env.SEEDCORE_SCENE_TEST_PORT||'8771',base=`http://127.0.0.1:${port}`;
+const server=spawn(process.env.SEEDCORE_TEST_PYTHON||path.join(root,'.venv/bin/python'),['scripts/robotics/serve_mini_studio.py','--port',port],{cwd:root,stdio:['ignore','pipe','pipe']});
+let log='',browser,testingCorruption=false;server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
+const passed=name=>{report.checks.push(name);console.log(`PASS ${name}`);};
+const measurement=async page=>JSON.parse(await page.locator('#scene-json').textContent());
+const waitFor=async(page,fn,timeout=15000)=>page.waitForFunction(fn,null,{timeout});
+try {
+  for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(log);try{if(log.includes('Uvicorn running on')&&(await fetch(base+'/api/starter')).ok)break;}catch{}if(i===99)throw Error('Server readiness timeout');await new Promise(r=>setTimeout(r,100));}
+  const channel=process.env.SEEDCORE_BROWSER_CHANNEL||'chrome';browser=await chromium.launch({headless:true,...(channel==='bundled'?{}:{channel})});report.browser=browser.version();
+  const context=await browser.newContext({viewport:{width:1280,height:1000},acceptDownloads:true}),page=await context.newPage();
+  page.on('pageerror',e=>report.errors.push(e.message));page.on('console',m=>{if(m.type()!=='error'||/Failed to load resource/.test(m.text()))return;
+    if(testingCorruption&&(/Static scene rejected: asset SHA-256 mismatch/.test(m.text())||/^TilesRenderer : Failed to load tile at url "detail-[0-3]\.glb"\.$/.test(m.text())))report.expectedFaultLogs.push(m.text());else report.errors.push(m.text());});
+  await page.goto(base+'/scene.html');assert.equal(await page.evaluate(()=>crossOriginIsolated),true);
+  await page.selectOption('#scene-seconds','30');await page.click('#scene-start');
+  await waitFor(page,()=>{const d=JSON.parse(document.querySelector('#scene-json').textContent);return d.metrics.staticStatus==='ready'||document.querySelector('#scene-status').dataset.state==='failed';});
+  const initial=await measurement(page);report.initial=initial;
+  assert.equal(await page.locator('#scene-status').getAttribute('data-state'),'running',await page.locator('#scene-status').textContent());
+  assert.equal(initial.metrics.renderer,'three-webgl2-offscreen');assert.equal(initial.metrics.tilesRendererVersion,'0.5.3');
+  await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.tick>20);
+  passed('pinned NASA renderer and Draco decode render in OffscreenCanvas beside active Wasm physics');
+  await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.visibleUris?.includes('coarse.glb'));
+  report.overview=await measurement(page);assert.equal(report.overview.metrics.visibleTriangles,48);
+  await page.selectOption('#scene-distance','1.2');
+  await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.visibleUris?.some(u=>u.startsWith('detail-')));
+  report.detail=await measurement(page);assert.ok(report.detail.metrics.visibleTriangles>48);assert.ok(report.detail.metrics.tick>report.overview.metrics.tick);
+  await page.screenshot({path:path.join(out,'detail.png'),fullPage:true});
+  assert.ok(report.detail.metrics.peakDownloads<=2);assert.ok(report.detail.metrics.residentTiles<=6);assert.ok(report.detail.metrics.residentGeometryBytes<=2097152);
+  passed('camera/SSE refinement loads detail with bounded downloads, cache and independent physics ticks');
+  assert.ok(report.detail.metrics.origin_m[0]>6e6);assert.ok(report.detail.metrics.cameraLocal.every(v=>Math.abs(v)<2));
+  passed('large synthetic world origin stays outside float32 scene/camera coordinates');
+  await page.selectOption('#scene-distance','5');await page.locator('#scene-sse').fill('64');await page.locator('#scene-sse').dispatchEvent('input');
+  await waitFor(page,()=>{const m=JSON.parse(document.querySelector('#scene-json').textContent).metrics;return m.visibleUris?.includes('coarse.glb')&&m.evictions>0;});
+  report.eviction=await measurement(page);passed('zoom-out returns to coarse content and evicts unused detail');
+  await page.screenshot({path:path.join(out,'desktop.png'),fullPage:true});await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.screenshot({path:path.join(out,'mobile.png'),fullPage:true});await page.setViewportSize({width:1280,height:1000});passed('desktop/mobile controls and comparison metrics fit without overflow');
+  const download=page.waitForEvent('download');await page.click('#scene-export');const file=await download;await file.saveAs(path.join(out,'measurement.json'));assert.equal(JSON.parse(await readFile(path.join(out,'measurement.json'),'utf8')).executionAuthority,'none');passed('unsigned visual-only measurements export with explicit scope');
+  await page.click('#scene-stop');await page.selectOption('#scene-cache','3');await page.click('#scene-start');await page.selectOption('#scene-distance','1.2');await page.locator('#scene-sse').fill('1');await page.locator('#scene-sse').dispatchEvent('input');
+  await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.tick>500);
+  report.constrained=await measurement(page);assert.ok(report.constrained.metrics.residentTiles<=3);assert.ok(report.constrained.metrics.visibleTiles>=1);passed('constrained cache retains visible coverage while limiting resident tiles');
+  await page.click('#scene-stop');await page.selectOption('#scene-cache','6');
+  testingCorruption=true;
+  await page.route('**/scene-assets/detail-*.glb',async route=>{const name=new URL(route.request().url()).pathname.split('/').at(-1),data=await readFile(path.join(root,'packages/scene-fixtures/mini-workbench',name));data[data.length-1]^=1;await route.fulfill({status:200,contentType:'model/gltf-binary',body:data});});
+  await page.click('#scene-start');await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.failures>0);
+  const degraded=await measurement(page),tick=degraded.metrics.tick;assert.equal(degraded.metrics.staticStatus,'degraded');
+  await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.tick>500);
+  const continued=await measurement(page);report.degraded=continued;assert.ok(continued.metrics.tick>tick);assert.ok(continued.metrics.visibleUris.includes('coarse.glb'));assert.equal(continued.metrics.coarseFallbackLatched,true);
+  passed('corrupt detail is rejected before decoding; coarse visual and independent robot continue');
+  await page.click('#scene-stop');await page.unroute('**/scene-assets/detail-*.glb');
+  await page.route('**/scene-decoders/draco_decoder.wasm',async route=>{const data=await readFile(path.join(root,'ts/apps/mini-studio/dist/scene-decoders/draco_decoder.wasm'));data[0]^=1;await route.fulfill({status:200,contentType:'application/wasm',body:data});});
+  await page.click('#scene-start');await waitFor(page,()=>document.querySelector('#scene-status').dataset.state==='failed');assert.match(await page.locator('#scene-status').textContent(),/SHA-256 mismatch/);await page.unroute('**/scene-decoders/draco_decoder.wasm');passed('corrupt executable decoder fails initialization explicitly');
+  await page.click('#scene-start');await waitFor(page,()=>JSON.parse(document.querySelector('#scene-json').textContent).metrics.tick>10);
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{value:true,configurable:true});document.dispatchEvent(new Event('visibilitychange'));});assert.equal(await page.locator('#scene-status').getAttribute('data-state'),'interrupted');const stoppedTick=(await measurement(page)).metrics.tick;await page.waitForTimeout(150);assert.equal((await measurement(page)).metrics.tick,stoppedTick);passed('hidden-page interruption terminates workers and fences late results');
+  assert.deepEqual(report.errors,[]);report.status='checks_passed';
+}catch(error){report.status='checks_failed';report.failure=String(error.stack||error);console.error(report.failure);process.exitCode=1;}
+finally{await browser?.close();server.kill('SIGTERM');await writeFile(path.join(out,'browser-verification.json'),JSON.stringify(report,null,2)+'\n');await writeFile(path.join(out,'server.log'),log);}

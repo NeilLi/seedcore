@@ -1,7 +1,21 @@
 {
-  "name": "@seedcore/robot-canvas", "version": "0.1.0", "private": true, "type": "module",
-  "main": "dist/index.js", "types": "dist/index.d.ts",
-  "scripts": {"build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit"},
-  "dependencies": {"@seedcore/contracts": "0.1.0", "three": "0.181.1"},
-  "devDependencies": {"@types/three": "0.181.0"}
+  "name": "@seedcore/robot-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {".": {"types":"./dist/index.d.ts","default":"./dist/index.js"},"./static": {"types":"./dist/staticScene.d.ts","default":"./dist/staticScene.js"}},
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@seedcore/contracts": "0.1.0",
+    "3d-tiles-renderer": "0.5.3",
+    "three": "0.181.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.181.0"
+  }
 }

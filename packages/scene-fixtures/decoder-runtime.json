@@ -1,0 +1,16 @@
+{
+  "schema": "seedcore.scene-decoder-runtime.v1",
+  "threeVersion": "0.181.1",
+  "assets": [
+    {
+      "uri": "draco_wasm_wrapper.js",
+      "bytes": 58456,
+      "sha256": "8bb2952d2ba7d67e1414f8df819410cb0434a666be53f671fff75f68843d76f6"
+    },
+    {
+      "uri": "draco_decoder.wasm",
+      "bytes": 192420,
+      "sha256": "a680d927bed9cb864ddbd63521868891af2bfbe755092761b4837487618df8ac"
+    }
+  ]
+}

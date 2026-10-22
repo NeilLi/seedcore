@@ -1,0 +1,53 @@
+{
+  "schema": "seedcore.static-scene.v1",
+  "scope": "visual_only",
+  "physicalAcceptance": false,
+  "executionAuthority": "none",
+  "origin_m": [
+    6371000,
+    1000000,
+    -2000000
+  ],
+  "tileset": {
+    "uri": "tileset.json",
+    "bytes": 2027,
+    "sha256": "07837b70b6944785a038536313f47d081282bf5c086b703aac5e1439adfe7d29"
+  },
+  "assets": [
+    {
+      "uri": "coarse.glb",
+      "bytes": 1800,
+      "sha256": "fbb458056669f2134700f1f0f58d15101ee8f96ca65cab8e79bf36cb4418e0bc",
+      "triangles": 48,
+      "decodedGeometryBytes": 2880
+    },
+    {
+      "uri": "detail-0.glb",
+      "bytes": 7752,
+      "sha256": "949bde8eab214a6419b1a6855b20baa4fc0bcf3a68d903933536a6ab7b8ed323",
+      "triangles": 780,
+      "decodedGeometryBytes": 46800
+    },
+    {
+      "uri": "detail-1.glb",
+      "bytes": 7740,
+      "sha256": "f9c137ac1a2face3788c1662129ae44cf6025e1c7216f0c184ec4b7deeb25fa6",
+      "triangles": 780,
+      "decodedGeometryBytes": 46800
+    },
+    {
+      "uri": "detail-2.glb",
+      "bytes": 7752,
+      "sha256": "4deb69d82413718094f8b6ac5ba67ee5896cbce1ca8b6075db680f5c803e0501",
+      "triangles": 780,
+      "decodedGeometryBytes": 46800
+    },
+    {
+      "uri": "detail-3.glb",
+      "bytes": 7752,
+      "sha256": "66dd7499e3d8f89caac44fdc7262f5cd30493a29524bf82c1cd077fb72c928ca",
+      "triangles": 780,
+      "decodedGeometryBytes": 46800
+    }
+  ]
+}
