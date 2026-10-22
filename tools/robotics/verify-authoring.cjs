@@ -13,7 +13,7 @@ function run(label,command,args){
 }
 try{
  run('generated schema and CSP validator',process.execPath,['tools/robotics/generate-assembly-schema.cjs','--check']);
- for(const workspace of ['contracts','drc-solver','robot-canvas','mini-studio']) {
+ for(const workspace of ['contracts','drc-solver','wasm-sim-bridge','robot-canvas','mini-studio']) {
   fs.rmSync(path.join(root,`ts/${workspace==='mini-studio'?'apps':'packages'}/${workspace}/dist`),{recursive:true,force:true});
   run(`${workspace} source build`,'npm',['--prefix','ts','run','--workspace',`@seedcore/${workspace}`,'build']);
  }
@@ -28,7 +28,7 @@ finally{
  report.source_revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
  report.working_tree_dirty=Boolean(spawnSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).stdout.trim());
  const tracked=spawnSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.trim().split('\n');
- const prefixes=['ts/packages/drc-solver/','ts/packages/robot-canvas/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json'];
+ const prefixes=['ts/packages/drc-solver/','ts/packages/robot-canvas/','ts/packages/wasm-sim-bridge/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-','ts/tests/browser-pipeline','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json','apps/mini-robot-simulator/physics-build.json'];
  report.inputs=tracked.filter(p=>prefixes.some(prefix=>p.startsWith(prefix))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
  report.outputs=['ts/apps/mini-studio/dist/app.js','ts/apps/mini-studio/dist/index.html','ts/apps/mini-studio/dist/app.css','ts/apps/mini-studio/dist/third-party-notices.txt'].filter(p=>fs.existsSync(path.join(root,p))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
  for(const scope of ['cw-a02','cw-a03','cw-a04']){const target=path.join(root,`artifacts/robotics/${scope}/verification.json`);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,JSON.stringify(report,null,2)+'\n');}

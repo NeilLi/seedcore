@@ -1,7 +1,14 @@
 import {build} from 'esbuild';
 import {mkdir,copyFile,readFile,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 await mkdir('dist',{recursive:true});
 await build({entryPoints:['src/app.ts'],outfile:'dist/app.js',bundle:true,format:'esm',platform:'browser',target:'es2022',legalComments:'inline'});
-for(const file of ['index.html','app.css','favicon.svg']) await copyFile(`src/${file}`,`dist/${file}`);
+const physicsRoot='../../../apps/mini-robot-simulator';
+const pin=JSON.parse(await readFile(`${physicsRoot}/physics-build.json`,'utf8'));
+const wasm=await readFile(`${physicsRoot}/mini-physics.wasm`);
+if(wasm.length!==pin.bytes||createHash('sha256').update(wasm).digest('hex')!==pin.sha256) throw new Error('Rebuild pinned SIM-3 physics before building the performance lab');
+await build({entryPoints:{performance:'src/performance/app.ts','lab-physics':'src/performance/physics-worker.ts','lab-render':'src/performance/render-worker.ts'},outdir:'dist',bundle:true,format:'esm',platform:'browser',target:'es2022',legalComments:'inline',define:{__LAB_PHYSICS_SHA256__:JSON.stringify(pin.sha256),__LAB_PHYSICS_BYTES__:String(pin.bytes)}});
+await writeFile('dist/lab-physics.wasm',wasm);
+for(const file of ['index.html','app.css','favicon.svg','performance.html','performance.css']) await copyFile(`src/${file}`,`dist/${file}`);
 const notices = await Promise.all(['three/LICENSE','ajv/LICENSE','fast-deep-equal/LICENSE'].map(async name=>`${name}\n${await readFile(`../../node_modules/${name}`,'utf8')}`));
 await writeFile('dist/third-party-notices.txt',notices.join('\n\n'));

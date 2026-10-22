@@ -1,6 +1,23 @@
 {
-  "name": "@seedcore/mini-studio", "version": "0.1.0", "private": true, "type": "module",
-  "scripts": {"build": "node build.mjs", "typecheck": "tsc -p tsconfig.json --noEmit", "test:browser": "node browser-check.mjs"},
-  "dependencies": {"@seedcore/contracts": "0.1.0", "@seedcore/drc-solver": "0.1.0", "@seedcore/robot-canvas": "0.1.0"},
-  "devDependencies": {"esbuild": "0.28.2", "playwright": "1.61.1"}
+  "name": "@seedcore/mini-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:browser": "node browser-check.mjs",
+    "test:performance": "node performance-browser.mjs"
+  },
+  "dependencies": {
+    "@seedcore/contracts": "0.1.0",
+    "@seedcore/drc-solver": "0.1.0",
+    "@seedcore/robot-canvas": "0.1.0",
+    "@seedcore/wasm-sim-bridge": "0.1.0"
+  },
+  "devDependencies": {
+    "@webgpu/types": "0.1.74",
+    "esbuild": "0.28.2",
+    "playwright": "1.61.1"
+  }
 }

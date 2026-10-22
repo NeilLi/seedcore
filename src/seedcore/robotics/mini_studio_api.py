@@ -40,11 +40,14 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
         if origin is not None and origin != str(request.base_url).rstrip("/"):
             return JSONResponse({"detail": "same-origin authoring only"}, status_code=403)
         response = await call_next(request)
+        # Only the opt-in lab and its physics worker may compile pinned Wasm.
+        # The editor retains its existing no-eval policy; no arbitrary JS eval.
+        wasm_policy = " 'wasm-unsafe-eval'" if request.url.path in {"/performance.html", "/lab-physics.js"} else ""
         response.headers.update({
             "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp",
             "Cross-Origin-Resource-Policy": "same-origin", "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            "Content-Security-Policy": f"default-src 'self'; script-src 'self'{wasm_policy}; worker-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         })
         return response
 
@@ -91,8 +94,9 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
     @app.get("/{page:path}")
     def page(page: str):
         name = page or "index.html"
-        if name not in {"index.html", "app.js", "app.css", "third-party-notices.txt", "favicon.svg"} or not (web_root / name).is_file():
+        if name not in {"index.html", "app.js", "app.css", "third-party-notices.txt", "favicon.svg",
+                        "performance.html", "performance.js", "performance.css", "lab-physics.js", "lab-render.js", "lab-physics.wasm"} or not (web_root / name).is_file():
             raise HTTPException(404, "build Mini Studio before serving")
-        return FileResponse(web_root / name)
+        return FileResponse(web_root / name, media_type="application/wasm" if name.endswith(".wasm") else None)
 
     return app
