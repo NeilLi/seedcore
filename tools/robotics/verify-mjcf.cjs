@@ -35,7 +35,7 @@ finally {
  report.source_revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
  report.working_tree_dirty=Boolean(spawnSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).stdout.trim());
  const tracked=spawnSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.trim().split('\n');
- const prefixes=['ts/packages/wasm-sim-bridge/','ts/packages/contracts/src/','ts/packages/drc-solver/src/','ts/tests/assembly-mjcf','ts/tests/fixtures/cw-s01','tools/robotics/verify-mjcf','tools/robotics/export-cw-s01','tools/robotics/generate-assembly-schema','tests/test_cw_s01_native','src/seedcore/robotics/assembly.py','src/seedcore/robotics/component_registry.py','packages/component-registry/','ts/package-lock.json'];
+ const prefixes=['packages/simulation-fixtures/cw-s01/','ts/apps/mini-studio/src/simulation.ts','ts/packages/wasm-sim-bridge/','ts/packages/contracts/src/','ts/packages/drc-solver/src/','ts/tests/assembly-mjcf','ts/tests/fixtures/cw-s01','tools/robotics/verify-mjcf','tools/robotics/export-cw-s01','tools/robotics/generate-assembly-schema','tests/test_cw_s01_native','src/seedcore/robotics/assembly.py','src/seedcore/robotics/component_registry.py','packages/component-registry/','ts/package-lock.json'];
  report.inputs=tracked.filter(p=>prefixes.some(prefix=>p.startsWith(prefix))&&fs.statSync(path.join(root,p)).isFile()).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
  fs.writeFileSync(path.join(out,'verification.json'),JSON.stringify(report,null,2)+'\n');
  console.log(`CW-SIM-01: ${report.status}; artifacts/robotics/cw-s01/verification.json`);

@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-10-22
-Status: Phase 2 offline and CW-S01 synthetic compiler/native-parity slices passed locally; CW-S01 real-source handoff and CW-S02 browser acceptance remain open
+Date: 2026-10-23
+Status: Phase 2 offline and CW-S01 compiler/native/Studio handoff passed locally; CW-S02 is the single next package; real-source/physical gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -31,8 +31,11 @@ adds local snapping/ghost/numeric/subtree evidence. The
 software scope with pure worker DRC, routing proposals, field-linked findings,
 3D rotated/parallel-axis mass/inertia and unknown-aware BOM. The **CW-S01 restricted
 assembly-to-MJCF compiler/native-parity slice** is implemented on synthetic
-supported serial-tabletop fixtures; real-source readiness/handoff is next,
-followed by separately pinned CW-S02 browser runtime qualification.
+supported serial-tabletop fixtures. The 23 October offline Studio handoff adds
+a separately pinned synthetic reference, readiness inspection and deterministic
+XML/model exports. **CW-S02 is the single next implementation package** for
+pinned browser worker/engine/model/control/capture qualification. Real-source
+physical readiness remains open under CW-D01.
 Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
 Missing Microduck checkpoint outputs block its locomotion policy lane, not a
@@ -122,7 +125,7 @@ data. Static rendering is independent of model/control/capture qualification.
 
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
-| CW-S01 · W6 | Restricted assembly-to-MJCF compiler; `ts/packages/wasm-sim-bridge` | CW-A01, CW-A04; explicit joint model | Simulation: first fixed-base tabletop subset, generated primitive geometry/inertials/actuators, native MuJoCo compile/FK/mass/range comparison and unsupported-subset report |
+| CW-S01 · W6 (offline handoff passed locally) | Restricted assembly-to-MJCF compiler and Studio reference/export handoff; `ts/packages/wasm-sim-bridge` | CW-A01, CW-A04; explicit joint model | Simulation: first fixed-base tabletop subset, generated primitive geometry/inertials/actuators, native MuJoCo compile/FK/mass/range comparison and unsupported-subset report |
 | CW-S02 · W7 | Pinned browser MuJoCo worker adapter, clocks, bounded buffers and runtime profiles | CW-S01; selected engine/build review | Simulation + Studio: native/browser parity, worker/resource/fault report, isolation/header/embedding tests and named-device timing; no silent planar fallback |
 | CW-S03 · W7–W8 | Compatible ONNX adapter and skill manifest candidate; `packages/skill-packages` | CW-S02 plus independent policy/model references | Simulation/policy: policy bytes/license/export provenance, explicit observation/action map and input/output/timing parity; unsupported body/policy combinations refuse to run |
 | CW-S04 · W8 | Joint/LED gesture timeline, bounded interpolation, simulation trace and replay projection | CW-A01, CW-S02; CW-S03 only for policy-driven behaviors | Studio + verification: authored wave/tilt fixture, curve-extrema/loop/edit tests, stop/fault/coverage report and scoped outcome display |
@@ -137,8 +140,16 @@ The [21 October CW-S01 record](central_world_cw_s01_mjcf.md) delivers the local
 compiler/native-parity slice on synthetic sources. The user-approved separate
 offline readiness policy defers only `MECHANICAL_PROXY_UNQUALIFIED`; the full
 DRC result stays unchanged and all other findings block compilation. The real
-starter remains blocked; resolving its data/handoff is separate from passing
-the synthetic slice. CW-S02/browser and hardware acceptance remain open.
+starter remains blocked (10 full DRC findings / 9 simulation blockers). The
+[23 October Studio handoff](central_world_cw_s01_mjcf.md#23-october-studio-handoff-and-offline-reference)
+now supplies an explicitly labeled synthetic two-joint reference with exact
+source pins, `physicalAcceptance: false`, readiness/manifest inspection, and
+canonical MJCF/model copy/download. Exports are fenced by revision, assembly,
+catalog, DRC digest and authority epoch; edits/settings and undo/redo force
+current checks. Local evidence passed 18 compiler TS + 15 native tests, and
+134 workspace TS + 22 API + 27 Chrome groups + 2 downloaded-bundle native tests.
+This unblocks CW-S02 entry only. Source qualification, general browser runtime
+acceptance and hardware gates remain open.
 
 CW-S02 explicitly distinguishes the current planar custom engine from general
 MuJoCo Wasm. Freeze engine version, compiler options, model digest, physics dt,

@@ -6,7 +6,8 @@ import {
   assessSimulationReadiness, assertCompiledModelCurrent, compileAssemblyToMjcf,
   CwS01Error, type CompilerInput, type CompilerErrorCode,
 } from '../packages/wasm-sim-bridge/src/index.js';
-import { makeSyntheticSimulationInput, realStarterInput, refreshFixture, rewriteFixturePart, snapshotFixture } from './fixtures/cw-s01.js';
+import { makeSyntheticSimulationInput, realStarterInput, refreshFixture, rewriteFixturePart, snapshotFixture, studioReferenceInput } from './fixtures/cw-s01.js';
+import { assertStudioModelCurrent } from '../apps/mini-studio/src/simulation.js';
 
 const rejects = (input: CompilerInput, code?: CompilerErrorCode) => assert.throws(() => compileAssemblyToMjcf(input), error => error instanceof CwS01Error && (!code || error.code === code));
 
@@ -15,10 +16,40 @@ test('CW-S01: actual starter stays blocked; source/catalog/DRC bytes are not rew
   const ready = assessSimulationReadiness(input);
   assert.equal(input.drcReport.disposition,'blocked');
   assert.equal(ready.ready,false);
+  assert.deepEqual(input.drcReport.counts, { blocked: 10, conflict: 0 });
+  assert.equal(ready.blockingFindings.length,9);
   assert.equal(ready.deferredPhysicalFindings.length,1);
   assert.equal(ready.blockingFindings.length,input.drcReport.findings.length-1);
   rejects(input,'DRC_NOT_READY');
   assert.equal(snapshotFixture(input),before);
+});
+
+test('CW-S01: committed Studio reference keeps the full DRC blocked and uses separate synthetic pins', () => {
+  const input = studioReferenceInput(), before = snapshotFixture(input);
+  assert.deepEqual(input.drcReport.findings.map(f => f.code), ['MECHANICAL_PROXY_UNQUALIFIED']);
+  assert.equal(input.catalog.provenance, 'synthetic_fixture');
+  assert.ok(input.assembly.nodes.every(n => n.part_id.startsWith('synthetic.cw-s01.')));
+  const model = compileAssemblyToMjcf(input);
+  assert.deepEqual(model, compileAssemblyToMjcf(input));
+  assert.equal(model.manifest.readiness.physicalAcceptance, false);
+  assert.equal(snapshotFixture(input), before);
+  input.assembly.mechanical_tree.find(e => e.connection_type === 'articulated_joint')!.joint.rest_angle_rad = 0.1;
+  assert.throws(() => compileAssemblyToMjcf(input), /DRC_BINDING_MISMATCH/);
+  refreshFixture(input);
+  assert.notEqual(compileAssemblyToMjcf(input).modelDigest, model.modelDigest);
+});
+
+test('CW-S01: Studio handoff fences every binding and rejects ABA epochs and tampered bytes', () => {
+  const model = compileAssemblyToMjcf(studioReferenceInput());
+  const binding = { revisionDigest: 'a'.repeat(64), authorityEpoch: 1, modelDigest: model.modelDigest,
+    assemblyDigest: model.manifest.assemblyDigest, catalogDigest: model.manifest.catalogDigest, drcDigest: model.manifest.drcDigest };
+  assertStudioModelCurrent(model, binding, binding);
+  for (const field of ['revisionDigest', 'assemblyDigest', 'catalogDigest', 'drcDigest', 'authorityEpoch'] as const) {
+    const changed = { ...binding, [field]: field === 'authorityEpoch' ? 3 : 'b'.repeat(64) };
+    assert.throws(() => assertStudioModelCurrent(model, binding, changed), /Stale simulation handoff/);
+  }
+  const altered = structuredClone(model); altered.xml += ' ';
+  assert.throws(() => assertStudioModelCurrent(altered, binding, binding), /MODEL_BINDING_MISMATCH/);
 });
 
 for (const count of [1,2,3] as const) for (const mode of ['position','torque'] as const) {

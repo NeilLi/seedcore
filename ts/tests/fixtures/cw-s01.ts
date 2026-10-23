@@ -16,6 +16,12 @@ export function realStarterInput(): CompilerInput {
   return { assembly, catalog, drcReport: evaluateAssemblyDrc(assembly, parseDrcCatalogFromRaw(catalog)), options: { actuatorMode: 'position' } };
 }
 
+export function studioReferenceInput(): CompilerInput {
+  const profile = JSON.parse(readFileSync(new URL('../../../packages/simulation-fixtures/cw-s01/reference.json', import.meta.url), 'utf8'));
+  const { assembly, catalog } = profile;
+  return { assembly, catalog, drcReport: evaluateAssemblyDrc(assembly, parseDrcCatalogFromRaw(catalog)), options: { actuatorMode: 'position' } };
+}
+
 type Q4 = [number, number, number, number];
 const mul = (a: Q4, b: Q4): Q4 => {
   const [w,x,y,z] = a, [v,i,j,k] = b;

@@ -52,7 +52,7 @@ flowchart LR
         NATIVE["Separate native MuJoCo / ONNX workbench"]
         PDP["Target live admission boundary<br/>Agent + PDP + qualified executor"]
         PROOF["Python / Rust evidence verification"]
-        MS -.->|"Planned CW-S01 build compilation"| NATIVE
+        MS -.->|"CW-S01 offline synthetic model handoff"| NATIVE
         SIM -->|"Simulation receipts"| PROOF
     end
 
@@ -78,7 +78,7 @@ flowchart LR
 1. **Pick Reusable Parts (`packages/component-registry/`):** Browse the SHA-256-pinned part catalog (`:8770`) across MCUs, servos, sensors, power rails, and brackets.
 2. **Author or LLM-Draft the Next Robot (`ts/apps/mini-studio/`):** Snap parts at `15 mm` / `5°` in Mini Studio (`:8767`) or import an LLM-proposed `seedcore.assembly.v2` JSON draft—strictly rejecting duplicate keys, invalid rest poses, or unpinned catalog hashes.
 3. **Inspect DRC & BOM (`ts/packages/drc-solver/`):** Review bus, GPIO, power, mass/inertia and cost findings. The starter is currently `blocked`; a report does not authorize wiring or battery connection.
-4. **Rehearse a Supported Simulation (`apps/mini-robot-simulator/`, `packages/models/`):** Use prepared planar lessons, the bounded `fast-spine-v1` session rehearsal, or the separate native Microduck workbench. Compiling the custom assembly into simulation remains CW-S01 work.
+4. **Rehearse a Supported Simulation (`apps/mini-robot-simulator/`, `packages/models/`):** Use prepared planar lessons, the bounded `fast-spine-v1` session rehearsal, or the separate native Microduck workbench. Mini Studio can compile eligible serial assemblies and its separate synthetic reference to MJCF; browser runtime acceptance remains CW-S02.
 5. **Inspect Evidence (`src/seedcore/`, `rust/`):** Verify Session Lab's signed simulation receipts. Physical attempts require the accepted Agent/PDP/executor path and hardware evidence gates.
 
 See the [local service map](deploy/local/README.md) for exact URLs and commands.
@@ -106,7 +106,7 @@ Every delivered slice in this repository is backed by reproducible build-from-so
 | **CW1 Component Catalog Foundation** | **Delivered (Proxy Scope)** | Strict `.sc-part.json` v1 schema, 12 draft/proxy component records, original box-proxy GLB meshes, linter, and read-only part viewer; **107 passing registry/model tests**. | `pytest tests/test_component_registry.py -q` |
 | **CW-A01 Assembly v2 Contract** | **Software Exit Passed** | `seedcore.assembly.v2` schema, cross-language `seedcore.jcs-safe-integers.v1` canonical bytes, exact catalog byte pins, `opposed_z_rx_pi` rest poses, explicit proxy `actuator_outputs`, and 5-part `tabletop-starter.sc-assembly.json` (`0.2.0`); **117 Python + 71 Node conformance tests passing**. | `node tools/robotics/verify-assembly.cjs` |
 | **CW-A02–CW-A04 Mini Studio, Snapping, DRC & Unknown-Aware BOM** | **Phase 2 Offline Passed** | Strict duplicate-key raw JSON rejection, deep-frozen 32-entry / 2 MiB revision store, deterministic undo/redo, `authorityEpoch` invalidation, stale-load fencing, `15 mm` / `5°` candidate snapping (`CW-SNAP-01`), pure worker DRC (`CW-DRC-01..03`), routing proposals, 3D rotated/parallel-axis mass/inertia, and unknown-aware BOM; **97 TS + 14 FastAPI + 21 Chrome browser exercise groups passing**. | `node tools/robotics/verify-authoring.cjs --browser` |
-| **CW-S01 Restricted Assembly-to-MJCF Compiler** | **Local Synthetic Slice Passed** | Deterministic primitive serial-chain MJCF, separate offline simulation readiness, source/DRC/model binding, **16 TS + 13 native Python tests** over 12 synthetic models. The actual starter remains blocked; browser/live/hardware acceptance is open. | `node tools/robotics/verify-mjcf.cjs` |
+| **CW-S01 Restricted Assembly-to-MJCF Compiler** | **Local Synthetic Slice Passed** | Deterministic primitive serial-chain MJCF, separate offline simulation readiness, source/DRC/model binding, **18 TS + 15 native Python tests** over 14 synthetic models, plus the Studio readiness inspector and canonical XML/model export handoff. The actual starter remains blocked; browser/live/hardware acceptance is open. | `node tools/robotics/verify-mjcf.cjs` |
 | **Simulation-First `M0` & Bounded Sessions** | **Delivered (Simulation Scope)** | Pinned **Microduck 0.1.0** MJCF ($0.737\text{ kg}$, 14 actuators, **88 Python tests**), read-only `microduck-sim-v1` HAL adapter (`61` obs / `14` actions / `15` servo channels), **16 upstream ONNX (`alpha_walking.onnx`) goldens**, localhost split-screen `fast-spine-v1` session rehearsal, and Python/Rust receipt checks. | `.venv/bin/python scripts/robotics/review_m0_pins.py` |
 | **M0 / CW-D01 Hardware Source Register** | **Inventory Recorded; Qualification Open** | Inventories `ESP32-S3-DevKitC-1-N8R8` and `Feetech STS3215` (TTL half-duplex spec `A/0`, `4–7.4 V` input) reference facts ([`m0_cw_d01_register_2026_10_19.md`](docs/development/robotics/m0_cw_d01_register_2026_10_19.md)). **No hardware is connected or qualified** (`STS3215` page 4 vs. page 8 pin numbering and regulated rail setpoints remain open). | `.venv/bin/python scripts/robotics/freeze_fast_spine_protocol.py` |
 
@@ -127,7 +127,7 @@ caches and origin rebasing beside an independent synthetic robot. Static
 visuals remain outside collision, DRC and execution authority.
 
 ### What Remains Open / Gated
-- **Central World Phase 3–5 (`CW-S01` → `CW-L03`):** Phase 2 offline assembly/DRC and the CW-S01 synthetic compiler/native-parity slice are complete locally. CW-S01 real-source readiness and Studio handoff remain open. Subsequent work is `CW-S02–S04` (browser MuJoCo worker where [`mjswan 0.11.9`](docs/development/robotics/mjswan_integration_assessment.md) is a conditional candidate, ONNX adapter and Robot Moments), `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification and the January alpha review.
+- **Central World Phase 3–5 (`CW-S01` → `CW-L03`):** Phase 2 offline assembly/DRC and the CW-S01 synthetic compiler/native-parity slice are complete locally. CW-S01 offline Studio handoff is available through a separately pinned synthetic reference; real-source physical readiness remains open under CW-D01. CW-S02 is the single next package. Subsequent work is `CW-S02–S04` (browser MuJoCo worker where [`mjswan 0.11.9`](docs/development/robotics/mjswan_integration_assessment.md) is a conditional candidate, ONNX adapter and Robot Moments), `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification and the January alpha review.
 - **Native Microduck & Physical Hardware (`M1–M4` / `G0–G2`):** Independent training-checkpoint export parity (`M1`), live native `M2` velocity/stop sessions, hardware-enrolled signer receipts (`M3`), physical MCU firmware & WebSerial bridge, and measured 1-servo → 3-servo / biped stopping behavior (`M4`).
 
 ---
@@ -239,7 +239,7 @@ npm --prefix ts ci
 # Run CW-A01 v2 build-from-source conformance (117 Python + 71 Node tests)
 node tools/robotics/verify-assembly.cjs
 
-# Run authoring/DRC and compiler workspace regressions (113 TS + 14 API; optional 21 UI groups)
+# Run authoring/DRC/compiler regressions and handoff (134 TS + 22 API + 27 UI groups + 2 native download tests)
 node tools/robotics/verify-authoring.cjs --browser
 
 # Run CW-S01 compiler/negative matrix and pinned native MuJoCo parity (robotics-sim extra required)
@@ -330,7 +330,7 @@ seedcore/
 | **`CW1` & `CW-A01 v2`** | Component Catalog & Assembly v2 Contract | **Passed Locally** | 107 catalog tests + 117 Python & 71 Node assembly v2 conformance checks passing. |
 | **`CW-A02`–`CW-A04`** | Mini Studio Store, Snapping, DRC & Unknown-Aware BOM | **Phase 2 Offline Passed** | 97 TS + 14 API + 21 Chrome browser exercise groups passing (`CW-ASM-02`, `CW-SNAP-01` & `CW-DRC-01..03`). |
 | **`CW-D01`** | Qualified Hardware Source Register | **Inventory Recorded; Open** | [19 Oct register](docs/development/robotics/m0_cw_d01_register_2026_10_19.md) logged; reconcile `STS3215` A/0 connector pinout and regulated `4–7.4 V` rails before physical pass. |
-| **`CW-S01`–`CW-S04`** | MJCF Compiler, Browser MuJoCo & Gestures | **CW-S01 Synthetic Slice Passed; Real Handoff Open** | [Compiler/native evidence](docs/development/robotics/central_world_cw_s01_mjcf.md); actual starter stays blocked. Browser worker ([`mjswan 0.11.9` assessment](docs/development/robotics/mjswan_integration_assessment.md)) and Robot Moments remain planned. |
+| **`CW-S01`–`CW-S04`** | MJCF Compiler, Browser MuJoCo & Gestures | **CW-S01 Offline Studio Handoff Passed; CW-S02 Next** | [Compiler/native evidence](docs/development/robotics/central_world_cw_s01_mjcf.md); actual starter stays blocked. Browser worker ([`mjswan 0.11.9` assessment](docs/development/robotics/mjswan_integration_assessment.md)) and Robot Moments remain planned. |
 | **`CW-G01`–`CW-L03`** | Live Admission, Build Pack & Alpha Review | **Planned (Weeks 9–12)** | Live PDP admission/replay, Build Pack ZIP/SVG exporter, conditional `CW-F01/F02` firmware lane, and January authoring/simulation alpha. |
 | **`M0`–`M4` (`G0`–`G2`)** | Native Microduck & Fast Spine Bench | **M0 Sim Delivered; M1–M4 Open** | Close independent checkpoint parity (`M1`), live native `M2` session stop, enrolled signer receipts (`M3`), and 1-servo → 3-servo / Microduck `M4` stop measurements. |
 

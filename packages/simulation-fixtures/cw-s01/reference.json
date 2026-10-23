@@ -1,0 +1,251 @@
+{
+  "schemaVersion": "seedcore.cw-s01.reference.v1",
+  "scope": "offline_simulation_only",
+  "physicalAcceptance": false,
+  "executionAuthority": "none",
+  "provenance": "synthetic_fixture",
+  "assembly": {
+    "schema_version": "seedcore.assembly.v2",
+    "canonicalization": "seedcore.jcs-safe-integers.v1",
+    "runtime_profile": "offline_proxy_no_actuation",
+    "mating_convention": "opposed_z_rx_pi",
+    "actuator_outputs": [
+      {
+        "node_id": "servo_0",
+        "port_id": "mount.top",
+        "channel": 1,
+        "basis": "simulation_proxy",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "pivot_m": [
+          0,
+          0,
+          0.02
+        ]
+      },
+      {
+        "node_id": "servo_1",
+        "port_id": "mount.top",
+        "channel": 1,
+        "basis": "simulation_proxy",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "pivot_m": [
+          0,
+          0,
+          0.02
+        ]
+      }
+    ],
+    "identity": {
+      "assembly_id": "synthetic.cw-s01.serial",
+      "version": "0.2.0",
+      "name": "Offline Simulation Reference · Synthetic",
+      "status": "draft",
+      "created_at": "2026-10-16T00:00:00Z",
+      "notes": "Ideal mathematical actuators and synthetic estimates; not product data."
+    },
+    "root_node_id": "base",
+    "nodes": [
+      {
+        "node_id": "base",
+        "part_id": "synthetic.cw-s01.base",
+        "part_version": "0.1.0",
+        "part_sha256": "92a9e0b24ac25774b280d8cf8dbc27f962ede21b5c0914e0a42f31326b0e6436",
+        "role": "chassis"
+      },
+      {
+        "node_id": "servo_0",
+        "part_id": "synthetic.cw-s01.actuator",
+        "part_version": "0.1.0",
+        "part_sha256": "cd3034641de4f8108d87ec3cd699abe5b8e42fbd7770afe758230f87d9b76dcd",
+        "role": "actuator"
+      },
+      {
+        "node_id": "servo_1",
+        "part_id": "synthetic.cw-s01.actuator",
+        "part_version": "0.1.0",
+        "part_sha256": "cd3034641de4f8108d87ec3cd699abe5b8e42fbd7770afe758230f87d9b76dcd",
+        "role": "actuator"
+      },
+      {
+        "node_id": "payload",
+        "part_id": "synthetic.cw-s01.payload",
+        "part_version": "0.1.0",
+        "part_sha256": "053857070e2cbbf84903b845ff5e5c78e337d0ae3863e2c2d8a2917c45c198b4",
+        "role": "payload"
+      }
+    ],
+    "mechanical_tree": [
+      {
+        "edge_id": "edge_1",
+        "parent_node_id": "base",
+        "parent_port_id": "mount.top",
+        "child_node_id": "servo_0",
+        "child_port_id": "mount.bottom",
+        "relative_transform": {
+          "position_m": [
+            0,
+            0,
+            0.026000000000000002
+          ],
+          "quaternion_wxyz": [
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        "connection_type": "rigid_mount"
+      },
+      {
+        "edge_id": "edge_2",
+        "parent_node_id": "servo_0",
+        "parent_port_id": "mount.top",
+        "child_node_id": "servo_1",
+        "child_port_id": "mount.bottom",
+        "relative_transform": {
+          "position_m": [
+            0,
+            0,
+            0.04
+          ],
+          "quaternion_wxyz": [
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        "connection_type": "articulated_joint",
+        "joint": {
+          "joint_id": "joint_servo_0",
+          "kind": "revolute",
+          "frame": "parent_part",
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "pivot_m": [
+            0,
+            0,
+            0.02
+          ],
+          "actuator_node_id": "servo_0",
+          "actuator_channel": 1,
+          "rest_angle_rad": 0,
+          "limits_rad": {
+            "min_rad": -0.5,
+            "max_rad": 0.5,
+            "max_velocity_rad_s": 1,
+            "max_torque_nm": 0.2
+          }
+        }
+      },
+      {
+        "edge_id": "edge_3",
+        "parent_node_id": "servo_1",
+        "parent_port_id": "mount.top",
+        "child_node_id": "payload",
+        "child_port_id": "mount.bottom",
+        "relative_transform": {
+          "position_m": [
+            0,
+            0,
+            0.024
+          ],
+          "quaternion_wxyz": [
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        "connection_type": "articulated_joint",
+        "joint": {
+          "joint_id": "joint_servo_1",
+          "kind": "revolute",
+          "frame": "parent_part",
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "pivot_m": [
+            0,
+            0,
+            0.02
+          ],
+          "actuator_node_id": "servo_1",
+          "actuator_channel": 1,
+          "rest_angle_rad": 0,
+          "limits_rad": {
+            "min_rad": -0.5,
+            "max_rad": 0.5,
+            "max_velocity_rad_s": 1,
+            "max_torque_nm": 0.2
+          }
+        }
+      }
+    ],
+    "electrical_nets": [
+      {
+        "net_id": "synthetic_power",
+        "kind": "power",
+        "nominal_voltage_v": 6,
+        "endpoints": [
+          {
+            "node_id": "base",
+            "interface_id": "power",
+            "pins": [
+              "VIN"
+            ]
+          },
+          {
+            "node_id": "servo_0",
+            "interface_id": "power",
+            "pins": [
+              "VIN"
+            ]
+          },
+          {
+            "node_id": "servo_1",
+            "interface_id": "power",
+            "pins": [
+              "VIN"
+            ]
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "notes": "Synthetic positive simulation fixture; never a hardware profile."
+    }
+  },
+  "catalog": {
+    "catalogRawJson": "{\"schema_version\":\"seedcore.component-catalog.v1\",\"status\":\"synthetic_fixture\",\"parts\":[{\"part_id\":\"synthetic.cw-s01.base\",\"version\":\"0.1.0\",\"path\":\"parts/synthetic.cw-s01.base.sc-part.json\",\"sha256\":\"92a9e0b24ac25774b280d8cf8dbc27f962ede21b5c0914e0a42f31326b0e6436\"},{\"part_id\":\"synthetic.cw-s01.actuator\",\"version\":\"0.1.0\",\"path\":\"parts/synthetic.cw-s01.actuator.sc-part.json\",\"sha256\":\"cd3034641de4f8108d87ec3cd699abe5b8e42fbd7770afe758230f87d9b76dcd\"},{\"part_id\":\"synthetic.cw-s01.payload\",\"version\":\"0.1.0\",\"path\":\"parts/synthetic.cw-s01.payload.sc-part.json\",\"sha256\":\"053857070e2cbbf84903b845ff5e5c78e337d0ae3863e2c2d8a2917c45c198b4\"}]}",
+    "catalogSha256": "82ae2b3b927c19286ac1094ea79d939cc8e8f43002554acc20c2df7d8e6b7ee0",
+    "partDocuments": [
+      {
+        "part_id": "synthetic.cw-s01.base",
+        "raw_json": "{\"schema_version\":\"seedcore.component.v1\",\"identity\":{\"part_id\":\"synthetic.cw-s01.base\",\"version\":\"0.1.0\",\"name\":\"CW-S01 synthetic mathematical 0; no physical claims\",\"category\":\"chassis\",\"status\":\"draft\",\"bom_cost_usd\":1,\"cost_basis\":\"estimate\",\"supplier_skus\":[],\"notes\":\"Synthetic conformance fixture, not supplier data or hardware acceptance.\"},\"mechanical\":{\"frame\":\"right_handed_z_up_meters\",\"basis\":\"simulation_proxy\",\"visual_mesh\":{\"uri\":\"assets/seedcore-tabletop-base.glb\",\"sha256\":\"95d482e23d0398a17590a86e87022e42f5cf93baa91475ffad034c86545622ed\",\"format\":\"glb2\",\"up_axis\":\"Y\",\"license\":\"Apache-2.0\",\"origin\":\"seedcore_box_proxy\"},\"collision\":{\"type\":\"box\",\"size_m\":[0.12,0.1,0.012]},\"mass_kg\":0.1,\"center_of_mass_m\":[0,0,0],\"inertia_kg_m2\":{\"ixx\":0.00008453333333333335,\"iyy\":0.0001212,\"izz\":0.00020333333333333336,\"ixy\":0,\"ixz\":0,\"iyz\":0},\"snap_ports\":[{\"port_id\":\"mount.bottom\",\"position_m\":[0,0,-0.006],\"quaternion_wxyz\":[0,1,0,0],\"mount_standard\":\"seedcore.proxy_mount_v1\",\"gender\":\"neutral\",\"qualification\":\"illustrative\"},{\"port_id\":\"mount.top\",\"position_m\":[0,0,0.006],\"quaternion_wxyz\":[1,0,0,0],\"mount_standard\":\"seedcore.proxy_mount_v1\",\"gender\":\"neutral\",\"qualification\":\"illustrative\"}]},\"electrical\":{\"rating_basis\":\"documented\",\"min_v\":6,\"max_v\":6,\"continuous_ma\":0,\"peak_ma\":0,\"output_capacity_ma\":10000,\"bus_interfaces\":[{\"interface_id\":\"power\",\"kind\":\"POWER_RAIL\",\"role\":\"source\",\"protocol\":null,\"logic_min_v\":null,\"logic_max_v\":null,\"i2c_address\":null,\"pins\":[\"VIN\",\"GND\"]}]},\"hal_and_safety\":{\"capabilities\":[],\"runtime_binding\":null,\"qualification\":\"unqualified\",\"hard_limits\":{\"min_rad\":null,\"max_rad\":null,\"max_rad_s\":null,\"max_torque_nm\":null},\"simulation_limits\":null,\"execution_authority\":\"none\"}}"
+      },
+      {
+        "part_id": "synthetic.cw-s01.actuator",
+        "raw_json": "{\"schema_version\":\"seedcore.component.v1\",\"identity\":{\"part_id\":\"synthetic.cw-s01.actuator\",\"version\":\"0.1.0\",\"name\":\"CW-S01 synthetic mathematical 1; no physical claims\",\"category\":\"actuator\",\"status\":\"draft\",\"bom_cost_usd\":1,\"cost_basis\":\"estimate\",\"supplier_skus\":[],\"notes\":\"Synthetic conformance fixture, not supplier data or hardware acceptance.\"},\"mechanical\":{\"frame\":\"right_handed_z_up_meters\",\"basis\":\"simulation_proxy\",\"visual_mesh\":{\"uri\":\"assets/feetech-sts3215-draft.glb\",\"sha256\":\"b62bd829163e3db6bef31c061ded11a475c62b3ab136a513c634326517375d04\",\"format\":\"glb2\",\"up_axis\":\"Y\",\"license\":\"Apache-2.0\",\"origin\":\"seedcore_box_proxy\"},\"collision\":{\"type\":\"box\",\"size_m\":[0.04,0.02,0.04]},\"mass_kg\":0.05,\"center_of_mass_m\":[0,0,0],\"inertia_kg_m2\":{\"ixx\":0.000008333333333333334,\"iyy\":0.000013333333333333335,\"izz\":0.000008333333333333334,\"ixy\":0,\"ixz\":0,\"iyz\":0},\"snap_ports\":[{\"port_id\":\"mount.bottom\",\"position_m\":[0,0,-0.02],\"quaternion_wxyz\":[0,1,0,0],\"mount_standard\":\"seedcore.proxy_mount_v1\",\"gender\":\"neutral\",\"qualification\":\"illustrative\"},{\"port_id\":\"mount.top\",\"position_m\":[0,0,0.02],\"quaternion_wxyz\":[1,0,0,0],\"mount_standard\":\"seedcore.proxy_mount_v1\",\"gender\":\"neutral\",\"qualification\":\"illustrative\"}]},\"electrical\":{\"rating_basis\":\"documented\",\"min_v\":5,\"max_v\":7.4,\"continuous_ma\":100,\"peak_ma\":200,\"output_capacity_ma\":null,\"bus_interfaces\":[{\"interface_id\":\"power\",\"kind\":\"POWER_RAIL\",\"role\":\"sink\",\"protocol\":null,\"logic_min_v\":null,\"logic_max_v\":null,\"i2c_address\":null,\"pins\":[\"VIN\",\"GND\"]}]},\"hal_and_safety\":{\"capabilities\":[\"actuator.joint_position\"],\"runtime_binding\":null,\"qualification\":\"unqualified\",\"hard_limits\":{\"min_rad\":null,\"max_rad\":null,\"max_rad_s\":null,\"max_torque_nm\":null},\"simulation_limits\":{\"min_rad\":-0.5,\"max_rad\":0.5,\"max_rad_s\":1,\"max_torque_nm\":0.2},\"execution_authority\":\"none\"}}"
+      },
+      {
+        "part_id": "synthetic.cw-s01.payload",
+        "raw_json": "{\"schema_version\":\"seedcore.component.v1\",\"identity\":{\"part_id\":\"synthetic.cw-s01.payload\",\"version\":\"0.1.0\",\"name\":\"CW-S01 synthetic mathematical 2; no physical claims\",\"category\":\"chassis\",\"status\":\"draft\",\"bom_cost_usd\":1,\"cost_basis\":\"estimate\",\"supplier_skus\":[],\"notes\":\"Synthetic conformance fixture, not supplier data or hardware acceptance.\"},\"mechanical\":{\"frame\":\"right_handed_z_up_meters\",\"basis\":\"simulation_proxy\",\"visual_mesh\":{\"uri\":\"assets/seedcore-sensor-hat.glb\",\"sha256\":\"a8a9ae5d556f04d54c900e1d4282f3f51d94834712ea0ce98e169065a14d530d\",\"format\":\"glb2\",\"up_axis\":\"Y\",\"license\":\"Apache-2.0\",\"origin\":\"seedcore_box_proxy\"},\"collision\":{\"type\":\"box\",\"size_m\":[0.06,0.05,0.008]},\"mass_kg\":0.02,\"center_of_mass_m\":[0,0,0],\"inertia_kg_m2\":{\"ixx\":0.0000042733333333333345,\"iyy\":0.000006106666666666666,\"izz\":0.000010166666666666667,\"ixy\":0,\"ixz\":0,\"iyz\":0},\"snap_ports\":[{\"port_id\":\"mount.bottom\",\"position_m\":[0,0,-0.004],\"quaternion_wxyz\":[0,1,0,0],\"mount_standard\":\"seedcore.proxy_mount_v1\",\"gender\":\"neutral\",\"qualification\":\"illustrative\"},{\"port_id\":\"mount.top\",\"position_m\":[0,0,0.004],\"quaternion_wxyz\":[1,0,0,0],\"mount_standard\":\"seedcore.proxy_mount_v1\",\"gender\":\"neutral\",\"qualification\":\"illustrative\"}]},\"electrical\":{\"rating_basis\":\"not_applicable\",\"min_v\":null,\"max_v\":null,\"continuous_ma\":null,\"peak_ma\":null,\"output_capacity_ma\":null,\"bus_interfaces\":[]},\"hal_and_safety\":{\"capabilities\":[],\"runtime_binding\":null,\"qualification\":\"unqualified\",\"hard_limits\":{\"min_rad\":null,\"max_rad\":null,\"max_rad_s\":null,\"max_torque_nm\":null},\"simulation_limits\":null,\"execution_authority\":\"none\"}}"
+      }
+    ],
+    "provenance": "synthetic_fixture"
+  }
+}

@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-10-22
-Status: Canonical active execution queue — Phase 2 offline and CW-S01 compiler/parity slices delivered locally; real starter readiness, browser/live and physical gates open
+Date: 2026-10-23
+Status: Canonical active execution queue — CW-S01 offline Studio handoff delivered locally; CW-S02 is next; real-source/physical and live gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -14,11 +14,12 @@ field-linked findings, 3D rotated/parallel-axis mass/inertia and unknown-aware B
 The [CW-S01 compiler/native-parity slice](robotics/central_world_cw_s01_mjcf.md)
 is now implemented for synthetic supported serial-tabletop fixtures. A separate
 versioned offline simulation-readiness result defers only proxy physical fit;
-the full DRC report and actual starter remain blocked. CW-S01 real-source
-readiness/handoff remains open before broader CW-S02 browser integration,
-progressing toward a bounded
-attempt with an understandable allow/deny/interruption timeline and sufficient
-verifier evidence. Use the
+the full DRC report and actual starter remain blocked. The 23 October Studio
+handoff adds an explicitly synthetic offline reference, readiness/manifest
+inspection and deterministic XML/model exports. CW-S02 is the single next
+implementation package; real-source qualification stays open under CW-D01.
+The runtime work progresses toward a bounded attempt with an understandable
+allow/deny/interruption timeline and sufficient verifier evidence. Use the
 [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 for Oct 2026–Mar 2028 targets and the dated 14 Oct–12 Nov tactical schedule.
 The [portfolio decision](application_directions.md) owns scope, while the
@@ -101,9 +102,10 @@ subsequent Phase 3–5 packages remain planned/open.
 | Local software slice passed | CW-A02 | [Mini Studio, raw import, immutable store and browser evidence](robotics/central_world_cw_a02_authoring.md) | Offline proxy scope; no runtime admission |
 | Local software slice passed | CW-A03 | [15 mm snapping, ghost/numeric placement and atomic reparenting](robotics/central_world_cw_a03_snapping.md) | Proxy-only CW-SNAP-01 evidence; explicit joints preserved |
 | Local software slice passed | CW-A04 | [Pure worker DRC, routing proposals, 3D mass/inertia and unknown-aware BOM](robotics/central_world_cw_a04_drc.md) | Offline CW-DRC-01..03 passed; physical pass awaits CW-D01 |
-| Local compiler/parity slice passed | CW-S01 | [Deterministic primitive MJCF, separate offline readiness and native parity](robotics/central_world_cw_s01_mjcf.md) | Synthetic positive fixtures only; actual starter remains blocked, no browser/physical acceptance |
-| 1 | CW-S01 handoff, then CW-S02–CW-S04 | Resolve real-source readiness, browser worker and bounded gesture replay | Separate simulation readiness preserves full DRC; trained-policy lane has independent compatibility/reference gates |
-| 2 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
+| Local compiler/parity and Studio handoff passed | CW-S01 | [Offline synthetic reference, readiness inspector, deterministic MJCF/model exports and native/browser handoff evidence](robotics/central_world_cw_s01_mjcf.md#23-october-studio-handoff-and-offline-reference) | Actual starter: 10 DRC blockers / 9 simulation blockers; physical source qualification stays open under CW-D01 |
+| 1 (single next package) | CW-S02 | Pinned browser MuJoCo worker; engine/model/control/capture qualification using CW-S01 bundles | Offline handoff available; native/browser parity, bounded clocks/buffers, faults and deployment isolation remain required |
+| 2 | CW-S03–CW-S04 | Compatible policy adapter where qualified; bounded tabletop gesture and replay | CW-S02; trained-policy lane has independent compatibility/reference gates |
+| 3 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
 
 ## Native Reference Milestones
 
@@ -194,7 +196,7 @@ two-person-day COOP-01 research cap in the
 capacity remains after committed work. Use the
 [pilot briefs](../application/robotics_component_partner_pilot_briefs.md) to
 record exact versions, complete mass/power/cost, fabrication, interface and
-rights gaps. CW-S01 remains next; unsupported CAN/CAN FD work, a new joint/body
+rights gaps. CW-S02 is next after the CW-S01 handoff; unsupported CAN/CAN FD work, a new joint/body
 or an extra pilot is not a prerequisite. Select at most one later commercial
 or open-joint experiment against a measured mini-task need and existing CW/M/G
 gates. The prior compute/capture/middleware-first sequence is superseded;
@@ -206,7 +208,7 @@ to review reusable-dock packaging, complete starter cost and incremental
 print/active-pack cost. Keep rails/connectors unselected and ID discovery
 non-authoritative; no dock PCB, catalog part, survey or hardware build is added
 to the implementation queue. Optional gesture JSON drafting remains a CW-S04
-candidate; CW-S01 still comes first.
+candidate; CW-S02 now follows the delivered CW-S01 offline handoff.
 
 Opt-in telemetry begins with adult bench data. Keep capture and external camera
 egress disabled by default; separately review permissions, retained samples,

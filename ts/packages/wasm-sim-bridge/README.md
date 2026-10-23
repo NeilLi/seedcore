@@ -85,7 +85,7 @@ node tools/robotics/verify-mjcf.cjs
 ```
 
 The runner rebuilds source dependencies, checks generated validators, runs the
-compiler negative matrix, exports 12 synthetic models and requires pinned
+compiler negative matrix, exports 14 synthetic models (including both Studio reference modes) and requires pinned
 MuJoCo 3.15.0 parity. Python checks authoritative catalog/assembly semantics,
 native compilation, independent FK at reference/zero/boundary/interior states,
 body/subtree mass, COM/full inertias and joint/actuator ranges. No engine fallback
@@ -94,3 +94,11 @@ or hardware is used. `--skip-native` explicitly reports native checks not run.
 Evidence: `artifacts/robotics/cw-s01/verification.json` and `models/cases.json`.
 See the [implementation/acceptance record](../../../docs/development/robotics/central_world_cw_s01_mjcf.md)
 and [existing acceptance matrix](../../../docs/development/robotics/central_world_acceptance_matrix.md).
+
+Mini Studio now exposes this compiler and readiness policy through its
+**Simulation** inspector. The explicitly selected reference is pinned separately
+under `packages/simulation-fixtures/cw-s01/`; the physical catalog is unchanged.
+The Studio retains revision/authority-epoch freshness fences outside model
+content and checks source/DRC/model identity again before export. See
+`node tools/robotics/verify-authoring.cjs --browser` for byte-identical download
+and native MuJoCo checks. This handoff does not implement CW-S02 runtime physics.

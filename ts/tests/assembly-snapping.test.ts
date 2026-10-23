@@ -146,7 +146,7 @@ test('placement palette verifies raw catalog/part pins and mesh bytes before exp
   const original=globalThis.fetch;let mode='ok';
   try {
     globalThis.fetch=async(url)=>{
-      if(url==='/api/placement-catalog'){const data=structuredClone(payload);if(mode==='part')data.part_documents[0].raw_json+=' ';if(mode==='catalog')data.catalog_raw_json+=' ';return Response.json(data);}
+      if(url===`/api/placement-catalog?digest=${digest}`){const data=structuredClone(payload);if(mode==='part')data.part_documents[0].raw_json+=' ';if(mode==='catalog')data.catalog_raw_json+=' ';return Response.json(data);}
       const bytes=new Uint8Array(readFileSync(new URL(`../../packages/component-registry${url}`,import.meta.url)));if(mode==='mesh')bytes[0]=0;return new Response(bytes);
     };
     assert.equal((await loadPlacementCatalog(digest,new AbortController().signal)).parts.length,12);

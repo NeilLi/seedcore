@@ -1,6 +1,6 @@
 # Mini Studio
 
-Local CW-A02/CW-A03/CW-A04 authoring shell for frozen assembly v2 and original proxy geometry.
+Local CW-A02/CW-A03/CW-A04 authoring and CW-S01 offline handoff shell for frozen assembly v2 and original proxy geometry.
 Run it on a local development computer at `http://127.0.0.1:8767` to design
 successive proxy robot assemblies. Snap parts interactively or import candidate
 JSON from another tool, including an optional LLM. No cloud account is required.
@@ -15,6 +15,22 @@ clear admission; stale async results cannot replace the current revision.
 Selection and failed imports are distinct from accepted assembly changes.
 No runtime admission or
 hardware routes are supplied.
+
+The **Simulation** tab runs the existing CW-S01 readiness policy and compiler
+alongside full DRC. The physical starter stays blocked (10 DRC findings, 9
+simulation blockers). Select **Load Offline Simulation Reference (Synthetic)**
+for a separate pinned two-joint mathematical fixture; physical acceptance is
+false and synthetic prices/power inputs are not supplier evidence. Select
+position/ideal-torque mode, timestep and gain, inspect the manifest/mappings and
+limitations, then copy/download `.mjcf.xml` or canonical `.cw-s01.model.json`.
+Loads and edits clear old artifacts; undo/redo recompiles under a fresh epoch.
+The offline handoff is delivered; browser MuJoCo runtime acceptance is CW-S02.
+
+`node tools/robotics/verify-authoring.cjs --browser` requires the pinned native
+MuJoCo 3.15.0 environment as well as Chrome. It compares actual browser exports
+to fresh compiler bytes and compiles the downloads natively. Evidence is retained
+in `artifacts/robotics/cw-s01/studio/`. The separate full native compiler parity
+runner remains `node tools/robotics/verify-mjcf.cjs`.
 
 The optional [browser performance lab](../../../docs/development/robotics/browser_performance_pipeline.md)
 at `/performance.html` runs the pinned synthetic planar Wasm fixture in a physics

@@ -83,7 +83,7 @@ async function loadProxyMesh(visual: {origin:string;up_axis:string;uri:string;sh
 
 /** Read-only palette; its catalog digest must match the accepted assembly's scene. */
 export async function loadPlacementCatalog(expectedDigest:string,signal:AbortSignal):Promise<PlacementCatalog> {
-  const response=await fetch('/api/placement-catalog',{signal});
+  const response=await fetch(`/api/placement-catalog?digest=${encodeURIComponent(expectedDigest)}`,{signal});
   const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await readBounded(response,2*1024*1024)));
   if(data.scope!=='offline_proxy_authoring'||data.physical_acceptance!==false||data.catalog_sha256!==expectedDigest||await sha256Text(data.catalog_raw_json)!==expectedDigest) throw new Error('Placement catalog scope/digest mismatch');
   const index=parseStrictJson(data.catalog_raw_json) as {parts:{part_id:string;version:string;sha256:string}[]};

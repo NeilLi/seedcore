@@ -123,6 +123,7 @@ jobs:
             artifacts/robotics/cw-a03/verification.json
             artifacts/robotics/cw-a04/verification.json
             artifacts/robotics/cw-s01/verification.json
+            artifacts/robotics/cw-s01/studio/verification.json
             artifacts/robotics/browser-performance/verification.json
             artifacts/robotics/static-scene/verification.json
 

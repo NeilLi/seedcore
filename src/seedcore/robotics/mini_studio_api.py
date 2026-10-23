@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from jsonschema import ValidationError
 
 from .assembly import (
-    compute_assembly_digest, compute_node_world_transforms, load_assembly_catalog, validate_assembly,
+    AssemblyCatalog, compute_assembly_digest, compute_node_world_transforms, load_assembly_catalog, validate_assembly,
 )
 from .component_registry import REGISTRY, ROOT, parse_json, read_local, sha256
 
@@ -29,6 +29,32 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
     validate_assembly(parse_json(starter), catalog, root=registry)
     catalog_raw = read_local(registry, "catalog.json")
     catalog_sha = sha256(catalog_raw)
+    # Separate immutable mathematical sources; never patch the physical catalog.
+    reference = parse_json(read_local(ROOT, "packages/simulation-fixtures/cw-s01/reference.json", 2 * 1024 * 1024))
+    if (reference["schemaVersion"] != "seedcore.cw-s01.reference.v1"
+            or reference["scope"] != "offline_simulation_only"
+            or reference["physicalAcceptance"] is not False
+            or reference["executionAuthority"] != "none"
+            or reference["provenance"] != "synthetic_fixture"):
+        raise ValueError("invalid offline reference scope")
+    raw_reference = reference["catalog"]
+    reference_documents = {d["part_id"]: d["raw_json"].encode() for d in raw_reference["partDocuments"]}
+    reference_raw = raw_reference["catalogRawJson"].encode()
+    reference_sha = sha256(reference_raw)
+    if reference_sha != raw_reference["catalogSha256"] or raw_reference["provenance"] != "synthetic_fixture":
+        raise ValueError("offline reference catalog pin mismatch")
+    pins = parse_json(reference_raw)["parts"]
+    if len(reference_documents) != len(pins) or any(
+        p["part_id"] not in reference_documents or sha256(reference_documents[p["part_id"]]) != p["sha256"]
+        or parse_json(reference_documents[p["part_id"]])["identity"]["version"] != p["version"] for p in pins
+    ):
+        raise ValueError("offline reference part pin mismatch")
+    reference_catalog = AssemblyCatalog(tuple(reference_documents.values()), registry, "synthetic_fixture")
+    validate_assembly(reference["assembly"], reference_catalog, root=registry)
+    for raw in reference_documents.values():
+        visual = parse_json(raw)["mechanical"]["visual_mesh"]
+        if Path(visual["uri"]).name not in meshes or sha256(meshes[Path(visual["uri"]).name]) != visual["sha256"]:
+            raise ValueError("offline reference must use existing pinned proxy assets")
     web_root = web_root or ROOT / "ts/apps/mini-studio/dist"
     scene_root = ROOT / "packages/scene-fixtures/mini-workbench"
     scene_assets = {name: read_local(scene_root, name, 1048576) for name in
@@ -60,12 +86,22 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
     def get_starter():
         return Response(starter, media_type="application/json")
 
+    @app.get("/api/simulation-reference")
+    def get_simulation_reference():
+        return reference
+
     @app.get("/api/placement-catalog")
-    def placement_catalog():
+    def placement_catalog(digest: str | None = None):
+        if digest not in {None, catalog_sha, reference_sha}:
+            raise HTTPException(404, "catalog outside pinned authoring profiles")
+        synthetic = digest == reference_sha
+        raw = reference_raw if synthetic else catalog_raw
+        docs = reference_documents if synthetic else documents
         return {
             "scope": "offline_proxy_authoring", "physical_acceptance": False,
-            "catalog_sha256": catalog_sha, "catalog_raw_json": catalog_raw.decode("utf-8"),
-            "part_documents": [{"part_id": key, "raw_json": raw.decode("utf-8")} for key, raw in sorted(documents.items())],
+            "provenance": "synthetic_fixture" if synthetic else "verified_local_catalog",
+            "catalog_sha256": sha256(raw), "catalog_raw_json": raw.decode("utf-8"),
+            "part_documents": [{"part_id": key, "raw_json": value.decode("utf-8")} for key, value in sorted(docs.items())],
         }
 
     @app.post("/api/assembly/validate")
@@ -78,15 +114,22 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
             if len(body) > MAX_BODY:
                 raise HTTPException(413, "assembly exceeds 262144 bytes")
         try:
-            assembly = validate_assembly(parse_json(bytes(body)), catalog, root=registry)
+            candidate = parse_json(bytes(body))
+            synthetic = isinstance(candidate, dict) and isinstance(candidate.get("nodes"), list) and any(
+                isinstance(n, dict) and isinstance(n.get("part_id"), str)
+                and n["part_id"] in reference_documents for n in candidate.get("nodes", [])
+            )
+            assembly = validate_assembly(candidate, reference_catalog if synthetic else catalog, root=registry)
         except (ValueError, ValidationError, UnicodeError, RecursionError) as error:
             detail = error.message if isinstance(error, ValidationError) else str(error)
             raise HTTPException(422, detail[:500]) from error
         ids = sorted({node["part_id"] for node in assembly["nodes"]})
+        docs = reference_documents if synthetic else documents
         return {
             "scope": "offline_proxy_authoring", "physical_acceptance": False,
-            "assembly_digest": compute_assembly_digest(assembly), "catalog_sha256": catalog_sha,
-            "part_documents": [{"part_id": key, "raw_json": documents[key].decode("utf-8")} for key in ids],
+            "provenance": "synthetic_fixture" if synthetic else "verified_local_catalog",
+            "assembly_digest": compute_assembly_digest(assembly), "catalog_sha256": reference_sha if synthetic else catalog_sha,
+            "part_documents": [{"part_id": key, "raw_json": docs[key].decode("utf-8")} for key in ids],
             "transforms": compute_node_world_transforms(assembly),
         }
 

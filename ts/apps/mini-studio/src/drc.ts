@@ -13,25 +13,29 @@ import {
   type Selection,
   type StoreState,
 } from '@seedcore/robot-canvas';
+import type { RawCompilerCatalog } from '@seedcore/wasm-sim-bridge';
+import { setupSimulation } from './simulation.js';
 
-async function fetchDrcCatalog(expectedDigest: string, signal: AbortSignal): Promise<DrcCatalog> {
-  const response = await fetch('/api/placement-catalog', { signal });
+async function fetchDrcCatalog(expectedDigest: string, signal: AbortSignal): Promise<{ catalog: DrcCatalog; raw: RawCompilerCatalog }> {
+  const response = await fetch(`/api/placement-catalog?digest=${encodeURIComponent(expectedDigest)}`, { signal });
   const data = JSON.parse(
     new TextDecoder('utf-8', { fatal: true }).decode(await readBounded(response, 2 * 1024 * 1024)),
   );
   if (
     data.scope !== 'offline_proxy_authoring' ||
     data.physical_acceptance !== false ||
-    data.catalog_sha256 !== expectedDigest
+    data.catalog_sha256 !== expectedDigest ||
+    !['verified_local_catalog', 'synthetic_fixture'].includes(data.provenance)
   ) {
     throw new Error('DRC catalog scope or digest mismatch');
   }
-  return parseDrcCatalogFromRaw({
+  const raw: RawCompilerCatalog = {
     catalogSha256: data.catalog_sha256,
     catalogRawJson: data.catalog_raw_json,
     partDocuments: data.part_documents,
-    provenance: 'verified_local_catalog',
-  });
+    provenance: data.provenance,
+  };
+  return { catalog: parseDrcCatalogFromRaw(raw), raw };
 }
 
 function selectionForFieldRefs(
@@ -67,6 +71,8 @@ export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
   const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const button = (id: string) => el<HTMLButtonElement>(id);
   let catalog: DrcCatalog | undefined;
+  let rawCatalog: RawCompilerCatalog | undefined;
+  const simulation = setupSimulation(store);
   let catalogController: AbortController | undefined;
   let catalogGen = 0;
   let attemptedCatalogDigest: string | undefined;
@@ -182,6 +188,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
       return;
     }
     button('drc-recheck').disabled = true;
+    simulation.invalidate();
     setStatus('Running pure DRC worker on current revision…', false, 'loading');
     const outcome = await coordinator.evaluate({
       revisionDigest: current.revisionDigest,
@@ -193,6 +200,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
     button('drc-recheck').disabled = !store.getState().current;
     if (outcome.status === 'committed') {
       renderReport(outcome.report, outcome.revisionDigest, outcome.authorityEpoch);
+      if (rawCatalog) simulation.accept(outcome, rawCatalog);
     } else if (outcome.status === 'rejected') {
       setStatus(`DRC worker rejected candidate: ${outcome.error}`, true, 'error');
     }
@@ -216,7 +224,8 @@ export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
       ) {
         return;
       }
-      catalog = loaded;
+      catalog = loaded.catalog;
+      rawCatalog = loaded.raw;
       evaluatedKey = '';
       await runDrc();
     } catch (error) {
@@ -244,9 +253,17 @@ export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
     }
     if (state.loading) {
       coordinator.cancel();
+      evaluatedKey = '';
       return;
     }
     const digest = current.scene.catalogDigest;
+    // A load for a profile that has since been left must not suppress a later
+    // retry of that profile (physical -> synthetic -> physical -> synthetic).
+    if (attemptedCatalogDigest && attemptedCatalogDigest !== digest) {
+      ++catalogGen;
+      catalogController?.abort();
+      attemptedCatalogDigest = undefined;
+    }
     if (catalog?.catalogDigest !== digest) {
       if (attemptedCatalogDigest !== digest) void loadCatalog(digest);
       return;
@@ -282,6 +299,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
     ++catalogGen;
     catalogController?.abort();
     coordinator.dispose();
+    simulation.dispose();
     unsubscribe();
   };
 }

@@ -13,7 +13,7 @@ export function setupPlacement(store:AssemblyStore<ProxyScene>,canvas:RobotCanva
     request=undefined;proposal=undefined;binding=undefined;candidates=[];select('snap-candidate').replaceChildren();select('snap-candidate').disabled=true;button('commit-placement').disabled=true;
     canvas?.setGhost(null);if(!keepDrag)canvas?.setPlacementDrag(undefined);if(text)message(text);
   };
-  const tabs=['inspect','placement','drc'] as const;
+  const tabs=['inspect','placement','drc','simulation'] as const;
   const activate=(name:(typeof tabs)[number])=>{
     for(const pane of tabs){const active=pane===name;el(`${pane}-panel`).hidden=!active;button(`${pane}-tab`).setAttribute('aria-selected',String(active));button(`${pane}-tab`).tabIndex=active?0:-1;}
   };
@@ -99,7 +99,7 @@ export function setupPlacement(store:AssemblyStore<ProxyScene>,canvas:RobotCanva
       const next=await loadPlacementCatalog(digest,active.signal);
       if(disposed||generation!==loadGeneration||store.getState().current?.scene.catalogDigest!==digest)return;
       catalog=next;select('part-choice').replaceChildren(...catalog.parts.map(p=>new Option(p.name.replace(' - illustrative draft',''),p.partId)));
-      select('part-choice').value='seedcore.sensor-hat';el('catalog-status').textContent=`${catalog.parts.length} proxy parts · catalog and asset pins checked`;
+      select('part-choice').value=catalog.parts.some(p=>p.partId==='seedcore.sensor-hat')?'seedcore.sensor-hat':catalog.parts[0].partId;el('catalog-status').textContent=`${catalog.parts.length} proxy parts · catalog and asset pins checked`;
       el<HTMLFieldSetElement>('placement-fields').disabled=store.getState().loading;configureSource();
     }catch(error){if(!disposed&&generation===loadGeneration){el('catalog-status').textContent=`Catalog unavailable. ${error instanceof Error?error.message:'Load failed'}`;button('catalog-retry').hidden=false;active.abort();}}
     finally{clearTimeout(timer);}
@@ -110,7 +110,9 @@ export function setupPlacement(store:AssemblyStore<ProxyScene>,canvas:RobotCanva
     if(state.loading||nextKey!==currentKey||nextSourceKey!==sourceKey)clear();
     const changed=nextKey!==currentKey||nextSourceKey!==sourceKey;currentKey=nextKey;sourceKey=nextSourceKey;
     el<HTMLFieldSetElement>('placement-fields').disabled=state.loading||!state.current||catalog?.catalogDigest!==state.current.scene.catalogDigest;
-    if(changed&&catalog&&state.current)configureSource();
+    const digest=state.current?.scene.catalogDigest;
+    if(attemptedDigest&&digest&&attemptedDigest!==digest){++loadGeneration;controller?.abort();attemptedDigest=undefined;}
+    if(changed&&catalog&&state.current&&catalog.catalogDigest===digest)configureSource();
     if(state.current&&catalog?.catalogDigest!==state.current.scene.catalogDigest&&attemptedDigest!==state.current.scene.catalogDigest)void loadCatalog(state.current.scene.catalogDigest);
   });
   button('catalog-retry').onclick=()=>{const digest=store.getState().current?.scene.catalogDigest;if(digest)void loadCatalog(digest);};

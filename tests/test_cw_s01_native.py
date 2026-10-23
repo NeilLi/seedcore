@@ -27,6 +27,7 @@ from seedcore.robotics.mujoco_workbench.runtime import ENGINE_VERSION
 ROOT = Path(__file__).resolve().parents[1]
 CASES = [f"serial-{n}-{orientation}-{mode}" for n in (1, 2, 3)
          for orientation in ("aligned", "rotated") for mode in ("position", "torque")]
+CASES += [f"studio-reference-{mode}" for mode in ("position", "torque")]
 
 
 @pytest.fixture(scope="module")

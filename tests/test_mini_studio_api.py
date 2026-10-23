@@ -127,3 +127,38 @@ def test_placement_palette_keeps_exact_catalog_and_part_bytes(client):
     for item in payload["part_documents"]:
         assert sha256(item["raw_json"].encode()) == pins[item["part_id"]]["sha256"]
         assert json.loads(item["raw_json"])["hal_and_safety"]["execution_authority"] == "none"
+
+
+def test_simulation_reference_has_separate_exact_synthetic_sources_and_no_authority(client):
+    profile = client.get("/api/simulation-reference").json()
+    assert profile["provenance"] == profile["catalog"]["provenance"] == "synthetic_fixture"
+    assert profile["scope"] == "offline_simulation_only"
+    assert profile["physicalAcceptance"] is False and profile["executionAuthority"] == "none"
+    result = client.post("/api/assembly/validate", json=profile["assembly"])
+    assert result.status_code == 200
+    data = result.json()
+    assert data["provenance"] == "synthetic_fixture" and data["physical_acceptance"] is False
+    palette = client.get("/api/placement-catalog", params={"digest": data["catalog_sha256"]}).json()
+    assert palette["catalog_raw_json"] == profile["catalog"]["catalogRawJson"]
+    assert sha256(palette["catalog_raw_json"].encode()) == data["catalog_sha256"]
+    assert palette["provenance"] == "synthetic_fixture"
+    documents = {d["part_id"]: d["raw_json"] for d in palette["part_documents"]}
+    for node in profile["assembly"]["nodes"]:
+        assert sha256(documents[node["part_id"]].encode()) == node["part_sha256"]
+    profile["assembly"]["identity"]["name"] = "Edited offline reference"
+    assert client.post("/api/assembly/validate", json=profile["assembly"]).status_code == 200
+    assert client.get("/api/placement-catalog?digest=" + "0" * 64).status_code == 404
+    profile["assembly"]["nodes"][0]["part_id"] = ["untrusted malformed identity"]
+    assert client.post("/api/assembly/validate", json=profile["assembly"]).status_code == 422
+
+
+@pytest.mark.parametrize("mutation", ["pin", "mixed", "joint", "pose", "authority"])
+def test_reference_cannot_bypass_catalog_structure_or_kinematic_gates(client, mutation):
+    assembly = client.get("/api/simulation-reference").json()["assembly"]
+    if mutation == "pin": assembly["nodes"][0]["part_sha256"] = "0" * 64
+    elif mutation == "mixed": assembly["nodes"][0] = starter()["nodes"][0]
+    elif mutation == "joint": assembly["mechanical_tree"][-1]["joint"]["limits_rad"]["max_rad"] = 100
+    elif mutation == "pose": assembly["mechanical_tree"][0]["relative_transform"]["position_m"][0] += 1
+    else: assembly["execution_token"] = {"allow": True}
+    assert client.post("/api/assembly/validate", json=assembly).status_code == 422
+    assert client.get("/api/starter").content == read_local(REGISTRY, "assemblies/tabletop-starter.sc-assembly.json", 262144)

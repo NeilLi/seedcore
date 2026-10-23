@@ -30,8 +30,8 @@ TTL fixture, printable structures, ODRI open-design study and exact CubeMars
 compact-joint feasibility. It assesses all seven newly supplied initiatives and
 reclassifies the earlier ten candidates. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
-CW-S01 real-source handoff active after its synthetic compiler/parity slice; new joints and physical profiles remain
-conditional, with no industrial-cell or humanoid expansion.
+CW-S02 active after the delivered CW-S01 offline Studio handoff; real-source
+qualification, new joints and physical profiles remain conditional, with no industrial-cell or humanoid expansion.
 
 The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)
 proposes a complete affordable starter and modular printable attachments,
