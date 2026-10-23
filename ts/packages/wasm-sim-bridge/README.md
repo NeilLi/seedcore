@@ -101,4 +101,10 @@ under `packages/simulation-fixtures/cw-s01/`; the physical catalog is unchanged.
 The Studio retains revision/authority-epoch freshness fences outside model
 content and checks source/DRC/model identity again before export. See
 `node tools/robotics/verify-authoring.cjs --browser` for byte-identical download
-and native MuJoCo checks. This handoff does not implement CW-S02 runtime physics.
+and native MuJoCo checks. The separate CW-S02 single-thread adapter now qualifies explicit `dt=0.002`,
+position `kp=1` or ideal torque on the 14 fixture sources for up to 120 steps.
+`node tools/robotics/verify-cw-s02.cjs` checks strict uninterrupted native parity;
+`verify-authoring.cjs --browser` also checks the actual CSP-patched Chrome worker,
+single-thread/no-SAB operation, startup races and Studio interruptions. Compiler
+default kp=10 is retained for export but refused by this runtime profile. See
+[CW-S02 scope and review evidence](../../../docs/development/robotics/central_world_cw_s02_mujoco.md).

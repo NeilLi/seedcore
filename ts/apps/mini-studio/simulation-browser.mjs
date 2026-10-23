@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {exerciseCwS02WorkerBoundary} from './cw-s02-browser.mjs';
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 
@@ -27,6 +28,7 @@ export async function exerciseSimulation(page, output, passed, root) {
     'POWER_UNKNOWN_RATING','POWER_RAIL_UNCONNECTED','POWER_UNKNOWN_RATING','POWER_RAIL_UNCONNECTED','BOM_UNPRICED_PARTS',
   ]);
   assert.equal(await page.locator('#sim-download-bundle').isDisabled(), true);
+  assert.equal(await page.locator('#sim-run-rehearsal').isDisabled(), true);
   assert.equal(await digest(), '—');
   passed('CW-S01 physical starter retains 10 DRC blockers and exact 9 simulation-blocking reasons');
 
@@ -123,6 +125,99 @@ export async function exerciseSimulation(page, output, passed, root) {
   assert.equal(await page.locator('#part-choice option').count(), 3);
   assert.match(await page.locator('#part-choice').inputValue(), /^synthetic\.cw-s01\./);
   passed('CW-S01 stale catalog loads cannot restore exports; synthetic draft reload retains provenance and deterministic identity');
+
+  assert.equal(await page.locator('#sim-run-rehearsal').isDisabled(), true);
+  assert.equal(await page.locator('#sim-rehearsal-status').getAttribute('data-state'), 'unqualified');
+  await page.locator('#sim-rehearsal-preset').click(); await waitCompiled();
+  assert.notEqual(await digest(), original);
+  assert.equal(await page.locator('#sim-kp').inputValue(), '1');
+  passed('CW-S02 explicit qualified preset changes model identity while CW-S01 defaults remain available');
+
+  // CW-S02: Reject planar SIM-3 Wasm fallback in the browser worker before running the valid rehearsal.
+  await page.route('**/mujoco.wasm', route =>
+    route.fulfill({status: 200, contentType: 'application/wasm', body: Buffer.alloc(13242)}),
+  );
+  await page.locator('#sim-run-rehearsal').click();
+  await page.waitForFunction(() => document.querySelector('#sim-rehearsal-status')?.dataset.state === 'failed');
+  assert.match(await page.locator('#sim-rehearsal-status').textContent(), /PLANAR_FALLBACK_FORBIDDEN/);
+  await page.unroute('**/mujoco.wasm');
+  passed('CW-S02 browser worker rejects 13,242-byte planar SIM-3 Wasm and refuses silent fallback');
+
+  // CW-S02: Operator stop / mid-flight interruption fences the active worker.
+  let wasmRelease, wasmHeldResolve;
+  const wasmHeld = new Promise(resolve => {wasmHeldResolve = resolve;});
+  const wasmGate = new Promise(resolve => {wasmRelease = resolve;});
+  await page.route('**/mujoco.wasm', async route => {
+    wasmHeldResolve(); await wasmGate; try {await route.continue();} catch {}
+  });
+  await page.locator('#sim-run-rehearsal').click();
+  await wasmHeld;
+  assert.equal(await page.locator('#sim-rehearsal-status').getAttribute('data-state'), 'running');
+  await page.locator('#sim-stop-rehearsal').click();
+  assert.equal(await page.locator('#sim-rehearsal-status').getAttribute('data-state'), 'interrupted');
+  wasmRelease();
+  await page.unroute('**/mujoco.wasm');
+  passed('CW-S02 active worker rehearsal interrupts cleanly on operator stop');
+
+  for (const action of ['parameters','draft','undo','redo','hidden']) {
+    await page.locator('#sim-rehearsal-preset').click(); await waitCompiled();
+    let releasePending, pendingResolve;
+    const pending=new Promise(resolve=>{pendingResolve=resolve;}),gate=new Promise(resolve=>{releasePending=resolve;});
+    const hold=async route=>{pendingResolve();await gate;try{await route.continue();}catch{}};
+    await page.route('**/mujoco.wasm',hold);
+    try {
+      await page.locator('#sim-run-rehearsal').click();await pending;
+      if(action==='parameters') await page.locator('#sim-kp').fill('2');
+      else if(action==='draft') {
+        await page.locator('#inspect-tab').click();await page.locator('#name').fill('CW-S02 interruption revision');
+        await page.locator('#rename').click();await page.locator('#simulation-tab').click();
+      } else if(action==='undo'||action==='redo') await page.locator(`#${action}`).click();
+      else await page.evaluate(()=>{
+        Object.defineProperty(document,'hidden',{configurable:true,value:true});
+        document.dispatchEvent(new Event('visibilitychange'));delete document.hidden;
+      });
+      assert.equal(await page.locator('#sim-stop-rehearsal').isDisabled(),true);
+      releasePending();await page.unroute('**/mujoco.wasm',hold);await waitCompiled();
+      await page.waitForTimeout(60);
+      assert.notEqual(await page.locator('#sim-rehearsal-status').getAttribute('data-state'),'completed');
+      assert.equal(await page.locator('#sim-rehearsal-trace').textContent(),'—');
+    } finally {releasePending();await page.unroute('**/mujoco.wasm',hold);}
+  }
+  await page.locator('#sim-rehearsal-preset').click(); await waitCompiled();
+  passed('CW-S02 draft/undo/redo/parameter/tab interruption fences pending workers and clears stale rehearsal results');
+
+  // CW-S02: Full 60-substep rehearsal in pinned @mujoco/mujoco@3.15.0 Wasm under worker-scoped wasm-unsafe-eval CSP.
+  await page.locator('#sim-run-rehearsal').click();
+  await page.waitForFunction(() => ['completed','failed'].includes(document.querySelector('#sim-rehearsal-status')?.dataset.state), null, {timeout: 15000});
+  assert.equal(await page.locator('#sim-rehearsal-status').getAttribute('data-state'), 'completed', await page.locator('#sim-rehearsal-status').textContent());
+  assert.equal(
+    await page.locator('#sim-rehearsal-profile').textContent(),
+    'seedcore.cw-s02.mujoco-wasm-st.v1 · @mujoco/mujoco 3.15.0',
+  );
+  assert.equal(
+    await page.locator('#sim-rehearsal-wasm').textContent(),
+    'd59c489dd521c80af6965756c5b90daff549fa281566544e4540c170d937633d',
+  );
+  assert.equal(
+    await page.locator('#sim-rehearsal-substeps').textContent(),
+    '60 / 60 · dt 0.002s · decimation 10 · 6 policy updates · 60 captured',
+  );
+  const traceSha = await page.locator('#sim-rehearsal-trace').textContent();
+  assert.match(traceSha, /^[0-9a-f]{64}$/);
+  const rehearsalPayload = JSON.parse(await page.locator('#sim-rehearsal-summary').textContent());
+  assert.equal(rehearsalPayload.summary.status, 'completed');
+  assert.equal(rehearsalPayload.summary.planarFallbackUsed, false);
+  assert.equal(rehearsalPayload.summary.physicalAcceptance, false);
+  assert.equal(rehearsalPayload.summary.executionAuthority, 'none');
+  assert.equal(rehearsalPayload.summary.executedSubsteps, 60);
+  assert.equal(rehearsalPayload.summary.capturedSamples, 60);
+  assert.equal(rehearsalPayload.summary.traceDigest, traceSha);
+  const cwS02Dir = path.join(root, 'artifacts/robotics/cw-s02');
+  await mkdir(cwS02Dir, {recursive: true});
+  await writeFile(path.join(cwS02Dir, 'browser-rehearsal.json'), JSON.stringify(rehearsalPayload, null, 2) + '\n');
+  passed('CW-S02 pinned @mujoco/mujoco 3.15.0 worker completes 60-substep rehearsal with deterministic trace');
+
+  await exerciseCwS02WorkerBoundary(page,root,passed);
   await page.screenshot({path:path.join(studio,'simulation-inspector.png'),fullPage:true});
   await writeFile(path.join(studio, 'browser-handoff.json'), JSON.stringify({scope:'offline_simulation_only', physicalAcceptance:false, modelDigest:original, binding},null,2)+'\n');
 }

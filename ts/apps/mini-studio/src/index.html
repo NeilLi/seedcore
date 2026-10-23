@@ -63,7 +63,20 @@
 <details><summary>Manifest · mappings, rest angles, velocity metadata &amp; limitations</summary><pre id="sim-manifest" class="mono"></pre></details>
 <label for="sim-xml">Compiled MJCF XML</label><textarea id="sim-xml" rows="8" readonly spellcheck="false"></textarea>
 <div class="simulation-actions"><button id="sim-download-xml" type="button" disabled>Download .mjcf.xml</button><button id="sim-copy-xml" type="button" disabled>Copy MJCF</button><button id="sim-download-bundle" type="button" disabled>Download .cw-s01.model.json</button><button id="sim-copy-bundle" type="button" disabled>Copy model bundle</button></div>
-<p class="note">Fixed-base serial boxes, 1–3 revolute joints. Proxy contacts disabled; ideal actuators omit electrical/thermal dynamics. Velocity limits are metadata only. Native target: MuJoCo 3.15.0. Browser runtime acceptance remains CW-S02; exports grant no motion authority.</p>
+<h3>CW-S02 · Pinned Browser MuJoCo 3.15.0 Rehearsal</h3>
+<p>Qualified rehearsal: dt 0.002 s; position kp 1 (torque has no kp). Applying this preset recompiles the model and changes its digest. Compiler defaults and exports remain available independently.</p>
+<button id="sim-rehearsal-preset" type="button" disabled>Apply qualified rehearsal settings</button>
+<div class="simulation-actions"><button id="sim-run-rehearsal" type="button" disabled>Run CW-S02 Wasm Rehearsal</button><button id="sim-stop-rehearsal" type="button" disabled>Stop Rehearsal</button></div>
+<p id="sim-rehearsal-status" role="status" aria-live="polite" data-state="idle">Compile a current model to rehearse in pinned MuJoCo 3.15.0 Wasm.</p>
+<dl class="drc-meta">
+<dt>Runtime profile</dt><dd id="sim-rehearsal-profile" class="mono">—</dd>
+<dt>Pinned Wasm SHA-256</dt><dd id="sim-rehearsal-wasm" class="mono">—</dd>
+<dt>Substeps &amp; clock</dt><dd id="sim-rehearsal-substeps">—</dd>
+<dt>Final joint state (qpos / qvel)</dt><dd id="sim-rehearsal-joints" class="mono">—</dd>
+<dt>Capture trace SHA-256</dt><dd id="sim-rehearsal-trace" class="mono">—</dd>
+</dl>
+<details><summary>CW-S02 worker summary · clocks, capture &amp; substep gate</summary><pre id="sim-rehearsal-summary" class="mono"></pre></details>
+<p class="note">Fixed-base serial boxes, 1–3 revolute joints. Proxy contacts disabled; ideal actuators omit electrical/thermal dynamics. Velocity limits are metadata only. Native/Wasm target: MuJoCo 3.15.0 (no planar fallback). Exports and rehearsal grant no motion authority.</p>
 </div></aside>
 </div>
 <details class="raw"><summary>Import raw assembly JSON</summary><label for="raw">V2 only · maximum 256 KiB · duplicate keys rejected</label><textarea id="raw" rows="8" spellcheck="false" placeholder="Paste a seedcore.assembly.v2 document"></textarea><button id="import-text">Validate &amp; import</button></details>

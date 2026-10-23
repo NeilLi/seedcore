@@ -3,17 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"},
-    "./visual": {"types": "./dist/visual.d.ts", "default": "./dist/visual.js"}
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./visual": {
+      "types": "./dist/visual.d.ts",
+      "default": "./dist/visual.js"
+    },
+    "./mujoco": {
+      "types": "./dist/mujoco.d.ts",
+      "default": "./dist/mujoco.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@mujoco/mujoco": "3.15.0",
     "@seedcore/contracts": "0.1.0",
     "@seedcore/drc-solver": "0.1.0"
   }

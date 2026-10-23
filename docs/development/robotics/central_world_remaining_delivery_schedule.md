@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
 Date: 2026-10-23
-Status: Phase 2 offline and CW-S01 compiler/native/Studio handoff passed locally; CW-S02 is the single next package; real-source/physical gates remain open
+Status: Phase 2 offline and CW-S01 compiler/native/Studio handoff passed locally; CW-S02 fixed-preset local runtime passed; CW-S03 compatibility preflight is next; real-source/physical gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -33,9 +33,10 @@ software scope with pure worker DRC, routing proposals, field-linked findings,
 assembly-to-MJCF compiler/native-parity slice** is implemented on synthetic
 supported serial-tabletop fixtures. The 23 October offline Studio handoff adds
 a separately pinned synthetic reference, readiness inspection and deterministic
-XML/model exports. **CW-S02 is the single next implementation package** for
-pinned browser worker/engine/model/control/capture qualification. Real-source
-physical readiness remains open under CW-D01.
+XML/model exports. **CW-S02 now has a reviewed local fixed-preset runtime**:
+`dt=0.002`, position `kp=1` or ideal torque, with full 120-step native/Chrome
+parity and bounded capture/control checks. **CW-S03 compatibility preflight is
+next**, followed by CW-S04; physical readiness remains open under CW-D01.
 Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
 Missing Microduck checkpoint outputs block its locomotion policy lane, not a
@@ -126,7 +127,7 @@ data. Static rendering is independent of model/control/capture qualification.
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
 | CW-S01 · W6 (offline handoff passed locally) | Restricted assembly-to-MJCF compiler and Studio reference/export handoff; `ts/packages/wasm-sim-bridge` | CW-A01, CW-A04; explicit joint model | Simulation: first fixed-base tabletop subset, generated primitive geometry/inertials/actuators, native MuJoCo compile/FK/mass/range comparison and unsupported-subset report |
-| CW-S02 · W7 | Pinned browser MuJoCo worker adapter, clocks, bounded buffers and runtime profiles | CW-S01; selected engine/build review | Simulation + Studio: native/browser parity, worker/resource/fault report, isolation/header/embedding tests and named-device timing; no silent planar fallback |
+| CW-S02 · W7 (local Wasm/parity/veto passed) | Pinned browser MuJoCo worker adapter, clocks, bounded buffers and runtime profiles | CW-S01; selected engine/build review | Simulation + Studio: [CW-S02 record](central_world_cw_s02_mujoco.md), `@mujoco/mujoco@3.15.0` Wasm/native parity, bounded clocks/capture, per-substep control veto and Studio worker rehearsal; no silent planar fallback |
 | CW-S03 · W7–W8 | Compatible ONNX adapter and skill manifest candidate; `packages/skill-packages` | CW-S02 plus independent policy/model references | Simulation/policy: policy bytes/license/export provenance, explicit observation/action map and input/output/timing parity; unsupported body/policy combinations refuse to run |
 | CW-S04 · W8 | Joint/LED gesture timeline, bounded interpolation, simulation trace and replay projection | CW-A01, CW-S02; CW-S03 only for policy-driven behaviors | Studio + verification: authored wave/tilt fixture, curve-extrema/loop/edit tests, stop/fault/coverage report and scoped outcome display |
 
@@ -151,6 +152,22 @@ current checks. Local evidence passed 18 compiler TS + 15 native tests, and
 This unblocks CW-S02 entry only. Source qualification, general browser runtime
 acceptance and hardware gates remain open.
 
+The [23 October CW-S02 record](central_world_cw_s02_mujoco.md) pins official
+Google DeepMind `@mujoco/mujoco@3.15.0` (`seedcore.cw-s02.mujoco-wasm-st.v1`,
+exact SHA-256 Wasm/JS pins, CSP-safe Embind closure invokers with zero JS
+`unsafe-eval`) matching native Python `mujoco==3.15.0`. It verifies Wasm/native
+FK, mass/inertia, and 120-substep rollout parity across all 14 synthetic models,
+enforces integer clocks, catch-up ceilings, complete capture overflow fencing,
+external force clearing, and per-substep control vetoes (`CW-SIM-02..04`), and
+adds an explicit fixed-preset worker rehearsal in Mini Studio. Position sources
+are recompiled with `kp=1`, `dt=0.002`; default `kp=10` is not runtime-qualified.
+Native state is never reset between rollout steps; absolute tolerance remains
+`1e-12` for all 120 steps in both modes. Chrome tests the shipped CSP invokers,
+stale startup races and single-thread operation without isolation/SAB. Local
+evidence passed 18 CW-S02 TS + 15 native parity tests, and
+152 workspace TS + 22 API + 36 Chrome checks +
+2 downloaded-bundle native tests.
+
 CW-S02 explicitly distinguishes the current planar custom engine from general
 MuJoCo Wasm. Freeze engine version, compiler options, model digest, physics dt,
 policy cadence and capture units. Simulation workers own state; rendering and
@@ -158,13 +175,12 @@ host/browser stalls cannot silently enlarge dt or drop required capture.
 Qualify an explicit single-thread profile if offered. Local top-level isolation
 does not establish that a portal/subdomain/iframe deployment is isolated.
 
-Use the [mjswan source assessment](mjswan_integration_assessment.md) as the
-CW-S02/CW-S03 candidate decision. Start with API feasibility: the reviewed 0.11.9
-engine lacks a public per-control veto, worker state-ownership contract and full
-telemetry export. Its MuJoCo 3.11.0 pin needs explicit reconciliation with
-SeedCore 3.15.0; do not install it into the frozen environment. Qualify a small
-generic extension before performance/policy work, or rescope to official Wasm
-bindings under the same adapter contract if a large private fork is required.
+The [mjswan source assessment](mjswan_integration_assessment.md) supplied the
+rescope rule. CW-S02 selected official `@mujoco/mujoco@3.15.0` rather than
+importing mjswan's incompatible 3.11.0 engine. Its policy/worker interfaces do
+not inherit acceptance from this adapter; CW-S03 still requires independent
+policy/model references. Broader target-device timing and portal/iframe
+qualification remain open; the localhost editor intentionally rejects framing.
 
 CW-S03 is conditional for Microduck locomotion: exact checkpoint/export outputs
 and runtime/model/policy compatibility are still open. Its 61/14 mapping is not

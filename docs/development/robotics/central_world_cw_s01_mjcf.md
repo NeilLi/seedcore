@@ -189,10 +189,10 @@ handoff evidence. Neither omission can claim the full handoff verification.
 ## Remaining work
 
 CW-S01's offline Studio handoff is available through the separately pinned
-synthetic reference. The **single next implementation package is CW-S02**:
-pinned browser MuJoCo worker and engine/model/control/capture qualification.
-Real-source physical starter readiness remains CW-D01 work; never silently
-fill unknown fields or reuse synthetic sources as product qualification.
-CW-S03 policy compatibility, CW-S04
+synthetic reference. [CW-S02](central_world_cw_s02_mujoco.md) now delivers the
+pinned `@mujoco/mujoco@3.15.0` browser worker, clocks, bounded capture, and
+per-substep control gate (`CW-SIM-02..04`). Real-source physical starter
+readiness remains CW-D01 work; never silently fill unknown fields or reuse
+synthetic sources as product qualification. CW-S03 policy compatibility, CW-S04
 gestures and CW-G/F live/firmware work remain planned or separately gated.
 The [active queue](../current_next_steps.md) owns the next allocation.

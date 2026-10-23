@@ -70,18 +70,20 @@ def test_no_deployment_or_arbitrary_asset_routes(client):
 
 
 def test_performance_lab_static_allowlist_and_wasm_csp(tmp_path):
-    for name in ["performance.html", "lab-physics.js", "lab-render.js", "lab-physics.wasm", "index.html"]:
+    for name in ["performance.html", "lab-physics.js", "lab-render.js", "lab-physics.wasm", "cw-s02-worker.js", "mujoco.wasm", "index.html"]:
         (tmp_path / name).write_bytes(b"fixture")
     lab = TestClient(create_app(web_root=tmp_path))
-    for name in ["performance.html", "lab-physics.js", "lab-render.js", "lab-physics.wasm"]:
+    for name in ["performance.html", "lab-physics.js", "lab-render.js", "lab-physics.wasm", "cw-s02-worker.js", "mujoco.wasm"]:
         response = lab.get("/" + name)
         assert response.status_code == 200
         assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
         assert response.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
         assert "'unsafe-eval'" not in response.headers["Content-Security-Policy"]
     assert "'wasm-unsafe-eval'" in lab.get("/lab-physics.js").headers["Content-Security-Policy"]
+    assert "'wasm-unsafe-eval'" in lab.get("/cw-s02-worker.js").headers["Content-Security-Policy"]
     assert "'wasm-unsafe-eval'" not in lab.get("/").headers["Content-Security-Policy"]
     assert lab.get("/lab-physics.wasm").headers["Content-Type"] == "application/wasm"
+    assert lab.get("/mujoco.wasm").headers["Content-Type"] == "application/wasm"
     (tmp_path / "secret.js").write_text("not allowlisted")
     assert lab.get("/secret.js").status_code == 404
     assert lab.get("/performance/../secret.js").status_code == 404

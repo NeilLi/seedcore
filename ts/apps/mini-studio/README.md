@@ -24,7 +24,12 @@ false and synthetic prices/power inputs are not supplier evidence. Select
 position/ideal-torque mode, timestep and gain, inspect the manifest/mappings and
 limitations, then copy/download `.mjcf.xml` or canonical `.cw-s01.model.json`.
 Loads and edits clear old artifacts; undo/redo recompiles under a fresh epoch.
-The offline handoff is delivered; browser MuJoCo runtime acceptance is CW-S02.
+CW-S02 now adds a pinned single-thread MuJoCo worker rehearsal. Explicitly
+apply its qualified settings (`dt=0.002`, position `kp=1` or ideal torque) to
+compile a new model digest; CW-S01 defaults/exports stay available. Runs are
+bounded to 60 substeps, with per-step control/capture gates and interruption
+on edit, parameter change, undo/redo, stop or tab hide. Broader model/device and
+portal/iframe qualification remain open.
 
 `node tools/robotics/verify-authoring.cjs --browser` requires the pinned native
 MuJoCo 3.15.0 environment as well as Chrome. It compares actual browser exports

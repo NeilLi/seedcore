@@ -59,4 +59,4 @@ try {
   await page.locator('.inspector').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,'mobile-inspector.png')});passed('desktop and mobile layout; no horizontal overflow');
   assert.deepEqual(report.errors,[]);passed('strict CSP and no browser exceptions');report.status='checks_passed';
 } catch(error) {report.status='checks_failed';report.failure=String(error.stack||error);process.exitCode=1;console.error(report.failure);}
-finally {await browser?.close();server.kill('SIGTERM');for(const dir of [output,compatOutput,path.join(root,'artifacts/robotics/cw-s01/studio')]){await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'browser-verification.json'),JSON.stringify(report,null,2)+'\n');await writeFile(path.join(dir,'server.log'),log);}}
+finally {await browser?.close();server.kill('SIGTERM');for(const dir of [output,compatOutput,path.join(root,'artifacts/robotics/cw-s01/studio'),path.join(root,'artifacts/robotics/cw-s02')]){await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'browser-verification.json'),JSON.stringify(report,null,2)+'\n');await writeFile(path.join(dir,'server.log'),log);}}

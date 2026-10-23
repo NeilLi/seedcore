@@ -72,7 +72,7 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
         # Only the opt-in simulation labs and physics worker may compile pinned Wasm.
         # The editor retains its existing no-eval policy; no arbitrary JS eval.
         scene_policy = request.url.path in {"/scene.html", "/scene-worker.js"}
-        wasm_policy = " 'wasm-unsafe-eval'" if scene_policy or request.url.path in {"/performance.html", "/lab-physics.js"} else ""
+        wasm_policy = " 'wasm-unsafe-eval'" if scene_policy or request.url.path in {"/performance.html", "/lab-physics.js", "/cw-s02-worker.js"} else ""
         blob_policy = " blob:" if scene_policy else ""
         response.headers.update({
             "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp",
@@ -149,6 +149,7 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
     def page(page: str):
         name = page or "index.html"
         if name not in {"index.html", "app.js", "app.css", "third-party-notices.txt", "favicon.svg",
+                        "cw-s02-worker.js", "mujoco.wasm",
                         "performance.html", "performance.js", "performance.css", "lab-physics.js", "lab-render.js", "lab-physics.wasm",
                         "scene.html", "scene.css", "scene.js", "scene-worker.js", "scene-build.json",
                         "scene-decoders/draco_decoder.wasm", "scene-decoders/draco_wasm_wrapper.js"} or not (web_root / name).is_file():

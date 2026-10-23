@@ -106,6 +106,9 @@ jobs:
       - name: Verify restricted MJCF compiler and native parity
         run: node tools/robotics/verify-mjcf.cjs
 
+      - name: Verify CW-S02 pinned MuJoCo Wasm worker, clocks, veto and native parity
+        run: node tools/robotics/verify-cw-s02.cjs
+
       - name: Verify browser pipeline transport and bounded pacing
         run: node tools/robotics/verify-browser-performance.cjs --skip-python
 
@@ -124,6 +127,10 @@ jobs:
             artifacts/robotics/cw-a04/verification.json
             artifacts/robotics/cw-s01/verification.json
             artifacts/robotics/cw-s01/studio/verification.json
+            artifacts/robotics/cw-s02/verification.json
+            artifacts/robotics/cw-s02/browser-verification.json
+            artifacts/robotics/cw-s02/browser-parity.json
+            artifacts/robotics/cw-s02/browser-rehearsal.json
             artifacts/robotics/browser-performance/verification.json
             artifacts/robotics/static-scene/verification.json
 
