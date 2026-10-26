@@ -2,3 +2,4 @@
 export * from './compiler.js';
 export * from './visual.js';
 export * from './mujoco.js';
+export * from './policyCompatibility.js';

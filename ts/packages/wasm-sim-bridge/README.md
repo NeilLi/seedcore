@@ -108,3 +108,20 @@ position `kp=1` or ideal torque on the 14 fixture sources for up to 120 steps.
 single-thread/no-SAB operation, startup races and Studio interruptions. Compiler
 default kp=10 is retained for export but refused by this runtime profile. See
 [CW-S02 scope and review evidence](../../../docs/development/robotics/central_world_cw_s02_mujoco.md).
+
+## CW-S03 offline policy compatibility preflight
+
+`assessPolicyCompatibility(input)` checks bounded versioned policy/model/adapter
+contracts against independently retained pins, exact observation/action and
+joint/home semantics, actuator mapping, cadence and separately bound evidence
+roles. It does not load ONNX, step physics, authorize motion or qualify a runtime.
+`computePolicyAdapterDigest(adapter)` hashes the canonical adapter descriptor.
+A synthetic positive is only `contract_consistent`; all reports retain
+`physicalAcceptance: false`, authority none and runtime qualification not granted.
+
+Run `node tools/robotics/verify-cw-s03.cjs --require-artifact-replay` from the
+repository root for the strict local inventory/replay and refusal report. The
+policy cache is never fetched implicitly. The default command records missing
+optional artifacts/dependencies explicitly and cannot claim skipped replay as
+acceptance. See the [CW-S03 record](../../../docs/development/robotics/central_world_cw_s03_preflight.md)
+for the two blocked real candidates and the handoff to CW-S04.

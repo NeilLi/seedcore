@@ -192,7 +192,8 @@ rehearsal settings. Broader models/settings, target-device timing, portal/iframe
 deployment and rendering/capture export qualification remain separate. The
 localhost editor intentionally forbids framing; local COOP/COEP checks do not
 qualify another deployment. Physical starter
-qualification remains blocked on `CW-D01`. The next scheduled packages are
-**CW-S03** (compatible ONNX policy adapter where independent checkpoint/export
-references exist) and **CW-S04** (declarative tabletop joint/LED gesture
-timeline, bounded interpolation, and replay projection).
+qualification remains blocked on `CW-D01`. The [26 October CW-S03 preflight](central_world_cw_s03_preflight.md)
+now records exact policy/model/adapter blockers without qualifying policy
+execution. **CW-S04** (declarative tabletop joint/LED gesture timeline, bounded
+interpolation and replay projection) is next; full CW-S03 policy inference
+remains conditional on its independent references and browser evidence.

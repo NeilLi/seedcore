@@ -30,7 +30,7 @@ TTL fixture, printable structures, ODRI open-design study and exact CubeMars
 compact-joint feasibility. It assesses all seven newly supplied initiatives and
 reclassifies the earlier ten candidates. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
-CW-S03 compatibility preflight next after CW-S01 handoff and the CW-S02 fixed-preset local runtime; real-source
+CW-S04 next after CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 offline preflight; full policy execution remains gated; real-source
 qualification, new joints and physical profiles remain conditional, with no industrial-cell or humanoid expansion.
 
 The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)

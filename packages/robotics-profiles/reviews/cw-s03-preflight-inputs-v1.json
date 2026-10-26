@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "seedcore.cw-s03.inventory-pins.v1",
+  "scope": "offline_policy_compatibility_preflight",
+  "physicalAcceptance": false,
+  "executionAuthority": "none",
+  "baselineRevision": "bfd76d6",
+  "files": {
+    "packages/robotics-profiles/microduck-sim-v1.json": "8794d1b069364b90d113e4b2135bdc7152a5b416feb0e419dab5b6e0b1af7a38",
+    "tests/fixtures/microduck/golden-v1.json": "34295a7129eec78b3827eb467fc350113ec919b309883cefb3491cf4cb0f798a",
+    "src/seedcore/robotics/microduck_contract.py": "60a8bd491d359c74aa13763c8742464f75d0d9cdde00f6c7f4c470d151e70fb6"
+  }
+}

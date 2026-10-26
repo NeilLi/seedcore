@@ -108,6 +108,7 @@ Every delivered slice in this repository is backed by reproducible build-from-so
 | **CW-A02–CW-A04 Mini Studio, Snapping, DRC & Unknown-Aware BOM** | **Phase 2 Offline Passed** | Strict duplicate-key raw JSON rejection, deep-frozen 32-entry / 2 MiB revision store, deterministic undo/redo, `authorityEpoch` invalidation, stale-load fencing, `15 mm` / `5°` candidate snapping (`CW-SNAP-01`), pure worker DRC (`CW-DRC-01..03`), routing proposals, 3D rotated/parallel-axis mass/inertia, and unknown-aware BOM; **97 TS + 14 FastAPI + 21 Chrome browser exercise groups passing**. | `node tools/robotics/verify-authoring.cjs --browser` |
 | **CW-S01 Restricted Assembly-to-MJCF Compiler** | **Local Synthetic Slice Passed** | Deterministic primitive serial-chain MJCF, separate offline simulation readiness, source/DRC/model binding, **18 TS + 15 native Python tests** over 14 synthetic models, plus the Studio readiness inspector and canonical XML/model export handoff. The actual starter remains blocked; browser/live/hardware acceptance is open. | `node tools/robotics/verify-mjcf.cjs` |
 | **CW-S02 Pinned MuJoCo Worker** | **Fixed-Preset Local Slice Passed** | Official `@mujoco/mujoco@3.15.0`, CSP-safe static invokers, 14 full 120-step native/Chrome fixture rollouts at `dt=0.002` / position `kp=1` or torque; per-step veto, clocks and bounded capture. Broader model/device/deployment qualification remains open. | `node tools/robotics/verify-cw-s02.cjs` and `node tools/robotics/verify-authoring.cjs --browser` |
+| **CW-S03 Policy Compatibility Preflight** | **Local Preflight Passed; Runtime Blocked** | Pinned inventory, 16-case CPU artifact replay, exact policy/model/adapter checks and deterministic refusal reports. Independent checkpoint, actuator, rights and browser evidence remain open. | `node tools/robotics/verify-cw-s03.cjs --require-artifact-replay` |
 | **Simulation-First `M0` & Bounded Sessions** | **Delivered (Simulation Scope)** | Pinned **Microduck 0.1.0** MJCF ($0.737\text{ kg}$, 14 actuators, **88 Python tests**), read-only `microduck-sim-v1` HAL adapter (`61` obs / `14` actions / `15` servo channels), **16 upstream ONNX (`alpha_walking.onnx`) goldens**, localhost split-screen `fast-spine-v1` session rehearsal, and Python/Rust receipt checks. | `.venv/bin/python scripts/robotics/review_m0_pins.py` |
 | **M0 / CW-D01 Hardware Source Register** | **Inventory Recorded; Qualification Open** | Inventories `ESP32-S3-DevKitC-1-N8R8` and `Feetech STS3215` (TTL half-duplex spec `A/0`, `4–7.4 V` input) reference facts ([`m0_cw_d01_register_2026_10_19.md`](docs/development/robotics/m0_cw_d01_register_2026_10_19.md)). **No hardware is connected or qualified** (`STS3215` page 4 vs. page 8 pin numbering and regulated rail setpoints remain open). | `.venv/bin/python scripts/robotics/freeze_fast_spine_protocol.py` |
 
@@ -128,7 +129,7 @@ caches and origin rebasing beside an independent synthetic robot. Static
 visuals remain outside collision, DRC and execution authority.
 
 ### What Remains Open / Gated
-- **Central World Phase 3–5 (`CW-S01` → `CW-L03`):** Phase 2 offline assembly/DRC and the CW-S01 synthetic compiler/native-parity slice are complete locally. CW-S01 offline Studio handoff is available through a separately pinned synthetic reference; real-source physical readiness remains open under CW-D01. CW-S02 now has a local pinned MuJoCo worker at explicit rehearsal settings (`dt=0.002`, position `kp=1` or torque), full native/Chrome rollout parity, and bounded control/capture gates. CW-S03 compatibility preflight is next, followed by CW-S04 Robot Moments; broader model/device/deployment qualification remains open, `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification and the January alpha review.
+- **Central World Phase 3–5 (`CW-S01` → `CW-L03`):** Phase 2 offline assembly/DRC and the CW-S01 synthetic compiler/native-parity slice are complete locally. CW-S01 offline Studio handoff is available through a separately pinned synthetic reference; real-source physical readiness remains open under CW-D01. CW-S02 now has a local pinned MuJoCo worker at explicit rehearsal settings (`dt=0.002`, position `kp=1` or torque), full native/Chrome rollout parity, and bounded control/capture gates. CW-S03 offline preflight now records pinned inputs, CPU artifact replay and blocked runtime candidates; CW-S04 Robot Moments is next. Broader model/device/deployment qualification remains open. Later packages include `CW-G01–G02` (live admission/replay), `CW-E01` (Build Pack exporter), conditional `CW-F01/F02` firmware qualification and the January alpha review.
 - **Native Microduck & Physical Hardware (`M1–M4` / `G0–G2`):** Independent training-checkpoint export parity (`M1`), live native `M2` velocity/stop sessions, hardware-enrolled signer receipts (`M3`), physical MCU firmware & WebSerial bridge, and measured 1-servo → 3-servo / biped stopping behavior (`M4`).
 
 ---
@@ -240,11 +241,14 @@ npm --prefix ts ci
 # Run CW-A01 v2 build-from-source conformance (117 Python + 71 Node tests)
 node tools/robotics/verify-assembly.cjs
 
-# Run authoring/DRC/compiler regressions and handoff (152 TS + 22 API + 36 UI groups + 2 native download tests)
+# Run authoring/DRC/compiler regressions and handoff (195 TS + 22 API + 36 UI groups + 2 native download tests)
 node tools/robotics/verify-authoring.cjs --browser
 
 # Run CW-S01 compiler/negative matrix and pinned native MuJoCo parity (robotics-sim extra required)
 node tools/robotics/verify-mjcf.cjs
+
+# Verify CW-S03 preflight and require the existing pinned CPU policy artifact replay
+node tools/robotics/verify-cw-s03.cjs --require-artifact-replay
 
 # Serve Mini Studio locally at http://127.0.0.1:8767
 .venv/bin/python scripts/robotics/serve_mini_studio.py --port 8767
