@@ -7,8 +7,11 @@
 > This report preserves the supplied draft for review. Its commands, model
 > details, policy inventory, and performance statements need to be checked
 > against the cited project revisions and local environment before being used
-> as verified test results. SeedCore's current development map describes the
-> Microduck adapter and hardware acceptance as planned work.
+> as verified test results. For SeedCore implementation status, the
+> [26 October active queue](../current_next_steps.md) records a delivered
+> read-only Microduck adapter and host simulation rehearsal; live native motion,
+> enrolled physical evidence and hardware acceptance remain gated. This editorial
+> status note does not validate or alter the supplied study below.
 
 ## 1. Local Development Capabilities (Mac / Apple Silicon)
 

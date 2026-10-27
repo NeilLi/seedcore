@@ -7,10 +7,15 @@ They provide bounded transferable/shared snapshots and a pinned synthetic SIM-3
 fixture. They do not run compiled MJCF or implement the CW-S02 MuJoCo adapter.
 The CW-S01 compiler API and readiness policy below remain unchanged.
 
-CW-S01 / CW-SIM-01, 2026-10-21. This package compiles the supported assembly v2
-subset to deterministic, asset-free MJCF and a digest-bound manifest. It has no
-browser worker, UI endpoint, hardware route or execution authority. CW-S02 owns
-the future browser MuJoCo adapter.
+The CW-S01 / CW-SIM-01 compiler slice (21 October) compiles the supported
+assembly v2 subset to deterministic, asset-free MJCF and a digest-bound
+manifest. Its [23 October Studio handoff](../../../docs/development/robotics/central_world_cw_s01_mjcf.md)
+and the separate [CW-S02 fixed-preset MuJoCo adapter](../../../docs/development/robotics/central_world_cw_s02_mujoco.md)
+are delivered locally. This package also supplies the CW-S03 offline preflight
+described below; full policy execution remains blocked. The
+[26 October active queue](../../../docs/development/current_next_steps.md)
+selects CW-S04 gesture/replay next. These slices create no hardware route or
+execution authority; real starter and broader runtime qualification remain open.
 
 ## Supported subset
 

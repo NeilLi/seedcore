@@ -67,7 +67,15 @@ flowchart TB
 | **Hardware Requirement** | Runs on any CPU (plus optional MJX/Warp for batch RL training); **zero NVIDIA GPU required** for interactive work. | Pure CPU mathematical programming (`Eigen`, `OSQP`, `CLP`, `Ipopt`); **zero GPU required**. | Runs on standard Linux/macOS/SBC CPUs (`Raspberry Pi`, `Orin`, `x86`, `Mac`). |
 | **Primary Academic Strength** | Fast forward time-stepping (`mj_step`), generalized coordinates, soft convex contact, actuators, sensors, and RL policy evaluation. | Analytical multibody kinematics/dynamics, **trajectory optimization (`Toppra`, `KinematicTrajectoryOptimization`)**, constrained IK, hydroelastic contact, and Lyapunov/CBF verification. | Standardized hardware drivers (`ros2_control`), `URDF`/`Xacro` descriptions, distributed pub/sub (`DDS`/`Zenoh`), and `MCAP` recording/inspection. |
 | **Browser Wasm Suitability** | **High:** Compact C core compiles cleanly to single-thread or pthread Wasm (`@mujoco/mujoco`, `mjswan`). | **Low (Avoid in Browser):** Heavy C++ template and numerical solver graph is too large for a beginner browser tab; keep on the Local AI Station Python host. | **Low for Core Middleware; High for Formats:** Do not run DDS in a browser tab; use pure-TS `@mcap/core`, `urdf-loader`, or WebSocket/Zenoh edge bridges. |
-| **Current SeedCore Status (`2dd11d4`)** | **Adopted & Pinned:** `mujoco==3.15.0` in Python workbench, Microduck `0.1.0` loader, and `CW-S01` native parity (`13/13` tests). | **Evaluated Candidate:** Not yet installed; targeted for optional `CW-S04` trajectory retiming/IK and Pillar C calibration. | **Evaluated Candidate:** `URDF` ingestion supported in `model_package.py`; `CW-E01` URDF export and `CW-G02` MCAP framing planned. |
+| **SeedCore research baseline (`2dd11d4`)** | **Adopted & Pinned:** `mujoco==3.15.0` in Python workbench, Microduck `0.1.0` loader, and `CW-S01` native parity (`13/13` tests). | **Evaluated Candidate:** Not yet installed; targeted for optional `CW-S04` trajectory retiming/IK and Pillar C calibration. | **Evaluated Candidate:** `URDF` ingestion supported in `model_package.py`; `CW-E01` URDF export and `CW-G02` MCAP framing planned. |
+
+The table retains its source-review baseline and counts. For implementation
+status, the [26 October active queue](../current_next_steps.md) and package
+records now include [CW-S01 offline handoff](central_world_cw_s01_mjcf.md),
+[CW-S02 fixed-preset local runtime](central_world_cw_s02_mujoco.md) and
+[CW-S03 preflight](central_world_cw_s03_preflight.md). CW-S04 bounded gesture/replay
+is next; full policy execution, broader runtime qualification and hardware
+gates remain open. Drake and ROS/MCAP integrations remain candidates.
 
 ---
 

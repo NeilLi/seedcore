@@ -1,7 +1,7 @@
 # Robot design toolkits for SeedCore
 
 Date: 2026-10-08
-Status: Accepted research recommendation; CAD adapters and external model imports planned
+Status: Accepted research recommendation; offline MJCF/URDF package ingestion delivered separately; CAD adapters planned
 
 ## Decision and scope
 
@@ -18,9 +18,13 @@ are the useful acceptance targets.
 
 The [MuJoCo workbench](mujoco_development_workbench.md) currently generates
 primitive mechanisms and supports bounded experiments through internal agent
-tools. External MJCF/URDF packages, CAD integration and a general browser
-workspace remain planned. This assessment supports that next step without
-changing the [Microduck integration gates](microduck_integration_plan.md).
+tools. [Offline MJCF/URDF package ingestion](model_package_ingestion.md) is
+implemented. [CW-S01](central_world_cw_s01_mjcf.md) and
+[CW-S02](central_world_cw_s02_mujoco.md) add a restricted synthetic compiler/handoff
+and fixed-preset browser runtime; CAD adapters and a general browser workbench
+remain planned. The [26 October active queue](../current_next_steps.md) selects
+CW-S04 bounded gesture/replay next without changing the
+[Microduck integration gates](microduck_integration_plan.md).
 
 ## Selected toolkits
 

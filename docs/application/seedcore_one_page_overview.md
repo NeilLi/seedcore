@@ -48,8 +48,11 @@ shared PDP/token/revocation/evidence paths and Rust token/signature/replay
 verification. On 2026-10-14, local checks passed 78 simulator tests and 88
 model/workbench tests.
 
-Microduck HAL integration, MCU Fast Spine firmware, physical WebSerial control,
-enrolled robot signing and hardware acceptance remain planned. SIM-3's planar
+The read-only Microduck HAL adapter and bounded host simulation rehearsal are
+delivered locally. Governed native motion, MCU Fast Spine firmware, physical
+WebSerial control, enrolled robot signing and hardware acceptance remain open.
+Use the [active queue](../development/current_next_steps.md) and package records
+for implementation status. SIM-3's planar
 slice is delivered; broader dynamics/encoder/worker/oracle gates remain open.
 The Microduck 61/14 policy mapping is not a universal robotics data schema.
 

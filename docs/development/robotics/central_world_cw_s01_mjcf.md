@@ -1,7 +1,7 @@
 # CW-S01: restricted assembly-to-MJCF compiler and native parity
 
 Date: 2026-10-23
-Status: Local compiler/native parity and Mini Studio offline handoff delivered; physical starter readiness and CW-S02 browser/runtime acceptance remain open
+Status: Local compiler/native parity and Mini Studio offline handoff delivered; CW-S02 fixed-preset local runtime recorded separately; physical starter and broader runtime/live/hardware qualification remain open
 Review: CW-SIM-01
 
 ## Scope and approved gate decision
@@ -193,6 +193,8 @@ synthetic reference. [CW-S02](central_world_cw_s02_mujoco.md) now delivers the
 pinned `@mujoco/mujoco@3.15.0` browser worker, clocks, bounded capture, and
 per-substep control gate (`CW-SIM-02..04`). Real-source physical starter
 readiness remains CW-D01 work; never silently fill unknown fields or reuse
-synthetic sources as product qualification. CW-S03 policy compatibility, CW-S04
-gestures and CW-G/F live/firmware work remain planned or separately gated.
-The [active queue](../current_next_steps.md) owns the next allocation.
+synthetic sources as product qualification. The
+[26 October CW-S03 preflight](central_world_cw_s03_preflight.md) records CPU
+artifact replay and both blocked policy-runtime candidates; full policy execution
+remains gated. The [active queue](../current_next_steps.md) selects CW-S04 bounded
+gesture/replay next. CW-G/F live/firmware work remains separately gated.

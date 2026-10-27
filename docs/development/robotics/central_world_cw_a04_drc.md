@@ -76,4 +76,10 @@ node tools/robotics/verify-authoring.cjs --browser
 
 ## Phase 2 offline exit and remaining gates
 
-With `CW-A01 v2`, `CW-A02`, `CW-A03`, and `CW-A04` passing locally, **Central World Phase 2 (Assembly & DRC) offline software scope is complete**. Physical component qualification (`CW-D01`, 26 Oct–1 Nov window) remains open in parallel. The next implementation package is **Phase 3 `CW-S01`** (restricted assembly-to-MJCF compiler and native MuJoCo comparison in `ts/packages/wasm-sim-bridge`).
+With `CW-A01 v2`, `CW-A02`, `CW-A03`, and `CW-A04` passing locally, **Central World Phase 2 (Assembly & DRC) offline software scope is complete**. Physical component qualification (`CW-D01`, 26 Oct–1 Nov window) remains open in parallel. At this 20 October exit, the next implementation package was **Phase 3 `CW-S01`** (restricted assembly-to-MJCF compiler and native MuJoCo comparison in `ts/packages/wasm-sim-bridge`).
+
+For current status, the [26 October active queue](../current_next_steps.md) and
+package records now retain local [CW-S01 handoff](central_world_cw_s01_mjcf.md),
+[CW-S02 fixed-preset runtime](central_world_cw_s02_mujoco.md) and
+[CW-S03 preflight](central_world_cw_s03_preflight.md) evidence. CW-S04 bounded
+gesture/replay is next; full policy execution and physical qualification remain open.

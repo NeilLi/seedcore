@@ -1,7 +1,7 @@
 # CW-S02: pinned browser MuJoCo 3.15.0 worker adapter, clocks, bounded capture and per-substep control gate
 
 Date: 2026-10-23
-Status: Local offline Wasm/native parity, bounded worker clocks/capture and per-substep control gate delivered; physical starter qualification, CW-S03 policy compatibility and CW-S04 timelines remain open
+Status: Local offline Wasm/native parity, bounded worker clocks/capture and per-substep control gate delivered; CW-S03 preflight delivered separately, policy execution blocked; CW-S04 next; physical and broader runtime qualification open
 Review: CW-SIM-02, CW-SIM-03, CW-SIM-04
 
 ## Scope and engine selection decision

@@ -2,7 +2,8 @@
 
 Date: 2026-10-20
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
-Status: Phase 1/2 offline and first CW-S01 compiler/native-parity slice implemented; real starter readiness and browser/live/hardware gates open
+Status: Phase 1/2 offline, CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 preflight delivered locally; CW-S04 next; real starter, full policy, broader runtime/live/hardware gates open
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 The product direction unifies component authoring, visual assembly, browser
 rehearsal and separately governed deployment inside the SeedCore monorepo.
@@ -23,14 +24,19 @@ implemented with local browser/store evidence. The
 ghosts and atomic numeric/subtree placement; the
 [CW-A04 DRC/BOM slice](central_world_cw_a04_drc.md) adds pure worker DRC,
 routing proposals, field-linked findings and unknown-aware BOM, closing Phase 2's
-offline software scope. CW-S01 now supplies the first restricted compiler slice.
+offline software scope. CW-S01 supplies the restricted compiler and offline Studio handoff.
 Exact physical catalog data remains an independent open gate.
 
-The [21 October CW-S01 record](central_world_cw_s01_mjcf.md) adds a restricted
-primitive compiler and synthetic native parity. A separate versioned offline
-readiness check defers only proxy physical fit; the full DRC report and actual
-starter remain blocked. This does not deliver a browser MuJoCo worker or close
-the real-source/Studio handoff.
+The [CW-S01 record](central_world_cw_s01_mjcf.md) records the restricted primitive
+compiler, synthetic native parity and 23 October offline Studio handoff. A
+separate versioned offline readiness check defers only proxy physical fit; the
+full DRC report and actual starter remain blocked. The
+[CW-S02 record](central_world_cw_s02_mujoco.md) supplies local fixed-preset
+browser MuJoCo parity, clocks, capture and per-substep veto evidence. The
+[26 October CW-S03 preflight](central_world_cw_s03_preflight.md) reproduces CPU
+artifact replay and reports both policy-runtime candidates blocked. The
+[active queue](../current_next_steps.md) selects CW-S04 bounded gesture/replay
+next; real-source, broader runtime/device, live and hardware gates remain open.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 retains the commercial horizon. [Microduck M0–M5](microduck_integration_plan.md)
@@ -62,8 +68,8 @@ capacity weekly, keeping the existing enforcement/evidence gates intact.
 | `packages/skill-packages/` | Behavior/policy manifests, observations/actions, compatible model/calibration, licenses and retained evaluation artifacts | Planned; do not duplicate the existing ignored ONNX cache into a distribution |
 | `ts/packages/robot-canvas/` | Immutable store, rendering/selection/ghost adapter and pure port alignment proposals, independent of policy state | CW-A02/CW-A03 proxy slice implemented |
 | `ts/packages/drc-solver/` | Pure deterministic assembly/electrical/mass checks, typed findings and bounded worker messages | CW-A04 offline slice implemented |
-| `ts/packages/wasm-sim-bridge/` | Versioned compiler/runtime adapters, worker lifecycle, clocks and telemetry provenance | CW-S01 restricted compiler/native parity implemented; CW-S02 worker/runtime adapter remains planned |
-| `ts/apps/mini-studio/` | Local Central World shell: assembly authoring, placement and DRC/BOM; timeline remains later work | CW-A02–CW-A04 localhost slice; not a deployed site |
+| `ts/packages/wasm-sim-bridge/` | Versioned compiler/runtime adapters, worker lifecycle, clocks and telemetry provenance | CW-S01 compiler/handoff, CW-S02 fixed-preset runtime and CW-S03 compatibility preflight delivered locally; full policy execution gated |
+| `ts/apps/mini-studio/` | Local Central World shell: assembly authoring, placement, DRC/BOM and synthetic model rehearsal; CW-S04 timeline next | CW-A02–CW-A04 plus CW-S01 handoff/CW-S02 fixed-preset localhost slices; not a deployed site |
 | `src/seedcore/robotics/component_registry.py` | Read-only structural, semantic and integrity validation | Implemented; creates no authority |
 | Existing Agent Gateway/PDP/HAL and Rust verifier | Independently admitted execution, device enforcement and evidence closure | Shared foundations; custom-build/native/hardware integration still gated |
 

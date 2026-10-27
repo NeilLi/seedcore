@@ -42,8 +42,10 @@ adoption hypotheses and the path from one integration to a reusable component.
 Avoid “guarantees physical safety”, “production-ready robotics” or “deterministic
 reconstruction of everything the robot saw”. Authorization, controller safety,
 sensor assurance and evidence completeness are separate claims. Describe only
-the profile and capture coverage actually validated. The Microduck adapter and
-hardware acceptance remain planned work.
+the profile and capture coverage actually validated. The read-only Microduck
+adapter and host simulation rehearsal are delivered locally; live native motion,
+enrolled physical evidence and hardware acceptance remain gated. Use the
+[active queue](current_next_steps.md) and its package records for implementation status.
 
 ## Core Distinction
 

@@ -120,9 +120,12 @@ binary, signed profile, build ZIP or community publication is created here.
 The [source review](references/upstream-sources.json) pins URDF-Studio, mjswan
 and the motion-editor snapshots and inspected-file hashes. No code from those
 three projects was imported. The [Central World plan](../../docs/development/robotics/central_world_engineering_plan.md)
-owns the later assembly, DRC, simulation, governance and deployment stages.
+owns assembly, DRC, simulation, governance and deployment stages.
 The [remaining schedule](../../docs/development/robotics/central_world_remaining_delivery_schedule.md)
-tracks the [assembly v2 implementation](assemblies/README.md) and CW-A02 handoff;
+records the [assembly v2 implementation](assemblies/README.md), CW-A02–CW-A04
+offline scope, CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 preflight
+as delivered locally. The [26 October active queue](../../docs/development/current_next_steps.md)
+selects CW-S04 bounded gesture/replay next; full policy execution remains gated.
 CW-D01 separately closes exact
 physical data for the selected profile. Use the
 [acceptance matrix](../../docs/development/robotics/central_world_acceptance_matrix.md)

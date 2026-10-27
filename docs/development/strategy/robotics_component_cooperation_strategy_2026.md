@@ -2,7 +2,8 @@
 
 Date: 2026-10-20
 Status: Revised proposal for lightweight desktop and supervised family/STEM robotics; no supplier qualification or agreement
-Repository baseline: `ba0d132`; CW-A04 offline DRC/BOM complete, CW-S01 next
+Research baseline: `ba0d132`; CW-A04 offline DRC/BOM complete at that revision
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 ## Recommendation
 
@@ -114,8 +115,12 @@ its diligence priority without claiming that any product has changed.
 ## Current foundation and gaps
 
 Central World has twelve draft/proxy parts, canonical assembly v2, immutable
-revisions, proxy placement and offline CW-A04 DRC/BOM. CW-S01 custom-build
-simulation is next. Microduck is a separately pinned native reference, not a
+revisions, proxy placement and offline CW-A04 DRC/BOM. The
+[CW-S01 handoff](../robotics/central_world_cw_s01_mjcf.md),
+[CW-S02 fixed-preset runtime](../robotics/central_world_cw_s02_mujoco.md) and
+[CW-S03 preflight](../robotics/central_world_cw_s03_preflight.md) are delivered
+locally; CW-S04 bounded gesture/replay is next. Full policy execution and broader
+runtime/device qualification remain open. Microduck is a separately pinned native reference, not a
 catalog-built robot or a replacement for the first fixture. Fast Spine remains
 simulation-only; exact hardware, firmware, ingress isolation, enrollment and
 physical stop evidence are open. See the [active queue](../current_next_steps.md)

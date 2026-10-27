@@ -3,6 +3,7 @@
 Date: 2026-10-14
 Cooperation addendum: 2026-10-20
 Status: Canonical 18-month planning schedule; dates, costs and adoption counts are targets, not completed milestones or commitments
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 ## Positioning And First Offer
 
@@ -41,6 +42,13 @@ Local checks on this date: the simulator runner passed **78 Node.js tests**,
 12 native planar invariant groups, six native tree groups and 12 Wasm
 invariants. Model/workbench checks passed **88 Python tests**. These are
 software/model results, not physical hardware or classroom acceptance.
+
+This table and its counts retain the 14 October baseline. For current status,
+the [26 October active queue](../current_next_steps.md) records the read-only
+Microduck adapter and host simulation rehearsal, CW-A01–CW-A04 offline scope,
+CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 preflight as delivered
+locally. CW-S04 bounded gesture/replay is next. Full policy execution, live native
+motion, enrolled physical evidence and hardware qualification remain open.
 
 ## Delivery Responsibilities
 
@@ -108,9 +116,10 @@ These candidates compete for the existing phase 3 adapter budget. Selecting an
 alternative to the planned LeRobot/model-provider package requires an explicit
 queue/capacity decision. Dedicated edge compute, depth capture and middleware
 are deferred until required by a named small-robot task; industrial cells and
-large humanoids are outside this cooperation backlog. Q4 work still prioritizes
-CW-S01 after CW-A04's offline completion, exact fixture data and native
-Microduck acceptance. The January authoring/simulation alpha has no new supplier
+large humanoids are outside this cooperation backlog. The current queue selects
+CW-S04 after local CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03
+preflight; exact fixture data and native Microduck acceptance retain their
+separate gates. The January authoring/simulation alpha has no new supplier
 dependency; existing dates, cost targets and CW/M/G gates remain in force.
 
 The [base/attachment product analysis](mini_robotics_base_attachment_product_analysis.md)
@@ -140,10 +149,11 @@ A mock receipt or protocol fixture must remain visibly labeled as such.
 The subsequent [Central World product workstream](../robotics/central_world_engineering_plan.md)
 targets 19 Oct–10 Jan for component standardization → assembly/DRC → separately
 qualified browser MuJoCo/gesture rehearsal → conditional governed deployment →
-alpha review. Its Phase 1 software foundation is implemented early; exact part
-qualification and later phases are open. This can bring forward a browser
-MuJoCo adapter without moving the custom engine's broader SIM-4–SIM-6 research
-or weakening native M0–M4/G0–G2. Review capacity weekly; January defaults to a
+alpha review. Its Phase 1/2 offline scope, CW-S01 handoff, CW-S02 fixed-preset
+runtime and CW-S03 preflight have local evidence. CW-S04 is next; exact part
+qualification, full policy execution and later live/release gates remain open.
+These local slices do not advance the custom engine's broader SIM-4–SIM-6 research
+or close native M0–M4/G0–G2. Review capacity weekly; January defaults to a
 simulation/authoring alpha when firmware/hardware gates are not ready.
 
 The [remaining CW delivery schedule](../robotics/central_world_remaining_delivery_schedule.md)
@@ -154,8 +164,12 @@ review evidence. CW-A01 v2 and the
 have local software evidence. The [CW-A03 placement slice](../robotics/central_world_cw_a03_snapping.md)
 adds local proxy-mating evidence, and the
 [CW-A04 DRC/BOM slice](../robotics/central_world_cw_a04_drc.md) closes Phase 2's
-offline software scope; Phase 3 CW-S01 restricted assembly-to-MJCF compilation is
-next. Exact physical data is CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
+offline software scope. [CW-S01](../robotics/central_world_cw_s01_mjcf.md) now
+includes compiler/native parity and offline Studio handoff;
+[CW-S02](../robotics/central_world_cw_s02_mujoco.md) records fixed-preset local
+native/Chrome parity; [CW-S03 preflight](../robotics/central_world_cw_s03_preflight.md)
+records artifact replay and both blocked policy-runtime candidates. CW-S04 bounded
+gesture/replay is next. Exact physical data is CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
 that may extend beyond its target, not an automatic November release promise.
 
 **15 October simulation-first checkpoint:** no hardware is connected. The

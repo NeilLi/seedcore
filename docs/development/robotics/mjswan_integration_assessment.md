@@ -1,7 +1,17 @@
 # mjswan: applicability and integration decision
 
 Date: 2026-10-16
-Status: Source assessment complete; conditional integration candidate, no runtime imported
+Status: Source assessment retained; no mjswan runtime imported; CW-S02 selected official MuJoCo 3.15.0, CW-S03 preflight delivered with policy execution blocked
+
+## Current implementation status — 26 October 2026
+
+The [CW-S02 record](central_world_cw_s02_mujoco.md) selects official
+`@mujoco/mujoco@3.15.0` and supplies fixed-preset local worker/parity/veto
+evidence. It does not import mjswan or qualify its policy machinery. The
+[CW-S03 preflight](central_world_cw_s03_preflight.md) records artifact replay
+and both blocked runtime candidates. The [active queue](../current_next_steps.md)
+selects CW-S04 bounded gesture/replay next. The source assessment below retains
+its 16 October context; full policy, broader runtime and physical gates remain open.
 
 ## Decision
 
@@ -13,8 +23,9 @@ capabilities and concrete integration gaps; it is not a browser benchmark or
 Microduck compatibility result.
 
 Keep assembly authoring ahead of this runtime qualification in the
-[delivery schedule](central_world_remaining_delivery_schedule.md). CW-A01 now
-has a verified v2 software candidate; the active queue advances to CW-A02. The
+[delivery schedule](central_world_remaining_delivery_schedule.md). An earlier
+allocation in this assessment put CW-A02 after the verified CW-A01 v2 software
+candidate; current implementation order is recorded above. The
 fixed-base tabletop gesture remains the first supported simulation target;
 Microduck locomotion retains its independent model/training gates. No hardware
 is connected, and this decision does not enable WebSerial or firmware release.

@@ -28,7 +28,8 @@ running authoring and verification on a local development computer:
 
 - **Proposal boundary:** candidate `seedcore.assembly.v2` JSON can be imported through the existing raw-text validation path. A remote model must not receive signing keys or direct motor access; a general provider-to-studio integration is not implied.
 - **Authoring boundary:** strict parsing, catalog byte pins and semantic checks precede acceptance into the store. DRC then reports `pass`, `blocked` or `conflict`; blocked drafts remain usable for offline authoring.
-- **Execution boundary:** governed live attempts require the accountable Agent, PDP, scoped token and qualified executor. Session Lab currently uses an explicit simulation issuer, and standalone physics lessons do not invoke the production PDP. The assembly-to-simulation handoff remains planned.
+- **Simulation handoff:** [CW-S01](../robotics/central_world_cw_s01_mjcf.md) delivers restricted compilation and offline Studio export; [CW-S02](../robotics/central_world_cw_s02_mujoco.md) delivers fixed-preset local MuJoCo rehearsal for the synthetic reference. The real starter and broader model/device/deployment qualification remain blocked or open; [CW-S03 preflight](../robotics/central_world_cw_s03_preflight.md) does not qualify policy execution.
+- **Execution boundary:** governed live attempts require the accountable Agent, PDP, scoped token and qualified executor. Session Lab currently uses an explicit simulation issuer, and standalone physics lessons do not invoke the production PDP. Live Studio admission remains CW-G01 work; the [active queue](../current_next_steps.md) selects CW-S04 bounded gesture/replay next.
 
 ## Documents
 

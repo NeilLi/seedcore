@@ -1,7 +1,7 @@
 # Browser performance pipeline and advanced stack adoption
 
 Date: 2026-10-21
-Status: Opt-in synthetic planar lab implemented and exercised locally; CW-S02 MuJoCo, policy, live and hardware gates remain open
+Status: Opt-in synthetic planar lab implemented and exercised locally; CW-S02 fixed-preset runtime delivered separately, CW-S03 preflight delivered with policy execution blocked; broader runtime/live/hardware gates open
 Baseline: CW-S01 compiler/native parity and the existing pinned SIM-3 ABI 2 engine; engine bytes unchanged
 
 22 October extension: the separate [static scene lab](static_scene_streaming.md)
@@ -19,7 +19,8 @@ the chain count and repeat **Compare all three** to inspect scaling; export the
 result table and raw measurements as JSON. There are no invented latency curves.
 
 This is an independent synthetic SIM-3 workload, not the authored assembly or
-the future CW-S02 runtime. The main editor keeps selection, snapping, keyboard
+the separately delivered [CW-S02 fixed-preset runtime](central_world_cw_s02_mujoco.md).
+The main editor keeps selection, snapping, keyboard
 placement, immutable revisions and its current Three.js viewport. No blocked
 assembly is compiled or promoted by opening the lab.
 
@@ -173,7 +174,7 @@ a factory-room renderer or a remote training cluster.
 | SAB + OffscreenCanvas + WGSL FK | Implemented in the optional lab | Before editor integration, preserve picking, camera/placement gestures, revision fencing, accessibility, visual asset hashes and resource cleanup; benchmark the same authored task |
 | Wasm SIMD128 | Separate build candidate; not enabled in the frozen scalar artifact | Pin compiler/flags/binary; prove actual emitted vector work, native/scalar/SIMD numerical parity and named-device p50/p95 improvement. No generic 2.5–4× claim; `-msimd128` alone is insufficient evidence |
 | Wasm pthreads | Separate engine profile, distinct from having two JS workers | Qualify threaded memory ownership and pool, COOP/COEP deployment, cancellation and thread-count determinism. Build separately from single-thread; small 1–3 joint models may not justify overhead |
-| Official MuJoCo Wasm / `@mujoco/mujoco/mt` | Preferred low-level candidate alongside the existing conditional mjswan review; not imported | CW-S02: pin engine source/build/bytes against native 3.15.0, consume verified CW-S01 bundles, compare FK/mass/actuator order and short rollouts, inventory all state/control mutations and gate every substep |
+| Official MuJoCo Wasm / `@mujoco/mujoco/mt` | Single-thread `@mujoco/mujoco@3.15.0` adopted in the separate [CW-S02 fixed-preset slice](central_world_cw_s02_mujoco.md); `/mt` remains a candidate | Preserve native/Chrome parity, pinned model/engine bytes, bounded clocks/capture and per-substep vetoes; qualify broader models, devices and deployments separately; threaded builds do not inherit single-thread acceptance |
 | Rapier SIMD / GPU physics | Optional future scene-collision backend; no replacement for current tabletop/native model | Exact package/features and model profile, multibody/constraint support, contact and inertia tests, determinism evidence, versions and licenses. Modern Rapier has multibody joints; do not classify every Rapier joint as a drifting maximal-coordinate constraint |
 | GPU culling / CAD batching | Follow measured draw/CPU pressure; currently one indexed instance draw | Freeze batch/material/visibility semantics and compare GPU output to CPU reference; handle compacted draw counts, bounds, resource ceilings and optional features. One indirect call does not render arbitrary materials/meshes automatically |
 | WGSL synthetic depth/LiDAR | Deferred sensor extension | Freeze model geometry/BVH bytes, frame convention, intrinsics, timestamp/sample coverage and analytical/native ray goldens. Visual splats are not collision or depth truth by default; no 100k rays/s claim without timing |
@@ -207,6 +208,9 @@ provides transport primitives, not remote simulator admission or zero-latency
 authority. The service retains `connect-src 'self'` until a reviewed remote lane
 actually needs a named endpoint.
 
-CW-SIM-02/03/04 and CW-POL-01 remain open for the general browser model/policy
-runtime. The lab exercises transport and display techniques only. CW-G01/G02,
-Microduck M1–M4 and physical qualification remain independent.
+CW-SIM-02/03/04 have local fixed-preset evidence in the separate CW-S02 record;
+broader model/device/deployment qualification remains open. The
+[CW-S03 preflight](central_world_cw_s03_preflight.md) records artifact replay and
+blocked runtime candidates; full CW-POL-01 remains open. The lab exercises
+transport and display techniques only. The [active queue](../current_next_steps.md)
+selects CW-S04 next; CW-G01/G02, Microduck M1–M4 and physical qualification remain independent.

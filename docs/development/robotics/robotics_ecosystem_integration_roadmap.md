@@ -17,8 +17,13 @@ implementation order or the existing research caps.
 
 ## Preserve the delivery order
 
-At `ba0d132`, CW-A01 v2 through CW-A04 have local offline evidence. CW-S01
-restricted assembly-to-MJCF compilation is next. The catalog contains twelve
+The `ba0d132` research baseline had local CW-A01 v2 through CW-A04 offline
+evidence. The [26 October active queue](../current_next_steps.md) now records
+[CW-S01 compiler/handoff](central_world_cw_s01_mjcf.md),
+[CW-S02 fixed-preset runtime](central_world_cw_s02_mujoco.md) and
+[CW-S03 offline preflight](central_world_cw_s03_preflight.md) as delivered locally;
+CW-S04 bounded gesture/replay is next. Full policy execution and broader
+runtime/device/deployment qualification remain open. The catalog contains twelve
 draft/proxy parts; Fast Spine is simulation-only and exact fixture qualification
 is open. Microduck retains its separately pinned native M0–M4 lane.
 
@@ -38,7 +43,7 @@ Orbbec or Viam adapter. Proposed review windows are not delivery promises.
 | ID / review window | Scope and owner role | Entry / dependencies | Reviewable exit | State |
 | --- | --- | --- | --- | --- |
 | **COOP-00 / 20 Oct 2026** | Mini-category and base/attachment product analysis; integration lead | Current repo and primary-source review | Revised cooperation packet, Robosen evidence/limits and two-tier pricing hypotheses; seven supplied initiatives assessed, earlier ten reclassified | Documentation prepared; product demand and hardware/vendor qualification open |
-| **COOP-01 / 21 Oct–12 Nov** | Existing TTL fixture/shared-dock gap and cost record; ODRI and exact CubeMars source/fit records; integration lead + reviewer | Capacity after CW-S01/native commitments | Dock concept/source gaps, complete starter versus incremental attachment costs, two concise candidate records and go/defer decision | Proposed supporting diligence; no parts/SDK imports, orders or customer outreach |
+| **COOP-01 / 21 Oct–12 Nov** | Existing TTL fixture/shared-dock gap and cost record; ODRI and exact CubeMars source/fit records; integration lead + reviewer | Capacity after active CW-S04/native commitments | Dock concept/source gaps, complete starter versus incremental attachment costs, two concise candidate records and go/defer decision | Proposed supporting diligence; no parts/SDK imports, orders or customer outreach |
 | **COOP-02 / by 10 Jan 2027 alpha review** | Mini-joint/dock interface and fabrication-gap review; runtime/mechanical reviewers | CW-A04 findings; source records and available capacity | One offline fixture design, mount/rail/connector unknowns, non-authoritative discovery flow, supported-schema/CAN gaps and reproduction dependencies | Conditional design review; no new live body or automatic motor enable |
 | **COOP-03 / Apr–Sep 2027 ecosystem review** | One compact commercial-joint feasibility study, initially CubeMars; integration owner | Named gap in small-servo baseline; exact revision/docs/access and effort cap | Pinned model/protocol/source packet, complete system BOM, load/thermal/stop requirements and offline/read-only comparison | Candidate; a physical bench phase needs a separate accepted profile |
 | **COOP-04 / same ecosystem window, alternative to COOP-03** | One ODRI actuator reproduction/model study; research + mechanical owner | Pinned upstream version, rights, electronics/calibration plan and fabrication access | Reproduction plan or unit build record, modeled/measured distinction, actual fabrication effort/cost and single-joint comparison | Candidate alternative; not a full Solo build or OpenQDD replacement commitment |

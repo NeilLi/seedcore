@@ -41,10 +41,14 @@ URDF import and the pinned Microduck MJCF body.
 
 Browser delivery remains possible: DeepMind provides canonical JavaScript/
 TypeScript bindings and precompiled Wasm in `@mujoco/mujoco`. The versioned
-documentation marks the bindings as work in progress. Browser compatibility,
-memory ownership, asset loading, worker scheduling and numerical differences
-still need qualification. Use the single-threaded build for an initial worker
-prototype; the multithreaded build requires cross-origin isolation.
+documentation marks the bindings as work in progress. The
+[CW-S02 record](central_world_cw_s02_mujoco.md) now supplies local single-thread
+fixed-preset worker/parity/veto evidence using the
+[CW-S01 synthetic compiler/handoff](central_world_cw_s01_mjcf.md). Broader browser,
+model, asset and deployment qualification remains open; the multithreaded build
+needs separate qualification and cross-origin isolation. The
+[26 October active queue](../current_next_steps.md) selects CW-S04 gesture/replay
+next; a general browser workbench remains planned.
 [Versioned Wasm documentation](https://github.com/google-deepmind/mujoco/blob/3.15.0/wasm/README.md).
 
 ## Implemented foundation

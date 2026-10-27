@@ -6,21 +6,25 @@ Status: Proposed solution and staged implementation specification; studio and Mi
 
 Audience: Product, curriculum, application, runtime and robotics contributors
 
-## Central World Follow-up — 2026-10-15
+## Central World implementation status — 26 October 2026
 
 The [12-week Central World engineering plan](central_world_engineering_plan.md)
 is the active browser-product schedule.
 The [component registry](../../../packages/component-registry/README.md) now
 provides the four-block part schema, 12 illustrative drafts, integrity/semantic
-checks and a local part viewer. Exact hardware data and later assembly, DRC,
-browser MuJoCo/policy, timeline and deployment integration remain gated. The
-full Studio and public community service remain planned.
+checks and a local part viewer. CW-A01–CW-A04 offline assembly/DRC,
+[CW-S01 compiler/handoff](central_world_cw_s01_mjcf.md),
+[CW-S02 fixed-preset runtime](central_world_cw_s02_mujoco.md) and
+[CW-S03 offline preflight](central_world_cw_s03_preflight.md) are delivered
+locally. The actual starter, full policy execution, broader runtime/device
+qualification and live/hardware paths remain gated. The full mission Studio
+and public community service remain planned.
 
 The [remaining delivery schedule](central_world_remaining_delivery_schedule.md)
-records the CW-A01 v2 software candidate, assigns next authoring/store work to
-CW-A02 and graph/canvas/DRC across
-CW-A02–CW-A04, physics/policy/Robot Moments to CW-S01–CW-S04, live trust/replay
-and export to CW-G01–CW-E01, and curated fork/alpha review to CW-L01–CW-L03.
+records the delivered local slices and assigns CW-S04 bounded gesture/replay
+as the next package, following the [active queue](../current_next_steps.md).
+CW-S03 inference/runtime remains separately blocked. Live trust/replay and
+export are CW-G01–CW-E01, and curated fork/alpha review is CW-L01–CW-L03.
 Physical provisioning is conditional CW-F01/CW-F02. The
 [acceptance matrix](central_world_acceptance_matrix.md) binds those handoffs to
 specific graph, parity, curve, authority, evidence and operator checks.
@@ -300,7 +304,8 @@ advisory planning. Preserve typed, finite, bounded proposals and server-owned
 endpoint/tool bindings. The implemented [team runtime](multi_robot_team_architecture.md)
 is useful later for coordination, but `TeamMission` currently requires 2–32
 robots. Do not fabricate a second robot or alter that contract merely to run L1.
-Use the existing single-agent gateway path and the planned Microduck adapter.
+Use the existing single-agent gateway path; the read-only Microduck adapter is
+delivered, while governed native motion remains M2 integration work.
 
 Generated Blender recipes or lesson code are candidate artifacts. Run selected
 build tools in an isolated authoring environment with scoped filesystem access;

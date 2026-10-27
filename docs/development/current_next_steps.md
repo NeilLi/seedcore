@@ -98,8 +98,10 @@ The [remaining delivery schedule](robotics/central_world_remaining_delivery_sche
 owns detailed order and owner roles; the
 [acceptance matrix](robotics/central_world_acceptance_matrix.md) owns tests and
 measurement artifacts. CW-A01 v2, CW-A02, CW-A03 and CW-A04 now have passing
-local offline software evidence, completing Phase 2's offline authoring/DRC scope;
-subsequent Phase 3–5 packages remain planned/open.
+local offline software evidence, completing Phase 2's offline authoring/DRC scope.
+Phase 3's CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 offline preflight
+also have local evidence. CW-S04 is next; full policy execution and the later
+live/release packages remain open.
 
 | Order | Package | Next reviewable result | Dependency |
 | --- | --- | --- | --- |

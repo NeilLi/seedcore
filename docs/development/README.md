@@ -2,6 +2,7 @@
 
 Date: 2026-10-20
 Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
 as the first integration focus and Microduck as the reference target. The
@@ -40,9 +41,13 @@ digest-discovery flow remain engineering proposals, not automatic admission.
 
 ## Target builder workflow: local station, optional LLM and successive designs
 
-The [21 October CW-S01 slice](robotics/central_world_cw_s01_mjcf.md) now provides
-the restricted compiler and synthetic native parity checks. Real starter
-readiness remains blocked; browser worker/live hardware paths are still gated.
+The [CW-S01 record](robotics/central_world_cw_s01_mjcf.md) provides the restricted
+compiler, synthetic native parity and 23 October offline Studio handoff.
+The [CW-S02 record](robotics/central_world_cw_s02_mujoco.md) qualifies the local
+fixed-preset MuJoCo worker; the [26 October CW-S03 preflight](robotics/central_world_cw_s03_preflight.md)
+records artifact replay and both blocked policy-runtime candidates. CW-S04
+bounded gesture/replay is next. Real starter readiness, broader runtime/device
+qualification, live admission and hardware paths remain gated.
 
 The optional [browser performance lab](robotics/browser_performance_pipeline.md)
 now measures separate scalar Wasm physics/render workers, transferable or
@@ -56,7 +61,7 @@ It is visual-only; texture-bearing assets and arbitrary CAD import remain gated.
 
 The [academic open-robotics ecosystem assessment](robotics/academic_open_robotics_ecosystem_assessment.md)
 defines how SeedCore reuses CPU-efficient academic stacks—pinned **DeepMind MuJoCo**
-(`3.15.0` native + `CW-S02` Wasm candidate), optional local-station **MIT Drake**
+(`3.15.0` native + `CW-S02` fixed-preset local Wasm slice), optional local-station **MIT Drake**
 (`Toppra` trajectory retiming, constrained IK, and `SpatialInertia` system ID for
 `CW-S04` / Pillar C), and **ROS 2 / Foxglove `MCAP`** formats at the replay and
 export edges (`CW-G02`, `CW-E01`)—while preserving zero-install browser authoring
@@ -151,6 +156,9 @@ execution authority.
 
 For scheduling, the active 18-month plan owns target dates and phase reviews;
 the portfolio decision owns scope and the active queue owns immediate work.
+For implementation status, follow the 26 October active queue and its linked
+package acceptance records. Older dated baselines and test counts retain their
+original scope; a later status summary does not extend their acceptance.
 These take precedence over older annual plans and application schedules. The
 device/SIM plans, durable contracts and ADRs
 retain their authority within their scope; changing priority does not waive

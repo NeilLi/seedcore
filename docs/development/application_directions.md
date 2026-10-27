@@ -2,6 +2,7 @@
 
 Date: 2026-10-15
 Status: Canonical portfolio decision — affordable physical AI, supervised STEM/maker adoption and OEM distribution
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 **SeedCore is an open trust runtime for affordable physical AI.** The next
 commercial wedge is browser-first maker and supervised education kits with
@@ -29,7 +30,7 @@ phase 2–5 handoffs without changing native hardware or public-release gates.
 | Microduck native integration | Primary 61/14 policy/runtime reference; complete M0 deployment pins and M1–M4 | Native adapter, authority/evidence tests and separately measured hardware acceptance |
 | 1–3 DOF Fast Spine fixture | Bounded bench work package for browser-to-MCU protocol, stop and onboarding | No automatic Microduck M4 credit; supported arm product needs its own accepted profile and support capacity |
 | Browser lessons / tree studio | Delivered local planar research foundation | Qualify browser/device experience; physical connection follows G1/G2 gates |
-| Central World authoring studio | Phase 1 draft catalog/viewer delivered; CW-A01 assembly/joint contract is next | CW2 graph/DRC and CW3 native/browser simulation evidence; January authoring alpha is conditional on its own gates |
+| Central World authoring studio | Draft catalog and CW-A01–CW-A04 offline scope delivered; CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 preflight passed locally; CW-S04 gesture/replay next | Actual starter/source qualification, broader model/device/deployment checks, full policy execution and live admission remain open; January authoring/simulation alpha is conditional on its own gates |
 | Shared trust / proof runtime | Required foundation | Preserve accountable Agent, PDP, token, revocation, local control and evidence closure |
 | Supervised STEM/maker offer | Active need/lesson and support preparation | One useful supervised pilot, then repeat delivery before 3–5 sites or a larger kit batch |
 | OEM SeedCore Inside | Prepare design-in/conformance packet now | One accepted shipping profile before targeting 2–3 OEM relationships |

@@ -2,6 +2,7 @@
 
 Date: 2026-10-20
 Status: Primary development area; native reference, Fast Spine fixture and supervised STEM/OEM delivery
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 SeedCore's robotics direction is a reusable trust runtime for physical AI.
 Microduck is the selected reference integration. Read the strategy for product
@@ -19,7 +20,7 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 
 - **Optional remote proposer:** drafts candidate assembly JSON or task intents. Authoring validation, DRC findings and execution admission have separate responsibilities.
 - **Local development computer:** runs Mini Studio (`:8767`), Session Lab (`:8766`), native MuJoCo/ONNX tools and Python/Rust verification. Session Lab's issuer is simulation-only; live Agent/PDP integration remains a separate gate.
-- **Successive robot designs:** begin with proxy authoring; the one-to-three-servo fixture requires separate qualification. Sensor-head and arm variants need explicit profile/support decisions. Microduck is a separately pinned native reference with 14 policy actions and 15 physical channels; it is not assembled from the draft catalog. Custom-build simulation and physical receipts remain gated.
+- **Successive robot designs:** begin with proxy authoring; the one-to-three-servo fixture requires separate qualification. Sensor-head and arm variants need explicit profile/support decisions. Microduck is a separately pinned native reference with 14 policy actions and 15 physical channels; it is not assembled from the draft catalog. CW-S01/S02 provide an offline synthetic tabletop compiler/rehearsal slice; real starter readiness, broader model support and physical receipts remain gated.
 
 | Document | Role |
 | --- | --- |
@@ -27,15 +28,15 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 | [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
 | [Mini-robotics cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md) | Seven supplied joint/open-hardware initiatives assessed; existing TTL fixture first, ODRI/CubeMars source studies and earlier ten candidates reclassified |
 | [Reusable base and printable attachments](../strategy/mini_robotics_base_attachment_product_analysis.md) | Two-tier complete starter/attachment proposal, Robosen evidence/limits, price tests and complete cost/contribution analysis |
-| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Revised COOP-00–06 mini-fixture/joint backlog mapped to CW/M/G; CW-S01 remains next and later commercial/open-joint experiments are alternatives |
+| [Ecosystem integration roadmap](robotics_ecosystem_integration_roadmap.md) | Revised COOP-00–06 mini-fixture/joint backlog mapped to CW/M/G; CW-S04 next after local CW-S01/S02 and CW-S03 preflight; later commercial/open-joint experiments are alternatives |
 | [Partner integration architecture](../integrations/robotics_partner_integration_architecture.md) | Small-fixture control/evidence, supply and fabrication boundaries; CAN/CAN FD remains an unsupported-contract gap |
 | [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
 | [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
-| [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan component/assembly/DRC/browser/governance workstream; Phase 1 & Phase 2 offline scope delivered, later stages gated |
+| [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan workstream; Phase 1/2 offline, CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 preflight delivered locally; CW-S04 next, later gates open |
 | [Central World remaining schedule](central_world_remaining_delivery_schedule.md) | CW-A01–CW-L03 work packages, owner roles, dependencies and deliverables for phases 2–5; Phase 2 and CW-S01/CW-S02 local slices passed; CW-S03 preflight delivered and CW-S04 is next |
 | [CW-A01 acceptance closure](central_world_cw_a01_acceptance_plan.md) | Assembly v2 candidate addresses eight findings; local software exit passed with reproducible evidence; CW-A02 handoff |
 | [CW-A02 authoring store](central_world_cw_a02_authoring.md), [CW-A03 snapping](central_world_cw_a03_snapping.md) & [CW-A04 DRC/BOM](central_world_cw_a04_drc.md) | Delivered Phase 2 offline authoring store, `15 mm` / `5°` proxy snapping, pure worker DRC, 3D rotated inertia, and unknown-aware BOM |
-| [CW-S01 compiler and native parity](central_world_cw_s01_mjcf.md) | Local restricted MJCF compiler and synthetic native parity; separate offline readiness preserves the blocked actual starter; browser/live/hardware work remains open |
+| [CW-S01 compiler and native parity](central_world_cw_s01_mjcf.md) | Local restricted MJCF compiler, synthetic native parity and offline Studio handoff; actual starter stays blocked; CW-S02 fixed-preset runtime recorded separately, broader runtime/live/hardware gates open |
 | [CW-S02 pinned MuJoCo worker](central_world_cw_s02_mujoco.md) | Local fixed-preset native/Chrome parity, bounded clocks/capture and per-step control fencing; broader runtime/device gates remain open |
 | [CW-S03 policy compatibility preflight](central_world_cw_s03_preflight.md) | Pinned policy/model/adapter inventory, 16-case CPU artifact replay and deterministic refusal reports; both runtime candidates blocked, CW-S04 next |
 | [Browser robotics studio stack architecture](browser_robotics_studio_stack_architecture.md) | Five-layer browser studio reference, subsystem evaluation (`urdf-loader`, Draco, Rapier vs. MuJoCo/C++ Wasm, Pyodide sandboxing, WebSerial/Zenoh/Foxglove), and `CW-S02..S04` optimizations |

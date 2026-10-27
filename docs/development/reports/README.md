@@ -17,7 +17,7 @@ exists.
   - **Timing:** Planning, policy inference and native control have separate deadlines. The report's frequency ranges and 20 ms allocation are illustrative; action execution rate does not establish fresh inference rate or SeedCore performance.
   - **Policy selection:** ACT, diffusion, flow matching and tokenized policies are candidates for measured comparison. Continuous outputs alone do not guarantee jerk bounds, stability or collision avoidance.
   - **Local limits:** Force/pressure limits, stop behavior and response times require robot- and task-specific review and measurements. The report's generic force pair and cutoff claims do not establish ISO compliance or implemented HAL behavior.
-  - **SeedCore integration:** Keep admission outside local control while enforcing session expiry, command binding/freshness and revocation freshness locally. The Microduck adapter and hardware acceptance remain planned; automated reward synthesis is a research extension.
+  - **SeedCore integration:** Keep admission outside local control while enforcing session expiry, command binding/freshness and revocation freshness locally. The read-only Microduck adapter and host simulation rehearsal are delivered locally; live native motion, enrolled physical evidence and hardware acceptance remain gated. Follow the [active queue](../current_next_steps.md) and its package records for implementation status; automated reward synthesis is a research extension.
 - [Microduck Simulation and Architecture Report](microduck_simulation_architecture_report.md) — supplied draft; describes the companion Microduck and `microduck_rl` projects and has not been independently verified.
 
 Return to the [development map](../README.md).

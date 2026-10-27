@@ -12,16 +12,19 @@ The [component registry](../../../packages/component-registry/README.md) validat
 authoring parts and GLB proxies; it is a different contract from this compiled
 model package. Its schema pass does not define joints or create a MuJoCo model.
 [CW-A01 v2](central_world_cw_a01_acceptance_plan.md) now declares the initial
-proxy articulation subset. CW-S01 must compile supported models and compare native FK, mass,
-joint/actuator ordering and limits before CW-S02 browser use. A visual port
+proxy articulation subset. [CW-S01](central_world_cw_s01_mjcf.md) now compiles
+supported synthetic models with native FK, mass, joint/actuator ordering and
+limit comparisons, plus offline Studio handoff. [CW-S02](central_world_cw_s02_mujoco.md)
+records fixed-preset local browser parity and runtime fences; actual starter
+readiness and broader runtime qualification remain open. A visual port
 normal or GLB URI cannot substitute for an explicit joint or qualified asset
 conversion. Preserve source rights and content identity through that handoff.
 
 Keep the existing Microduck package unchanged unless separately versioned and
 reviewed. An edited body needs new model/policy compatibility evidence; neither
 component provenance nor native compilation establishes trained-policy transfer.
-The [acceptance matrix](central_world_acceptance_matrix.md) defines planned
-SIM/POL checks without changing this implemented ingestion schema.
+The [acceptance matrix](central_world_acceptance_matrix.md) records local SIM
+evidence and the remaining policy/runtime gates without changing this implemented ingestion schema.
 
 ## Contract and identity
 

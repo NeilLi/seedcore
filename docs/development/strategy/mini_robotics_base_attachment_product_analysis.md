@@ -2,7 +2,8 @@
 
 Date: 2026-10-20
 Status: Product/pricing hypotheses and engineering proposals; no launched SKU, price commitment or qualified dock
-Baseline: `ba0d132` plus the pending mini-robotics cooperation revision
+Research baseline: `ba0d132` plus the then-pending mini-robotics cooperation revision
+Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
 
 ## Recommendation
 
@@ -16,7 +17,8 @@ This is a proposed way to reduce repeated setup and component cost. Robosen
 provides a relevant product pattern; its catalog does not establish SeedCore's
 consumer demand, conversion, margins or repeat purchases. Validate those before
 committing to retail prices or tooling. Keep the existing small TTL fixture and
-CW-S01 delivery order from the [cooperation strategy](robotics_component_cooperation_strategy_2026.md).
+CW/M/G delivery boundaries from the [cooperation strategy](robotics_component_cooperation_strategy_2026.md)
+and [active queue](../current_next_steps.md).
 
 ## Robosen reference: evidence and limits
 
@@ -171,8 +173,10 @@ The [dock/discovery architecture](../integrations/robotics_partner_integration_a
 owns the proposed module boundary, physical interface and non-authoritative ID
 flow. Its first result is a concept/source/BOM review, not a new qualified
 catalog part. The [roadmap](../robotics/robotics_ecosystem_integration_roadmap.md)
-keeps this within COOP-01/02 capacity; CW-S01 remains next. Optional LLM gesture
-import stays within the planned CW-S04/CW-MOM-01 scope, while physical admission
+keeps this within COOP-01/02 capacity. The [26 October active queue](../current_next_steps.md)
+selects CW-S04 bounded gesture/replay after local CW-S01 handoff, CW-S02
+fixed-preset runtime and CW-S03 preflight. Full policy execution remains gated.
+Optional LLM gesture import stays within CW-S04/CW-MOM-01 scope, while physical admission
 and firmware/discovery are later CW-G01/CW-F01/F02 work.
 
 Keep original printable attachments, conservative scope labels and independent
