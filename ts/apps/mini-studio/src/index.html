@@ -9,7 +9,7 @@
 <div class="workbench">
 <aside class="panel"><p class="eyebrow">ASSEMBLY GRAPH</p><h2 id="build-name">No build loaded</h2><h3>Parts <span id="node-count"></span></h3><div id="nodes" class="item-list" aria-label="Assembly nodes"></div><h3>Connections <span id="edge-count"></span></h3><div id="edges" class="item-list" aria-label="Assembly edges"></div></aside>
 <section class="viewport-panel"><div class="view-label"><span>REST POSE / METERS / Z-UP</span><button id="fit">Fit view</button></div><canvas id="viewport" aria-label="3D rest-pose assembly preview. Use the parts list to select by keyboard." tabindex="0"></canvas><p class="view-hint">Drag to orbit · scroll to zoom · click a part to inspect</p><p id="canvas-error" role="alert"></p></section>
-<aside class="panel inspector"><div class="inspector-tabs" role="tablist" aria-label="Assembly tools"><button id="inspect-tab" role="tab" aria-selected="true" aria-controls="inspect-panel">Inspect</button><button id="placement-tab" role="tab" aria-selected="false" aria-controls="placement-panel" tabindex="-1">Place parts</button><button id="drc-tab" role="tab" aria-selected="false" aria-controls="drc-panel" tabindex="-1">DRC &amp; BOM</button><button id="simulation-tab" role="tab" aria-selected="false" aria-controls="simulation-panel" tabindex="-1">Simulation</button></div><div id="inspect-panel" role="tabpanel" aria-labelledby="inspect-tab"><p class="eyebrow">DRAFT INSPECTOR</p><h2 id="selection-title">Select a part or connection</h2><p id="selection-detail">Review the graph without changing the physical model.</p><form id="rename-form"><label for="name">Build name</label><input id="name" maxlength="160" required><button id="rename" disabled>Save draft revision</button></form><dl><dt>Content SHA-256</dt><dd id="content-digest">—</dd><dt>Local revision</dt><dd id="revision">—</dd><dt>Execution admission</dt><dd>None · authoring only</dd><dt>Hardware qualification</dt><dd>Open · electrical ratings unknown</dd></dl><p class="note">These shapes and mounts are illustrative proxies. Import checks do not establish physical fit, wiring approval, or safe motion.</p></div>
+<aside class="panel inspector"><div class="inspector-tabs" role="tablist" aria-label="Assembly tools"><button id="inspect-tab" role="tab" aria-selected="true" aria-controls="inspect-panel">Inspect</button><button id="placement-tab" role="tab" aria-selected="false" aria-controls="placement-panel" tabindex="-1">Place parts</button><button id="drc-tab" role="tab" aria-selected="false" aria-controls="drc-panel" tabindex="-1">DRC &amp; BOM</button><button id="simulation-tab" role="tab" aria-selected="false" aria-controls="simulation-panel" tabindex="-1">Simulation</button><button id="moments-tab" role="tab" aria-selected="false" aria-controls="moments-panel" tabindex="-1">Moments</button></div><div id="inspect-panel" role="tabpanel" aria-labelledby="inspect-tab"><p class="eyebrow">DRAFT INSPECTOR</p><h2 id="selection-title">Select a part or connection</h2><p id="selection-detail">Review the graph without changing the physical model.</p><form id="rename-form"><label for="name">Build name</label><input id="name" maxlength="160" required><button id="rename" disabled>Save draft revision</button></form><dl><dt>Content SHA-256</dt><dd id="content-digest">—</dd><dt>Local revision</dt><dd id="revision">—</dd><dt>Execution admission</dt><dd>None · authoring only</dd><dt>Hardware qualification</dt><dd>Open · electrical ratings unknown</dd></dl><p class="note">These shapes and mounts are illustrative proxies. Import checks do not establish physical fit, wiring approval, or safe motion.</p></div>
 <div id="placement-panel" role="tabpanel" aria-labelledby="placement-tab" hidden>
 <p class="eyebrow">MAGNETIC PLACEMENT / 15 MM</p><h2>Place a proxy part</h2>
 <p id="catalog-status" role="status">Load a build to access its pinned catalog.</p><button id="catalog-retry" type="button" hidden>Retry catalog</button>
@@ -77,6 +77,31 @@
 </dl>
 <details><summary>CW-S02 worker summary · clocks, capture &amp; substep gate</summary><pre id="sim-rehearsal-summary" class="mono"></pre></details>
 <p class="note">Fixed-base serial boxes, 1–3 revolute joints. Proxy contacts disabled; ideal actuators omit electrical/thermal dynamics. Velocity limits are metadata only. Native/Wasm target: MuJoCo 3.15.0 (no planar fallback). Exports and rehearsal grant no motion authority.</p>
+</div><div id="moments-panel" role="tabpanel" aria-labelledby="moments-tab" hidden>
+<section id="moments" aria-labelledby="moment-heading">
+<h3 id="moment-heading">CW-S04 · bounded gesture &amp; captured replay</h3>
+<p>In Simulation, load the synthetic reference and apply the qualified position preset. This short fixture supports 1–120 steps at 2 ms (240 ms maximum), with a virtual LED indicator. Full curves are checked before rehearsal.</p>
+<button id="moment-example" type="button" disabled>Create tilt/return example</button>
+<label for="moment-json">Gesture timeline · declarative JSON, 64 KiB maximum</label>
+<textarea id="moment-json" rows="10" spellcheck="false" placeholder="Create an example for the current synthetic model, or paste a bounded gesture draft."></textarea>
+<div class="simulation-actions"><button id="moment-compile" type="button" disabled>Validate full gesture curves</button><button id="moment-run" type="button" disabled>Rehearse gesture in simulation</button><button id="moment-stop" type="button" disabled>Stop gesture</button></div>
+<p id="moment-status" role="status" aria-live="polite" data-state="idle">Load the synthetic reference and apply the qualified position preset.</p>
+<dl><dt>Compiled gesture SHA-256</dt><dd id="moment-digest" class="mono">—</dd></dl>
+<details><summary>Analytic target-curve bounds</summary><pre id="moment-bounds" class="mono"></pre></details>
+<h3>Read-only captured replay</h3>
+<p id="moment-result">No current captured attempt.</p>
+<label for="moment-tick">Captured sample · scrubbing never runs physics or dispatches controls</label>
+<input id="moment-tick" type="range" min="0" max="0" value="0" disabled>
+<output id="moment-frame" for="moment-tick">—</output><p id="moment-led">Virtual LED · no captured frame</p>
+<div id="moment-values" class="drc-list" aria-label="Target and observed simulated joint values"></div>
+<button id="moment-export" type="button" disabled>Download current replay JSON</button>
+<details><summary>Inspect imported replay for this attempt</summary>
+<label for="moment-replay-json">Replay JSON · 256 KiB maximum; requires this session's retained attempt identity</label>
+<textarea id="moment-replay-json" rows="6" spellcheck="false"></textarea>
+<button id="moment-inspect-replay" type="button" disabled>Inspect capture integrity &amp; coverage</button>
+</details>
+<p class="note">Simulation only · physicalAcceptance: false · executionAuthority: none. Curve bounds constrain target commands; they do not guarantee measured joint tracking, torque, contact or physical stopping. Replay hashes check integrity and coverage, not signer identity or physical truth. Edits and model changes invalidate prior results. Live admission remains CW-G01.</p>
+</section>
 </div></aside>
 </div>
 <details class="raw"><summary>Import raw assembly JSON</summary><label for="raw">V2 only · maximum 256 KiB · duplicate keys rejected</label><textarea id="raw" rows="8" spellcheck="false" placeholder="Paste a seedcore.assembly.v2 document"></textarea><button id="import-text">Validate &amp; import</button></details>

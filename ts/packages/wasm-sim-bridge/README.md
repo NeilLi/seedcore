@@ -13,8 +13,9 @@ manifest. Its [23 October Studio handoff](../../../docs/development/robotics/cen
 and the separate [CW-S02 fixed-preset MuJoCo adapter](../../../docs/development/robotics/central_world_cw_s02_mujoco.md)
 are delivered locally. This package also supplies the CW-S03 offline preflight
 described below; full policy execution remains blocked. The
-[26 October active queue](../../../docs/development/current_next_steps.md)
-selects CW-S04 gesture/replay next. These slices create no hardware route or
+[active queue](../../../docs/development/current_next_steps.md)
+now records the local CW-S04 slice below and selects CW-G01 admission integration
+next. These slices create no hardware route or
 execution authority; real starter and broader runtime qualification remain open.
 
 ## Supported subset
@@ -130,3 +131,32 @@ policy cache is never fetched implicitly. The default command records missing
 optional artifacts/dependencies explicitly and cannot claim skipped replay as
 acceptance. See the [CW-S03 record](../../../docs/development/robotics/central_world_cw_s03_preflight.md)
 for the two blocked real candidates and the handoff to CW-S04.
+
+## CW-S04 bounded synthetic gestures and captured replay
+
+`compileGesture(raw, model, expectedBinding)` validates closed declarative
+Hermite joint targets, virtual LED cues, loops and time scaling. Analytic
+interior position/velocity and acceleration extrema must fit declared target
+limits and model ranges. Revision/assembly/catalog/DRC/model/epoch bindings
+and immutable compiled digests fence edits and stale asynchronous results.
+
+The synthetic position profile retains dt=0.002, kp=1, one to three joints,
+at most five assembly bodies plus the world body, and the existing
+120-step / 240 ms maximum. The worker recompiles and checks the expected
+gesture digest, then proposes controls through every existing CW-S02 substep
+gate. `gestureFrameAtTick` only evaluates target data. `createGestureReplay`
+and `inspectGestureReplay` retain/check original samples against independent
+expected bindings and project completed versus interrupted simulation capture.
+Their expected context requires `captureDigest`, obtained with
+`gestureCaptureDigest(summary, samples)` from the original terminal worker capture
+and retained independently of imported JSON. Recomputed embedded hashes cannot
+replace that pin. Closed nested shapes, terminal counters/reasons and zero
+interrupted controls are checked alongside capture coverage and trace integrity.
+The Studio **Moments** tab scrubs captured targets/observations and virtual LED
+cues without resimulation. Bundle/trace hashes are unsigned integrity checks,
+not signer authentication, physical evidence or execution authority.
+
+Run `node tools/robotics/verify-cw-s04.cjs --browser` for source rebuild, full-curve
+refusal/binding/replay checks, independent native parity and shipped Chrome
+exercise. See the [CW-S04 record](../../../docs/development/robotics/central_world_cw_s04_gestures.md)
+for supported scope, use, retained artifacts and open CW-G01/G02/physical gates.

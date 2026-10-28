@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
 const {spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'../..');
 const python=process.env.SEEDCORE_TEST_PYTHON || (fs.existsSync(path.join(root,'.venv/bin/python'))?path.join(root,'.venv/bin/python'):'python3');
-const report={scope:'offline_proxy_authoring',physical_acceptance:false,node:process.version,review_ids:['CW-SIM-02','CW-SIM-03','CW-SIM-04','CW-SIM-01-STUDIO','CW-ASM-02','CW-SNAP-01','CW-DRC-01','CW-DRC-02','CW-DRC-03'],checks:[]};
+const report={scope:'offline_proxy_authoring',physical_acceptance:false,node:process.version,review_ids:['CW-MOM-01','CW-SIM-02','CW-SIM-03','CW-SIM-04','CW-SIM-01-STUDIO','CW-ASM-02','CW-SNAP-01','CW-DRC-01','CW-DRC-02','CW-DRC-03'],checks:[]};
 function run(label,command,args,env={}){
  const result=spawnSync(command,args,{cwd:root,encoding:'utf8',env:{...process.env,SEEDCORE_TEST_PYTHON:python,...env}});
  process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');
@@ -23,6 +23,7 @@ try{
  if(process.argv.includes('--browser')) {
   run('fresh CW-S01 reference artifacts',path.join(root,'ts/node_modules/.bin/tsx'),['tools/robotics/export-cw-s01.ts','artifacts/robotics/cw-s01/models']);
   run('fresh CW-S02 parity artifacts',path.join(root,'ts/node_modules/.bin/tsx'),['tools/robotics/export-cw-s02.ts','artifacts/robotics/cw-s02/models']);
+  run('fresh CW-S04 gesture captures',path.join(root,'ts/node_modules/.bin/tsx'),['tools/robotics/export-cw-s04.ts','artifacts/robotics/cw-s04/models']);
   run('Chrome authoring and CW-S01 handoff exercise','npm',['--prefix','ts','run','--workspace','@seedcore/mini-studio','test:browser']);
   if(!process.argv.includes('--skip-python')) run('downloaded Studio bundles in pinned native MuJoCo',python,['-m','pytest','tests/test_cw_s01_studio_native.py','-q'],{SEEDCORE_CW_S01_STUDIO_REQUIRED:'1'});
  }
@@ -33,7 +34,7 @@ finally{
  report.source_revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
  report.working_tree_dirty=Boolean(spawnSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).stdout.trim());
  const tracked=spawnSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.trim().split('\n');
- const prefixes=['ts/tests/policy-compatibility.test.ts','ts/tests/fixtures/policy-compatibility.ts','packages/simulation-fixtures/cw-s01/','tests/test_cw_s01_studio_native.py','tests/test_cw_s02_parity.py','tools/robotics/export-cw-s01.ts','tools/robotics/export-cw-s02.ts','tools/robotics/verify-cw-s02.cjs','ts/tests/fixtures/cw-s01.ts','ts/tests/mujoco-cw-s02.test.ts','ts/packages/drc-solver/','ts/packages/robot-canvas/','ts/packages/wasm-sim-bridge/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-','ts/tests/browser-pipeline','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json','apps/mini-robot-simulator/physics-build.json'];
+ const prefixes=['ts/tests/gesture-cw-s04.test.ts','tests/test_cw_s04_parity.py','tools/robotics/export-cw-s04.ts','tools/robotics/verify-cw-s04.cjs','ts/tests/policy-compatibility.test.ts','ts/tests/fixtures/policy-compatibility.ts','packages/simulation-fixtures/cw-s01/','tests/test_cw_s01_studio_native.py','tests/test_cw_s02_parity.py','tools/robotics/export-cw-s01.ts','tools/robotics/export-cw-s02.ts','tools/robotics/verify-cw-s02.cjs','ts/tests/fixtures/cw-s01.ts','ts/tests/mujoco-cw-s02.test.ts','ts/packages/drc-solver/','ts/packages/robot-canvas/','ts/packages/wasm-sim-bridge/','ts/apps/mini-studio/','ts/packages/contracts/src/','ts/packages/contracts/package.json','ts/tsconfig.base.json','scripts/robotics/serve_mini_studio.py','.github/workflows/unit-tests.yml','ts/tests/assembly-','ts/tests/browser-pipeline','tests/test_mini_studio_api','src/seedcore/robotics/mini_studio_api','tools/robotics/verify-authoring','tools/robotics/generate-assembly-schema','ts/package-lock.json','apps/mini-robot-simulator/physics-build.json'];
  report.inputs=tracked.filter(p=>prefixes.some(prefix=>p.startsWith(prefix))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
  report.outputs=['ts/apps/mini-studio/dist/app.js','ts/apps/mini-studio/dist/cw-s02-worker.js','ts/apps/mini-studio/dist/mujoco.wasm','ts/apps/mini-studio/dist/index.html','ts/apps/mini-studio/dist/app.css','ts/apps/mini-studio/dist/third-party-notices.txt'].filter(p=>fs.existsSync(path.join(root,p))).map(p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}));
  for(const scope of ['cw-a02','cw-a03','cw-a04','cw-s01/studio']){const target=path.join(root,`artifacts/robotics/${scope}/verification.json`);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,JSON.stringify(report,null,2)+'\n');}

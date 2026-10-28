@@ -13,7 +13,7 @@ export function setupPlacement(store:AssemblyStore<ProxyScene>,canvas:RobotCanva
     request=undefined;proposal=undefined;binding=undefined;candidates=[];select('snap-candidate').replaceChildren();select('snap-candidate').disabled=true;button('commit-placement').disabled=true;
     canvas?.setGhost(null);if(!keepDrag)canvas?.setPlacementDrag(undefined);if(text)message(text);
   };
-  const tabs=['inspect','placement','drc','simulation'] as const;
+  const tabs=['inspect','placement','drc','simulation','moments'] as const;
   const activate=(name:(typeof tabs)[number])=>{
     for(const pane of tabs){const active=pane===name;el(`${pane}-panel`).hidden=!active;button(`${pane}-tab`).setAttribute('aria-selected',String(active));button(`${pane}-tab`).tabIndex=active?0:-1;}
   };

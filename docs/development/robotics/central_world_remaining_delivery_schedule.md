@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-10-26
-Status: Phase 2 offline and CW-S01 compiler/native/Studio handoff passed locally; CW-S02 fixed-preset local runtime passed; CW-S03 preflight passed and CW-S04 is next; real-source/physical gates remain open
+Date: 2026-10-28
+Status: Phase 2 offline, CW-S01/S02 local slices, CW-S03 preflight and CW-S04 bounded synthetic gesture/replay passed locally; CW-G01 next; real-source/physical and full policy gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -37,8 +37,11 @@ XML/model exports. **CW-S02 now has a reviewed local fixed-preset runtime**:
 `dt=0.002`, position `kp=1` or ideal torque, with full 120-step native/Chrome
 parity and bounded capture/control checks. The **26 October CW-S03 offline
 preflight is delivered**, with both policy-execution candidates explicitly
-blocked. **CW-S04 bounded gesture/replay is next**; full policy inference and
-physical readiness retain their independent evidence gates.
+blocked. The [28 October CW-S04 record](central_world_cw_s04_gestures.md) now
+supplies bounded target curves, virtual LED, per-step simulation and captured
+replay on the synthetic 120-step / 240 ms position profile. **CW-G01 admission
+integration is next**; full policy inference and physical readiness retain
+their independent evidence gates.
 Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
 Missing Microduck checkpoint outputs block its locomotion policy lane, not a
@@ -131,7 +134,7 @@ data. Static rendering is independent of model/control/capture qualification.
 | CW-S01 · W6 (offline handoff passed locally) | Restricted assembly-to-MJCF compiler and Studio reference/export handoff; `ts/packages/wasm-sim-bridge` | CW-A01, CW-A04; explicit joint model | Simulation: first fixed-base tabletop subset, generated primitive geometry/inertials/actuators, native MuJoCo compile/FK/mass/range comparison and unsupported-subset report |
 | CW-S02 · W7 (local Wasm/parity/veto passed) | Pinned browser MuJoCo worker adapter, clocks, bounded buffers and runtime profiles | CW-S01; selected engine/build review | Simulation + Studio: [CW-S02 record](central_world_cw_s02_mujoco.md), `@mujoco/mujoco@3.15.0` Wasm/native parity, bounded clocks/capture, per-substep control veto and Studio worker rehearsal; no silent planar fallback |
 | CW-S03 · W7–W8 (preflight passed locally; inference open) | Compatible ONNX adapter and skill manifest candidate; `packages/skill-packages` | CW-S02 plus independent policy/model references | Simulation/policy: [26 Oct preflight](central_world_cw_s03_preflight.md) records pinned bytes, 16 CPU replay cases and two blocked runtime candidates; full policy/model/training/operator/timing qualification remains open |
-| CW-S04 · W8 | Joint/LED gesture timeline, bounded interpolation, simulation trace and replay projection | CW-A01, CW-S02; CW-S03 only for policy-driven behaviors | Studio + verification: authored wave/tilt fixture, curve-extrema/loop/edit tests, stop/fault/coverage report and scoped outcome display |
+| CW-S04 · W8 (local synthetic slice passed) | Declarative joint targets, virtual LED timeline, bounded interpolation, retained simulation trace and read-only replay | CW-A01, CW-S02; CW-S03 only for policy-driven behaviors | [28 Oct record](central_world_cw_s04_gestures.md): 46 TS + 7 native tests and 9 Chrome groups; analytic extrema, loops/time scaling, revision invalidation, partial stop/revoke/overflow and replay tampering; at most 120 steps / 240 ms, no physical output |
 
 Keep CW-S01 within declared primitive geometry and at most the reviewed tabletop
 joint subset. GLB visualization alone is not a valid MuJoCo articulation or
@@ -191,8 +194,9 @@ Local acceptance passed 43 TS + 7 Python tests and repeated byte-identical
 refusal reports. The existing 793,705-byte policy matches its SHA-256 and all
 16 CPU artifact goldens; independent training references remain unavailable.
 Both the native Microduck policy candidate and Microduck-on-tabletop candidate
-remain blocked. This closes only today's preflight allocation, allowing CW-S04
-tabletop gestures to proceed independently of full policy support.
+remain blocked. This closed the 26 October preflight allocation independently
+of full policy support. The [CW-S04 local gesture/replay slice](central_world_cw_s04_gestures.md)
+now supplies the next simulation result; CW-G01 remains the next integration.
 
 CW-S03 is conditional for Microduck locomotion: exact checkpoint/export outputs
 and runtime/model/policy compatibility are still open. Its 61/14 mapping is not

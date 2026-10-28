@@ -112,6 +112,9 @@ jobs:
       - name: Verify CW-S03 offline policy compatibility preflight
         run: node tools/robotics/verify-cw-s03.cjs
 
+      - name: Verify CW-S04 bounded simulation gestures, replay and native parity
+        run: node tools/robotics/verify-cw-s04.cjs
+
       - name: Verify browser pipeline transport and bounded pacing
         run: node tools/robotics/verify-browser-performance.cjs --skip-python
 
@@ -137,6 +140,9 @@ jobs:
             artifacts/robotics/cw-s03/verification.json
             artifacts/robotics/cw-s03/inventory.json
             artifacts/robotics/cw-s03/compatibility.json
+            artifacts/robotics/cw-s04/verification.json
+            artifacts/robotics/cw-s04/models/cases.json
+            artifacts/robotics/cw-s04/browser-verification.json
             artifacts/robotics/browser-performance/verification.json
             artifacts/robotics/static-scene/verification.json
 

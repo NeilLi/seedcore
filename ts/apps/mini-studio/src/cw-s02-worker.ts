@@ -6,6 +6,9 @@ import {
   createMujocoModelSession,
   loadVerifiedMujocoModule,
   readPinnedMujocoWasm,
+  compileGesture,
+  gestureFrameAtTick,
+  GestureError,
   type CompiledMjcf,
   type CwS02AttemptBinding,
   type MujocoModelSession,
@@ -45,6 +48,7 @@ worker.onmessage = async ({ data: m }) => {
       stopped = true;
       activeExecutor?.stop(typeof m.reason === 'string' ? m.reason : 'Stopped by operator');
       const summary = activeExecutor?.getSummary();
+      const samples = activeExecutor?.getSamples();
       cleanupSession();
       worker.postMessage({
         protocol: CW_S02_WORKER_PROTOCOL,
@@ -52,6 +56,7 @@ worker.onmessage = async ({ data: m }) => {
         generation: activeGeneration,
         reason: typeof m.reason === 'string' ? m.reason : 'Stopped by operator',
         ...(summary ? { summary } : {}),
+        ...(samples ? { samples } : {}),
       });
     }
     return;
@@ -90,11 +95,13 @@ worker.onmessage = async ({ data: m }) => {
   activeGeneration = generation;
   stopped = false;
 
+  let gestureDigest: string | undefined;
   const send = (type: string, extra: Record<string, unknown> = {}) => {
     worker.postMessage({
       protocol: CW_S02_WORKER_PROTOCOL,
       type,
       generation,
+      ...(gestureDigest ? { gestureDigest } : {}),
       ...extra,
     });
   };
@@ -112,8 +119,16 @@ worker.onmessage = async ({ data: m }) => {
       modelDigest: string;
       authorityEpoch: number;
     };
-    const totalSubsteps = Number.isInteger(m.totalSubsteps) ? Number(m.totalSubsteps) : 60;
-    const policyDecimation = Number.isInteger(m.policyDecimation) ? Number(m.policyDecimation) : 10;
+    // Independently compile declarative data before engine startup. Invalid gestures
+    // never fall back to the deterministic CW-S02 rehearsal controller.
+    const gesture = m.gesture === undefined ? undefined : compileGesture(m.gesture, model, binding);
+    if ((gesture && (m.gestureDigest !== gesture.gestureDigest ||
+        (m.totalSubsteps !== undefined && m.totalSubsteps !== gesture.totalTicks) ||
+        (m.policyDecimation !== undefined && m.policyDecimation !== 1))) ||
+        (!gesture && m.gestureDigest !== undefined)) throw new GestureError('GESTURE_BINDING_MISMATCH','Worker gesture digest/clock mismatch');
+    gestureDigest = gesture?.gestureDigest;
+    const totalSubsteps = gesture?.totalTicks ?? (Number.isInteger(m.totalSubsteps) ? Number(m.totalSubsteps) : 60);
+    const policyDecimation = gesture ? 1 : Number.isInteger(m.policyDecimation) ? Number(m.policyDecimation) : 10;
 
     const wasmBytes = await readPinnedMujocoWasm(
       await fetch('/mujoco.wasm', { signal: run.controller.signal }),
@@ -165,8 +180,10 @@ worker.onmessage = async ({ data: m }) => {
         const now = performance.now();
         const due = executor.dueSubsteps(now);
         if (due > 0) {
-          executor.stepBatch(now, due, policyStep =>
-            buildDeterministicRehearsalProposal(
+          executor.stepBatch(now, due, (policyStep, tick) => gesture ? {
+            generation:attempt.generation,authorityEpoch:attempt.authorityEpoch,modelDigest:attempt.modelDigest,
+            proposedAtMonotonicMs:now,expiresAtMonotonicMs:now+150,targetCtrl:gestureFrameAtTick(gesture,tick+1).targetRad,
+          } : buildDeterministicRehearsalProposal(
               attempt,
               session.actuatorCtrlRanges,
               restAngles,
@@ -188,12 +205,14 @@ worker.onmessage = async ({ data: m }) => {
         }
       } catch (error) {
         const summary = activeExecutor?.getSummary();
+        const samples = activeExecutor?.getSamples();
         cleanupSession();
         send('error', {
           error: error instanceof Error ? error.message : String(error),
-          code: error instanceof CwS02Error ? error.code : 'ENGINE_COMPILE_FAILED',
+          code: error instanceof CwS02Error || error instanceof GestureError ? error.code : 'ENGINE_COMPILE_FAILED',
           vetoReason: error instanceof CwS02Error ? (error.vetoReason ?? null) : null,
           ...(summary ? { summary } : {}),
+          ...(samples ? { samples } : {}),
         });
       }
     };
@@ -201,12 +220,14 @@ worker.onmessage = async ({ data: m }) => {
   } catch (error) {
     if (!isCurrent()) return;
     const summary = activeExecutor?.getSummary();
+    const samples = activeExecutor?.getSamples();
     cleanupSession();
     send('error', {
       error: error instanceof Error ? error.message : String(error),
-      code: error instanceof CwS02Error ? error.code : 'ENGINE_COMPILE_FAILED',
+      code: error instanceof CwS02Error || error instanceof GestureError ? error.code : 'ENGINE_COMPILE_FAILED',
       vetoReason: error instanceof CwS02Error ? (error.vetoReason ?? null) : null,
       ...(summary ? { summary } : {}),
+      ...(samples ? { samples } : {}),
     });
   } finally { clearTimeout(startupTimeout); }
 };

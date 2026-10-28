@@ -1,6 +1,7 @@
 import { canonicalAssemblyString, type RobotAssembly } from '@seedcore/contracts';
 import { sha256Hex, type DrcReport } from '@seedcore/drc-solver';
 import { AssemblyStore, fetchAssemblyText, type ProxyScene } from '@seedcore/robot-canvas';
+import { setupMoments } from './moments.js';
 import {
   CW_S02_WORKER_PROTOCOL,
   assertQualifiedMujocoSettings,
@@ -82,6 +83,7 @@ export function setupSimulation(store: AssemblyStore<ProxyScene>) {
   const invalidate = () => {
     const wasRunning = rehearsalActive;
     compiled = undefined;
+    moments.invalidate();
     stopRehearsal(
       wasRunning
         ? 'Rehearsal interrupted because the draft or simulation parameters changed.'
@@ -117,6 +119,8 @@ export function setupSimulation(store: AssemblyStore<ProxyScene>) {
     assertStudioModelCurrent(compiled.model, compiled.binding, liveBinding());
     return compiled.model;
   };
+  const moments = setupMoments({current: () => ({model:currentModel(),binding:{...compiled!.binding}}),
+    stopOther: () => stopRehearsal('Starting CW-S04 simulation gesture.',false)});
   const renderSummary = (summary: CwS02ExecutionSummary, inspection?: CwS02ModelInspection) => {
     el('sim-rehearsal-profile').textContent = `${summary.profile} · @mujoco/mujoco ${summary.engineVersion}`;
     el('sim-rehearsal-wasm').textContent = summary.wasmSha256;
@@ -159,6 +163,7 @@ export function setupSimulation(store: AssemblyStore<ProxyScene>) {
       const retained = { ...accepted.binding, modelDigest: model.modelDigest };
       assertStudioModelCurrent(model, retained, liveBinding());
       compiled = { model, binding: retained };
+      moments.refresh();
       el('sim-model-digest').textContent = model.modelDigest;
       el('sim-binding').textContent = canonicalAssemblyString(live);
       el('sim-manifest').textContent = JSON.stringify(model.manifest, null, 2);
@@ -216,6 +221,7 @@ export function setupSimulation(store: AssemblyStore<ProxyScene>) {
 
   el<HTMLButtonElement>('sim-run-rehearsal').onclick = () => {
     try {
+      moments.invalidate('CW-S02 rehearsal selected. Validate a fresh gesture before another CW-S04 attempt.');
       const model = currentModel();
       assertQualifiedMujocoSettings(model);
       if (document.hidden) throw new Error('Cannot start a rehearsal in a hidden page.');
@@ -323,6 +329,7 @@ export function setupSimulation(store: AssemblyStore<ProxyScene>) {
       render();
     },
     dispose() {
+      moments.dispose();
       disposed = true;
       accepted = undefined;
       document.removeEventListener('visibilitychange', onVisibilityChange);

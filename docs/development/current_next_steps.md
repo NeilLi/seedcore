@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-10-26
-Status: Canonical active execution queue — CW-S01 handoff and CW-S02 fixed-preset runtime delivered locally; CW-S03 offline preflight delivered; CW-S04 bounded gesture/replay next; real-source/physical and live gates remain open
+Date: 2026-10-28
+Status: Canonical active execution queue — CW-S01/S02 local slices, CW-S03 preflight and CW-S04 bounded synthetic gesture/replay delivered; CW-G01 live admission integration next; real-source/physical and full policy gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -21,9 +21,12 @@ adds pinned single-thread MuJoCo, full 120-step native/Chrome parity at explicit
 `dt=0.002`, position `kp=1` or ideal torque, and bounded control/capture fences.
 The [26 October CW-S03 preflight](robotics/central_world_cw_s03_preflight.md)
 now reproduces available artifact replay and reports both native and tabletop
-policy candidates blocked with exact reasons. Full policy execution remains
-gated; CW-S04 bounded gesture/replay is next. Source qualification stays open
-under CW-D01.
+policy candidates blocked with exact reasons. The
+[28 October CW-S04 slice](robotics/central_world_cw_s04_gestures.md) now provides
+bounded declarative target curves, a virtual LED cue, per-step simulation
+controls and read-only captured replay within the existing 120-step / 240 ms
+synthetic position profile. Full policy execution remains gated; CW-G01 live
+admission integration is next. Source qualification stays open under CW-D01.
 The runtime work progresses toward a bounded attempt with an understandable
 allow/deny/interruption timeline and sufficient verifier evidence. Use the
 [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
@@ -100,8 +103,9 @@ owns detailed order and owner roles; the
 measurement artifacts. CW-A01 v2, CW-A02, CW-A03 and CW-A04 now have passing
 local offline software evidence, completing Phase 2's offline authoring/DRC scope.
 Phase 3's CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 offline preflight
-also have local evidence. CW-S04 is next; full policy execution and the later
-live/release packages remain open.
+also have local evidence. CW-S04's bounded synthetic gesture/replay slice is
+delivered locally. CW-G01 is next; full policy execution and later live/release
+gates remain open.
 
 | Order | Package | Next reviewable result | Dependency |
 | --- | --- | --- | --- |
@@ -113,9 +117,10 @@ live/release packages remain open.
 | Local compiler/parity and Studio handoff passed | CW-S01 | [Offline synthetic reference, readiness inspector, deterministic MJCF/model exports and native/browser handoff evidence](robotics/central_world_cw_s01_mjcf.md#23-october-studio-handoff-and-offline-reference) | Actual starter: 10 DRC blockers / 9 simulation blockers; physical source qualification stays open under CW-D01 |
 | Local Wasm worker/parity/veto slice passed | CW-S02 | [Pinned `@mujoco/mujoco@3.15.0` worker adapter, clocks, bounded capture, per-substep control veto and native/browser parity](robotics/central_world_cw_s02_mujoco.md) | Local fixture profile at dt=0.002, position kp=1 or torque passed (`CW-SIM-02..04`); broader model/device/deployment checks remain open; no planar fallback; live Agent/PDP admission remains CW-G01 |
 | Local offline preflight passed | CW-S03 preflight | [Pinned inventory, 16-case CPU artifact replay and deterministic compatibility/refusal reports](robotics/central_world_cw_s03_preflight.md) | Full CW-POL-01 remains open: both real policy-execution candidates blocked; no checkpoint/browser qualification |
-| 1 (next package) | CW-S04 | Bounded tabletop gesture and replay; trained policy optional | CW-S02 fixed-preset local profile; do not infer Microduck policy compatibility |
+| Local synthetic slice passed | CW-S04 | [Bounded Hermite timeline, virtual LED, per-step target controls, interrupted capture and read-only replay](robotics/central_world_cw_s04_gestures.md) | Synthetic position profile only: dt=0.002, kp=1, at most 120 steps / 240 ms; no physical or policy authority |
 | Separately gated | CW-S03 inference/runtime | Compatible policy/model/actuator mapping, independent training/export and browser operator/timing evidence | Resume from the preflight blockers; artifact replay alone does not qualify this lane |
-| 2 | CW-G01–CW-L03 | Live admission/replay, design pack, curated fork flow and alpha review | CW3 evidence; firmware/physical provisioning remains conditional |
+| 1 (next integration package) | CW-G01 | Exact reviewed build/behavior/endpoint binding through the accountable Agent and trusted PDP; negative claim/dispatch matrix | CW-S04 local evidence; preserve existing token fields, revocation and local enforcement; physical paths require their own qualification |
+| Following CW-G01 | CW-G02–CW-L03 | Signed evidence projection, design pack, curated fork flow and alpha review | Local unsigned CW-S04 replay does not close CW-G02; firmware/physical provisioning remains conditional |
 
 ## Native Reference Milestones
 
@@ -206,7 +211,8 @@ two-person-day COOP-01 research cap in the
 capacity remains after committed work. Use the
 [pilot briefs](../application/robotics_component_partner_pilot_briefs.md) to
 record exact versions, complete mass/power/cost, fabrication, interface and
-rights gaps. CW-S04 follows the completed CW-S03 preflight; unsupported CAN/CAN FD work, a new joint/body
+rights gaps. CW-S04's local synthetic slice follows the completed CW-S03 preflight;
+CW-G01 is next. Unsupported CAN/CAN FD work, a new joint/body
 or an extra pilot is not a prerequisite. Select at most one later commercial
 or open-joint experiment against a measured mini-task need and existing CW/M/G
 gates. The prior compute/capture/middleware-first sequence is superseded;
@@ -217,8 +223,9 @@ Within the same research cap, use the
 to review reusable-dock packaging, complete starter cost and incremental
 print/active-pack cost. Keep rails/connectors unselected and ID discovery
 non-authoritative; no dock PCB, catalog part, survey or hardware build is added
-to the implementation queue. Optional gesture JSON drafting remains a CW-S04
-candidate; CW-S02 local runtime and CW-S03 preflight are delivered; CW-S04 is next.
+to the implementation queue. Optional LLM-drafted gesture JSON uses the same
+bounded CW-S04 parser as manual edits; no provider connector is required or
+implemented. CW-S04 is delivered locally; CW-G01 admission integration is next.
 
 Opt-in telemetry begins with adult bench data. Keep capture and external camera
 egress disabled by default; separately review permissions, retained samples,

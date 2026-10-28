@@ -31,6 +31,19 @@ bounded to 60 substeps, with per-step control/capture gates and interruption
 on edit, parameter change, undo/redo, stop or tab hide. Broader model/device and
 portal/iframe qualification remain open.
 
+The **Moments** tab adds CW-S04 declarative Hermite joint targets and virtual
+LED cues for synthetic position fixtures with 1–3 joints and at most five
+assembly bodies. Apply the qualified position settings, create or paste a
+gesture, validate its complete curves, then rehearse up to 120 steps / 240 ms.
+Stop retains partial capture when acknowledged. Edits invalidate old gestures
+and replay; the scrubber reads captured targets and observations without stepping
+physics. Replay import requires this session's original capture digest, retained
+independently of the imported JSON. These unsigned simulation artifacts grant
+no execution authority or physical qualification. Run
+`node tools/robotics/verify-cw-s04.cjs --browser` for the focused native and full
+Studio/browser checks; see the
+[CW-S04 record](../../../docs/development/robotics/central_world_cw_s04_gestures.md).
+
 `node tools/robotics/verify-authoring.cjs --browser` requires the pinned native
 MuJoCo 3.15.0 environment as well as Chrome. It compares actual browser exports
 to fresh compiler bytes and compiles the downloads natively. Evidence is retained

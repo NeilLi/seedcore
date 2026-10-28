@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
-Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
+Implementation status reviewed: 2026-10-28 against the active queue and package records
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
 as the first integration focus and Microduck as the reference target. The
@@ -31,7 +31,8 @@ TTL fixture, printable structures, ODRI open-design study and exact CubeMars
 compact-joint feasibility. It assesses all seven newly supplied initiatives and
 reclassifies the earlier ten candidates. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
-CW-S04 next after CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 offline preflight; full policy execution remains gated; real-source
+CW delivery ahead of optional ecosystem research; CW-S04 now has a bounded
+synthetic slice and CW-G01 admission integration is next. Full policy execution remains gated; real-source
 qualification, new joints and physical profiles remain conditional, with no industrial-cell or humanoid expansion.
 
 The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)
@@ -45,8 +46,10 @@ The [CW-S01 record](robotics/central_world_cw_s01_mjcf.md) provides the restrict
 compiler, synthetic native parity and 23 October offline Studio handoff.
 The [CW-S02 record](robotics/central_world_cw_s02_mujoco.md) qualifies the local
 fixed-preset MuJoCo worker; the [26 October CW-S03 preflight](robotics/central_world_cw_s03_preflight.md)
-records artifact replay and both blocked policy-runtime candidates. CW-S04
-bounded gesture/replay is next. Real starter readiness, broader runtime/device
+records artifact replay and both blocked policy-runtime candidates. The
+[28 October CW-S04 record](robotics/central_world_cw_s04_gestures.md) adds bounded
+synthetic target gestures, virtual LED and unsigned read-only capture replay
+within 120 steps / 240 ms. CW-G01 live admission integration is next. Real starter readiness, broader runtime/device
 qualification, live admission and hardware paths remain gated.
 
 The optional [browser performance lab](robotics/browser_performance_pipeline.md)
@@ -156,7 +159,7 @@ execution authority.
 
 For scheduling, the active 18-month plan owns target dates and phase reviews;
 the portfolio decision owns scope and the active queue owns immediate work.
-For implementation status, follow the 26 October active queue and its linked
+For implementation status, follow the active queue and its linked
 package acceptance records. Older dated baselines and test counts retain their
 original scope; a later status summary does not extend their acceptance.
 These take precedence over older annual plans and application schedules. The
