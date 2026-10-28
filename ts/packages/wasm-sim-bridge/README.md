@@ -160,3 +160,16 @@ Run `node tools/robotics/verify-cw-s04.cjs --browser` for source rebuild, full-c
 refusal/binding/replay checks, independent native parity and shipped Chrome
 exercise. See the [CW-S04 record](../../../docs/development/robotics/central_world_cw_s04_gestures.md)
 for supported scope, use, retained artifacts and open CW-G01/G02/physical gates.
+
+## CW-G01 candidate preparation
+
+`createCwBuildCandidate(model, gesture, binding, endpointId)` rechecks current
+compiler outputs and freezes `seedcore.cw-g01.candidate.v1`: exact build/gesture/
+runtime bindings, analytic curve bounds, requested derivative ceilings and a
+requested `cw_sim://` endpoint. `assertCwBuildCandidateCurrent` compares it with
+fresh compilation; the digest is not registration, a signature or admission.
+Mini Studio exports this candidate for separate trusted review. The Python
+preparation boundary preserves the existing `PolicyCase` and binds its prepared
+payload through existing fields. Live token verification, claim/revocation and
+dispatch remain open. See the [CW-G01 record](../../../docs/development/robotics/central_world_cw_g01_admission.md)
+and `node tools/robotics/verify-cw-g01.cjs --browser`.

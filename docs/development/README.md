@@ -52,6 +52,11 @@ synthetic target gestures, virtual LED and unsigned read-only capture replay
 within 120 steps / 240 ms. CW-G01 live admission integration is next. Real starter readiness, broader runtime/device
 qualification, live admission and hardware paths remain gated.
 
+The [28 October CW-G01 preparation record](robotics/central_world_cw_g01_admission.md)
+adds current build/gesture/endpoint review candidates and trusted per-joint-limit
+preparation of the existing PolicyCase. CW-G01 remains active for trusted
+intake/profile resolution and live token/claim/revocation/dispatch enforcement.
+
 The optional [browser performance lab](robotics/browser_performance_pipeline.md)
 now measures separate scalar Wasm physics/render workers, transferable or
 atomically protected shared snapshots, and WebGPU display FK on a synthetic

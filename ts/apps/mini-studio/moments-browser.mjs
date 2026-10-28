@@ -3,6 +3,7 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {canonicalAssemblyString} from '@seedcore/contracts';
+import {compileGesture,createCwBuildCandidate} from '@seedcore/wasm-sim-bridge';
 
 export async function exerciseMoments(page,root,passed) {
   const out=path.join(root,'artifacts/robotics/cw-s04');await mkdir(out,{recursive:true});
@@ -11,6 +12,7 @@ export async function exerciseMoments(page,root,passed) {
   const example=async()=>{await page.locator('#moments-tab').click();await page.locator('#moment-example').click();await page.locator('#moment-compile').click();await gestureCompiled();};
   await page.locator('#starter').click();await page.waitForFunction(()=>document.querySelectorAll('#sim-blocking li').length===9);
   assert.equal(await page.locator('#moment-example').isDisabled(),true);assert.equal(await page.locator('#moment-run').isDisabled(),true);
+  assert.equal(await page.locator('#moment-freeze').isDisabled(),true);
   await page.locator('#simulation-tab').focus();await page.keyboard.press('End');
   assert.equal(await page.locator('#moments-tab').getAttribute('aria-selected'),'true');
   await page.locator('#simulation-tab').click();
@@ -28,6 +30,28 @@ export async function exerciseMoments(page,root,passed) {
   await page.locator('#moment-compile').click();assert.match(await page.locator('#moment-status').textContent(),/Duplicate JSON key/);
   await page.locator('#moment-json').fill(raw);await page.locator('#moment-compile').click();await gestureCompiled();
   passed('CW-S04 strict JSON and interior derivative rejection; corrected draft recovers deterministically');
+
+  const candidateOut=path.join(root,'artifacts/robotics/cw-g01');await mkdir(candidateOut,{recursive:true});
+  const modelContext=await page.evaluate(()=>{
+    const model={schemaVersion:'seedcore.cw-s01.model.v1',scope:'offline_simulation_only',physicalAcceptance:false,executionAuthority:'none',
+      xml:document.querySelector('#sim-xml').value,manifest:JSON.parse(document.querySelector('#sim-manifest').textContent),modelDigest:document.querySelector('#sim-model-digest').textContent};
+    return {model,binding:{...JSON.parse(document.querySelector('#sim-binding').textContent),modelDigest:model.modelDigest}};
+  });
+  let candidateRequests=0;const observeCandidate=()=>{candidateRequests++;};page.on('request',observeCandidate);
+  await page.locator('#moment-endpoint').fill('hal://physical/1');await page.locator('#moment-freeze').click();
+  assert.match(await page.locator('#moment-candidate').textContent(),/Candidate rejected/);
+  await page.locator('#moment-endpoint').fill('cw_sim://fixture/1');
+  const candidateDownload=page.waitForEvent('download');await page.locator('#moment-freeze').click();const frozen=await candidateDownload;
+  assert.equal(frozen.suggestedFilename(),'gesture.cw-g01.candidate.json');await frozen.saveAs(path.join(candidateOut,'browser-candidate.json'));
+  const candidateRaw=await readFile(path.join(candidateOut,'browser-candidate.json'),'utf8');
+  const expectedCandidate=createCwBuildCandidate(modelContext.model,compileGesture(raw,modelContext.model,modelContext.binding),modelContext.binding,'cw_sim://fixture/1');
+  assert.equal(candidateRaw,canonicalAssemblyString(expectedCandidate)+'\n');
+  assert.match(await page.locator('#moment-candidate').textContent(),/No admission requested/);
+  await page.locator('#moment-endpoint').fill('cw_sim://fixture/2');assert.equal(await page.locator('#moment-candidate').textContent(),'No current review candidate.');
+  assert.equal(candidateRequests,0);page.off('request',observeCandidate);
+  passed('CW-G01 browser exports fresh byte-identical build/gesture/endpoint candidates without registration or admission requests');
+  await writeFile(path.join(candidateOut,'browser-verification.json'),JSON.stringify({scope:'offline_simulation_only',physicalAcceptance:false,
+    executionAuthority:'none',status:'checks_passed',checks:1,candidateDigest:expectedCandidate.candidateDigest,admissionRequests:0,dispatchAvailable:false},null,2)+'\n');
 
   // Bad declarative input is rejected inside the actual worker before engine fetch.
   const invalidWorker=await page.evaluate(async draft=>{
@@ -86,6 +110,7 @@ export async function exerciseMoments(page,root,passed) {
   passed('CW-S04 independently retained capture pin rejects rewritten observations despite recalculated trace and replay hashes');
   await page.locator('#moment-json').fill(raw.replace(draft.name,'Edited gesture'));
   assert.equal(await page.locator('#moment-digest').textContent(),'—');assert.equal(await page.locator('#moment-tick').isDisabled(),true);
+  assert.equal(await page.locator('#moment-candidate').textContent(),'No current review candidate.');assert.equal(await page.locator('#moment-freeze').isDisabled(),true);
   await page.locator('#moment-compile').click();await gestureCompiled();assert.notEqual(await page.locator('#moment-digest').textContent(),digest);
   passed('CW-S04 imports require current independent attempt identity; tampering rejects and edits clear compilation/replay');
 

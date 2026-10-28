@@ -38,7 +38,9 @@ artifact replay and reports both policy-runtime candidates blocked. The
 [CW-S04 record](central_world_cw_s04_gestures.md) now adds bounded synthetic
 target gestures, virtual LED and unsigned captured replay on the 120-step / 240 ms
 position profile. The [active queue](../current_next_steps.md) selects CW-G01
-live admission integration next; real-source, broader runtime/device, full policy
+live admission integration as active. The [28 October CW-G01 preparation record](central_world_cw_g01_admission.md)
+adds review candidates and trusted existing PDP input preparation; live
+token/claim/dispatch enforcement remains open. Real-source, broader runtime/device, full policy
 and hardware gates remain open.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)

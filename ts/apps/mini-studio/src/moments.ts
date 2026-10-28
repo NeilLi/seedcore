@@ -1,6 +1,7 @@
 import { canonicalAssemblyString } from '@seedcore/contracts';
 import { CW_S02_WORKER_PROTOCOL, assertCompiledGestureCurrent, assertQualifiedMujocoSettings, compileGesture,
   CW_S04_MAX_BODIES, createGestureReplay, createTabletopGestureExample, inspectGestureReplay, gestureCaptureDigest,
+  createCwBuildCandidate,
   type CompiledGesture, type CompiledMjcf, type GestureBinding, type GestureReplay, type GestureReplayProjection, type GestureReplayExpected,
 } from '@seedcore/wasm-sim-bridge';
 
@@ -23,6 +24,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     el<HTMLInputElement>('moment-tick').disabled = true;
     button('moment-export').disabled = true;
   };
+  const clearCandidate = () => { el('moment-candidate').textContent = 'No current review candidate.'; };
   const terminate = () => { clearTimeout(timer); timer = undefined; worker?.terminate(); worker = undefined; stopping = false; button('moment-stop').disabled = true; };
   const current = () => {
     const c = host.current();
@@ -36,10 +38,12 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     button('moment-example').disabled = !eligible; button('moment-compile').disabled = !eligible;
     button('moment-run').disabled = !compiled || Boolean(worker);
     button('moment-inspect-replay').disabled = !retainedAttempt || Boolean(worker);
+    button('moment-freeze').disabled = !compiled || Boolean(worker);
   };
   const invalidate = (reason = 'Build or settings changed. Rebind and validate a new simulation gesture.') => {
     generation++; terminate(); compiled = undefined; retainedAttempt = undefined;
     clearCapture(); el('moment-digest').textContent = '—'; el('moment-bounds').textContent = '';
+    clearCandidate();
     status(reason,'stale'); refresh();
   };
   const paintFrame = (index: number) => {
@@ -167,6 +171,18 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     clearCapture();
     try { retainReplay(el<HTMLTextAreaElement>('moment-replay-json').value); status('Imported capture matches the independently retained current attempt; read-only simulation projection.','replayed'); }
     catch (e) { status(`Replay rejected: ${String(e)}`,'rejected'); }
+  };
+  el<HTMLInputElement>('moment-endpoint').oninput = clearCandidate;
+  button('moment-freeze').onclick = () => {
+    clearCandidate();
+    try {
+      const c = current();
+      const candidate = createCwBuildCandidate(c.model,compiled!,c.binding,el<HTMLInputElement>('moment-endpoint').value);
+      const url = URL.createObjectURL(new Blob([canonicalAssemblyString(candidate)+'\n'],{type:'application/json'}));
+      const a = document.createElement('a'); a.href = url; a.download = 'gesture.cw-g01.candidate.json'; a.click();
+      setTimeout(() => URL.revokeObjectURL(url),1000);
+      el('moment-candidate').textContent = `Review candidate ${candidate.candidateDigest}. Exported for ${candidate.endpointId}; trusted registration and a PDP decision are still required. No admission requested.`;
+    } catch (e) { el('moment-candidate').textContent = `Candidate rejected: ${e instanceof Error ? e.message : String(e)}`; }
   };
   const onHidden = () => { if (document.hidden) interrupt('hidden'); };
   document.addEventListener('visibilitychange',onHidden);

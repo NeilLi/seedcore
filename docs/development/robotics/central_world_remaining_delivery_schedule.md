@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
 Date: 2026-10-28
-Status: Phase 2 offline, CW-S01/S02 local slices, CW-S03 preflight and CW-S04 bounded synthetic gesture/replay passed locally; CW-G01 next; real-source/physical and full policy gates remain open
+Status: Phase 2 offline, CW-S01/S02 local slices, CW-S03 preflight and CW-S04 bounded synthetic gesture/replay passed locally; CW-G01 candidate/preparation slice available, live integration active; real-source/physical and full policy gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -40,7 +40,9 @@ preflight is delivered**, with both policy-execution candidates explicitly
 blocked. The [28 October CW-S04 record](central_world_cw_s04_gestures.md) now
 supplies bounded target curves, virtual LED, per-step simulation and captured
 replay on the synthetic 120-step / 240 ms position profile. **CW-G01 admission
-integration is next**; full policy inference and physical readiness retain
+integration is active**. Its [28 October preparation slice](central_world_cw_g01_admission.md)
+freezes current candidates and prepares trusted existing PDP inputs; live
+token/claim/dispatch enforcement remains next. Full policy inference and physical readiness retain
 their independent evidence gates.
 Keep **CW-D01** open in parallel for data collection;
 unknown physical facts block physical readiness, not graph/UI development.
@@ -235,7 +237,7 @@ goal is separate from the policy/control rate and physical stopping evidence.
 
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
-| CW-G01 · W9 | Reviewed build-freeze/capability-request contract and live Agent/PDP integration; existing robotics/gateway boundary | CW-A01, CW-A04, CW-S04; trusted profile evidence for hardware | Trust + verification: proposed versus granted limits, digest/signer context, exact existing-token binding and negative authority matrix |
+| CW-G01 · W9 (preparation slice available; live integration open) | Reviewed build-freeze/capability-request contract and live Agent/PDP integration; existing robotics/gateway boundary | CW-A01, CW-A04, CW-S04; trusted profile evidence for hardware | [28 Oct preparation](central_world_cw_g01_admission.md): 20 TS + 54 Python tests, separate review pin/current context, per-joint intersection and existing PDP denials; live allow/token/claim/dispatch matrix remains open |
 | CW-G02 · W9–W10 | Scoped robot replay adapter into the existing verification/operator surfaces | CW-G01, retained traces; applicable signer evidence | Verification + Studio: source/binding/coverage projection, Python/Rust agreement and missing/conflicting/revoked-key quarantine cases; no replay write authority |
 | CW-E01 · W10 | Reproducible design Build Pack exporter | CW-A04, CW-S04; rights and printable CAD for claimed print files | Studio + delivery: artifact/hash inventory, unknown-cost count, reviewed-net SVG, safe CSV/ZIP tests and explicit draft/qualified status |
 | CW-F01 · W10, conditional | One-board firmware/configuration ABI and NVS golden comparison | CW-D01, actual reviewed ESP-IDF source/build/partition table; CW-G01 | Trust/firmware: source/build manifest, official-generator byte fixtures, config signature/digest limits and wrong-profile rejection; no device secrets in public partitions |

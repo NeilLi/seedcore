@@ -1,7 +1,7 @@
 # Current Next Steps
 
 Date: 2026-10-28
-Status: Canonical active execution queue — CW-S01/S02 local slices, CW-S03 preflight and CW-S04 bounded synthetic gesture/replay delivered; CW-G01 live admission integration next; real-source/physical and full policy gates remain open
+Status: Canonical active execution queue — CW-S01/S02 local slices, CW-S03 preflight and CW-S04 bounded synthetic gesture/replay delivered; CW-G01 candidate/preparation slice available, live admission integration active; real-source/physical and full policy gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -26,7 +26,10 @@ policy candidates blocked with exact reasons. The
 bounded declarative target curves, a virtual LED cue, per-step simulation
 controls and read-only captured replay within the existing 120-step / 240 ms
 synthetic position profile. Full policy execution remains gated; CW-G01 live
-admission integration is next. Source qualification stays open under CW-D01.
+admission integration is active. The [28 October CW-G01 preparation slice](robotics/central_world_cw_g01_admission.md)
+adds current build/gesture/endpoint candidates and trusted review/per-joint-limit
+preparation of the existing PolicyCase. Live token/claim/dispatch acceptance
+remains open; this does not advance CW-G02. Source qualification stays open under CW-D01.
 The runtime work progresses toward a bounded attempt with an understandable
 allow/deny/interruption timeline and sufficient verifier evidence. Use the
 [18-month execution plan](strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
@@ -104,7 +107,8 @@ measurement artifacts. CW-A01 v2, CW-A02, CW-A03 and CW-A04 now have passing
 local offline software evidence, completing Phase 2's offline authoring/DRC scope.
 Phase 3's CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 offline preflight
 also have local evidence. CW-S04's bounded synthetic gesture/replay slice is
-delivered locally. CW-G01 is next; full policy execution and later live/release
+delivered locally. CW-G01's candidate/preparation slice is available; its live
+admission adapter is next. Full policy execution and later live/release
 gates remain open.
 
 | Order | Package | Next reviewable result | Dependency |
@@ -119,7 +123,7 @@ gates remain open.
 | Local offline preflight passed | CW-S03 preflight | [Pinned inventory, 16-case CPU artifact replay and deterministic compatibility/refusal reports](robotics/central_world_cw_s03_preflight.md) | Full CW-POL-01 remains open: both real policy-execution candidates blocked; no checkpoint/browser qualification |
 | Local synthetic slice passed | CW-S04 | [Bounded Hermite timeline, virtual LED, per-step target controls, interrupted capture and read-only replay](robotics/central_world_cw_s04_gestures.md) | Synthetic position profile only: dt=0.002, kp=1, at most 120 steps / 240 ms; no physical or policy authority |
 | Separately gated | CW-S03 inference/runtime | Compatible policy/model/actuator mapping, independent training/export and browser operator/timing evidence | Resume from the preflight blockers; artifact replay alone does not qualify this lane |
-| 1 (next integration package) | CW-G01 | Exact reviewed build/behavior/endpoint binding through the accountable Agent and trusted PDP; negative claim/dispatch matrix | CW-S04 local evidence; preserve existing token fields, revocation and local enforcement; physical paths require their own qualification |
+| 1 (active integration package) | CW-G01 | [Candidate/preparation slice](robotics/central_world_cw_g01_admission.md) available; next: trusted intake/profile resolution, live PDP/token adapter and negative claim/dispatch matrix | Exact build/behavior/endpoint binding; preserve existing token fields, durable claim, revocation and per-substep enforcement; physical paths require separate qualification |
 | Following CW-G01 | CW-G02–CW-L03 | Signed evidence projection, design pack, curated fork flow and alpha review | Local unsigned CW-S04 replay does not close CW-G02; firmware/physical provisioning remains conditional |
 
 ## Native Reference Milestones

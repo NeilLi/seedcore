@@ -44,6 +44,13 @@ no execution authority or physical qualification. Run
 Studio/browser checks; see the
 [CW-S04 record](../../../docs/development/robotics/central_world_cw_s04_gestures.md).
 
+After gesture validation, **Review candidate** exports a CW-G01 candidate bound
+to the current model, gesture and requested `cw_sim://` endpoint. Edits clear it;
+the export grants no authority and makes no registration/admission request.
+The separate Python preparation boundary requires trusted review, current build
+and existing Agent/PDP context. Live token/claim/dispatch integration remains open;
+see the [CW-G01 preparation record](../../../docs/development/robotics/central_world_cw_g01_admission.md).
+
 `node tools/robotics/verify-authoring.cjs --browser` requires the pinned native
 MuJoCo 3.15.0 environment as well as Chrome. It compares actual browser exports
 to fresh compiler bytes and compiles the downloads natively. Evidence is retained
