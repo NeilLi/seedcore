@@ -10,6 +10,11 @@ export interface PlacementDrag {
   onPose:(pose:RelativeTransform)=>void;
   onDrop:()=>void;
 }
+export interface CapturedBodyPose {
+  nodeId: string;
+  position_m: number[];
+  quaternion_wxyz: number[];
+}
 
 /** Rest-pose proxy preview, isolated from authoring state and execution. */
 export class RobotCanvas {
@@ -26,7 +31,9 @@ export class RobotCanvas {
   private ghosts=new THREE.Group();
   private placementDrag?:PlacementDrag;
   private dragging?:{plane:THREE.Plane;offset:THREE.Vector3};
-  constructor(private canvas: HTMLCanvasElement, private onSelect: (selection: Selection) => void) {
+  private restPoses: CapturedBodyPose[] = [];
+  constructor(private canvas: HTMLCanvasElement, private onSelect: (selection: Selection) => void,
+    private onDisplayMode?: (mode:'rest'|'captured')=>void) {
     this.renderer = new THREE.WebGLRenderer({canvas,antialias:true});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio,2)); this.renderer.setClearColor('#e8eeeb');
     this.camera.up.set(0,0,1); this.camera.position.set(.22,-.30,.23);
@@ -77,6 +84,7 @@ export class RobotCanvas {
     this.setGhost(null);this.setPlacementDrag(undefined);
     for (const object of [...this.objects.values(),...this.edges.values()]) {object.geometry.dispose(); object.material.dispose();}
     this.group.clear(); this.objects.clear(); this.edges.clear();
+    this.restPoses=scene.nodes.map(n=>({nodeId:n.id,position_m:[...n.transform.position_m],quaternion_wxyz:[...n.transform.quaternion_wxyz]}));
     const colors: Record<string,number> = {chassis:0x769886,actuator:0xe3a666,mcu:0x6e9eae,link:0xa7b2c7,bracket:0x93a493};
     for (const node of scene.nodes) {
       const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position',new THREE.Float32BufferAttribute([...node.positions],3)); geometry.setIndex([...node.indices]); geometry.computeVertexNormals();
@@ -89,7 +97,23 @@ export class RobotCanvas {
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([from,to]),new THREE.LineBasicMaterial({color:0x8f9f98,depthTest:false,transparent:true,opacity:.6}));
       line.renderOrder=2; this.edges.set(edge.edge_id,line); this.group.add(line);
     }
-    this.canvas.dataset.meshState = 'verified'; this.fit();
+    this.canvas.dataset.meshState = 'verified';this.canvas.dataset.poseState='rest';this.onDisplayMode?.('rest');this.fit();
+  }
+  /** Display-only transforms from a checked capture. Never writes the assembly/store. */
+  showCapturedPose(poses:CapturedBodyPose[]):void {
+    const ids=new Set(poses.map(p=>p.nodeId));
+    if(poses.length!==this.objects.size||ids.size!==poses.length||poses.some(p=>!this.objects.has(p.nodeId)||
+      p.position_m.length!==3||p.quaternion_wxyz.length!==4||![...p.position_m,...p.quaternion_wxyz].every(Number.isFinite)||
+      p.position_m.some(v=>Math.abs(v)>100)||Math.abs(Math.hypot(...p.quaternion_wxyz)-1)>1e-6))throw new Error('Captured pose inventory/transform mismatch');
+    for(const p of poses){const mesh=this.objects.get(p.nodeId)!;mesh.position.fromArray(p.position_m);const[w,x,y,z]=p.quaternion_wxyz;mesh.quaternion.set(x,y,z,w);}
+    for(const line of this.edges.values())line.visible=false;
+    this.setGhost(null);this.setPlacementDrag(undefined);this.canvas.dataset.poseState='captured';this.onDisplayMode?.('captured');
+  }
+  restoreRestPose():void {
+    if(!this.restPoses.length||this.canvas.dataset.poseState!=='captured')return;
+    this.showCapturedPose(this.restPoses);
+    for(const line of this.edges.values())line.visible=true;
+    this.canvas.dataset.poseState='rest';this.onDisplayMode?.('rest');
   }
   select(selection: Frozen<Selection>): void {
     for (const [id,mesh] of this.objects) {mesh.material.emissive.setHex(selection?.kind==='node' && selection.id===id ? 0x255a48 : 0);}
@@ -98,7 +122,8 @@ export class RobotCanvas {
   fit(): void {
     const box = new THREE.Box3().setFromObject(this.group); if(box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
-    const distance = Math.max(.12, size.length())*2.2;
+    const vertical=THREE.MathUtils.degToRad(this.camera.fov), horizontal=2*Math.atan(Math.tan(vertical/2)*this.camera.aspect);
+    const distance=Math.max(.04,size.length()/2)/Math.sin(Math.min(vertical,horizontal)/2)*1.25;
     this.camera.far=Math.max(10,distance*4);this.camera.updateProjectionMatrix();
     this.controls.target.copy(center); this.camera.position.copy(center).add(new THREE.Vector3(.7,-1,.8).normalize().multiplyScalar(distance)); this.controls.update();
   }

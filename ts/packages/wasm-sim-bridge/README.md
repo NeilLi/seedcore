@@ -171,5 +171,8 @@ fresh compilation; the digest is not registration, a signature or admission.
 Mini Studio exports this candidate for separate trusted review. The Python
 preparation boundary preserves the existing `PolicyCase` and binds its prepared
 payload through existing fields. Live token verification, claim/revocation and
-dispatch remain open. See the [CW-G01 record](../../../docs/development/robotics/central_world_cw_g01_admission.md)
+dispatch now have a separate service-owned native implementation for the pinned
+local synthetic reference. The browser remains a proposer/display client; this
+package's offline worker grants no authority. Production context/deployment and
+physical qualification remain open. See the [CW-G01 record](../../../docs/development/robotics/central_world_cw_g01_admission.md)
 and `node tools/robotics/verify-cw-g01.cjs --browser`.

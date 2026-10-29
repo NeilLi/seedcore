@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
-Implementation status reviewed: 2026-10-28 against the active queue and package records
+Implementation status reviewed: 2026-10-29 against the active queue and package records
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
 as the first integration focus and Microduck as the reference target. The
@@ -32,7 +32,7 @@ compact-joint feasibility. It assesses all seven newly supplied initiatives and
 reclassifies the earlier ten candidates. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
 CW delivery ahead of optional ecosystem research; CW-S04 now has a bounded
-synthetic slice and CW-G01 admission integration is next. Full policy execution remains gated; real-source
+synthetic slice and CW-G01 has a local native-admission adapter for review. Full policy execution remains gated; real-source
 qualification, new joints and physical profiles remain conditional, with no industrial-cell or humanoid expansion.
 
 The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)
@@ -49,13 +49,14 @@ fixed-preset MuJoCo worker; the [26 October CW-S03 preflight](robotics/central_w
 records artifact replay and both blocked policy-runtime candidates. The
 [28 October CW-S04 record](robotics/central_world_cw_s04_gestures.md) adds bounded
 synthetic target gestures, virtual LED and unsigned read-only capture replay
-within 120 steps / 240 ms. CW-G01 live admission integration is next. Real starter readiness, broader runtime/device
+within 120 steps / 240 ms. CW-G01 now adds scoped local native admission. Real starter readiness, broader runtime/device
 qualification, live admission and hardware paths remain gated.
 
-The [28 October CW-G01 preparation record](robotics/central_world_cw_g01_admission.md)
-adds current build/gesture/endpoint review candidates and trusted per-joint-limit
-preparation of the existing PolicyCase. CW-G01 remains active for trusted
-intake/profile resolution and live token/claim/revocation/dispatch enforcement.
+The [29 October CW-G01 record](robotics/central_world_cw_g01_admission.md)
+adds a local synthetic service-owned native adapter to the reviewed candidates:
+actual PDP, configured signing, Rust verification, durable claims, per-step
+stop/revocation and read-only 3D capture replay. CW-G01 remains at local adapter
+review; production authenticated intake/context refresh and deployment remain gated.
 
 The optional [browser performance lab](robotics/browser_performance_pipeline.md)
 now measures separate scalar Wasm physics/render workers, transferable or

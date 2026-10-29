@@ -1,4 +1,6 @@
 import { canonicalAssemblyString } from '@seedcore/contracts';
+import type {CapturedBodyPose} from '@seedcore/robot-canvas';
+import {setupGovernedSimulation} from './governed.js';
 import { CW_S02_WORKER_PROTOCOL, assertCompiledGestureCurrent, assertQualifiedMujocoSettings, compileGesture,
   CW_S04_MAX_BODIES, createGestureReplay, createTabletopGestureExample, inspectGestureReplay, gestureCaptureDigest,
   createCwBuildCandidate,
@@ -6,7 +8,7 @@ import { CW_S02_WORKER_PROTOCOL, assertCompiledGestureCurrent, assertQualifiedMu
 } from '@seedcore/wasm-sim-bridge';
 
 /** Local JSON authoring and read-only capture scrubber; never an admission service. */
-export function setupMoments(host: { current: () => {model: CompiledMjcf; binding: GestureBinding}; stopOther: () => void }) {
+export function setupMoments(host: { current: () => {model: CompiledMjcf; binding: GestureBinding}; stopOther: () => void; display:(bodies:CapturedBodyPose[]|null)=>void }) {
   const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const button = (id: string) => el<HTMLButtonElement>(id);
   let compiled: CompiledGesture | undefined, replay: GestureReplay | undefined, projection: GestureReplayProjection | undefined;
@@ -32,7 +34,10 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     assertCompiledGestureCurrent(compiled,c.model,c.binding,compiled.gestureDigest);
     return c;
   };
+  const governed=setupGovernedSimulation({current:()=>({...current(),gesture:compiled!}),display:host.display,
+    stopOffline:()=>{host.stopOther();terminate();clearCapture();retainedAttempt=undefined;refresh();}});
   const refresh = () => {
+    governed.refresh();
     let eligible = false;
     try { const c = host.current(); assertQualifiedMujocoSettings(c.model); eligible = c.model.manifest.catalogProvenance === 'synthetic_fixture' && c.model.manifest.options.actuatorMode === 'position' && c.model.manifest.bodies.length <= CW_S04_MAX_BODIES; } catch {}
     button('moment-example').disabled = !eligible; button('moment-compile').disabled = !eligible;
@@ -41,6 +46,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     button('moment-freeze').disabled = !compiled || Boolean(worker);
   };
   const invalidate = (reason = 'Build or settings changed. Rebind and validate a new simulation gesture.') => {
+    governed.invalidate(reason);
     generation++; terminate(); compiled = undefined; retainedAttempt = undefined;
     clearCapture(); el('moment-digest').textContent = '—'; el('moment-bounds').textContent = '';
     clearCandidate();
@@ -49,6 +55,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
   const paintFrame = (index: number) => {
     const frame = projection?.frames[index];
     if (!frame || !compiled) return;
+    host.display(null);
     el('moment-frame').textContent = `Captured tick ${frame.tick} · ${frame.simTimeSeconds.toFixed(3)} s`;
     el('moment-led').textContent = `Virtual LED ${frame.virtualLed} · display only`;
     el('moment-led').style.backgroundColor = frame.virtualLed;
@@ -85,6 +92,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     refresh();
   };
   button('moment-run').onclick = () => {
+    governed.invalidate('Offline rehearsal selected. Request fresh admission for a governed attempt.');
     try {
       const c = current(), gesture = compiled!;
       if (document.hidden) throw new Error('Cannot rehearse a gesture in a hidden page.');
@@ -172,7 +180,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     try { retainReplay(el<HTMLTextAreaElement>('moment-replay-json').value); status('Imported capture matches the independently retained current attempt; read-only simulation projection.','replayed'); }
     catch (e) { status(`Replay rejected: ${String(e)}`,'rejected'); }
   };
-  el<HTMLInputElement>('moment-endpoint').oninput = clearCandidate;
+  el<HTMLInputElement>('moment-endpoint').oninput = ()=>{clearCandidate();governed.invalidate('Requested endpoint edited. Request fresh admission.');};
   button('moment-freeze').onclick = () => {
     clearCandidate();
     try {
@@ -186,5 +194,5 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
   };
   const onHidden = () => { if (document.hidden) interrupt('hidden'); };
   document.addEventListener('visibilitychange',onHidden);
-  return {invalidate,refresh,dispose() {disposed = true; invalidate('Disposed'); document.removeEventListener('visibilitychange',onHidden);}};
+  return {invalidate,refresh,dispose() {disposed = true; invalidate('Disposed');governed.dispose();document.removeEventListener('visibilitychange',onHidden);}};
 }

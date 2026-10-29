@@ -8,7 +8,9 @@ const store = new AssemblyStore<ProxyScene>(prepareProxyScene);
 const storageKey = 'seedcore.mini-studio.draft.v2';
 let canvas: RobotCanvas | undefined, shownDigest: string | undefined, savedDigest: string | undefined;
 let storageError = '';
-try { canvas = new RobotCanvas(element<HTMLCanvasElement>('viewport'),selection=>store.select(selection)); }
+try { canvas = new RobotCanvas(element<HTMLCanvasElement>('viewport'),selection=>store.select(selection),mode=>{
+  element('view-mode').textContent=mode==='captured'?'CAPTURED SIMULATION POSE / METERS / Z-UP':'REST POSE / METERS / Z-UP';
+}); }
 catch {element('canvas-error').textContent = '3D preview unavailable in this browser. Use the parts and connections lists to inspect this draft.';}
 function item(label:string,detail:string,selection:Selection,current:Frozen<Selection>): HTMLButtonElement {
   const result = document.createElement('button'), text = document.createElement('span'), hint = document.createElement('small');
@@ -60,7 +62,7 @@ button('export').onclick = ()=>{
   const anchor=document.createElement('a'); anchor.href=url; anchor.download='assembly.sc-assembly.json'; anchor.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 const disposePlacement=setupPlacement(store,canvas);
-const disposeDrc=setupDrc(store);
+const disposeDrc=setupDrc(store,canvas);
 window.addEventListener('pagehide',()=>{disposePlacement();disposeDrc();store.dispose();canvas?.dispose();},{once:true});
 let restored:string|null=null; try{restored=localStorage.getItem(storageKey);}catch{storageError=' · Browser storage unavailable; export your draft.';}
 if(restored) void store.loadText(restored);

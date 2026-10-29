@@ -890,6 +890,7 @@ def evaluate_intent(
     authoritative_approval_envelope: Mapping[str, Any] | None = None,
     authoritative_approval_transition_history: Sequence[Mapping[str, Any]] | None = None,
     authoritative_approval_transition_head: str | None = None,
+    token_minter: Any | None = None,
 ) -> PolicyDecision:
     policy_case = (
         action_intent
@@ -1235,6 +1236,7 @@ def evaluate_intent(
                 issued_at=now,
                 valid_until=token_valid_until,
                 extra_constraints=execution_constraints or None,
+                **({"token_minter": token_minter} if token_minter is not None else {}),
             )
             if rust_disposition == "allow"
             else None
@@ -1313,6 +1315,7 @@ def evaluate_intent(
         issued_at=now,
         valid_until=token_valid_until,
         extra_constraints=execution_constraints or None,
+        **({"token_minter": token_minter} if token_minter is not None else {}),
     )
     allow_reason = _allow_reason(action_intent)
     disposition = "allow"
@@ -4152,6 +4155,7 @@ def _mint_execution_token(
     issued_at: datetime,
     valid_until: datetime,
     extra_constraints: Mapping[str, Any] | None = None,
+    token_minter: Any | None = None,
 ) -> ExecutionToken:
     constraints = _build_execution_constraints(action_intent)
     execution_preconditions = _build_execution_preconditions(action_intent)
@@ -4180,9 +4184,21 @@ def _mint_execution_token(
         "constraints": constraints,
         "execution_preconditions": execution_preconditions.model_dump(mode="json"),
     }
-    minted = mint_execution_token_with_rust(token_payload)
+    # Dependency of the trusted service, never an ActionIntent/browser field.
+    # An explicit signer failure must not fall back to the fixture minter.
+    minter = token_minter if token_minter is not None else mint_execution_token_with_rust
+    minted = minter(json.loads(json.dumps(token_payload)))
     if minted.get("error") is not None:
         raise ValueError(f"rust_token_mint_failed:{minted.get('error')}")
+    if token_minter is not None:
+        if set(minted) != set(token_payload) | {"artifact_hash", "signature"}:
+            raise ValueError("configured_token_minter_changed_shape")
+        for key, expected in token_payload.items():
+            actual = minted[key]
+            equal = (_parse_iso8601(actual) == _parse_iso8601(expected)
+                     if key in {"issued_at", "valid_until"} else actual == expected)
+            if not equal:
+                raise ValueError("configured_token_minter_changed_claims")
     # Preserve strict Rust-minted constraints while carrying transfer-specific
     # workflow bindings required by the execution spine.
     minted_constraints = minted.get("constraints")

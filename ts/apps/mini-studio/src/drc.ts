@@ -8,6 +8,7 @@ import {
 import {
   AssemblyStore,
   readBounded,
+  type RobotCanvas,
   type Frozen,
   type ProxyScene,
   type Selection,
@@ -67,12 +68,12 @@ function selectionForFieldRefs(
 }
 
 /** CW-A04 DRC & unknown-aware BOM panel. Never grants execution authority. */
-export function setupDrc(store: AssemblyStore<ProxyScene>): () => void {
+export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas): () => void {
   const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const button = (id: string) => el<HTMLButtonElement>(id);
   let catalog: DrcCatalog | undefined;
   let rawCatalog: RawCompilerCatalog | undefined;
-  const simulation = setupSimulation(store);
+  const simulation = setupSimulation(store,canvas);
   let catalogController: AbortController | undefined;
   let catalogGen = 0;
   let attemptedCatalogDigest: string | undefined;

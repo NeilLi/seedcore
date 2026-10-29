@@ -15,6 +15,7 @@ export function setupPlacement(store:AssemblyStore<ProxyScene>,canvas:RobotCanva
   };
   const tabs=['inspect','placement','drc','simulation','moments'] as const;
   const activate=(name:(typeof tabs)[number])=>{
+    if(name==='placement')canvas?.restoreRestPose();
     for(const pane of tabs){const active=pane===name;el(`${pane}-panel`).hidden=!active;button(`${pane}-tab`).setAttribute('aria-selected',String(active));button(`${pane}-tab`).tabIndex=active?0:-1;}
   };
   for(const name of tabs){button(`${name}-tab`).onclick=()=>activate(name);button(`${name}-tab`).onkeydown=event=>{

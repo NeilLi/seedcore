@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Status: Primary development area; native reference, Fast Spine fixture and supervised STEM/OEM delivery
-Implementation status reviewed: 2026-10-28 against the active queue and package records
+Implementation status reviewed: 2026-10-29 against the active queue and package records
 
 SeedCore's robotics direction is a reusable trust runtime for physical AI.
 Microduck is the selected reference integration. Read the strategy for product
@@ -32,15 +32,15 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 | [Partner integration architecture](../integrations/robotics_partner_integration_architecture.md) | Small-fixture control/evidence, supply and fabrication boundaries; CAN/CAN FD remains an unsupported-contract gap |
 | [Fast Spine protocol](fast_spine_protocol_spec.md) | Implemented host simulation v1 framing/session/evidence; proposed physical WebSerial/MCU profile; no firmware implemented |
 | [Simulation-first acceptance](simulation_first_acceptance.md) | Local ONNX paths, source/profile pins, read-only adapter, independent replay goldens, bounded-session studio and open hardware/training gates |
-| [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan workstream; Phase 1/2 and bounded CW-S01/S02/S04 local slices plus CW-S03 preflight delivered; CW-G01 next, broader live/physical gates open |
-| [Central World remaining schedule](central_world_remaining_delivery_schedule.md) | CW-A01–CW-L03 work packages and acceptance handoffs; local synthetic CW-S04 delivered, CW-G01 live admission integration next |
+| [Central World engineering plan](central_world_engineering_plan.md) | 19 Oct–10 Jan workstream; Phase 1/2 and bounded CW-S01/S02/S04 local slices plus CW-S03 preflight delivered; CW-G01 local adapter review, broader production/physical gates open |
+| [Central World remaining schedule](central_world_remaining_delivery_schedule.md) | CW-A01–CW-L03 work packages and acceptance handoffs; local synthetic CW-G01 native-admission candidate and remaining scope gates |
 | [CW-A01 acceptance closure](central_world_cw_a01_acceptance_plan.md) | Assembly v2 candidate addresses eight findings; local software exit passed with reproducible evidence; CW-A02 handoff |
 | [CW-A02 authoring store](central_world_cw_a02_authoring.md), [CW-A03 snapping](central_world_cw_a03_snapping.md) & [CW-A04 DRC/BOM](central_world_cw_a04_drc.md) | Delivered Phase 2 offline authoring store, `15 mm` / `5°` proxy snapping, pure worker DRC, 3D rotated inertia, and unknown-aware BOM |
 | [CW-S01 compiler and native parity](central_world_cw_s01_mjcf.md) | Local restricted MJCF compiler, synthetic native parity and offline Studio handoff; actual starter stays blocked; CW-S02 fixed-preset runtime recorded separately, broader runtime/live/hardware gates open |
 | [CW-S02 pinned MuJoCo worker](central_world_cw_s02_mujoco.md) | Local fixed-preset native/Chrome parity, bounded clocks/capture and per-step control fencing; broader runtime/device gates remain open |
 | [CW-S03 policy compatibility preflight](central_world_cw_s03_preflight.md) | Pinned policy/model/adapter inventory, 16-case CPU artifact replay and deterministic refusal reports; both runtime candidates blocked, CW-S04 next |
 | [CW-S04 bounded gestures and captured replay](central_world_cw_s04_gestures.md) | Local synthetic Hermite target curves, virtual LED, per-step controls, interrupted capture and read-only replay; 120 steps / 240 ms maximum, no admission or physical proof |
-| [CW-G01 review candidate and policy preparation](central_world_cw_g01_admission.md) | Current build/gesture/endpoint freeze, separate trusted review, per-joint intersection and existing PolicyCase handoff; live token/claim/dispatch integration remains active |
+| [CW-G01 local governed simulation](central_world_cw_g01_admission.md) | Reviewed candidates, actual PDP/configured signer, Rust token verification, durable claim, native substep gates and read-only 3D capture replay; local adapter review and broader production qualification remain open |
 | [Browser robotics studio stack architecture](browser_robotics_studio_stack_architecture.md) | Five-layer browser studio reference, subsystem evaluation (`urdf-loader`, Draco, Rapier vs. MuJoCo/C++ Wasm, Pyodide sandboxing, WebSerial/Zenoh/Foxglove), and `CW-S02..S04` optimizations |
 | [Open-source academic ecosystems (MuJoCo, Drake, ROS 2)](academic_open_robotics_ecosystem_assessment.md) | CPU-first academic ecosystem evaluation: adopt MuJoCo `3.15.0`/Wasm (`CW-S02`), evaluate local-station MIT Drake (`TOPP-RA`/IK/SysID for `CW-S04`), and use `MCAP`/`URDF` at replay/export edges (`CW-G02`/`CW-E01`) without beginner setup burden |
 | [Browser performance pipeline and stack adoption](browser_performance_pipeline.md) | Implemented synthetic Wasm/OffscreenCanvas lab comparing transferable/shared matrices and WGSL FK; measured timing, concurrency/fault checks and gated SIMD/MuJoCo/ONNX/remote adoption |

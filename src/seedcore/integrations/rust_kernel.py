@@ -609,4 +609,4 @@ def _repo_root() -> Path:
 
 
 def _isoformat_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

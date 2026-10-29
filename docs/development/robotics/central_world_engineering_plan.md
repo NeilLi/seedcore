@@ -2,8 +2,8 @@
 
 Date: 2026-10-20
 Horizon: 19 October 2026–10 January 2027 (12 weeks)
-Status: Phase 1/2 offline, CW-S01/S02 local slices, CW-S03 preflight and bounded synthetic CW-S04 delivered; CW-G01 next; real starter, full policy, broader runtime/live/hardware gates open
-Implementation status reviewed: 2026-10-28 against the active queue and package records
+Status: Phase 1/2 offline, CW-S01/S02 local slices, CW-S03 preflight and bounded synthetic CW-S04 delivered; CW-G01 local synthetic native-admission adapter available for review; real starter, production authenticated intake/deployment, full policy and hardware gates open
+Implementation status reviewed: 2026-10-29 against the active queue and package records
 
 The product direction unifies component authoring, visual assembly, browser
 rehearsal and separately governed deployment inside the SeedCore monorepo.
@@ -38,9 +38,11 @@ artifact replay and reports both policy-runtime candidates blocked. The
 [CW-S04 record](central_world_cw_s04_gestures.md) now adds bounded synthetic
 target gestures, virtual LED and unsigned captured replay on the 120-step / 240 ms
 position profile. The [active queue](../current_next_steps.md) selects CW-G01
-live admission integration as active. The [28 October CW-G01 preparation record](central_world_cw_g01_admission.md)
-adds review candidates and trusted existing PDP input preparation; live
-token/claim/dispatch enforcement remains open. Real-source, broader runtime/device, full policy
+live admission integration as active. The [29 October CW-G01 record](central_world_cw_g01_admission.md)
+adds a local synthetic service-owned native adapter, configured PDP signing,
+Rust verification, durable claims and per-step enforcement to the preparation
+slice. Review this local profile separately from production authenticated intake
+and deployment qualification. Real-source, broader runtime/device, full policy
 and hardware gates remain open.
 
 The [18-month execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)

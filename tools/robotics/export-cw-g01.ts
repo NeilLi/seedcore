@@ -2,7 +2,7 @@
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {canonicalAssemblyString} from '../../ts/packages/contracts/src/index.js';
-import {compileAssemblyToMjcf,compileGesture,createTabletopGestureExample,createCwBuildCandidate} from '../../ts/packages/wasm-sim-bridge/src/index.js';
+import {compileAssemblyToMjcf,compileGesture,createTabletopGestureExample,createCwBuildCandidate,gestureFrameAtTick} from '../../ts/packages/wasm-sim-bridge/src/index.js';
 import {studioReferenceInput} from '../../ts/tests/fixtures/cw-s01.js';
 
 const input=studioReferenceInput();input.options.positionGain=1;
@@ -13,4 +13,7 @@ const gesture=compileGesture(createTabletopGestureExample(model,binding),model,b
 const candidate=createCwBuildCandidate(model,gesture,binding,'cw_sim://fixture/1');
 const out=resolve(process.argv[2]??'artifacts/robotics/cw-g01');mkdirSync(out,{recursive:true});
 writeFileSync(resolve(out,'candidate.json'),canonicalAssemblyString(candidate)+'\n');
+writeFileSync(resolve(out,'endpoint-source.json'),canonicalAssemblyString({schemaVersion:'seedcore.cw-g01.endpoint-source.v1',
+  scope:'offline_simulation_only',physicalAcceptance:false,executionAuthority:'none',candidate,model,gesture,
+  frames:Array.from({length:gesture.totalTicks},(_,i)=>({tick:i+1,...gestureFrameAtTick(gesture,i+1)}))})+'\n');
 console.log('CW-G01 exported an unsigned simulation review candidate; no registration, token or execution.');

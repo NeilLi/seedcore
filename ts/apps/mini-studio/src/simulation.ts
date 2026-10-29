@@ -1,6 +1,6 @@
 import { canonicalAssemblyString, type RobotAssembly } from '@seedcore/contracts';
 import { sha256Hex, type DrcReport } from '@seedcore/drc-solver';
-import { AssemblyStore, fetchAssemblyText, type ProxyScene } from '@seedcore/robot-canvas';
+import { AssemblyStore, fetchAssemblyText, type ProxyScene, type RobotCanvas } from '@seedcore/robot-canvas';
 import { setupMoments } from './moments.js';
 import {
   CW_S02_WORKER_PROTOCOL,
@@ -29,7 +29,7 @@ export function assertStudioModelCurrent(model: CompiledMjcf, retained: StudioMo
 }
 
 /** Offline inspector and bounded CW-S02 Wasm worker rehearsal; nothing here admits physical motion. */
-export function setupSimulation(store: AssemblyStore<ProxyScene>) {
+export function setupSimulation(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas) {
   const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const actions = ['sim-download-xml', 'sim-copy-xml', 'sim-download-bundle', 'sim-copy-bundle'];
   let accepted: { binding: StudioModelBinding; report: DrcReport; catalog: RawCompilerCatalog } | undefined;
@@ -120,7 +120,8 @@ export function setupSimulation(store: AssemblyStore<ProxyScene>) {
     return compiled.model;
   };
   const moments = setupMoments({current: () => ({model:currentModel(),binding:{...compiled!.binding}}),
-    stopOther: () => stopRehearsal('Starting CW-S04 simulation gesture.',false)});
+    stopOther: () => stopRehearsal('Starting CW-S04 simulation gesture.',false),
+    display:bodies=>{if(bodies)canvas?.showCapturedPose(bodies);else canvas?.restoreRestPose();}});
   const renderSummary = (summary: CwS02ExecutionSummary, inspection?: CwS02ModelInspection) => {
     el('sim-rehearsal-profile').textContent = `${summary.profile} · @mujoco/mujoco ${summary.engineVersion}`;
     el('sim-rehearsal-wasm').textContent = summary.wasmSha256;

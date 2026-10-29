@@ -15,7 +15,7 @@ from .component_registry import REGISTRY, ROOT, parse_json, read_local, sha256
 MAX_BODY = 262144
 
 
-def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
+def create_app(registry: Path = REGISTRY, web_root: Path | None = None, *, admission_service=None):
     catalog = load_assembly_catalog(registry)
     documents = {parse_json(raw)["identity"]["part_id"]: raw for raw in catalog.artifacts}
     meshes = {}
@@ -60,6 +60,8 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None):
     scene_assets = {name: read_local(scene_root, name, 1048576) for name in
                     ["scene.json", "tileset.json", "coarse.glb", *[f"detail-{i}.glb" for i in range(4)]]}
     app = FastAPI(title="SeedCore offline Mini Studio", docs_url=None, redoc_url=None, openapi_url=None)
+    from .cw_simulation_api import attach_cw_simulation_routes
+    attach_cw_simulation_routes(app, admission_service)
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):

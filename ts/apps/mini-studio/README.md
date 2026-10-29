@@ -47,9 +47,15 @@ Studio/browser checks; see the
 After gesture validation, **Review candidate** exports a CW-G01 candidate bound
 to the current model, gesture and requested `cw_sim://` endpoint. Edits clear it;
 the export grants no authority and makes no registration/admission request.
-The separate Python preparation boundary requires trusted review, current build
-and existing Agent/PDP context. Live token/claim/dispatch integration remains open;
-see the [CW-G01 preparation record](../../../docs/development/robotics/central_world_cw_g01_admission.md).
+The Python boundary requires trusted review, current build and existing Agent/PDP
+context. The opt-in **Governed local simulation** path now uses the actual PDP,
+configured Ed25519 signer, Rust verification, durable claim and service-owned
+native MuJoCo. Request admission, explicitly start, stop, then scrub captured
+native body poses in the 3D viewport. Scrubbing changes display only. Default
+startup leaves this path unconfigured; it never generates a trusted profile/key.
+See the [CW-G01 record](../../../docs/development/robotics/central_world_cw_g01_admission.md)
+for private service configuration and the separate test-only inspection fixture.
+Production authenticated intake/deployment and physical qualification remain open.
 
 `node tools/robotics/verify-authoring.cjs --browser` requires the pinned native
 MuJoCo 3.15.0 environment as well as Chrome. It compares actual browser exports
