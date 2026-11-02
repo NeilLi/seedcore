@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 
 from seedcore.models.action_intent import PolicyCase
 from .build_admission import ReviewedSimulationBuild
@@ -28,7 +28,11 @@ def load_cw_simulation_service(config_path: Path) -> CwSimulationService:
     """Explicit operator configuration only. Never generate keys/roles/approval here."""
     config = parse_json(_private_file(config_path, 65536))
     config_path = config_path.resolve(strict=True)
-    if set(config) != {'schemaVersion', 'sourcePath', 'sourceSha256', 'executorDigest', 'review', 'policyCase', 'signingKeyPath', 'keyRef', 'claimStorePath'} or config['schemaVersion'] != 'seedcore.cw-g01.service-config.v1':
+    fields = {'schemaVersion', 'sourcePath', 'sourceSha256', 'executorDigest', 'review', 'policyCase', 'signingKeyPath', 'keyRef', 'claimStorePath'}
+    signed_evidence = config.get('schemaVersion') == 'seedcore.cw-g02.service-config.v1'
+    if signed_evidence:
+        fields |= {'receiptSigningKeyPath', 'receiptKeyRef'}
+    if set(config) != fields or config['schemaVersion'] not in {'seedcore.cw-g01.service-config.v1', 'seedcore.cw-g02.service-config.v1'}:
         raise ValueError('unsupported service configuration')
     def local(name):
         p = Path(config[name])
@@ -37,12 +41,17 @@ def load_cw_simulation_service(config_path: Path) -> CwSimulationService:
     if source.is_symlink() or not source.is_file() or source.stat().st_size > 262144:
         raise ValueError('bounded pinned endpoint source required')
     key = load_pem_private_key(_private_file(local('signingKeyPath'), 4096), password=None)
+    receipt_signer = None
+    if signed_evidence:
+        from .cw_evidence import CwReceiptSigner
+        receipt_signer = CwReceiptSigner(load_pem_private_key(
+            _private_file(local('receiptSigningKeyPath'), 4096), password=None), config['receiptKeyRef'])
     review = ReviewedSimulationBuild.model_validate_json(json.dumps(config['review']))
     store = ClaimStore(local('claimStorePath'))
     try:
         service = CwSimulationService(source.read_bytes(), source_sha256=config['sourceSha256'], review=review,
             policy_case=PolicyCase.model_validate(config['policyCase']), authority=CwTokenAuthority(key, config['keyRef']), store=store,
-            executor_digest=config['executorDigest'])
+            executor_digest=config['executorDigest'], receipt_signer=receipt_signer)
     except Exception:
         store.close(); raise
     return service
@@ -111,3 +120,13 @@ def attach_cw_simulation_routes(app, service: CwSimulationService | None):
         try: return active().capture(request_id)
         except KeyError as e: raise HTTPException(404, 'unknown attempt') from e
         except PermissionError as e: raise HTTPException(409, str(e)[:300]) from e
+
+    @app.get('/api/cw-g02/{request_id}/evidence')
+    def evidence(request_id: str):
+        try:
+            return Response(active().evidence_bundle(request_id), media_type='application/json', headers={
+                'Content-Disposition': 'attachment; filename="attempt.cw-g02.bundle.json"', 'Cache-Control': 'no-store'})
+        except KeyError as e: raise HTTPException(404, 'unknown attempt') from e
+        except PermissionError as e: raise HTTPException(409, str(e)[:300]) from e
+        except HTTPException: raise
+        except Exception as e: raise HTTPException(503, 'simulation evidence sealing failed') from e

@@ -242,3 +242,15 @@ CW-G02's next evidence work must retain original artifacts and independently
 verify signed closure/provenance; a local unsigned capture is not that proof.
 Production authenticated intake/context synchronization, other models/gestures,
 physical sources/profiles and hardware gates remain open.
+
+## 2 November: additive signed simulation evidence foundation
+
+The [CW-G02 Python foundation](central_world_cw_g02_evidence.md) now seals
+original CW-G01 capture/token/source artifacts in an explicitly configured
+host-signed simulation bundle. The original capture remains unsigned and keeps
+its existing schema. Admission can return a separately saved evidence context
+with a fresh service-instance identity; receipt signing is opt-in under a new
+private configuration version. The native executor review digest now includes
+the evidence module. Existing review pins must be refreshed through review,
+not bypassed. Full CW-G02 Rust/Studio/browser acceptance and broader CW-G01
+production/physical gates remain open.

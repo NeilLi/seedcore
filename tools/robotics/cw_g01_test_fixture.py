@@ -37,12 +37,13 @@ def test_context(source, now=None):
     return review, case
 
 
-def make_test_service(source, directory, *, clock=None, wall_clock=None, threaded=False, case_change=None):
+def make_test_service(source, directory, *, clock=None, wall_clock=None, threaded=False, case_change=None, receipt_signer=None):
     now = wall_clock() if wall_clock else datetime.now(timezone.utc)
     review, case = test_context(source, now)
     if case_change: case_change(case)
     key = Ed25519PrivateKey.generate(); store = ClaimStore(Path(directory)/'claims.sqlite')
     args = dict(clock=clock, wall_clock=wall_clock) if clock else {}
     service = CwSimulationService(source, source_sha256=sha256(source), review=review, policy_case=case,
-        authority=CwTokenAuthority(key, 'cw-explicit-test-pdp'), store=store, threaded=threaded, executor_digest=native_executor_digest(), **args)
+        authority=CwTokenAuthority(key, 'cw-explicit-test-pdp'), store=store, threaded=threaded,
+        executor_digest=native_executor_digest(), receipt_signer=receipt_signer, **args)
     return service, store, key

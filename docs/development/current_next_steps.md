@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-10-29
-Status: Canonical active execution queue — CW-S01/S02 local slices, CW-S03 preflight and CW-S04 delivered; CW-G01 local synthetic admission/native adapter candidate available for review; production authenticated intake/deployment, signed closure, real-source/physical and full policy gates remain open
+Date: 2026-11-02
+Status: Canonical active execution queue — CW-S01/S02 local slices, CW-S03 preflight and CW-S04 delivered; CW-G01 local adapter and CW-G02 signed simulation Python foundation available for review; CW-G02 Rust/Studio/browser, production authenticated intake/deployment, real-source/physical and full policy gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -129,7 +129,22 @@ gates remain open.
 | Local synthetic slice passed | CW-S04 | [Bounded Hermite timeline, virtual LED, per-step target controls, interrupted capture and read-only replay](robotics/central_world_cw_s04_gestures.md) | Synthetic position profile only: dt=0.002, kp=1, at most 120 steps / 240 ms; no physical or policy authority |
 | Separately gated | CW-S03 inference/runtime | Compatible policy/model/actuator mapping, independent training/export and browser operator/timing evidence | Resume from the preflight blockers; artifact replay alone does not qualify this lane |
 | 1 (local adapter review; broader integration gated) | CW-G01 | [29 Oct local synthetic adapter](robotics/central_world_cw_g01_admission.md): actual PDP/configured Ed25519 signer, Rust verification, durable claim, native substep/stop/revocation gates and captured 3D replay | Local fixture context only; review this named-profile evidence before promotion. Production authenticated intake/context refresh, deployment and physical paths require separate qualification |
-| Following CW-G01 | CW-G02–CW-L03 | Signed evidence projection, design pack, curated fork flow and alpha review | Local unsigned CW-S04 replay does not close CW-G02; firmware/physical provisioning remains conditional |
+| 2 (local foundation implemented; next implementation slice) | CW-G02 | [2 Nov signed simulation evidence foundation](robotics/central_world_cw_g02_evidence.md): original artifacts, explicit host signer and independent offline Python verification; next add Rust parity and Studio's read-only verification/import surface | Review the named CW-G01 local scope; Python foundation alone does not close CW-EVID-01; production/physical evidence remains separate |
+| Following CW-G02 | CW-E01–CW-L03 | Design pack, curated fork flow and alpha review | Signed local simulation does not qualify firmware/physical provisioning |
+
+## 2 November work plan
+
+The [afternoon plan](robotics/cw_g02_daily_plan_2026_11_02.md) now has a
+[reviewable CW-G02 Python foundation](robotics/central_world_cw_g02_evidence.md):
+original-artifact retention, explicitly configured host-signed terminal bundles,
+read-only download and independent offline verification against separately saved
+admission context and trust/revocation snapshots. Actual PDP/native completed
+and stopped fixtures retain original artifacts; gapped and revoked-key cases
+are quarantined. Full CW-G02 acceptance still requires the additive Rust
+adapter/parity and Studio/browser evidence; broader CW-G01 production and
+physical gates remain open. The plan retains the inspected baseline and
+afternoon time box and records today's fresh full CW-G01 browser/native
+regression pass separately from the still-pending CW-G02 browser surface.
 
 ## Native Reference Milestones
 

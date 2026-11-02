@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 from threading import RLock, Thread, Event
 import time
+from uuid import uuid4
 
 import numpy as np
 
@@ -38,7 +39,7 @@ def hashed(value):
 def native_executor_descriptor():
     """Review pin for this local adapter image and its frozen execution clocks."""
     package=Path(__file__).resolve().parents[1]
-    files=['robotics/cw_simulation.py','robotics/cw_simulation_api.py','robotics/cw_token_authority.py','robotics/build_admission.py',
+    files=['robotics/cw_simulation.py','robotics/cw_simulation_api.py','robotics/cw_token_authority.py','robotics/cw_evidence.py','robotics/build_admission.py',
            'robotics/fast_spine/store.py','coordinator/core/governance.py','integrations/rust_kernel.py']
     return dict(profile=NATIVE_PROFILE,engineVersion='3.15.0',timestepSeconds=DT,maxTicks=120,
                 maxSubstepsPerBatch=8,maxStallMs=250,maxWallDurationSeconds=1,
@@ -52,7 +53,7 @@ def native_executor_digest():
 class CwSimulationService:
     def __init__(self, source: bytes, *, source_sha256: str, review: ReviewedSimulationBuild,
                  policy_case: PolicyCase, authority: CwTokenAuthority, store: ClaimStore,
-                 executor_digest: str,
+                 executor_digest: str, receipt_signer=None,
                  clock=time.monotonic, wall_clock=lambda: datetime.now(timezone.utc), threaded=True):
         if len(source) > 262144 or sha256(source) != source_sha256:
             raise ValueError('independently pinned endpoint source required')
@@ -72,6 +73,14 @@ class CwSimulationService:
                 or len(profile['frames']) != 120):
             raise ValueError('only the pinned two-joint CW-S04 reference is supported')
         self._profile = copy.deepcopy(profile)
+        self._source_bytes = bytes(source)
+        self._instance_id = uuid4().hex
+        if receipt_signer is not None:
+            from .cw_evidence import CwReceiptSigner
+            if (not isinstance(receipt_signer, CwReceiptSigner) or receipt_signer.key_ref == authority.key_ref
+                    or not re.fullmatch(r'[a-zA-Z0-9_.:-]{1,128}', authority.key_ref)):
+                raise ValueError('separate-purpose explicit receipt signer required')
+        self._receipt_signer = receipt_signer
         self._source_sha = source_sha256
         self._review = ReviewedSimulationBuild.model_validate_json(review.model_dump_json())
         self._executor=native_executor_descriptor();self._executor_digest=hashed(self._executor)
@@ -126,7 +135,8 @@ class CwSimulationService:
     def describe(self):
         return dict(configured=True, profile=NATIVE_PROFILE, endpointId=self._review.endpointId,
                     modelDigest=REFERENCE_MODEL, sourceDigest=self._source_sha, scope='local_simulation_only',
-                    executorDigest=self._executor_digest,
+                    executorDigest=self._executor_digest, instanceId=self._instance_id,
+                    signedEvidenceConfigured=self._receipt_signer is not None,
                     physicalAcceptance=False, requiresAdmission=True, maxTicks=120, timestepSeconds=DT,
                     maxWallDurationSeconds=1, limitations=['synthetic_reference_only', 'unsigned_capture', 'no_hardware_endpoint'])
 
@@ -185,6 +195,16 @@ class CwSimulationService:
                 record.update(state='admitted', candidate=candidate.model_dump(mode='json'), token=token, claims=claims, expected=expected,
                               review=review, case=case, admittedAt=self._wall().isoformat())
                 response = self.status(request_id); response['executionToken'] = copy.deepcopy(token)
+                if self._receipt_signer is not None:
+                    from .cw_evidence import ExpectedContext
+                    record['evidence_context'] = ExpectedContext.model_validate(dict(
+                        schemaVersion='seedcore.cw-g02.expected.v1', requestId=request_id, instanceId=self._instance_id,
+                        endpointId=candidate.endpointId, admittedAt=record['admittedAt'], candidateDigest=candidate.candidateDigest,
+                        binding=candidate.binding.model_dump(mode='json'), sourceDigest=self._source_sha,
+                        executorDigest=self._executor_digest, reviewDigest=hashed(review.model_dump(mode='json')),
+                        tokenDigest=hashed(token), payloadHash=token['constraints']['payload_hash'],
+                        tokenKeyRef=self._authority.key_ref, receiptKeyRef=self._receipt_signer.key_ref)).model_dump(mode='json')
+                    response['evidenceContext'] = copy.deepcopy(record['evidence_context'])
                 return response
         except Exception as error:
             with self._lock:
@@ -228,7 +248,8 @@ class CwSimulationService:
                     raise PermissionError('authority/clock expired during verification or claim')
                 r.update(state='running', model=model, data=data, display=display, started=now, last=now, last_wall=wall,
                          deadline=min(now+1, now+(r['claims']['expires']-wall).total_seconds()), samples=[], tick=0,
-                         pinned_model=model, schedule=self._controls, executor_digest=self._executor_digest)
+                         pinned_model=model, schedule=self._controls, executor_digest=self._executor_digest,
+                         startedAt=wall.isoformat(), step_checks=[])
                 r['state_snapshot'] = self._state_snapshot(r)
                 self._check(r, now)
                 if self._threaded and r['state'] == 'running':
@@ -251,7 +272,7 @@ class CwSimulationService:
 
     def _fence(self, r, reason, state='fenced'):
         if r['state'] not in {'completed', 'stopped', 'fenced', 'denied'}:
-            self._clear(r); r.update(state=state, reason=reason)
+            self._clear(r); r.update(state=state, reason=reason, endedAt=self._wall().isoformat())
 
     def _check(self, r, now):
         if r['state'] != 'running': return False
@@ -311,8 +332,9 @@ class CwSimulationService:
                     r['samples'].append(dict(tick=r['tick'], simTimeSeconds=float(d.time), qpos=d.qpos.tolist(), qvel=d.qvel.tolist(),
                                              ctrl=d.ctrl.tolist(), qfrcActuator=d.qfrc_actuator.tolist(), xpos=d.xpos.reshape(-1).tolist(),
                                              bodies=bodies, virtualLed=self._cues[r['tick']-1]))
+                    r['step_checks'].append(r['last_wall'].isoformat())
                     if r['tick'] == 120:
-                        r.update(state='completed', reason=None); break
+                        r.update(state='completed', reason=None, endedAt=self._wall().isoformat()); break
                 except Exception:
                     self._fence(r, 'engine_step_failed'); break
             return self.status(request_id)
@@ -360,6 +382,30 @@ class CwSimulationService:
                            scope='local_simulation_only', physicalAcceptance=False, signed=False,
                            sourceDigest=self._source_sha, executorDigest=self._executor_digest, timestepSeconds=DT)
             return dict(**payload, captureDigest=hashed(payload))
+
+    def evidence_bundle(self, request_id) -> bytes:
+        """Seal a terminal attempt once. Export cannot advance or reopen a run."""
+        from .cw_evidence import seal_bundle
+        with self._lock:
+            r = self._records[request_id]
+            if self._receipt_signer is None:
+                raise PermissionError('no host simulation receipt signer configured')
+            if r['state'] not in {'completed', 'stopped', 'fenced'} or not r.get('samples') or 'evidence_context' not in r:
+                raise PermissionError('nonempty terminal admitted capture required')
+            if 'evidence_bundle' not in r:
+                artifacts = dict(source=self._source_bytes,
+                    token=canonical_assembly_bytes(r['token']), candidate=canonical_assembly_bytes(r['candidate']),
+                    parameters=canonical_assembly_bytes(r['case'].action_intent.action.parameters),
+                    review=canonical_assembly_bytes(r['review'].model_dump(mode='json')),
+                    executor=canonical_assembly_bytes(self._executor), capture=canonical_assembly_bytes(self.capture(request_id)))
+                manifest = dict(schemaVersion='seedcore.cw-g02.receipt.v1', profile=NATIVE_PROFILE,
+                    scope='local_simulation_only', physicalAcceptance=False, executionAuthority='none',
+                    context=copy.deepcopy(r['evidence_context']), startedAt=r['startedAt'], endedAt=r['endedAt'],
+                    stepCheckedAt=list(r['step_checks']), terminalState=r['state'], reason=r['reason'],
+                    executedSubsteps=r['tick'], totalSubsteps=120)
+                # Failure is visible to the caller and never changes execution state.
+                r['evidence_bundle'] = seal_bundle(artifacts, manifest, self._receipt_signer)
+            return r['evidence_bundle']
 
     def close(self):
         self._shutdown.set()

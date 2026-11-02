@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
-Implementation status reviewed: 2026-10-29 against the active queue and package records
+Implementation status reviewed: 2026-11-02 against the active queue and package records
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
 as the first integration focus and Microduck as the reference target. The
@@ -32,7 +32,10 @@ compact-joint feasibility. It assesses all seven newly supplied initiatives and
 reclassifies the earlier ten candidates. Its
 [integration roadmap](robotics/robotics_ecosystem_integration_roadmap.md) keeps
 CW delivery ahead of optional ecosystem research; CW-S04 now has a bounded
-synthetic slice and CW-G01 has a local native-admission adapter for review. Full policy execution remains gated; real-source
+synthetic slice and CW-G01 has a local native-admission adapter for review. The
+[CW-G02 Python foundation](robotics/central_world_cw_g02_evidence.md) adds
+host-signed simulation exports and independent offline verification; its Rust
+receipt adapter and Studio/browser verification surface remain next. Full policy execution remains gated; real-source
 qualification, new joints and physical profiles remain conditional, with no industrial-cell or humanoid expansion.
 
 The [reusable base/attachment analysis](strategy/mini_robotics_base_attachment_product_analysis.md)

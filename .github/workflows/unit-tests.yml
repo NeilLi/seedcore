@@ -121,6 +121,9 @@ jobs:
       - name: Verify CW-G01 local PDP tokens, durable claims and native simulation gates
         run: node tools/robotics/verify-cw-g01.cjs
 
+      - name: Verify CW-G02 signed simulation evidence and offline Python refusals
+        run: node tools/robotics/verify-cw-g02.cjs
+
       - name: Verify browser pipeline transport and bounded pacing
         run: node tools/robotics/verify-browser-performance.cjs --skip-python
 
@@ -156,6 +159,7 @@ jobs:
             artifacts/robotics/cw-g01/native/browser-verification.json
             artifacts/robotics/cw-g01/native/browser-capture.json
             artifacts/robotics/cw-g01/native/governed-inspector.png
+            artifacts/robotics/cw-g02/
             artifacts/robotics/browser-performance/verification.json
             artifacts/robotics/static-scene/verification.json
 
