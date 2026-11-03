@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-11-02
-Status: Phase 2 offline, CW-S01/S02 local slices, CW-S03 preflight and CW-S04 passed locally; CW-G01 local adapter and CW-G02 signed simulation Python foundation available for review; CW-G02 Rust/Studio/browser, production authenticated intake/deployment, real-source/physical and full policy gates remain open
+Date: 2026-11-03
+Status: Phase 2 offline, CW-S01/S02 local slices, CW-S03 preflight and CW-S04 passed locally; CW-G01 local adapter and CW-G02 independent Python/Rust simulation verification available for review; CW-G02 Studio/browser, production authenticated intake/deployment, real-source/physical and full policy gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -66,6 +66,13 @@ verification. Rust/Studio/browser package acceptance follows separately. This
 is a bounded local slice within the
 28 October–3 November tactical evidence window; it does not change the phase
 calendar below or record a new package pass.
+
+The [3 November priority plan](cw_g02_daily_plan_2026_11_03.md) now delivers the
+local CW-G02 Rust verifier and Python/Rust parity gate: RFC 8785/hash compatibility,
+original artifact/signature, binding/time/outcome and sample-coverage refusals.
+The record contains the 13:30–18:00 Asia/Bangkok time box and actual local evidence.
+The read-only Studio verification/import surface and browser evidence remain
+the following slice; the full package exit stays open.
 
 | Owner role | Responsibility |
 | --- | --- |
@@ -249,7 +256,7 @@ goal is separate from the policy/control rate and physical stopping evidence.
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
 | CW-G01 · W9 (local adapter candidate; broader integration open) | Reviewed build/behavior/endpoint binding through existing PDP and configured signer; service-owned native simulation | CW-A01, CW-A04, CW-S04; trusted profile evidence for hardware | [29 Oct local record](central_world_cw_g01_admission.md): 20 TS + 54 preparation + 39 native/PDP/API tests; Rust signature/constraint checks, durable claims, per-step stop/revocation, five governed Chrome groups and 3D captured replay; production authenticated intake/deployment and physical qualification remain open |
-| CW-G02 · W9–W10 (Python foundation local; package exit open) | Scoped robot replay adapter into the existing verification/operator surfaces | CW-G01, retained traces; applicable signer evidence | [2 Nov foundation](central_world_cw_g02_evidence.md): original artifacts, explicit host-signed local simulation receipt, independent Python/API/CLI refusal fixtures. Next: additive Rust parity and Studio/browser verification projection; no replay write authority |
+| CW-G02 · W9–W10 (Python/Rust gate local; package exit open) | Scoped robot replay adapter into the existing verification/operator surfaces | CW-G01, retained traces; applicable signer evidence | [3 Nov verification](central_world_cw_g02_evidence.md): original artifacts, explicit host signing, independent Rust CLI, Python/Rust agreement and refusal fixtures. Next: Studio/browser verification/import projection; no replay write authority |
 | CW-E01 · W10 | Reproducible design Build Pack exporter | CW-A04, CW-S04; rights and printable CAD for claimed print files | Studio + delivery: artifact/hash inventory, unknown-cost count, reviewed-net SVG, safe CSV/ZIP tests and explicit draft/qualified status |
 | CW-F01 · W10, conditional | One-board firmware/configuration ABI and NVS golden comparison | CW-D01, actual reviewed ESP-IDF source/build/partition table; CW-G01 | Trust/firmware: source/build manifest, official-generator byte fixtures, config signature/digest limits and wrong-profile rejection; no device secrets in public partitions |
 | CW-F02 · After CW-F01, conditional | ESP32-S3 installer/enrollment and one-servo → three-servo acceptance | CW-F01, device/ingress review, operator fixture and relevant G1 | Firmware + independent reviewer: boot/update/nonmoving state, watchdog/local stop, revocation, capture, signer and interrupted-flash/recovery measurements; physical demonstration also requires G2 |

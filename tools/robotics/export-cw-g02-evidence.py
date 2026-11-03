@@ -18,6 +18,7 @@ from seedcore.robotics.assembly import canonical_assembly_bytes
 from seedcore.robotics.component_registry import parse_json, sha256
 from seedcore.robotics.cw_evidence import CwReceiptSigner, digest, json_bytes, verify_bundle
 from cw_g01_test_fixture import make_test_service
+from cw_g02_parity import compare
 
 
 class FixtureClock:
@@ -69,6 +70,8 @@ def main():
                 (args.out/(label+'.bundle.json')).write_bytes(raw)
                 (args.out/(label+'.expected.json')).write_bytes(json_bytes(expected))
                 (args.out/(label+'.verification.json')).write_bytes(json_bytes(report))
+                rust = compare(raw, expected=expected, trust=trust, python_report=report, directory=args.out/'terminal-parity'/label)
+                (args.out/(label+'.rust.verification.json')).write_bytes(json_bytes(rust))
             # A valid host signature cannot excuse a gapped simulated capture.
             bundle = parse_json(raw)
             capture = parse_json(base64.b64decode(bundle['artifacts']['capture']))
@@ -83,11 +86,15 @@ def main():
             if report['verified']: raise RuntimeError('gapped evidence passed')
             (args.out/'gapped.bundle.json').write_bytes(gapped)
             (args.out/'gapped.verification.json').write_bytes(json_bytes(report))
+            rust = compare(gapped, expected=expected, trust=trust, python_report=report, directory=args.out/'terminal-parity/gapped')
+            (args.out/'gapped.rust.verification.json').write_bytes(json_bytes(rust))
             trust['revoked_keys'] = [signer.key_ref]
             report = verify_bundle(raw, expected=expected, trust=trust)
             if report['verified']: raise RuntimeError('revoked signer passed')
             (args.out/'revoked-trust.json').write_bytes(json_bytes(trust))
             (args.out/'revoked.verification.json').write_bytes(json_bytes(report))
+            rust = compare(raw, expected=expected, trust=trust, python_report=report, directory=args.out/'terminal-parity/revoked')
+            (args.out/'revoked.rust.verification.json').write_bytes(json_bytes(rust))
         finally:
             service.close()
             store.close()

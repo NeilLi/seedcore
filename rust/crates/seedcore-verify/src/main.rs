@@ -30,6 +30,8 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::str::FromStr;
 
+mod cw_evidence;
+mod cw_json;
 mod robot_session;
 
 fn main() -> ExitCode {
@@ -48,6 +50,22 @@ fn run(args: Vec<String>) -> Result<(), String> {
     };
 
     match command {
+        "verify-cw-evidence" => {
+            let bundle = flag_value(&args, "--bundle")?;
+            let expected = flag_value(&args, "--expected")?;
+            let trust = flag_value(&args, "--trust")?;
+            let report = cw_evidence::verify_paths(
+                Path::new(&bundle),
+                Path::new(&expected),
+                Path::new(&trust),
+            );
+            print_json(&report)?;
+            if report["verified"] == true {
+                Ok(())
+            } else {
+                Err("cw_evidence_quarantined".into())
+            }
+        }
         "verify-token" => {
             let artifact_path = flag_value(&args, "--artifact")?;
             let token: ExecutionToken = read_json_file(&artifact_path)?;
@@ -191,6 +209,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 fn usage() -> String {
     [
         "usage:",
+        "  seedcore-verify verify-cw-evidence --bundle <path> --expected <path> --trust <path>",
         "  seedcore-verify verify-receipt --artifact <path>",
         "  seedcore-verify verify-receipt --artifact <path> --trust-bundle <path> [--previous <path>]",
         "  seedcore-verify verify-chain --bundle <path> [--trust-bundle <path>]",

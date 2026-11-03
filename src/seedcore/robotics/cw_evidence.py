@@ -11,6 +11,7 @@ import copy
 from datetime import timedelta
 import json
 import math
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -33,8 +34,27 @@ SIGNATURE_FIELDS = {'signer_type', 'signer_id', 'signing_scheme', 'key_ref', 'at
 GUARDS = ['ctrl', 'qfrc_applied', 'xfrc_applied', 'qpos_qvel_act_state', 'opt_timestep', 'policy_model_switch']
 
 
+def _timestamp(value):
+    """Frozen CW clock domain: RFC 3339 with at most microsecond precision."""
+    pattern = (r'[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt](?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
+               r'(?:\.[0-9]{1,6})?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])')
+    _require(isinstance(value, str) and re.fullmatch(pattern, value) is not None, 'invalid CW timestamp/precision')
+    return utc(value.replace('t', 'T').replace('z', 'Z'))
+
+
+def _base64(value):
+    decoded = base64.b64decode(value, validate=True)
+    _require(base64.b64encode(decoded).decode('ascii') == value, 'noncanonical base64 encoding')
+    return decoded
+
+
 def digest(value):
     return sha256(canonical_assembly_bytes(value))
+
+
+def _same(left, right):
+    # JSON numbers may share a canonical spelling; booleans must never alias 0/1.
+    return canonical_assembly_bytes(left) == canonical_assembly_bytes(right)
 
 
 def json_bytes(value):
@@ -94,7 +114,6 @@ class CwReceiptSigner:
         if not isinstance(key, Ed25519PrivateKey):
             raise ValueError('explicit Ed25519 receipt signer required')
         # Validate with the same bounded key-reference domain as the contract.
-        import re
         if not isinstance(key_ref, str) or not re.fullmatch(r'[a-zA-Z0-9_.:-]{1,128}', key_ref):
             raise ValueError('invalid receipt key reference')
         self._key, self.key_ref = key, key_ref
@@ -143,8 +162,8 @@ def _signature(payload, artifact_hash, signature, trust, *, key_ref, anchor, end
              (key_ref, 'ed25519', anchor, endpoint), 'trust purpose/endpoint mismatch')
     hashed = digest(payload)
     _require(artifact_hash == dict(algorithm='sha256', value=hashed), 'signed artifact hash mismatch')
-    key = Ed25519PublicKey.from_public_bytes(base64.b64decode(entry['public_key'], validate=True))
-    key.verify(base64.b64decode(signature['signature'], validate=True), hashed.encode('ascii'))
+    key = Ed25519PublicKey.from_public_bytes(_base64(entry['public_key']))
+    key.verify(_base64(signature['signature']), hashed.encode('ascii'))
 
 
 def _vector(value, count):
@@ -165,6 +184,9 @@ def _check_artifacts(a, m, context, trust):
     _require(r.candidateDigest == c.candidateDigest and r.endpointId == c.endpointId and r.revoked is False
              and r.resourceStateHash == 'sha256:' + digest(dict(sourceDigest=context['sourceDigest'], executorDigest=context['executorDigest'])),
              'review/source/executor binding mismatch')
+    _require(all(type(executor[field]) in (int, float) for field in (
+        'timestepSeconds', 'maxTicks', 'maxSubstepsPerBatch', 'maxStallMs', 'maxWallDurationSeconds')),
+        'numeric executor clock settings required')
     _require(executor['profile'] == PROFILE and executor['engineVersion'] == '3.15.0'
              and executor['timestepSeconds'] == .002 and executor['maxTicks'] == 120
              and executor['maxSubstepsPerBatch'] == 8 and executor['maxStallMs'] == 250
@@ -185,21 +207,21 @@ def _check_artifacts(a, m, context, trust):
     _require(params['payload_hash'] == constraints['payload_hash'] == pre['payload_hash'] == context['payloadHash']
              == 'sha256:' + digest({k: v for k, v in params.items() if k != 'payload_hash'}), 'execution payload hash mismatch')
     build = params['cw_build']
-    _require(build['candidate'] == candidate and build['reviewDigest'] == context['reviewDigest']
-             and build['executor'] == executor and build['scope'] == 'offline_simulation_only'
+    _require(_same(build['candidate'], candidate) and build['reviewDigest'] == context['reviewDigest']
+             and _same(build['executor'], executor) and build['scope'] == 'offline_simulation_only'
              and build['physicalAcceptance'] is False and build['executionAuthority'] == 'none',
              'execution payload/candidate mismatch')
 
-    issued, expires = utc(token['issued_at']), utc(token['valid_until'])
-    admitted, started, ended = (utc(value) for value in (context['admittedAt'], m['startedAt'], m['endedAt']))
+    issued, expires = _timestamp(token['issued_at']), _timestamp(token['valid_until'])
+    admitted, started, ended = (_timestamp(value) for value in (context['admittedAt'], m['startedAt'], m['endedAt']))
     _require(issued <= admitted <= started < expires and timedelta(0) < expires-issued <= timedelta(seconds=5)
-             and utc(r.reviewedAt) <= admitted <= started < utc(r.validUntil) and ended >= started,
+             and _timestamp(r.reviewedAt) <= admitted <= started < _timestamp(r.validUntil) and ended >= started,
              'invalid admission/execution time window')
     previous = started
     _require(len(m['stepCheckedAt']) == m['executedSubsteps'], 'missing step authority coverage')
     for index, checked in enumerate(m['stepCheckedAt']):
-        at = utc(checked)
-        _require(previous <= at <= ended and at < min(expires, utc(r.validUntil), started+timedelta(seconds=1)),
+        at = _timestamp(checked)
+        _require(previous <= at <= ended and at < min(expires, _timestamp(r.validUntil), started+timedelta(seconds=1)),
                  'step outside authority window/clock rollback')
         _require((at-started).total_seconds() >= (index+1)*.002-1e-6, 'capture runs ahead of admitted clock')
         previous = at
@@ -219,6 +241,7 @@ def _check_artifacts(a, m, context, trust):
              and capture['captureDigest'] == digest({k: v for k, v in capture.items() if k != 'captureDigest'}),
              'capture scope/integrity mismatch')
     summary = capture['summary']
+    BuildBinding.model_validate(summary['binding'])
     _require(set(summary) == {'id', 'state', 'reason', 'executedSubsteps', 'totalSubsteps', 'profile', 'scope',
                              'physicalAcceptance', 'executionAuthority', 'mutationPathsGuarded', 'clearedExternalMutations',
                              'tokenId', 'validUntil', 'candidateDigest', 'binding', 'endpointId', 'modelDigest',
@@ -238,7 +261,7 @@ def _check_artifacts(a, m, context, trust):
              or (m['terminalState'] == 'stopped' and m['reason'] in {'operator_stop', 'service_shutdown'}
                  and m['executedSubsteps'] < 120), 'unsupported/conflicting terminal outcome')
     if m['terminalState'] == 'completed':
-        _require(ended < min(expires, utc(r.validUntil), started+timedelta(seconds=1)),
+        _require(ended < min(expires, _timestamp(r.validUntil), started+timedelta(seconds=1)),
                  'completion outside authority window')
     samples = capture['samples']
     _require(isinstance(samples, list) and len(samples) == m['executedSubsteps'], 'capture coverage mismatch')
@@ -256,7 +279,7 @@ def _check_artifacts(a, m, context, trust):
                                         zip(limits, sample['qpos'], strict=True)), 'observed state outside admitted bounds')
         _vector(sample['xpos'], 3*(len(bodies)+1))
         frame = source['frames'][i]
-        _require(frame['tick'] == i+1 and sample['ctrl'] == frame['targetRad']
+        _require(type(frame['tick']) is int and frame['tick'] == i+1 and _same(sample['ctrl'], frame['targetRad'])
                  and sample['virtualLed'] == frame['virtualLed'], 'sample control/cue mismatch')
         _require(len(sample['bodies']) == len(bodies), 'sample body inventory mismatch')
         for observed, body in zip(sample['bodies'], bodies, strict=True):
@@ -296,7 +319,7 @@ def verify_bundle(raw: bytes, *, expected: dict, trust: dict) -> dict:
         artifacts = {}
         for name, encoded in bundle['artifacts'].items():
             _require(isinstance(encoded, str) and len(encoded) <= 4*((MAX_ARTIFACT_BYTES+2)//3), 'oversized artifact encoding')
-            data = base64.b64decode(encoded, validate=True)
+            data = _base64(encoded)
             _require(0 < len(data) <= MAX_ARTIFACT_BYTES and sha256(data) == manifest['artifactDigests'][name],
                      'original artifact hash mismatch: '+name)
             artifacts[name] = parse_json(data)

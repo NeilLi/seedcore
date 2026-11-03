@@ -14,8 +14,12 @@ seedcore-approval-core = { path = "../seedcore-approval-core" }
 seedcore-policy-core = { path = "../seedcore-policy-core" }
 seedcore-token-core = { path = "../seedcore-token-core" }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 base64.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+# ECMAScript binary64 formatting for CW-only RFC 8785; Rust 1.75 compatible.
+ryu-js = "=0.2.2"
 
 [[bin]]
 name = "seedcore-verify"

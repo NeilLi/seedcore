@@ -252,5 +252,6 @@ its existing schema. Admission can return a separately saved evidence context
 with a fresh service-instance identity; receipt signing is opt-in under a new
 private configuration version. The native executor review digest now includes
 the evidence module. Existing review pins must be refreshed through review,
-not bypassed. Full CW-G02 Rust/Studio/browser acceptance and broader CW-G01
-production/physical gates remain open.
+not bypassed. The 3 November CW-G02 slice now independently verifies these
+bundles in Python and Rust with matching refusal evidence. Studio/browser
+acceptance and broader CW-G01 production/physical gates remain open.

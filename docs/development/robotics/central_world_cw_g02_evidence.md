@@ -1,12 +1,14 @@
 # CW-G02: signed local simulation evidence foundation
 
-Date: 2026-11-02
-Status: Python foundation implemented; verification results recorded below; full CW-G02 acceptance remains open
-Review scope: CW-G02-PYTHON-FOUNDATION (evidence label, not a PDP deny code)
+Date: 2026-11-03
+Status: Independent Python/Rust local verification and parity implemented; Studio/browser and full CW-G02 acceptance remain open
+Review scope: CW-G02-RUST-PARITY (evidence label, not a PDP deny code)
 
 This implements the bounded [2 November plan](cw_g02_daily_plan_2026_11_02.md)
 on the [CW-G01 local native adapter](central_world_cw_g01_admission.md). It adds
 host-signed simulation exports and independent offline Python verification.
+The [3 November slice](cw_g02_daily_plan_2026_11_03.md) adds the independent Rust
+verifier and shared positive/refusal corpus described below.
 It does not promote the endpoint into production or qualify physical devices.
 The supported executor remains the pinned synthetic two-joint reference,
 native MuJoCo 3.15.0, `dt=0.002`, position `kp=1`, at most 120 steps / 240 ms.
@@ -42,6 +44,18 @@ separately saved admission context and receipt; it is not a new ExecutionToken
 field. The frozen token claims/constraints and existing Fast Spine schemas are
 unchanged. Fast Spine's `spine_sim://` receipt validator is not used to accept a
 CW capture under a different schema.
+
+The CW-specific Rust reader in
+[`cw_json.rs`](../../../rust/crates/seedcore-verify/src/cw_json.rs) rejects
+duplicate keys, excessive depth/nodes, nonfinite numbers, unsafe integral
+values and oversized inputs before verification. Its RFC 8785 writer sorts
+unescaped property names by UTF-16 code units and formats binary64 numbers with
+exactly pinned `ryu-js=0.2.2` (Apache-2.0 OR BSL-1.0). Cargo.lock records the
+registry checksum; the build is verified with Rust 1.75. Serde's float-roundtrip
+reader is enabled for this dependency path. Existing shared proof canonicalization
+code and global token schemas are unchanged. Both implementations run the same
+82 fixed canonicalization/refusal vectors, including Unicode ordering, escapes,
+safe integers, negative zero, subnormals and seeded binary64 samples.
 
 ## Explicit configuration and export
 
@@ -93,7 +107,23 @@ server-side evidence storage across process restart.
   --trust reviewed-simulation-trust.json
 ```
 
-The CLI reads only those local files, emits JSON on stdout and exits zero for
+The independent Rust command takes the same three files:
+
+```bash
+cargo build --manifest-path rust/Cargo.toml --locked -p seedcore-verify
+rust/target/debug/seedcore-verify verify-cw-evidence \
+  --bundle attempt.cw-g02.bundle.json \
+  --expected saved-admission-context.json \
+  --trust reviewed-simulation-trust.json
+```
+
+[`cw_evidence.rs`](../../../rust/crates/seedcore-verify/src/cw_evidence.rs)
+implements the structural, signature, binding, time and capture checks in Rust;
+it does not invoke Python, MuJoCo or any execution endpoint. It computes CW's
+RFC 8785 hashes independently and reuses the existing detached Ed25519 verifier
+over those hashes. It does not pass CW artifacts through legacy proof hashing.
+
+Each CLI reads only those local files, emits JSON on stdout and exits zero for
 `verified_completed` / `verified_interrupted`, one for `quarantine` or input
 failure. It makes no service/network calls or execution requests and does not
 change the original artifacts or clear runtime quarantine. Its disposition is
@@ -111,6 +141,18 @@ key revocation, independently expected action/instance/configuration identities,
 the prepared payload hash, review window and every captured step's authorization
 window. Historical token expiry at verification time alone does not reject a
 run; execution must have occurred within its admitted window.
+
+Both receivers require canonical padded base64, including zero padding bits,
+for artifact/key/signature bytes. CW timestamps require explicit RFC 3339 zones
+and microsecond-or-coarser precision; offsets and lowercase `t`/`z` are accepted,
+while ambiguous ISO spellings, leap seconds and submicrosecond precision are
+quarantined. This freezes the service clock's precision rather than letting
+Python truncate extra digits differently from Rust. The original exporter
+already emits this subset. Captured revision bindings are revalidated as strict
+bindings so numeric/boolean coercion cannot alias an authority epoch.
+Structured candidate/executor comparisons also distinguish booleans from JSON
+numbers; executor clock settings and source frame counters require numeric
+values of the declared kind. A trusted signature does not bypass those checks.
 
 It requires contiguous ticks, matching time/count coverage, the pinned controls
 and LED cues, finite correctly sized state/pose vectors, body inventory, unit
@@ -130,7 +172,7 @@ Run the source-build and evidence lane:
 node tools/robotics/verify-cw-g02.cjs
 ```
 
-The lane builds the required CW compiler workspaces and existing Rust token
+The lane builds the required CW compiler workspaces and independent Rust CW
 verifier, runs native/PDP/receipt and API/CLI negative tests, and retains actual
 completed/stopped exports plus validly signed gapped and revoked-key refusal
 fixtures under `artifacts/robotics/cw-g02/`. The fixture exporter uses temporary
@@ -139,20 +181,31 @@ real PDP decisions, Rust token checks and native MuJoCo still execute. No privat
 keys or PolicyCase credentials are exported. CI runs this lane and retains the
 public synthetic artifacts, source revision and content hashes.
 
-Local focused evidence comprises **70 CW-G02 tests**, including real-clock
-same-origin admission/context capture, API download and independent CLI replay,
-plus **139 admission/Fast Spine regression tests** (two browser-only cases
-explicitly skipped in this lane). The report is
-`artifacts/robotics/cw-g02/verification.json`; it explicitly records that the
-Rust **CW receipt** adapter and CW-G02 browser surface are not included. Existing
-Rust token verification is exercised and is a distinct capability.
+The 3 November source-built lane passes **111 CW-G02 tests**, including
+real-clock same-origin admission/context capture, API download, independent
+CLI replay and stricter parser/encoding/clock cases; **139 admission/Fast Spine
+regression tests** (two browser-only cases explicitly skipped here); and
+**49 Rust verifier/proof/token/type tests**. The 82 fixed canonical vectors run
+in both languages. **110 retained cross-language comparisons** agree on
+acceptance/disposition/scope, with exact bundle/context/trust/source hashes on
+accepted inputs; three additional malformed-file CLI groups reject in both.
+Error wording is language-specific and is not an acceptance condition.
+
+The report is `artifacts/robotics/cw-g02/verification.json`. It now requires
+`rust_cw_receipt_adapter: true`, `parity_included: true` and records comparison
+and canonical-vector counts. `parity/` retains exact input bytes, independently
+supplied expected/trust files, both reports and an agreement record per importer
+call. `terminal-parity/` and the top-level `*.rust.verification.json` files retain
+both verifiers' real completed/stopped/gapped/revoked examples. A disagreement
+fails the lane and preserves the reproducer; the runner cannot silently substitute
+Python's disposition for Rust's. Normal verification never rewrites input files.
 
 The 36 research/document synchronization tests passed. The authz-graph script
 passed 79 focused tests; its separate live phase could not connect to
 `127.0.0.1:8002`. This is not recorded as a live-phase pass.
 
-The additive Rust CW receipt adapter and Python/Rust disposition parity,
-Studio's verification/import UI and real browser-export evidence are the next
-bounded slice. Full [CW-EVID-01/CW-G02 acceptance](central_world_acceptance_matrix.md)
+Studio's read-only verification/import UI and real browser-export evidence are
+the next bounded slice. The Rust/Python local gate above does not close those
+operator-surface requirements. Full [CW-EVID-01/CW-G02 acceptance](central_world_acceptance_matrix.md)
 stays open until those pass. Physical signer/profile acceptance, production
 context/deployment and real-policy execution retain separate gates.

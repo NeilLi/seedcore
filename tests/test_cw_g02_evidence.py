@@ -1,6 +1,7 @@
 """Actual PDP/native exports and independent, adversarial offline verification."""
 import base64
 import copy
+import hashlib
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -19,6 +20,26 @@ from seedcore.robotics.cw_evidence import CwReceiptSigner, digest, json_bytes, v
 from tools.robotics.cw_g01_test_fixture import make_test_service, test_context as context_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def cross_language_verification(request, monkeypatch, tmp_path):
+    """Run every existing importer case through the real Rust CLI when required."""
+    if os.getenv('SEEDCORE_CW_G02_REQUIRE_RUST') != '1':
+        return
+    from tools.robotics.cw_g02_parity import compare
+    original = verify_bundle
+    sequence = 0
+    root = Path(os.getenv('SEEDCORE_CW_G02_PARITY_OUT', str(tmp_path/'parity')))
+    case = hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:16]
+    def both(raw, *, expected, trust):
+        nonlocal sequence
+        sequence += 1
+        report = original(raw, expected=expected, trust=trust)
+        compare(raw, expected=expected, trust=trust, python_report=report,
+                directory=root/case/str(sequence))
+        return report
+    monkeypatch.setattr(sys.modules[__name__], 'verify_bundle', both)
 
 
 class Clock:
@@ -381,3 +402,212 @@ def test_real_clock_api_admission_context_and_stopped_download(source, tmp_path)
             assert report['disposition'] == 'verified_interrupted', report
     finally:
         service.close(); store.close()
+
+
+def test_frozen_canonicalization_vectors():
+    cases = parse_json((ROOT/'tests/fixtures/cw-g02/canonical.json').read_bytes())
+    for case in cases:
+        if case['canonical'] is None:
+            with pytest.raises((ValueError, UnicodeError, RecursionError)):
+                canonical_assembly_bytes(parse_json(case['input'].encode()))
+        else:
+            assert canonical_assembly_bytes(parse_json(case['input'].encode())).decode() == case['canonical'], case['name']
+
+
+@pytest.mark.parametrize('change', ['lowercase', 'offset', 'space', 'no_zone', 'nanoseconds', 'leap_second',
+                                  'offset_minutes', 'year_zero', 'invalid_date', 'hour_24'])
+def test_timestamp_domain_has_cross_language_precision_and_zone_rules(attempt, change):
+    a = attempt
+    raw = export(a)
+    def mutate(artifacts, manifest):
+        value = manifest['startedAt']
+        if change == 'lowercase': value = value.replace('T', 't').replace('+00:00', 'z')
+        elif change == 'offset': value = datetime.fromisoformat(value).astimezone(timezone(timedelta(hours=7))).isoformat()
+        elif change == 'space': value = value.replace('T', ' ')
+        elif change == 'no_zone': value = value[:-6]
+        elif change == 'nanoseconds': value = value[:26]+'0'+value[26:]
+        elif change == 'leap_second': value = value[:17]+'60'+value[19:]
+        elif change == 'offset_minutes': value = value[:-6]+'+00:75'
+        elif change == 'year_zero': value = '0000'+value[4:]
+        elif change == 'invalid_date': value = '2026-02-30'+value[10:]
+        elif change == 'hour_24': value = value[:11]+'24'+value[13:]
+        manifest['startedAt'] = value
+    report = check(a, rewrite(a, raw, mutate))
+    assert report['verified'] is (change in {'lowercase', 'offset'}), report
+
+
+@pytest.mark.parametrize('target', ['signature', 'public_key', 'artifact', 'extra_padding', 'missing_padding'])
+def test_noncanonical_base64_is_quarantined(attempt, target):
+    a = attempt
+    bundle = parse_json(export(a))
+    def alias(value):
+        alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+        index = len(value.rstrip('='))-1
+        result = value[:index]+alphabet[alphabet.index(value[index]) | 1]+value[index+1:]
+        assert result != value and base64.b64decode(result, validate=True) == base64.b64decode(value, validate=True)
+        return result
+    if target == 'signature': bundle['receipt']['signature']['signature'] = alias(bundle['receipt']['signature']['signature'])
+    elif target == 'public_key':
+        entry = a['trust']['trusted_keys'][a['signer'].key_ref]
+        entry['public_key'] = alias(entry['public_key'])
+    elif target == 'artifact':
+        name = next(name for name, raw in bundle['artifacts'].items() if raw.endswith('='))
+        bundle['artifacts'][name] = alias(bundle['artifacts'][name])
+    elif target == 'extra_padding': bundle['receipt']['signature']['signature'] += '='
+    elif target == 'missing_padding': bundle['receipt']['signature']['signature'] = bundle['receipt']['signature']['signature'].rstrip('=')
+    assert check(a, json_bytes(bundle))['verified'] is False
+
+
+@pytest.mark.parametrize('kind', ['duplicate', 'duplicate_escaped', 'node_bound', 'depth_bound', 'unsafe_integer', 'float_tick'])
+def test_validly_signed_malformed_original_artifacts_are_refused(attempt, kind):
+    a = attempt
+    bundle = parse_json(export(a))
+    raw = base64.b64decode(bundle['artifacts']['capture'])
+    if kind == 'duplicate': raw = b'{"a":0,"a":1}'
+    elif kind == 'duplicate_escaped': raw = b'{"a":0,"\\u0061":1}'
+    elif kind == 'node_bound': raw = b'['+b'0,'*50000+b'0]'
+    elif kind == 'depth_bound': raw = b'['*34+b'0'+b']'*34
+    elif kind == 'unsafe_integer': raw = b'{"value":9007199254740992}'
+    elif kind == 'float_tick':
+        # Numerically equal tick spelling still violates the strict integer gate.
+        raw = raw.replace(b'"tick":1,', b'"tick":1.0,', 1)
+    bundle['artifacts']['capture'] = base64.b64encode(raw).decode()
+    bundle['receipt']['artifact']['artifactDigests']['capture'] = sha256(raw)
+    bundle['receipt'] = a['signer'].seal(bundle['receipt']['artifact'])
+    assert check(a, json_bytes(bundle))['verified'] is False
+
+
+@pytest.mark.parametrize('epoch', [True, 1.0, -1, 9007199254740992])
+def test_signed_capture_binding_cannot_coerce_epoch_types(attempt, epoch):
+    def mutate(artifacts, manifest): artifacts['capture']['summary']['binding']['authorityEpoch'] = epoch
+    if epoch == 9007199254740992:
+        # The exporter refuses this before a signed artifact can be produced.
+        with pytest.raises(ValueError): rewrite(attempt, export(attempt), mutate)
+    elif type(epoch) is float:
+        # Preserve this spelling on the wire: RFC 8785 would normalize 1.0 to 1.
+        bundle = parse_json(export(attempt))
+        raw = base64.b64decode(bundle['artifacts']['capture']).replace(b'"authorityEpoch":1', b'"authorityEpoch":1.0')
+        bundle['artifacts']['capture'] = base64.b64encode(raw).decode()
+        bundle['receipt']['artifact']['artifactDigests']['capture'] = sha256(raw)
+        bundle['receipt'] = attempt['signer'].seal(bundle['receipt']['artifact'])
+        assert check(attempt, json_bytes(bundle))['verified'] is False
+    else:
+        assert check(attempt, rewrite(attempt, export(attempt), mutate))['verified'] is False
+
+
+def test_unused_trust_entries_are_not_adopted(attempt):
+    raw = export(attempt)
+    attempt['trust']['trusted_keys']['unused'] = {'unrelated': 'not a CW signer'}
+    assert check(attempt, raw)['verified'] is True
+
+
+@pytest.mark.parametrize('change', ['extra_fields', 'unknown_manifest', 'literal_physical', 'sample_bool', 'sample_float', 'summary_float'])
+def test_closed_schemas_and_numeric_kinds_apply_to_signed_samples(attempt, change):
+    def mutate(artifacts, manifest):
+        capture = artifacts['capture']
+        if change == 'extra_fields': capture['extra'] = 'unreviewed'
+        elif change == 'unknown_manifest': manifest['extra'] = True
+        elif change == 'literal_physical': capture['physicalAcceptance'] = 0
+        elif change == 'sample_bool': capture['samples'][0]['qvel'][0] = False
+        elif change == 'sample_float': capture['samples'][0]['tick'] = 1.0
+        elif change == 'summary_float': capture['summary']['executedSubsteps'] = 120.0
+    if change == 'unknown_manifest':
+        bundle = parse_json(export(attempt))
+        receipt = bundle['receipt']
+        receipt['artifact']['extra'] = True
+        hashed = digest(receipt['artifact'])
+        receipt['artifact_hash']['value'] = hashed
+        receipt['signature']['signature'] = base64.b64encode(attempt['signer']._key.sign(hashed.encode())).decode()
+        assert check(attempt, json_bytes(bundle))['verified'] is False
+    elif change in {'sample_float', 'summary_float'}:
+        # A producer's canonical normalization is valid; strict wire-number
+        # refusals are exercised separately without going through that producer.
+        assert check(attempt, rewrite(attempt, export(attempt), mutate))['verified'] is True
+    else:
+        assert check(attempt, rewrite(attempt, export(attempt), mutate))['verified'] is False
+
+
+def test_canonical_unicode_and_binary64_payload_hashes_verify_in_both_languages(attempt):
+    from seedcore.robotics.fast_spine.authority import CLAIM_KEYS
+    a = attempt
+    bundle = parse_json(export(a))
+    artifacts = {name: parse_json(base64.b64decode(raw)) for name, raw in bundle['artifacts'].items()}
+    params = artifacts['parameters']
+    params['trusted_fixture_extra'] = {'\ufb33': [1.0, -0.0, 1e-7, 5e-324], '\U0001f600': {'\r': 'é', '1': 333333333.33333329}}
+    params['payload_hash'] = 'sha256:'+digest({k:v for k,v in params.items() if k != 'payload_hash'})
+    token = artifacts['token']
+    token['constraints']['payload_hash'] = token['execution_preconditions']['payload_hash'] = params['payload_hash']
+    artifacts['token'] = a['service']._authority({key: token[key] for key in CLAIM_KEYS})
+    a['expected']['payloadHash'] = params['payload_hash']
+    a['expected']['tokenDigest'] = digest(artifacts['token'])
+    capture = artifacts['capture']
+    capture['summary']['payloadHash'] = params['payload_hash']
+    capture['captureDigest'] = digest({k:v for k,v in capture.items() if k != 'captureDigest'})
+    raw_artifacts = {name:canonical_assembly_bytes(value) for name,value in artifacts.items()}
+    raw_artifacts['source'] = a['source']
+    bundle['artifacts'] = {name:base64.b64encode(raw).decode() for name,raw in raw_artifacts.items()}
+    manifest = bundle['receipt']['artifact']
+    manifest['context'] = copy.deepcopy(a['expected'])
+    manifest['artifactDigests'] = {name:sha256(raw) for name,raw in raw_artifacts.items()}
+    bundle['receipt'] = a['signer'].seal(manifest)
+    assert check(a, json_bytes(bundle))['verified'] is True
+
+
+@pytest.mark.parametrize('target', ['expected', 'trust', 'bundle'])
+def test_cli_duplicate_key_inputs_cannot_bypass_strict_reader(attempt, tmp_path, target):
+    raw = export(attempt)
+    inputs = dict(bundle=raw, expected=json_bytes(attempt['expected']), trust=json_bytes(attempt['trust']))
+    key = {'bundle':'schemaVersion', 'expected':'schemaVersion', 'trust':'version'}[target]
+    value = parse_json(inputs[target])[key]
+    inputs[target] = inputs[target].rstrip()[:-1]+b','+json.dumps(key).encode()+b':'+json.dumps(value).encode()+b'}\n'
+    for name, data in inputs.items(): (tmp_path/(name+'.json')).write_bytes(data)
+    flags = ['--bundle',str(tmp_path/'bundle.json'),'--expected',str(tmp_path/'expected.json'),'--trust',str(tmp_path/'trust.json')]
+    commands = [[sys.executable,'-m','seedcore.robotics.cw_evidence']]
+    if os.getenv('SEEDCORE_CW_G02_REQUIRE_RUST') == '1':
+        commands.append([str(ROOT/'rust/target/debug/seedcore-verify'),'verify-cw-evidence'])
+    for command in commands:
+        result = subprocess.run(command+flags, cwd=ROOT, capture_output=True, check=False)
+        assert result.returncode == 1 and json.loads(result.stdout)['disposition'] == 'quarantine'
+    for name, data in inputs.items(): assert (tmp_path/(name+'.json')).read_bytes() == data
+
+
+@pytest.mark.parametrize('change', ['candidate_alias', 'payload_executor_alias', 'executor_clock_alias', 'source_tick_alias'])
+def test_valid_signatures_cannot_alias_booleans_to_profile_numbers(attempt, change):
+    from seedcore.robotics.fast_spine.authority import CLAIM_KEYS
+    a = attempt
+    bundle = parse_json(export(a))
+    artifacts = {name:parse_json(base64.b64decode(raw)) for name,raw in bundle['artifacts'].items()}
+    params, review, token = (artifacts[key] for key in ('parameters','review','token'))
+    if change == 'candidate_alias': params['cw_build']['candidate']['runtime']['positionKp'] = True
+    elif change == 'payload_executor_alias': params['cw_build']['executor']['maxWallDurationSeconds'] = True
+    elif change == 'executor_clock_alias':
+        artifacts['executor']['maxWallDurationSeconds'] = True
+        params['cw_build']['executor'] = copy.deepcopy(artifacts['executor'])
+    else: artifacts['source']['frames'][0]['tick'] = True
+    raw_artifacts = {name:canonical_assembly_bytes(value) for name,value in artifacts.items()}
+    # Independently bind the deliberately malformed fixture before signing it;
+    # this exercises semantic checks beyond hashes and trusted signatures.
+    a['expected']['sourceDigest'] = sha256(raw_artifacts['source'])
+    a['expected']['executorDigest'] = digest(artifacts['executor'])
+    review['resourceStateHash'] = 'sha256:'+digest(dict(sourceDigest=a['expected']['sourceDigest'],executorDigest=a['expected']['executorDigest']))
+    a['expected']['reviewDigest'] = digest(review)
+    params['cw_build']['reviewDigest'] = a['expected']['reviewDigest']
+    params['payload_hash'] = 'sha256:'+digest({k:v for k,v in params.items() if k != 'payload_hash'})
+    token['constraints']['payload_hash'] = token['execution_preconditions']['payload_hash'] = params['payload_hash']
+    token['execution_preconditions']['resource_state_hash'] = review['resourceStateHash']
+    artifacts['token'] = a['service']._authority({key:token[key] for key in CLAIM_KEYS})
+    a['expected']['payloadHash'] = params['payload_hash']
+    a['expected']['tokenDigest'] = digest(artifacts['token'])
+    capture = artifacts['capture']
+    capture['summary']['payloadHash'] = params['payload_hash']
+    capture['sourceDigest'] = a['expected']['sourceDigest']
+    capture['executorDigest'] = a['expected']['executorDigest']
+    capture['captureDigest'] = digest({k:v for k,v in capture.items() if k != 'captureDigest'})
+    raw_artifacts = {name:canonical_assembly_bytes(value) for name,value in artifacts.items()}
+    bundle['artifacts'] = {name:base64.b64encode(raw).decode() for name,raw in raw_artifacts.items()}
+    manifest = bundle['receipt']['artifact']
+    manifest['context'] = copy.deepcopy(a['expected'])
+    manifest['artifactDigests'] = {name:sha256(raw) for name,raw in raw_artifacts.items()}
+    bundle['receipt'] = a['signer'].seal(manifest)
+    report = check(a, json_bytes(bundle))
+    assert report['verified'] is False, report
