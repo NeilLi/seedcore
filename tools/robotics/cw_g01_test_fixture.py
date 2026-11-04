@@ -2,9 +2,11 @@
 from datetime import datetime, timedelta, timezone
 import copy
 import json
+import base64
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from seedcore.models.action_intent import PolicyCase
 from seedcore.robotics.build_admission import ReviewedSimulationBuild
@@ -37,13 +39,26 @@ def test_context(source, now=None):
     return review, case
 
 
-def make_test_service(source, directory, *, clock=None, wall_clock=None, threaded=False, case_change=None, receipt_signer=None):
+def make_test_service(source, directory, *, clock=None, wall_clock=None, threaded=False, case_change=None, receipt_signer=None, evidence_enabled=False):
     now = wall_clock() if wall_clock else datetime.now(timezone.utc)
     review, case = test_context(source, now)
     if case_change: case_change(case)
     key = Ed25519PrivateKey.generate(); store = ClaimStore(Path(directory)/'claims.sqlite')
+    evidence_verifier = None
+    if evidence_enabled:
+        if receipt_signer is None: raise ValueError('explicit test receipt signer required')
+        from seedcore.robotics.cw_evidence_studio import CwStudioVerifier
+        from seedcore.robotics.cw_evidence import json_bytes
+        endpoint = json.loads(source)['candidate']['endpointId']
+        trust = dict(version='seedcore.cw-g02.simulation-trust.v1', trusted_keys={
+            'cw-explicit-test-pdp':dict(key_ref='cw-explicit-test-pdp',key_algorithm='ed25519',
+                public_key=base64.b64encode(key.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)).decode(),
+                trust_anchor_type='service',endpoint_id=endpoint),
+            receipt_signer.key_ref:receipt_signer.trust_entry(endpoint)},revoked_keys=[])
+        trust_bytes = json_bytes(trust)
+        evidence_verifier = CwStudioVerifier(trust_bytes,trust_sha256=sha256(trust_bytes))
     args = dict(clock=clock, wall_clock=wall_clock) if clock else {}
     service = CwSimulationService(source, source_sha256=sha256(source), review=review, policy_case=case,
         authority=CwTokenAuthority(key, 'cw-explicit-test-pdp'), store=store, threaded=threaded,
-        executor_digest=native_executor_digest(), receipt_signer=receipt_signer, **args)
+        executor_digest=native_executor_digest(), receipt_signer=receipt_signer, evidence_verifier=evidence_verifier, **args)
     return service, store, key

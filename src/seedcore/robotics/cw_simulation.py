@@ -39,7 +39,7 @@ def hashed(value):
 def native_executor_descriptor():
     """Review pin for this local adapter image and its frozen execution clocks."""
     package=Path(__file__).resolve().parents[1]
-    files=['robotics/cw_simulation.py','robotics/cw_simulation_api.py','robotics/cw_token_authority.py','robotics/cw_evidence.py','robotics/build_admission.py',
+    files=['robotics/cw_simulation.py','robotics/cw_simulation_api.py','robotics/cw_token_authority.py','robotics/cw_evidence.py','robotics/cw_evidence_studio.py','robotics/build_admission.py',
            'robotics/fast_spine/store.py','coordinator/core/governance.py','integrations/rust_kernel.py']
     return dict(profile=NATIVE_PROFILE,engineVersion='3.15.0',timestepSeconds=DT,maxTicks=120,
                 maxSubstepsPerBatch=8,maxStallMs=250,maxWallDurationSeconds=1,
@@ -53,7 +53,7 @@ def native_executor_digest():
 class CwSimulationService:
     def __init__(self, source: bytes, *, source_sha256: str, review: ReviewedSimulationBuild,
                  policy_case: PolicyCase, authority: CwTokenAuthority, store: ClaimStore,
-                 executor_digest: str, receipt_signer=None,
+                 executor_digest: str, receipt_signer=None, evidence_verifier=None,
                  clock=time.monotonic, wall_clock=lambda: datetime.now(timezone.utc), threaded=True):
         if len(source) > 262144 or sha256(source) != source_sha256:
             raise ValueError('independently pinned endpoint source required')
@@ -81,6 +81,11 @@ class CwSimulationService:
                     or not re.fullmatch(r'[a-zA-Z0-9_.:-]{1,128}', authority.key_ref)):
                 raise ValueError('separate-purpose explicit receipt signer required')
         self._receipt_signer = receipt_signer
+        if evidence_verifier is not None:
+            from .cw_evidence_studio import CwStudioVerifier
+            if not isinstance(evidence_verifier, CwStudioVerifier) or receipt_signer is None:
+                raise ValueError('explicit Studio verifier and receipt signer required')
+        self._evidence_verifier = evidence_verifier
         self._source_sha = source_sha256
         self._review = ReviewedSimulationBuild.model_validate_json(review.model_dump_json())
         self._executor=native_executor_descriptor();self._executor_digest=hashed(self._executor)
@@ -137,6 +142,8 @@ class CwSimulationService:
                     modelDigest=REFERENCE_MODEL, sourceDigest=self._source_sha, scope='local_simulation_only',
                     executorDigest=self._executor_digest, instanceId=self._instance_id,
                     signedEvidenceConfigured=self._receipt_signer is not None,
+                    evidenceVerificationConfigured=self._evidence_verifier is not None,
+                    verificationTrustDigest=self._evidence_verifier.trust_digest if self._evidence_verifier else None,
                     physicalAcceptance=False, requiresAdmission=True, maxTicks=120, timestepSeconds=DT,
                     maxWallDurationSeconds=1, limitations=['synthetic_reference_only', 'unsigned_capture', 'no_hardware_endpoint'])
 
@@ -413,3 +420,19 @@ class CwSimulationService:
             self._closed = True
             for r in self._records.values(): self._fence(r, 'service_shutdown', 'stopped')
         for thread in self._threads: thread.join(timeout=1)
+
+    def verify_evidence(self, request_id, raw: bytes):
+        """Resolve authority-independent inspection inputs from a known terminal run."""
+        with self._lock:
+            r = self._records[request_id]
+            if self._evidence_verifier is None:
+                raise PermissionError('operator verification trust is not configured')
+            if r['state'] not in {'completed', 'stopped', 'fenced'} or not r.get('samples') or 'evidence_context' not in r:
+                raise PermissionError('verification requires a known nonempty terminal attempt')
+            expected = copy.deepcopy(r['evidence_context'])
+            original = self.evidence_bundle(request_id)
+            summary = self.status(request_id)
+            summary.update(sourceDigest=self._source_sha, executorDigest=self._executor_digest)
+            verifier = self._evidence_verifier
+        # Do not hold the native execution lock during either verifier.
+        return verifier.verify(raw, expected=expected, retained_digest=sha256(original), summary=summary)

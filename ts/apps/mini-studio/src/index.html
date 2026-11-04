@@ -101,7 +101,20 @@
 <label for="gov-tick">Governed captured replay · read-only</label><input id="gov-tick" type="range" min="0" max="0" value="0" disabled>
 <output id="gov-frame" for="gov-tick">No governed capture.</output><div id="gov-values" class="drc-list"></div>
 <button id="gov-export" type="button" disabled>Download governed simulation capture</button>
-<p>Admission gates only the configured synthetic simulator. Captures are unsigned simulation records. Physical execution and signed evidence closure require their own qualification.</p>
+<p>The capture above is an unsigned simulation record. The evidence inspector verifies its signed bundle under separately configured local service trust.</p>
+<h3>Simulation evidence inspector</h3>
+<p id="gov-evidence-status" role="status" aria-live="polite" data-state="unavailable">Verify a known terminal attempt under operator-configured trust.</p>
+<div class="simulation-actions"><button id="gov-evidence-verify" type="button" disabled>Verify this attempt</button></div>
+<label for="gov-evidence-import">Inspect a bundle for this known attempt · JSON, maximum 2 MiB</label>
+<input id="gov-evidence-import" type="file" accept="application/json,.json" disabled>
+<div class="simulation-actions">
+<button id="gov-evidence-bundle" type="button" disabled>Download inspected bundle</button>
+<button id="gov-evidence-context" type="button" disabled>Download admission context</button>
+<button id="gov-evidence-python" type="button" disabled>Download Python report</button>
+<button id="gov-evidence-rust" type="button" disabled>Download Rust report</button>
+</div>
+<details><summary>Scope, coverage and verifier bindings</summary><div id="gov-evidence-details" class="drc-list evidence-details"></div></details>
+<p>Read-only local simulation evidence. Verification and import grant no execution authority or physical qualification. Unknown attempts require independently retained context through the offline verifier.</p>
 <h3>Read-only captured replay</h3>
 <p id="moment-result">No current captured attempt.</p>
 <label for="moment-tick">Captured sample · scrubbing never runs physics or dispatches controls</label>

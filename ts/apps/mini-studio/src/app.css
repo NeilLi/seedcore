@@ -5,3 +5,6 @@
 #moments{margin-top:24px;padding-top:12px;border-top:1px solid #d7e1d7}#moments textarea{font:11px/1.5 ui-monospace,monospace;resize:vertical}#moments label{margin-top:12px}#moments button{font-size:11px;max-width:100%;white-space:normal}#moment-bounds{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}#moment-result,#moment-values,#moment-status{overflow-wrap:anywhere}#moment-led{padding:6px;border:1px solid #b3c5b8;color:#102c21}#moment-values{margin:10px 0}#moment-tick{padding:0}
 #gov-status,#gov-profile,#gov-frame,#gov-values{overflow-wrap:anywhere}#gov-tick{padding:0}
 @media(min-width:1051px){.workbench{height:clamp(540px,calc(100dvh - 285px),850px);min-height:540px}.workbench>.panel{overflow-y:auto}.viewport-panel{min-height:0}}
+/* Evidence digests and file controls remain contained in the inspector. */
+.evidence-details { overflow-wrap: anywhere; }
+#gov-evidence-import { width: 100%; max-width: 100%; min-width: 0; }

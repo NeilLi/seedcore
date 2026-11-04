@@ -253,5 +253,7 @@ with a fresh service-instance identity; receipt signing is opt-in under a new
 private configuration version. The native executor review digest now includes
 the evidence module. Existing review pins must be refreshed through review,
 not bypassed. The 3 November CW-G02 slice now independently verifies these
-bundles in Python and Rust with matching refusal evidence. Studio/browser
-acceptance and broader CW-G01 production/physical gates remain open.
+bundles in Python and Rust with matching refusal evidence. The 4 November
+known-attempt Studio inspector now adds original bundle/report downloads and
+bounded import under independently configured trust. Broader package promotion
+and CW-G01 production/physical gates remain open.

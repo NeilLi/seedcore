@@ -121,7 +121,7 @@ jobs:
       - name: Verify CW-G01 local PDP tokens, durable claims and native simulation gates
         run: node tools/robotics/verify-cw-g01.cjs
 
-      - name: Verify CW-G02 signed simulation evidence and independent Python/Rust parity
+      - name: Verify CW-G02 signed evidence, Python/Rust parity and trusted Studio API boundary
         run: node tools/robotics/verify-cw-g02.cjs
 
       - name: Verify browser pipeline transport and bounded pacing

@@ -29,10 +29,13 @@ def load_cw_simulation_service(config_path: Path) -> CwSimulationService:
     config = parse_json(_private_file(config_path, 65536))
     config_path = config_path.resolve(strict=True)
     fields = {'schemaVersion', 'sourcePath', 'sourceSha256', 'executorDigest', 'review', 'policyCase', 'signingKeyPath', 'keyRef', 'claimStorePath'}
-    signed_evidence = config.get('schemaVersion') == 'seedcore.cw-g02.service-config.v1'
+    studio_evidence = config.get('schemaVersion') == 'seedcore.cw-g02.service-config.v2'
+    signed_evidence = config.get('schemaVersion') in {'seedcore.cw-g02.service-config.v1', 'seedcore.cw-g02.service-config.v2'}
     if signed_evidence:
         fields |= {'receiptSigningKeyPath', 'receiptKeyRef'}
-    if set(config) != fields or config['schemaVersion'] not in {'seedcore.cw-g01.service-config.v1', 'seedcore.cw-g02.service-config.v1'}:
+    if studio_evidence:
+        fields |= {'evidenceTrustPath', 'evidenceTrustSha256'}
+    if set(config) != fields or config['schemaVersion'] not in {'seedcore.cw-g01.service-config.v1', 'seedcore.cw-g02.service-config.v1', 'seedcore.cw-g02.service-config.v2'}:
         raise ValueError('unsupported service configuration')
     def local(name):
         p = Path(config[name])
@@ -46,12 +49,20 @@ def load_cw_simulation_service(config_path: Path) -> CwSimulationService:
         from .cw_evidence import CwReceiptSigner
         receipt_signer = CwReceiptSigner(load_pem_private_key(
             _private_file(local('receiptSigningKeyPath'), 4096), password=None), config['receiptKeyRef'])
+    evidence_verifier = None
+    if studio_evidence:
+        from .cw_evidence_studio import CwStudioVerifier
+        from .cw_evidence import read_json_file
+        trust_path = local('evidenceTrustPath')
+        if trust_path.is_symlink() or not trust_path.is_file() or trust_path.stat().st_mode & 0o022:
+            raise ValueError('operator trust snapshot must be a regular file without group/other write access')
+        evidence_verifier = CwStudioVerifier(read_json_file(trust_path, 32768), trust_sha256=config['evidenceTrustSha256'])
     review = ReviewedSimulationBuild.model_validate_json(json.dumps(config['review']))
     store = ClaimStore(local('claimStorePath'))
     try:
         service = CwSimulationService(source.read_bytes(), source_sha256=config['sourceSha256'], review=review,
             policy_case=PolicyCase.model_validate(config['policyCase']), authority=CwTokenAuthority(key, config['keyRef']), store=store,
-            executor_digest=config['executorDigest'], receipt_signer=receipt_signer)
+            executor_digest=config['executorDigest'], receipt_signer=receipt_signer, evidence_verifier=evidence_verifier)
     except Exception:
         store.close(); raise
     return service
@@ -130,3 +141,24 @@ def attach_cw_simulation_routes(app, service: CwSimulationService | None):
         except PermissionError as e: raise HTTPException(409, str(e)[:300]) from e
         except HTTPException: raise
         except Exception as e: raise HTTPException(503, 'simulation evidence sealing failed') from e
+
+    @app.post('/api/cw-g02/{request_id}/verify')
+    async def verify(request_id: str, request: Request):
+        from .cw_evidence import MAX_BUNDLE_BYTES
+        from starlette.concurrency import run_in_threadpool
+        if request.headers.get('origin') != str(request.base_url).rstrip('/'):
+            raise HTTPException(403, 'same-origin evidence inspection required')
+        if request.headers.get('content-type', '').split(';', 1)[0] != 'application/json':
+            raise HTTPException(415, 'application/json required')
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw)+len(chunk) > MAX_BUNDLE_BYTES:
+                raise HTTPException(413, 'evidence bundle exceeds 2 MiB')
+            raw.extend(chunk)
+        if not raw: raise HTTPException(422, 'nonempty evidence bundle required')
+        try:
+            result = await run_in_threadpool(active().verify_evidence, request_id, bytes(raw))
+            return Response(json.dumps(result, allow_nan=False), media_type='application/json', headers={'Cache-Control':'no-store'})
+        except KeyError as e: raise HTTPException(404, 'unknown attempt; independently retained admission context is required') from e
+        except PermissionError as e: raise HTTPException(409, str(e)[:300]) from e
+        except (ValueError, RuntimeError) as e: raise HTTPException(503, 'evidence inspection unavailable; ask the service operator to inspect signing/configuration') from e

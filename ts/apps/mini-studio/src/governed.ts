@@ -1,6 +1,7 @@
 import {canonicalAssemblyString,parseStrictJson} from '@seedcore/contracts';
 import {readBounded, type CapturedBodyPose} from '@seedcore/robot-canvas';
 import {createCwBuildCandidate,gestureFrameAtTick,gestureHash,type CompiledGesture,type CompiledMjcf,type GestureBinding,type CwBuildCandidate} from '@seedcore/wasm-sim-bridge';
+import {setupEvidenceInspector} from './evidence.js';
 
 /** Client of a state-owning native simulation service. No browser token issuer or dispatch loop. */
 export function setupGovernedSimulation(host: {
@@ -11,7 +12,7 @@ export function setupGovernedSimulation(host: {
   const button=(id:string)=>el<HTMLButtonElement>(id);
   let profile:any, attempt:string|undefined, token:any, candidate:CwBuildCandidate|undefined;
   let generation=0, disposed=false, pending=false, stopping=false, timer:ReturnType<typeof setTimeout>|undefined;
-  let capture:any, controller:AbortController|undefined;
+  let capture:any, admissionContext:any, controller:AbortController|undefined;
   const status=(text:string,state:string)=>{el('gov-status').textContent=text;el('gov-status').dataset.state=state;};
   async function request(path:string, body?:unknown, signal?:AbortSignal, keepalive=false):Promise<any> {
     const response=await fetch(path,{...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:canonicalAssemblyString(body)}),signal,keepalive});
@@ -26,8 +27,21 @@ export function setupGovernedSimulation(host: {
   const checkCurrent=()=>{
     if(!candidate||currentCandidate().candidateDigest!==candidate.candidateDigest)throw new Error('Build/gesture/endpoint changed');
   };
+  const evidence=setupEvidenceInspector({unavailableReason:()=>{
+    if(!profile?.configured)return 'Evidence verification is unavailable until a trusted local endpoint is configured.';
+    if(!profile.evidenceVerificationConfigured)return 'Evidence verification is unavailable. Ask the service operator to configure receipt signing and verification trust.';
+    if(admissionContext&&admissionContext.instanceId!==profile.instanceId)return 'Service instance changed. Reload Studio and request fresh admission.';
+    return 'Run or stop a known admitted attempt to inspect its simulation evidence.';
+  },current:()=>{
+    checkCurrent();
+    if(!profile?.evidenceVerificationConfigured||!attempt||!admissionContext||!capture?.samples.length||
+      admissionContext.instanceId!==profile.instanceId||admissionContext.requestId!==attempt||
+      admissionContext.candidateDigest!==candidate!.candidateDigest||!['completed','stopped','fenced'].includes(capture.summary.state))
+      throw new Error('A known terminal attempt and operator-configured verification trust are required.');
+    return {attempt,context:admissionContext,trustDigest:profile.verificationTrustDigest,summary:capture.summary};
+  }});
   const clear=()=>{
-    capture=undefined;token=undefined;candidate=undefined;
+    capture=undefined;token=undefined;candidate=undefined;admissionContext=undefined;evidence.invalidate();
     button('gov-start').disabled=true;button('gov-export').disabled=true;
     el<HTMLInputElement>('gov-tick').disabled=true;el('gov-frame').textContent='No governed capture.';
     el('gov-values').replaceChildren();host.display(null);
@@ -35,6 +49,7 @@ export function setupGovernedSimulation(host: {
   const refresh=()=>{
     let eligible=false;try{eligible=currentCandidate().binding.modelDigest===profile.modelDigest;}catch{}
     button('gov-admit').disabled=!eligible||pending;
+    evidence.refresh();
   };
   const cancelRemote=(id:string,revoke=false)=>request(`/api/cw-g01/${id}/cancel`,{revoke},undefined,true);
   const invalidate=(reason='Build or gesture changed; request fresh admission.')=>{
@@ -70,6 +85,7 @@ export function setupGovernedSimulation(host: {
     capture=raw;
     const slider=el<HTMLInputElement>('gov-tick');slider.max=String(Math.max(0,raw.samples.length-1));slider.value='0';slider.disabled=!raw.samples.length;
     button('gov-export').disabled=false;if(raw.samples.length)paint(0);
+    evidence.refresh();
   };
   async function terminal(summary:any,gen:number){
     clearTimeout(timer);timer=undefined;
@@ -105,6 +121,7 @@ export function setupGovernedSimulation(host: {
       checkCurrent();
       if(result.state!=='admitted'){await terminal(result,gen);return;}
       token=result.executionToken;
+      admissionContext=result.evidenceContext;
       if(result.candidateDigest!==candidate.candidateDigest||result.endpointId!==profile.endpointId||!token)throw new Error('Admission reply binding mismatch');
       button('gov-start').disabled=false;status(`Admitted for local simulation · token ${result.tokenId}. Start before ${result.validUntil}.`,'admitted');poll(gen);
     }catch(e){if(gen===generation){invalidate();status(`Admission unavailable: ${String(e)}`,'denied');}}
