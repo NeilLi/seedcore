@@ -1,3 +1,4 @@
+import {setupGallery} from './gallery.js';
 import {setupPlacement} from './placement.js';
 import {setupDrc} from './drc.js';
 import {canonicalAssemblyString} from '@seedcore/contracts';
@@ -61,9 +62,10 @@ button('export').onclick = ()=>{
   const url=URL.createObjectURL(new Blob([canonicalAssemblyString(current.assembly)+'\n'],{type:'application/json'}));
   const anchor=document.createElement('a'); anchor.href=url; anchor.download='assembly.sc-assembly.json'; anchor.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
+const disposeGallery=setupGallery(store);
 const disposePlacement=setupPlacement(store,canvas);
 const disposeDrc=setupDrc(store,canvas);
-window.addEventListener('pagehide',()=>{disposePlacement();disposeDrc();store.dispose();canvas?.dispose();},{once:true});
+window.addEventListener('pagehide',()=>{disposeGallery();disposePlacement();disposeDrc();store.dispose();canvas?.dispose();},{once:true});
 let restored:string|null=null; try{restored=localStorage.getItem(storageKey);}catch{storageError=' · Browser storage unavailable; export your draft.';}
 if(restored) void store.loadText(restored);
 else void store.loadFrom(signal=>fetchAssemblyText('/api/starter',signal));

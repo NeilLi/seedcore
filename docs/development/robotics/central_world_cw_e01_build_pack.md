@@ -82,7 +82,7 @@ checks, workspace typechecking, CLI exports, independent Python ZIP extraction
 and inventory verification, and actual Chrome starter/reference downloads.
 Retained results live under `artifacts/robotics/cw-e01/`.
 
-The source-built gate passes **305 workspace tests**, including **25 exporter
+The original source-built gate passed **305 workspace tests**, including **25 exporter
 tests** and **five current-binding tests**, plus workspace typechecking and all
 five required source builds. It exports two deterministic CLI packs and checks
 them independently with Python ZIP/CRC/SHA, original source, CSV and XML readers.
@@ -104,9 +104,11 @@ are under `studio/`.
 
 Final shared governance/Studio regression results are recorded in the
 [daily delivery record](cw_e01_daily_plan_2026_11_05.md).
-The 6 November source-built rerun passed; its final inventory audit matched all
-135 source and 30 output hashes. The named local draft review and handoff are
-complete; CW-L01's curated local gallery/fork flow is the next implementation.
+The earlier 6 November source-built rerun passed; its inventory audit matched
+135 source and 30 output hashes. After the subsequent gallery change the gate
+was rerun successfully with **309 workspace tests**; the current report and
+hash audit reflect that later source. The named local draft review and handoff are
+complete; the subsequent [CW-L01 local gallery/fork candidate](central_world_cw_l01_gallery.md) is now available.
 Remote CI, full CW-E01 package promotion, printable asset support, reviewed
 physical wiring, firmware/provisioning and production/physical qualification
 are not established by the draft slice.

@@ -1,7 +1,7 @@
 # Central World: remaining delivery schedule
 
 Date: 2026-11-06
-Status: Phase 2 and CW-S01/S02/S04 local slices passed; CW-G01/CW-G02 named local review passed and CW-E01 draft design pack reviewed/delivered with final handoff closed; CW-L01 next; full package promotion, production authenticated intake/deployment, real-source/physical and full policy gates remain open
+Status: CW-L01 local gallery/fork and CW-L02 automated lesson available for review; independent maker trial and CW-L03 release decision remain open; production, real-source/physical and full policy gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
 12-week calendar, architecture and CW gate definitions. This document owns the
@@ -88,7 +88,7 @@ download flow. The [independent review](cw_g02_exit_review_2026_11_05.md) passes
 the named simulation scope; the [draft pack record](central_world_cw_e01_build_pack.md)
 retains 305 workspace tests, nine Chrome groups and independent ZIP/source checks.
 The final source-built verification, integrity audit and delivery record closed
-on 6 November; CW-L01 is the next implementation. Only draft offline design records are accepted;
+on 6 November; the following CW-L01 local candidate is now recorded below. Only draft offline design records are accepted;
 qualified wiring, print files, firmware and hardware remain open. The master
 weekly calendar below remains a target calendar; today's allocation does not
 promote production/physical scope or close a gate by date.
@@ -314,9 +314,9 @@ unless the conditional lane supplies its own complete acceptance evidence.
 
 | ID / target | Deliverable / proposed home | Depends on | Owner / exit artifact |
 | --- | --- | --- | --- |
-| CW-L01 · W11 | Curated gallery manifest, local fork flow and source/license lineage; Mini Studio | CW-A01, CW-E01 | Studio + delivery: pinned entries/assets, safe preview, unavailable-dependency rejection and fork identity tests; no public write/upload API initially |
-| CW-L02 · W11–W12 | Robot Moments lesson, operator help and site/embedding candidate | CW-S04, CW-G02, CW-L01 | Delivery + Studio: independent inspect → customize → rehearse → inspect result → export exercise; browser/keyboard/help/stop and privacy review |
-| CW-L03 · W12 | Alpha release decision and publication candidate | CW-L02; all claims backed by the applicable gates | Integration + reviewer: exact source/build/artifact set, measured task/setup/support results, documented exclusions, rollback/support owner and go/rescope/defer decision |
+| CW-L01 · W11 (local candidate passed) | Curated gallery manifest, local fork flow and source/license lineage; Mini Studio | CW-A01, CW-E01 | [Local record](central_world_cw_l01_gallery.md): pinned entries/assets, dependency refusal, new unqualified identity, lineage and browser-tested Build Pack; no public write/upload API |
+| CW-L02 · W11–W12 (automated exercise passed; independent trial pending) | Robot Moments lesson, operator help and site/embedding candidate | CW-S04, CW-G02, CW-L01 | [Lesson and observation sheet](central_world_cw_l02_maker_lesson.md): actual browser exercise passed; independent adult-maker timing, support, keyboard, accessibility and privacy observations remain open |
+| CW-L03 · W12 (release deferred) | Alpha release decision and publication candidate | CW-L02; all claims backed by the applicable gates | [Decision record](central_world_cw_l03_alpha_review.md): DEFER until maker evidence, reviewed exact release artifacts, support/rollback ownership and applicable authorization exist |
 
 Forks preserve source/license ancestry but receive new unqualified revisions.
 Never carry a publisher's hardware qualification, signature, token or device

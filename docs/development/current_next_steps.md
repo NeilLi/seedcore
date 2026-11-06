@@ -1,7 +1,7 @@
 # Current Next Steps
 
 Date: 2026-11-06
-Status: Canonical active execution queue — CW-G01/CW-G02 named local simulation review passed and CW-E01 local draft design pack reviewed/delivered with final handoff closed; next implementation is CW-L01; full package promotion, production authenticated intake/deployment, real-source/physical and full policy gates remain open
+Status: Canonical active execution queue — CW-L01 local gallery/fork and CW-L02 automated lesson candidate delivered; independent maker observation and CW-L03 release review remain open; physical and production gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -131,19 +131,33 @@ gates remain open.
 | Named local review passed; broader integration gated | CW-G01 | [5 Nov independent review](robotics/cw_g02_exit_review_2026_11_05.md) of the real PDP/configured signer, Rust verification, durable claim, native substep/stop/revocation and captured replay | Local fixture context only; production authenticated intake/context refresh, deployment and physical paths require separate qualification |
 | Named local review passed; full package promotion separate | CW-G02 | [Known-attempt inspector](robotics/central_world_cw_g02_evidence.md): independently provisioned trust, paired Python/Rust reports, original signed downloads, bounded import and actual Chrome/native handoff evidence | [Independent baseline review](robotics/cw_g02_exit_review_2026_11_05.md) passed with exact source/artifact integrity; general historical lookup and production/physical evidence remain separate |
 | Named local draft review passed; final handoff closed 6 Nov | CW-E01 | [Draft Build Pack](robotics/central_world_cw_e01_build_pack.md): deterministic pinned archive, full DRC, unknown-aware BOM, unreviewed-net SVG and current-revision Studio download | 305 workspace tests, nine Chrome groups and independent actual-ZIP checks; no qualified wiring, print assets, firmware or hardware |
-| Next implementation | CW-L01 | Curated local gallery/fork flow with source/license ancestry and new unqualified fork identity | Reviewed draft CW-E01 source/hash inventory; safe previews and missing-dependency refusal; no public write/upload API |
-| Following CW-L01 | CW-L02–CW-L03 | Independent maker exercise and alpha review | Measured task evidence and the applicable release gates; firmware/physical provisioning remain conditional |
+| Local candidate passed | CW-L01 | [Curated local gallery and fork flow](robotics/central_world_cw_l01_gallery.md), pinned source/dependency checks, distinct draft IDs and source/license ancestry | 309 workspace tests and seven Chrome groups; no public upload, inherited authority or physical qualification |
+| Automated exercise passed; independent observation pending | CW-L02 | [Guided synthetic lesson and observation sheet](robotics/central_world_cw_l02_maker_lesson.md): inspect, fork, customize, rehearse, inspect capture and export | Independent adult-maker timing, accessibility, support, privacy and failure observations remain required |
+| Deferred until independent evidence and release review | CW-L03 | [Alpha review decision](robotics/central_world_cw_l03_alpha_review.md), exact source/build inventory and release prerequisites | Actual maker observation, supported devices, support/rollback owner and a separate release decision |
+
+## 6 November gallery and lesson implementation
+
+CW-L01 now offers the byte-pinned tabletop source and canonical-pinned synthetic
+reference in the local gallery. Each fork creates a new draft identity and stores
+source/license provenance in the exported assembly. The seven-group browser gate
+checks unchanged-draft failure behavior, unique IDs, a real Build Pack and the
+guided synthetic rehearsal. The [independent maker sheet](robotics/central_world_cw_l02_maker_lesson.md)
+is prepared but has no participant results. The [alpha record](robotics/central_world_cw_l03_alpha_review.md)
+therefore records **DEFER**, not a publication or physical approval. Continue
+the CW-D01 source/rail and M1 training-reference lanes separately.
 
 ## 6 November final handoff
 
 The outstanding CW-E01 verification manifest and delivery record are complete.
-The fresh source-built browser gate passed **305 TS tests and nine Chrome
-groups**; all 135 source and 30 output hashes match. The final combined CW-G02
-report still matches all 133 source and 919 output hashes. The
+At that handoff the source-built browser gate passed **305 TS tests and nine
+Chrome groups**; the recorded CW-E01 and CW-G02 hashes matched. The subsequent
+CW-L01 work reran those gates with the updated source and 309 workspace tests.
+The
 [delivery record](robotics/cw_e01_daily_plan_2026_11_05.md#actual-delivery-record)
 distinguishes the 5 November work from this final 6 November closeout and records
-the skipped/unavailable lanes. CW-L01 is next; no full package, production or
-physical promotion is implied.
+the skipped/unavailable lanes. CW-L01 was the following implementation; its
+local candidate is now recorded above. No full package, production or physical
+promotion is implied.
 
 ## 5 November priority and agent allocation
 

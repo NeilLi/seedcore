@@ -1,0 +1,40 @@
+import {chromium} from 'playwright';
+import {spawn,spawnSync} from 'node:child_process';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+const root=fileURLToPath(new URL('../../../',import.meta.url));
+const out=path.join(root,'artifacts/robotics/cw-l01');await mkdir(out,{recursive:true});
+const port=process.env.SEEDCORE_GALLERY_TEST_PORT||'8782',base=`http://127.0.0.1:${port}`;
+const python=process.env.SEEDCORE_TEST_PYTHON||path.join(root,'.venv/bin/python');
+const server=spawn(python,['scripts/robotics/serve_mini_studio.py','--port',port],{cwd:root,stdio:['ignore','pipe','pipe']});
+let log='',browser;server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
+const report={scope:'offline_proxy_authoring',physicalAcceptance:false,executionAuthority:'none',checks:[]};
+const passed=name=>{report.checks.push(name);console.log('PASS '+name)};
+try {
+  for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(log);try{if(log.includes('Uvicorn running on')&&(await fetch(base+'/api/starter')).ok)break}catch{}if(i===99)throw Error(log);await new Promise(r=>setTimeout(r,100));}
+  const channel=process.env.SEEDCORE_BROWSER_CHANNEL||'chrome';browser=await chromium.launch({headless:true,...(channel==='bundled'?{}:{channel})});
+  const page=await browser.newPage({viewport:{width:1200,height:1000},acceptDownloads:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base);await page.waitForFunction(()=>document.querySelector('#drc-status')?.dataset.state==='ready');
+  await page.locator('#gallery-open').focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('loaded for inspection'));
+  assert.equal(await page.locator('#content-digest').textContent(),'2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb');passed('keyboard inspection loads pinned source');
+  await page.locator('#gallery-fork').click();await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('New draft fork loaded'));
+  const first=await page.locator('#content-digest').textContent();assert.notEqual(first,'2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb');
+  await page.locator('#drc-tab').click();await page.waitForFunction(()=>document.querySelector('#build-pack-status')?.dataset.state==='ready');
+  const download=page.waitForEvent('download');await page.locator('#build-pack-download').click();await (await download).saveAs(path.join(out,'fork.zip'));
+  const checked=spawnSync(python,['-c',`import sys,zipfile,json\nwith zipfile.ZipFile(sys.argv[1]) as z:\n a=json.loads(z.read('assembly.sc-assembly.json')); l=json.loads(a['metadata']['notes']); m=json.loads(z.read('manifest.json')); assert a['identity']['assembly_id'].startswith('fork-') and a['identity']['status']=='draft' and l['license']=='Apache-2.0' and l['source_sha256']=='14a3a17d66b799ee14326f0815382744ea1153879a2277d2788444b82d7946c7' and m['physicalAcceptance'] is False and m['executionAuthority']=='none'`,path.join(out,'fork.zip')],{encoding:'utf8'});assert.equal(checked.status,0,checked.stderr);passed('fork exports distinct unqualified identity and retained lineage in build pack');
+  await page.locator('#gallery-fork').click();await page.waitForFunction(x=>document.querySelector('#content-digest')?.textContent!==x,first);const second=await page.locator('#content-digest').textContent();assert.notEqual(first,second);passed('repeated forks receive distinct identities');
+  await page.route('**/api/starter',route=>route.fulfill({status:200,contentType:'application/json',body:'{}'}));await page.locator('#gallery-fork').click();await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('unavailable'));assert.equal(await page.locator('#content-digest').textContent(),second);await page.unroute('**/api/starter');passed('changed gallery bytes are refused without replacing current draft');
+  await page.route('**/assets/*.glb',route=>route.fulfill({status:404,body:'missing'}));await page.locator('#gallery-fork').click();await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('unavailable'));assert.equal(await page.locator('#content-digest').textContent(),second);await page.unroute('**/assets/*.glb');passed('missing pinned asset is refused without replacing current draft');
+  await page.locator('#gallery-synthetic').click();await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('New draft fork loaded'));
+  await page.locator('#inspect-tab').click();await page.locator('#name').fill('My lesson draft');await page.locator('#rename').click();await page.waitForFunction(()=>document.querySelector('#build-name')?.textContent==='My lesson draft');
+  await page.locator('#simulation-tab').click();await page.waitForFunction(()=>document.querySelector('#sim-status')?.dataset.state==='compiled');
+  await page.locator('#sim-rehearsal-preset').click();await page.waitForFunction(()=>document.querySelector('#sim-status')?.dataset.state==='compiled');
+  await page.locator('#moments-tab').click();await page.locator('#moment-example').click();await page.locator('#moment-compile').click();await page.waitForFunction(()=>document.querySelector('#moment-status')?.dataset.state==='compiled');
+  await page.locator('#moment-run').click();await page.waitForFunction(()=>document.querySelector('#moment-result')?.textContent.includes('completed_simulation_capture'),null,{timeout:30000});
+  await page.locator('#drc-tab').click();await page.locator('#drc-recheck').click();await page.waitForFunction(()=>document.querySelector('#build-pack-status')?.dataset.state==='ready');
+  const lessonDownload=page.waitForEvent('download');await page.locator('#build-pack-download').click();await (await lessonDownload).saveAs(path.join(out,'lesson-fork.zip'));
+  const lessonCheck=spawnSync(python,['-c',`import sys,zipfile,json\nwith zipfile.ZipFile(sys.argv[1]) as z:\n a=json.loads(z.read('assembly.sc-assembly.json')); l=json.loads(a['metadata']['notes']); m=json.loads(z.read('manifest.json')); assert a['identity']['name']=='My lesson draft' and l['entry']=='synthetic-reference' and m['model']['included'] is True`,path.join(out,'lesson-fork.zip')],{encoding:'utf8'});assert.equal(lessonCheck.status,0,lessonCheck.stderr);passed('guided synthetic fork, rename, bounded rehearsal, inspect and export');
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);passed('mobile containment and no browser exceptions');report.status='checks_passed';
+}catch(e){report.status='checks_failed';report.failure=String(e.stack||e);process.exitCode=1;console.error(report.failure)}finally{await browser?.close();server.kill('SIGTERM');await writeFile(path.join(out,'browser-verification.json'),JSON.stringify(report,null,2)+'\n');}

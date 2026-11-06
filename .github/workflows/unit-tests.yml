@@ -127,6 +127,9 @@ jobs:
       - name: Verify CW-E01 deterministic draft design packs and independent extraction
         run: node tools/robotics/verify-cw-e01.cjs
 
+      - name: Verify CW-L01 local curated gallery and fork identities
+        run: node tools/robotics/verify-cw-l01.cjs
+
       - name: Verify browser pipeline transport and bounded pacing
         run: node tools/robotics/verify-browser-performance.cjs --skip-python
 
@@ -164,6 +167,7 @@ jobs:
             artifacts/robotics/cw-g01/native/governed-inspector.png
             artifacts/robotics/cw-g02/
             artifacts/robotics/cw-e01/
+            artifacts/robotics/cw-l01/
             artifacts/robotics/browser-performance/verification.json
             artifacts/robotics/static-scene/verification.json
 

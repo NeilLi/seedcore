@@ -102,9 +102,10 @@ finding remains for the named offline draft slice.
 | Authz graph review, 5 November | **79 focused tests passed**; live phase unavailable at `127.0.0.1:8002`, with connection refused. This remains an open live check |
 | Final retained evidence audit, 6 November | All **133 CW-G02 source hashes / 919 output hashes** and **135 CW-E01 source hashes / 30 output hashes** match current files; no mismatches |
 
-The canonical source remains `36fceb1` with a reviewable uncommitted diff.
-CI now includes the non-browser CW-E01 gate and retains its artifacts; remote
-CI has not been executed. No commit, push, deployment or physical action occurred.
+At that handoff the source was `36fceb1` with a reviewable uncommitted diff.
+The user subsequently authorized commit `4ae171c`. CI includes the non-browser
+CW-E01 gate; remote CI was not executed at that handoff. No push, deployment or
+physical action occurred as part of that work.
 
 Retained evidence:
 
@@ -116,12 +117,14 @@ Retained evidence:
 - `artifacts/robotics/cw-g02-exit-review-2026-11-05/`: immutable baseline audit
   and the separate independent CW-E01 review.
 - `artifacts/robotics/cw-e01-integration-verification.json`: final source/output
-  inventory audit and retained integration-log hashes. The final rerun log is
-  outside the reported output directory to keep the inventory stable.
+  inventory audit recorded at that handoff. Subsequent CW-L01 work refreshed the
+  CW-E01/CW-G02 reports; the current audit is
+  `artifacts/robotics/cw-l01-integration-verification.json`.
 
-**Next implementation priority:** CW-L01's curated local gallery/fork flow,
-preserving source/license ancestry and creating new unqualified fork identities.
-CW-L02's independent maker exercise and CW-L03's release review follow their
+**Following implementation:** CW-L01's curated local gallery/fork flow now has
+a [local candidate](central_world_cw_l01_gallery.md) preserving source/license
+ancestry and creating new unqualified identities. CW-L02's independent maker
+exercise and CW-L03's release review still require their
 dependencies. Exact hardware, independent Microduck training outputs, firmware,
 qualified wiring/print files, production intake and physical acceptance retain
 their existing gates; the completed draft slice does not advance them.

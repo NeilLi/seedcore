@@ -41,8 +41,11 @@ passes the named local simulation scope for following offline work; full package
 promotion remains separate. The [CW-E01 draft Build Pack](robotics/central_world_cw_e01_build_pack.md)
 now has passing local exporter/Studio evidence under the
 [agent allocation](robotics/cw_e01_daily_plan_2026_11_05.md).
-Its final verification and handoff closed on 6 November; CW-L01's curated local
-gallery/fork flow is next.
+Its final verification and handoff closed on 6 November. The
+[CW-L01 local gallery/fork](robotics/central_world_cw_l01_gallery.md) and
+[automated maker lesson](robotics/central_world_cw_l02_maker_lesson.md) now have
+local browser evidence; independent maker observation remains pending and the
+[alpha release decision](robotics/central_world_cw_l03_alpha_review.md) is deferred.
 Full policy execution remains gated; real-source
 qualification, new joints and physical profiles remain conditional, with no industrial-cell or humanoid expansion.
 
