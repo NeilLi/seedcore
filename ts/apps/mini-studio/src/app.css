@@ -8,3 +8,8 @@
 /* Evidence digests and file controls remain contained in the inspector. */
 .evidence-details { overflow-wrap: anywhere; }
 #gov-evidence-import { width: 100%; max-width: 100%; min-width: 0; }
+#build-pack { margin-top: 24px; padding-top: 12px; border-top: 1px solid #d7e1d7; }
+#build-pack button { font-size: 11px; max-width: 100%; white-space: normal; }
+#build-pack-status, #build-pack-details { overflow-wrap: anywhere; }
+#build-pack-details { white-space: pre-wrap; max-height: 320px; overflow: auto; }
+#build-pack-status[data-state=refused] { color: #a24327; }

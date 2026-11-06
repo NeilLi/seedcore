@@ -47,6 +47,15 @@
 <h3>Findings <span id="drc-finding-count">0</span></h3>
 <div id="drc-findings" class="item-list" aria-label="DRC findings"></div>
 <p class="note">Unknown ratings, unassigned pins, proxy geometry, and unpriced parts block physical qualification rather than counting as zero load or free parts. DRC findings never grant motion authority.</p>
+<section id="build-pack" aria-labelledby="build-pack-heading">
+<h3 id="build-pack-heading">CW-E01 · Draft design pack</h3>
+<p>Save the current build, pinned part records, DRC, BOM and explicit design nets in a deterministic ZIP. Unknown costs and unresolved wiring stay visible. Printable CAD, visual assets and firmware are omitted.</p>
+<p>Supported offline models use a separate export preset: position gain 1, timestep 0.002 s. A blocked build can export its draft records with an explicit model-omission reason.</p>
+<button id="build-pack-download" type="button" disabled>Download draft design ZIP</button>
+<p id="build-pack-status" role="status" aria-live="polite" data-state="unavailable">Waiting for current DRC.</p>
+<details><summary>Draft pack manifest &amp; file hashes</summary><pre id="build-pack-details" class="mono"></pre></details>
+<p class="note">Draft design only. Hardware qualification remains open. Export grants no execution authority and does not establish that a proxy is printable or that a net is approved for wiring.</p>
+</section>
 </div>
 <div id="simulation-panel" role="tabpanel" aria-labelledby="simulation-tab" hidden>
 <p class="eyebrow">CW-S01 / OFFLINE MODEL HANDOFF</p><h2>Simulation &amp; MJCF</h2>

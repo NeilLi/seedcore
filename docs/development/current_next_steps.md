@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-11-04
-Status: Canonical active execution queue — CW-S01/S02 local slices, CW-S03 preflight and CW-S04 delivered; CW-G01 local adapter and CW-G02 known-attempt Studio evidence inspection available for review; full package promotion, production authenticated intake/deployment, real-source/physical and full policy gates remain open
+Date: 2026-11-06
+Status: Canonical active execution queue — CW-G01/CW-G02 named local simulation review passed and CW-E01 local draft design pack reviewed/delivered with final handoff closed; next implementation is CW-L01; full package promotion, production authenticated intake/deployment, real-source/physical and full policy gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -128,9 +128,41 @@ gates remain open.
 | Local offline preflight passed | CW-S03 preflight | [Pinned inventory, 16-case CPU artifact replay and deterministic compatibility/refusal reports](robotics/central_world_cw_s03_preflight.md) | Full CW-POL-01 remains open: both real policy-execution candidates blocked; no checkpoint/browser qualification |
 | Local synthetic slice passed | CW-S04 | [Bounded Hermite timeline, virtual LED, per-step target controls, interrupted capture and read-only replay](robotics/central_world_cw_s04_gestures.md) | Synthetic position profile only: dt=0.002, kp=1, at most 120 steps / 240 ms; no physical or policy authority |
 | Separately gated | CW-S03 inference/runtime | Compatible policy/model/actuator mapping, independent training/export and browser operator/timing evidence | Resume from the preflight blockers; artifact replay alone does not qualify this lane |
-| 1 (local adapter review; broader integration gated) | CW-G01 | [29 Oct local synthetic adapter](robotics/central_world_cw_g01_admission.md): actual PDP/configured Ed25519 signer, Rust verification, durable claim, native substep/stop/revocation gates and captured 3D replay | Local fixture context only; review this named-profile evidence before promotion. Production authenticated intake/context refresh, deployment and physical paths require separate qualification |
-| 2 (local Studio slice passed; exit review pending) | CW-G02 | [4 Nov known-attempt inspector](robotics/central_world_cw_g02_evidence.md): independently provisioned trust, Python/Rust reports, exact signed bundle/context downloads, bounded import and actual Chrome/native handoff evidence | Review the named CW-G01/CW-G02 local scope before package promotion; general historical lookup and production/physical evidence remain separate |
-| Following CW-G02 | CW-E01–CW-L03 | Design pack, curated fork flow and alpha review | Signed local simulation does not qualify firmware/physical provisioning |
+| Named local review passed; broader integration gated | CW-G01 | [5 Nov independent review](robotics/cw_g02_exit_review_2026_11_05.md) of the real PDP/configured signer, Rust verification, durable claim, native substep/stop/revocation and captured replay | Local fixture context only; production authenticated intake/context refresh, deployment and physical paths require separate qualification |
+| Named local review passed; full package promotion separate | CW-G02 | [Known-attempt inspector](robotics/central_world_cw_g02_evidence.md): independently provisioned trust, paired Python/Rust reports, original signed downloads, bounded import and actual Chrome/native handoff evidence | [Independent baseline review](robotics/cw_g02_exit_review_2026_11_05.md) passed with exact source/artifact integrity; general historical lookup and production/physical evidence remain separate |
+| Named local draft review passed; final handoff closed 6 Nov | CW-E01 | [Draft Build Pack](robotics/central_world_cw_e01_build_pack.md): deterministic pinned archive, full DRC, unknown-aware BOM, unreviewed-net SVG and current-revision Studio download | 305 workspace tests, nine Chrome groups and independent actual-ZIP checks; no qualified wiring, print assets, firmware or hardware |
+| Next implementation | CW-L01 | Curated local gallery/fork flow with source/license ancestry and new unqualified fork identity | Reviewed draft CW-E01 source/hash inventory; safe previews and missing-dependency refusal; no public write/upload API |
+| Following CW-L01 | CW-L02–CW-L03 | Independent maker exercise and alpha review | Measured task evidence and the applicable release gates; firmware/physical provisioning remain conditional |
+
+## 6 November final handoff
+
+The outstanding CW-E01 verification manifest and delivery record are complete.
+The fresh source-built browser gate passed **305 TS tests and nine Chrome
+groups**; all 135 source and 30 output hashes match. The final combined CW-G02
+report still matches all 133 source and 919 output hashes. The
+[delivery record](robotics/cw_e01_daily_plan_2026_11_05.md#actual-delivery-record)
+distinguishes the 5 November work from this final 6 November closeout and records
+the skipped/unavailable lanes. CW-L01 is next; no full package, production or
+physical promotion is implied.
+
+## 5 November priority and agent allocation
+
+The [afternoon execution plan](robotics/cw_e01_daily_plan_2026_11_05.md) assigns
+three agents: independent local CW-G01/CW-G02 exit review, the CW-E01 draft
+exporter, and its current-revision Studio download/browser exercise. The
+coordinator owns integration checks and this queue. The inspected `36fceb1`
+baseline was clean. The target is one reviewable offline draft design pack,
+with exact source/hash inventory, full DRC, unknown-aware BOM and explicitly
+unresolved wiring; supported synthetic models may include existing MJCF output.
+The named local evidence review passed, and the draft pack is implemented with
+305 workspace tests, nine Chrome groups and independent archive/source/binding
+checks. The shared Q2 verification script passed available lanes; optional
+Postgres remains skipped, and the authz live phase remains unavailable at port
+8002 after 79 focused tests passed. The [delivery record](robotics/cw_e01_daily_plan_2026_11_05.md)
+retains exact results and artifacts. Hardware, firmware, full policy execution
+and production intake retain their existing gates. The draft slice's independent
+review and final 6 November handoff are complete; prepare CW-L01's curated local
+gallery/fork flow next.
 
 ## 4 November priority task
 

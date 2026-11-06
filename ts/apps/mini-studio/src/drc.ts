@@ -16,6 +16,7 @@ import {
 } from '@seedcore/robot-canvas';
 import type { RawCompilerCatalog } from '@seedcore/wasm-sim-bridge';
 import { setupSimulation } from './simulation.js';
+import { setupBuildPack } from './build-pack.js';
 
 async function fetchDrcCatalog(expectedDigest: string, signal: AbortSignal): Promise<{ catalog: DrcCatalog; raw: RawCompilerCatalog }> {
   const response = await fetch(`/api/placement-catalog?digest=${encodeURIComponent(expectedDigest)}`, { signal });
@@ -74,6 +75,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
   let catalog: DrcCatalog | undefined;
   let rawCatalog: RawCompilerCatalog | undefined;
   const simulation = setupSimulation(store,canvas);
+  const buildPack = setupBuildPack(store);
   let catalogController: AbortController | undefined;
   let catalogGen = 0;
   let attemptedCatalogDigest: string | undefined;
@@ -190,6 +192,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
     }
     button('drc-recheck').disabled = true;
     simulation.invalidate();
+    const buildPackTicket = buildPack.begin();
     setStatus('Running pure DRC worker on current revision…', false, 'loading');
     const outcome = await coordinator.evaluate({
       revisionDigest: current.revisionDigest,
@@ -201,7 +204,10 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
     button('drc-recheck').disabled = !store.getState().current;
     if (outcome.status === 'committed') {
       renderReport(outcome.report, outcome.revisionDigest, outcome.authorityEpoch);
-      if (rawCatalog) simulation.accept(outcome, rawCatalog);
+      if (rawCatalog) {
+        simulation.accept(outcome, rawCatalog);
+        buildPack.accept(outcome, rawCatalog, buildPackTicket);
+      }
     } else if (outcome.status === 'rejected') {
       setStatus(`DRC worker rejected candidate: ${outcome.error}`, true, 'error');
     }
@@ -214,6 +220,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
     catalogController = new AbortController();
     const active = catalogController;
     const timer = setTimeout(() => active.abort(), 10000);
+    buildPack.invalidate('Loading pinned catalog. Draft export will be available after current DRC.');
     setStatus('Loading pinned DRC catalog…', false, 'loading');
     button('drc-retry').hidden = true;
     try {
@@ -247,12 +254,14 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
     const current = state.current;
     button('drc-recheck').disabled = !current || state.loading;
     if (!current) {
+      buildPack.invalidate();
       coordinator.cancel();
       evaluatedKey = '';
       setStatus('Load a build to evaluate DRC, mass properties, and BOM.', false, 'idle');
       return;
     }
     if (state.loading) {
+      buildPack.invalidate();
       coordinator.cancel();
       evaluatedKey = '';
       return;
@@ -301,6 +310,7 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
     catalogController?.abort();
     coordinator.dispose();
     simulation.dispose();
+    buildPack.dispose();
     unsubscribe();
   };
 }
