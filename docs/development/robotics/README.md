@@ -46,6 +46,7 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 | [CW-L01 local gallery](central_world_cw_l01_gallery.md) | Pinned tabletop/synthetic examples and new unqualified forks retaining declared source/license lineage |
 | [CW-L02 maker lesson](central_world_cw_l02_maker_lesson.md) | Guided local simulation and export; independent adult-maker observation sheet pending |
 | [CW-L03 alpha review](central_world_cw_l03_alpha_review.md) | Release decision deferred pending independent maker evidence and release ownership |
+| [9 November afternoon plan](cw_l02_daily_plan_2026_11_09.md) | CW-L02 trial packet and startup readiness, conditional independent observation, then a source-bound alpha-review handoff |
 | [5 November agent allocation](cw_e01_daily_plan_2026_11_05.md) | This afternoon's ownership, handoffs, finish criteria, actual delivery evidence and following priorities |
 | [Browser robotics studio stack architecture](browser_robotics_studio_stack_architecture.md) | Five-layer browser studio reference, subsystem evaluation (`urdf-loader`, Draco, Rapier vs. MuJoCo/C++ Wasm, Pyodide sandboxing, WebSerial/Zenoh/Foxglove), and `CW-S02..S04` optimizations |
 | [Open-source academic ecosystems (MuJoCo, Drake, ROS 2)](academic_open_robotics_ecosystem_assessment.md) | CPU-first academic ecosystem evaluation: adopt MuJoCo `3.15.0`/Wasm (`CW-S02`), evaluate local-station MIT Drake (`TOPP-RA`/IK/SysID for `CW-S04`), and use `MCAP`/`URDF` at replay/export edges (`CW-G02`/`CW-E01`) without beginner setup burden |

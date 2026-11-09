@@ -1,7 +1,7 @@
 # Current Next Steps
 
-Date: 2026-11-06
-Status: Canonical active execution queue — CW-L01 local gallery/fork and CW-L02 automated lesson candidate delivered; independent maker observation and CW-L03 release review remain open; physical and production gates remain open
+Date: 2026-11-09
+Status: Canonical active execution queue — local gallery, lesson and CW-L02 source-bound trial preparation delivered; independent maker observation not tested and CW-L03 release deferred; physical and production gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
 import/export, immutable revisions, selection, undo/redo and stale-load rejection.
@@ -134,6 +134,21 @@ gates remain open.
 | Local candidate passed | CW-L01 | [Curated local gallery and fork flow](robotics/central_world_cw_l01_gallery.md), pinned source/dependency checks, distinct draft IDs and source/license ancestry | 309 workspace tests and seven Chrome groups; no public upload, inherited authority or physical qualification |
 | Automated exercise passed; independent observation pending | CW-L02 | [Guided synthetic lesson and observation sheet](robotics/central_world_cw_l02_maker_lesson.md): inspect, fork, customize, rehearse, inspect capture and export | Independent adult-maker timing, accessibility, support, privacy and failure observations remain required |
 | Deferred until independent evidence and release review | CW-L03 | [Alpha review decision](robotics/central_world_cw_l03_alpha_review.md), exact source/build inventory and release prerequisites | Actual maker observation, supported devices, support/rollback owner and a separate release decision |
+
+## 9 November afternoon priority
+
+The [afternoon plan](robotics/cw_l02_daily_plan_2026_11_09.md) selects CW-L02
+trial readiness: a source-bound local trial packet, startup preflight, first-use
+and recovery checks, and an independent maker observation if a participant is
+available. CW-L03 consumes the resulting evidence; absent observation or release
+ownership keeps its decision deferred. The inspected baseline is `f99479a2`.
+The trial tools now pass 29 focused checks, the source-built gallery/browser gate
+and five actual startup/packet groups. Q2 available lanes passed; optional
+Postgres was skipped and the live authz phase was unavailable after 79 focused
+checks passed. The post-stop port-preflight issue is fixed, and a fresh packet is
+ready. The operator reported the maker exercise **not tested**. Independent
+observation and release ownership therefore remain pending; the daily handoff
+records exact artifact locations and the next step.
 
 ## 6 November gallery and lesson implementation
 

@@ -5,6 +5,50 @@ development. A local development computer can run the authoring and prepared
 simulation tools without a remote LLM account. The full API/HAL stack has
 separate configuration and service dependencies.
 
+## Prepare an independent maker trial
+
+From the repository root, using the existing project environment and installed
+TS/Chrome dependencies:
+
+```bash
+node tools/robotics/verify-cw-l01.cjs --browser
+.venv/bin/python scripts/robotics/prepare_maker_trial.py preflight --port 8767
+.venv/bin/python scripts/robotics/prepare_maker_trial.py prepare --port 8767 --out artifacts/robotics/cw-l02-trials/my-trial
+.venv/bin/python scripts/robotics/prepare_maker_trial.py verify --packet artifacts/robotics/cw-l02-trials/my-trial
+.venv/bin/python scripts/robotics/serve_mini_studio.py --port 8767
+```
+
+Open `http://127.0.0.1:8767` on this computer. The packet references the verified
+checkout and build; it does not contain a standalone Studio distribution. Choose
+a new output directory for each preparation. Existing observations are never
+overwritten. Preflight checks Python modules, Node/npm, the selected browser,
+source/build/report hashes and the local port. It installs nothing and stops no
+services. An older report without build hashes needs the source-built gate above.
+`--browser-channel bundled` selects installed Playwright Chromium for preflight;
+the verification runners use `SEEDCORE_BROWSER_CHANNEL=bundled` for that profile.
+
+The observer records actual timing, assistance and task outcomes in the packet's
+`observation.json`. It starts pending. After a real independent adult-maker
+session, fill all observation fields, set `independentAdultMakerObserved: true`
+and `status: recorded`, then run `verify` again. This checks structure and source
+bindings only; it does not attest the person's statements or approve release.
+Support/rollback owners and the separate alpha decision remain explicit.
+
+Recovery: stop only your own Studio with Ctrl-C, rerun preflight, then restart
+the same command. If the port is occupied, choose another port or stop your own
+instance; do not kill an unrelated process. Export a valuable draft before trying
+another example. Draft storage is local to the browser origin; changing port or
+clearing site data can hide or remove it. Do not clear storage as routine recovery.
+Recheck DRC after simulation preset changes before exporting the design ZIP.
+An earlier source candidate needs its own separate checkout, build and verification;
+never combine an old checkout with a newer `dist/`, or reset over local work.
+
+Automated startup/restart and failure-boundary checks:
+
+```bash
+.venv/bin/python tools/robotics/verify-cw-l02-trial.py
+```
+
 ## Local AI Station Surface Map (Mini-Robotics vs. Full Trust Runtime)
 
 Builders can run lightweight zero-database robotics studios directly on `127.0.0.1`, or bring up the full local PDP/HAL/Verification host stack:

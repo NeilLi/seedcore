@@ -1,12 +1,18 @@
 # CW-L03: authoring and simulation alpha review
 
-Date: 2026-11-06
+Date: 2026-11-09
 Decision: **DEFER release decision**; local software candidate available
 
 The candidate includes the CW-L01 local curated gallery/fork and a guided
-synthetic rehearsal/export lesson. Its source baseline is commit `4ae171c` plus
-the current uncommitted candidate diff; exact input/output hashes and the browser
-exercise are recorded in `artifacts/robotics/cw-l01/verification.json`.
+synthetic rehearsal/export lesson. Its committed source baseline is `f99479a2`.
+The 9 November trial-preparation implementation is an explicit uncommitted diff;
+exact source/build hashes, revision, dirty state and automated evidence are
+recorded in `artifacts/robotics/cw-l01/verification.json` and the generated
+`artifacts/robotics/cw-l02-trials/<trial>/candidate.json`. A packet is prepared
+evidence, not a recorded maker session. Support and rollback ownership remain
+unassigned. A participant was offered for 9 November, then the operator explicitly
+reported **not tested** and asked implementation to continue. No independent
+maker observation is recorded; availability alone does not close the trial.
 The candidate is restricted to local offline authoring and the existing synthetic
 simulation profile. The tabletop starter is not simulation or hardware qualified.
 

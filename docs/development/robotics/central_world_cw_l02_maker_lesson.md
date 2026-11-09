@@ -3,6 +3,28 @@
 Date: 2026-11-06
 Status: Local guide and automated exercise available; independent maker trial pending
 
+## Prepare and observe this candidate
+
+Use the [local trial commands](../../../deploy/local/README.md#prepare-an-independent-maker-trial)
+to build and verify the Studio, check startup dependencies and create a new
+source-bound packet. The current committed candidate is `f99479a2`; the packet
+also hashes the current build and records any uncommitted implementation changes.
+The packet is a set of local references and instructions, not a standalone app.
+
+The observer starts a stopwatch when the participant begins, records assistance
+without coaching in advance, and writes the actual browser/device and outcomes
+into the packet's blank `observation.json`. Keep setup time separate from lesson
+time. Record failures or interventions as they happen. Do not include names or
+private account information. If a task cannot be completed, record that outcome
+instead of substituting an automated test or estimate.
+
+Before starting, verify the packet against the checkout; repeat after filling
+the observation. `verify` checks source bindings and completeness, not the truth
+of manually supplied statements. All generated packets retain a deferred release
+decision and grant no execution authority.
+
+## Participant task
+
 The Studio's **Guided lesson** uses the synthetic reference and requires the
 local Studio service and its pinned dependencies. No external model account is
 needed. Browser draft data is saved locally; downloaded files remain with the
