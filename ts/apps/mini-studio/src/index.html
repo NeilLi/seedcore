@@ -1,39 +1,50 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SeedCore · Mini Studio</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><script type="module" src="/app.js"></script></head>
-<body>
-<header><a class="brand" href="/">◈ SEEDCORE <span>/ MINI STUDIO</span></a><span class="scope">OFFLINE AUTHORING · V2 DRAFTS</span></header>
+<body data-studio-view="demo">
+<header><a class="brand" href="/">◈ SEEDCORE <span>/ MINI STUDIO</span></a><span class="scope">BUILD · LEARN · TRY</span><button id="detail-mode" type="button" aria-pressed="false">Show technical details</button></header>
 <main>
-<section class="intro"><div><p class="eyebrow">CENTRAL WORLD / ASSEMBLY WORKBENCH</p><h1>A small build. A clear structure.</h1><p>Inspect a pinned assembly, edit its draft, and keep every accepted revision.</p></div><span class="status-chip">PROXY GEOMETRY</span></section>
-<div class="toolbar"><button id="starter">Load tabletop starter</button><label class="file-button" for="file">Import .json</label><input id="file" type="file" accept=".json,application/json"><button id="export" disabled>Export build</button><div class="spacer"></div><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button></div>
-<section aria-labelledby="gallery-heading" class="panel"><h2 id="gallery-heading">Local example gallery</h2><p>Tabletop starter · five illustrative proxy parts · Apache-2.0 source. Physical and electrical qualification remain open.</p><button id="gallery-open" type="button">Inspect example</button> <button id="gallery-fork" type="button">Create draft fork</button><p>Synthetic simulation reference · mathematical fixture for the guided lesson.</p><button id="gallery-synthetic" type="button">Create synthetic draft fork</button><p id="gallery-status" role="status" aria-live="polite">Choose an example to inspect or fork.</p></section>
-<details class="panel"><summary>Guided lesson: make and rehearse a draft</summary><ol><li>Choose <strong>Create synthetic draft fork</strong> in the local gallery.</li><li>In Inspect, change the build name and save the draft revision.</li><li>Open Simulation, wait for the model, and apply the rehearsal preset.</li><li>Open Moments, create the tilt/return example, validate its curves, and rehearse it. Stop is available during the rehearsal.</li><li>Inspect the captured result and use the slider to review samples.</li><li>In DRC &amp; BOM, recheck DRC and download the draft design ZIP. The assembly retains its gallery source and license.</li></ol><p>This lesson uses a synthetic simulation. The separate evidence inspector requires a configured local service and a known governed attempt.</p></details>
+<section class="intro"><div><p class="eyebrow">YOUR ROBOT WORKSHOP</p><h1>Let’s build something.</h1><p>Explore robot parts, try a short computer simulation, and save your project.</p></div><span class="status-chip">SIMULATION & DRAFTS</span></section>
+<div class="toolbar"><button id="show-demo" type="button">Meet Microduck</button><button id="resume-project" type="button" disabled>Continue saved project</button><button id="starter">Open tabletop example</button><label class="file-button" for="file">Open project file</label><input id="file" type="file" accept=".json,application/json"><button id="export" disabled>Save project file</button><div class="spacer"></div><button id="undo" disabled>Undo</button><button id="redo" disabled>Redo</button></div>
+<section class="lesson" aria-labelledby="lesson-heading">
+<div><p class="eyebrow">START HERE</p><h2 id="lesson-heading">Your first robot project</h2><p>A tiny tilt and return, recorded in a computer simulation. Follow the four steps below.</p></div>
+<ol class="lesson-steps">
+<li><button id="lesson-start" type="button">1. Choose a practice robot</button><span>Opens your own copy. Undo brings back your previous project.</span></li>
+<li><button id="lesson-prepare" type="button">2. Set up the simulation</button><span>Applies the tested settings in Try it.</span></li>
+<li><button id="lesson-motion" type="button">3. Make a movement</button><span>Create an example, check it, then try it.</span></li>
+<li><button id="lesson-review" type="button">4. Review and save</button><span>Move the replay slider to see recorded values. Save your project anytime.</span></li>
+</ol><p id="lesson-status" role="status" aria-live="polite">Start with step 1, or keep exploring your current project below.</p>
+<p class="lesson-scope">Computer simulation only. These sample shapes and movements are not approved for a real robot.</p>
+</section>
+<details class="panel example-gallery"><summary id="gallery-heading">More examples</summary><p>Explore a five-part tabletop design. Its shapes are illustrative; wiring and physical fit still need review.</p><button id="gallery-open" type="button">Open tabletop example</button> <button id="gallery-fork" type="button">Make my own copy</button><p>Practice with a simple model designed for computer simulation.</p><button id="gallery-synthetic" type="button">Start a practice project</button><p id="gallery-status" role="status" aria-live="polite">Choose an example to open or copy.</p></details>
 <p id="status" role="status" aria-live="polite">Opening the authoring workbench…</p>
 <div class="workbench">
-<aside class="panel"><p class="eyebrow">ASSEMBLY GRAPH</p><h2 id="build-name">No build loaded</h2><h3>Parts <span id="node-count"></span></h3><div id="nodes" class="item-list" aria-label="Assembly nodes"></div><h3>Connections <span id="edge-count"></span></h3><div id="edges" class="item-list" aria-label="Assembly edges"></div></aside>
-<section class="viewport-panel"><div class="view-label"><span id="view-mode">REST POSE / METERS / Z-UP</span><button id="fit">Fit view</button></div><canvas id="viewport" aria-label="3D assembly preview. Rest pose or labeled captured simulation pose. Use the parts list to select by keyboard." tabindex="0"></canvas><p class="view-hint">Drag to orbit · scroll to zoom · click a part to inspect</p><p id="canvas-error" role="alert"></p></section>
-<aside class="panel inspector"><div class="inspector-tabs" role="tablist" aria-label="Assembly tools"><button id="inspect-tab" role="tab" aria-selected="true" aria-controls="inspect-panel">Inspect</button><button id="placement-tab" role="tab" aria-selected="false" aria-controls="placement-panel" tabindex="-1">Place parts</button><button id="drc-tab" role="tab" aria-selected="false" aria-controls="drc-panel" tabindex="-1">DRC &amp; BOM</button><button id="simulation-tab" role="tab" aria-selected="false" aria-controls="simulation-panel" tabindex="-1">Simulation</button><button id="moments-tab" role="tab" aria-selected="false" aria-controls="moments-panel" tabindex="-1">Moments</button></div><div id="inspect-panel" role="tabpanel" aria-labelledby="inspect-tab"><p class="eyebrow">DRAFT INSPECTOR</p><h2 id="selection-title">Select a part or connection</h2><p id="selection-detail">Review the graph without changing the physical model.</p><form id="rename-form"><label for="name">Build name</label><input id="name" maxlength="160" required><button id="rename" disabled>Save draft revision</button></form><dl><dt>Content SHA-256</dt><dd id="content-digest">—</dd><dt>Local revision</dt><dd id="revision">—</dd><dt>Execution admission</dt><dd>Draft grants none · see scoped simulation attempts in Moments</dd><dt>Hardware qualification</dt><dd>Open · electrical ratings unknown</dd></dl><p class="note">These shapes and mounts are illustrative proxies. Import checks do not establish physical fit, wiring approval, or safe motion.</p></div>
+<aside class="panel demo-only demo-about"><p class="eyebrow">MEET A TINY ROBOT</p><h2>Microduck</h2><p>A complete little robot, with a head, camera eyes, two legs and orange feet.</p><h3>Take a closer look</h3><p>Drag to turn the view. Scroll or pinch to zoom. Use the head controls to explore how its joints fit together.</p><p id="demo-status" role="status" aria-live="polite">Loading Microduck’s original 3D parts…</p><p id="demo-source" class="note"></p><a href="/microduck-LICENSE.txt">Model license</a></aside>
+<aside class="panel"><p class="eyebrow">YOUR PROJECT</p><h2 id="build-name">No build loaded</h2><h3>Parts <span id="node-count"></span></h3><div id="nodes" class="item-list" aria-label="Assembly nodes"></div><h3>Connections <span id="edge-count"></span></h3><div id="edges" class="item-list" aria-label="Assembly edges"></div></aside>
+<section class="viewport-panel"><div class="view-label"><span id="view-mode">DESIGN VIEW</span><button id="fit">Show whole robot</button></div><canvas id="viewport" aria-label="3D assembly preview. Rest pose or labeled captured simulation pose. Use the parts list to select by keyboard." tabindex="0"></canvas><canvas id="demo-viewport" class="demo-only" aria-label="Complete Microduck robot. Drag to orbit and scroll to zoom. Head pose controls are available beside the preview." tabindex="0"></canvas><p id="viewport-hint" class="view-hint">Drag to orbit · scroll to zoom · click a part to inspect</p><p id="canvas-error" role="alert"></p></section>
+<aside class="panel demo-only demo-controls"><p class="eyebrow">POSE EXPLORER</p><h2>Say hello to Microduck</h2><p>Try turning and tilting its head.</p><fieldset id="demo-pose" disabled><label for="demo-yaw">Look left or right <output id="demo-yaw-value" for="demo-yaw">0°</output></label><input id="demo-yaw" data-demo-joint="head_yaw" type="range" min="-60" max="60" step="1" value="0"><label for="demo-pitch">Look up or down <output id="demo-pitch-value" for="demo-pitch">0°</output></label><input id="demo-pitch" data-demo-joint="head_pitch" type="range" min="-25" max="25" step="1" value="0"><button id="demo-reset" type="button">Reset pose &amp; view</button><h3>Choose a view</h3><div class="simulation-actions"><button type="button" data-demo-view="front">Front</button><button type="button" data-demo-view="side">Side</button><button type="button" data-demo-view="overview">Whole robot</button></div></fieldset><p class="note">Visual exploration only. These controls change the picture, without running physics or moving hardware.</p><h3>Ready to make something?</h3><p>Use step 1 below for the supported simulation lesson, or open a saved project. This full Microduck model is a separate reference, not an editable Studio assembly.</p></aside>
+<aside class="panel inspector"><div class="inspector-tabs" role="tablist" aria-label="Assembly tools"><button id="inspect-tab" role="tab" aria-selected="true" aria-controls="inspect-panel">My build</button><button id="placement-tab" role="tab" aria-selected="false" aria-controls="placement-panel" tabindex="-1">Place parts</button><button id="drc-tab" role="tab" aria-selected="false" aria-controls="drc-panel" tabindex="-1">Check &amp; parts</button><button id="simulation-tab" role="tab" aria-selected="false" aria-controls="simulation-panel" tabindex="-1">Try it</button><button id="moments-tab" role="tab" aria-selected="false" aria-controls="moments-panel" tabindex="-1">Movement</button></div><div id="inspect-panel" role="tabpanel" aria-labelledby="inspect-tab"><p class="eyebrow">PROJECT DETAILS</p><h2 id="selection-title">Select a part or connection</h2><p id="selection-detail">Choose a part in the picture or list to learn about it.</p><form id="rename-form"><label for="name">Project name</label><input id="name" maxlength="160" required><button id="rename" disabled>Save name</button></form><details class="technical"><summary>Project fingerprints &amp; qualification</summary><dl><dt>Content SHA-256</dt><dd id="content-digest">—</dd><dt>Local revision</dt><dd id="revision">—</dd><dt>Execution admission</dt><dd>Draft grants none · see scoped simulation attempts in Moments</dd><dt>Hardware qualification</dt><dd>Open · electrical ratings unknown</dd></dl></details><p class="note">These shapes and mounts are illustrative proxies. Import checks do not establish physical fit, wiring approval, or safe motion.</p></div>
 <div id="placement-panel" role="tabpanel" aria-labelledby="placement-tab" hidden>
-<p class="eyebrow">MAGNETIC PLACEMENT / 15 MM</p><h2>Place a proxy part</h2>
+<p class="eyebrow">ADD OR MOVE A PART</p><h2>Attach a part</h2>
 <p id="catalog-status" role="status">Load a build to access its pinned catalog.</p><button id="catalog-retry" type="button" hidden>Retry catalog</button>
 <form id="placement-form"><fieldset id="placement-fields" disabled>
-<label for="placement-mode">Operation</label><select id="placement-mode"><option value="new">Add catalog part</option><option value="move">Move selected subtree</option></select>
-<div id="new-part-fields"><label for="part-choice">Catalog part</label><select id="part-choice"></select></div>
-<label for="instance-id">Instance ID</label><input id="instance-id" maxlength="64" autocomplete="off">
-<label for="child-port">Part attachment port</label><select id="child-port"></select>
-<button id="stage-placement" type="button">Stage near an open mount</button>
-<p class="field-heading">World position · mm</p><div class="numeric-grid position-fields"><label>X<input id="pose-x" type="number" step="any" value="0"></label><label>Y<input id="pose-y" type="number" step="any" value="0"></label><label>Z<input id="pose-z" type="number" step="any" value="0"></label></div>
+<label for="placement-mode">What would you like to do?</label><select id="placement-mode"><option value="new">Add a new part</option><option value="move">Move a part and its attachments</option></select>
+<div id="new-part-fields"><label for="part-choice">Choose a part</label><select id="part-choice"></select></div>
+<details class="technical"><summary>Part identifier</summary><label for="instance-id">Unique part ID</label><input id="instance-id" maxlength="64" autocomplete="off">
+</details><label for="child-port">Attachment point</label><select id="child-port"></select>
+<button id="stage-placement" type="button">Preview an available attachment</button>
+<details class="technical"><summary>Exact position &amp; rotation</summary><p class="field-heading">World position · mm</p><div class="numeric-grid position-fields"><label>X<input id="pose-x" type="number" step="any" value="0"></label><label>Y<input id="pose-y" type="number" step="any" value="0"></label><label>Z<input id="pose-z" type="number" step="any" value="0"></label></div>
 <p class="field-heading">Unit quaternion · [w, x, y, z]</p><div class="numeric-grid quaternion-fields"><label>W<input id="pose-w" type="number" step="any" value="1"></label><label>X<input id="pose-qx" type="number" step="any" value="0"></label><label>Y<input id="pose-qy" type="number" step="any" value="0"></label><label>Z<input id="pose-qz" type="number" step="any" value="0"></label></div>
-<button id="preview-placement" type="submit">Find snap candidates</button><label for="snap-candidate">Compatible mount</label><select id="snap-candidate" disabled></select>
-<div class="placement-actions"><button id="commit-placement" type="button" disabled>Commit mount</button><button id="clear-placement" type="button">Clear</button></div>
+</details><button id="preview-placement" type="submit">Find matching attachments</button><label for="snap-candidate">Choose an attachment</label><select id="snap-candidate" disabled></select>
+<div class="placement-actions"><button id="commit-placement" type="button" disabled>Attach part</button><button id="clear-placement" type="button">Cancel preview</button></div>
 </fieldset></form>
-<p id="placement-status" role="status" aria-live="polite">Stage a part to preview a mount. The accepted draft stays unchanged.</p>
+<p id="placement-status" role="status" aria-live="polite">Choose a part, preview an attachment, then choose Attach part. Your project changes only when you attach it.</p>
 <p class="note">Green is an uncommitted proxy preview. Final twist is zero; capture allows 5°. Shift-drag moves the staged part in the XY plane; release proposes a mount. Numeric controls work without dragging.</p>
 </div>
 <div id="drc-panel" role="tabpanel" aria-labelledby="drc-tab" hidden>
-<p class="eyebrow">CW-A04 / WORKER DRC &amp; BOM</p><h2>Readiness &amp; unknown-aware BOM</h2>
-<div class="drc-toolbar"><span id="drc-disposition" class="drc-badge" data-disposition="blocked">BLOCKED · PROXY</span><button id="drc-recheck" type="button" disabled>Recheck DRC</button><button id="drc-retry" type="button" hidden>Retry catalog</button></div>
+<p class="eyebrow">CW-A04 / WORKER Check &amp; parts</p><h2>Design checks &amp; parts list</h2>
+<div class="drc-toolbar"><span id="drc-disposition" class="drc-badge" data-disposition="blocked">BLOCKED · PROXY</span><button id="drc-recheck" type="button" disabled>Check again</button><button id="drc-retry" type="button" hidden>Retry catalog</button></div>
 <p id="drc-status" role="status" aria-live="polite">Waiting for accepted assembly revision…</p>
-<dl class="drc-meta">
+<details class="technical"><summary>Mass, balance &amp; check fingerprints</summary><dl class="drc-meta">
 <dt>Assembly SHA-256</dt><dd id="drc-assembly-digest" class="mono">—</dd>
 <dt>Electrical plan SHA-256</dt><dd id="drc-plan-digest" class="mono">—</dd>
 <dt>Authority &amp; epoch</dt><dd id="drc-epoch">—</dd>
@@ -41,45 +52,45 @@
 <dt>World COM</dt><dd id="drc-com">—</dd>
 <dt>World inertia @ COM</dt><dd id="drc-inertia" class="mono">—</dd>
 </dl>
-<h3>Unknown-Aware BOM</h3>
+</details><h3>Parts &amp; estimated costs</h3>
 <p id="drc-bom-summary">—</p>
 <div id="drc-bom-list" class="drc-list" aria-label="Bill of materials"></div>
-<h3>Bus &amp; Routing Proposals</h3>
+<details class="technical"><summary>Wiring proposals</summary><h3>Suggested wiring (needs review)</h3>
 <div id="drc-routing-list" class="drc-list" aria-label="Electrical routing proposals"></div>
-<h3>Findings <span id="drc-finding-count">0</span></h3>
+</details><h3>Findings <span id="drc-finding-count">0</span></h3>
 <div id="drc-findings" class="item-list" aria-label="DRC findings"></div>
 <p class="note">Unknown ratings, unassigned pins, proxy geometry, and unpriced parts block physical qualification rather than counting as zero load or free parts. DRC findings never grant motion authority.</p>
 <section id="build-pack" aria-labelledby="build-pack-heading">
-<h3 id="build-pack-heading">CW-E01 · Draft design pack</h3>
+<h3 id="build-pack-heading">Save a design pack</h3>
 <p>Save the current build, pinned part records, DRC, BOM and explicit design nets in a deterministic ZIP. Unknown costs and unresolved wiring stay visible. Printable CAD, visual assets and firmware are omitted.</p>
 <p>Supported offline models use a separate export preset: position gain 1, timestep 0.002 s. A blocked build can export its draft records with an explicit model-omission reason.</p>
-<button id="build-pack-download" type="button" disabled>Download draft design ZIP</button>
+<button id="build-pack-download" type="button" disabled>Save design pack (.zip)</button>
 <p id="build-pack-status" role="status" aria-live="polite" data-state="unavailable">Waiting for current DRC.</p>
 <details><summary>Draft pack manifest &amp; file hashes</summary><pre id="build-pack-details" class="mono"></pre></details>
 <p class="note">Draft design only. Hardware qualification remains open. Export grants no execution authority and does not establish that a proxy is printable or that a net is approved for wiring.</p>
 </section>
 </div>
 <div id="simulation-panel" role="tabpanel" aria-labelledby="simulation-tab" hidden>
-<p class="eyebrow">CW-S01 / OFFLINE MODEL HANDOFF</p><h2>Simulation &amp; MJCF</h2>
-<button id="simulation-reference" type="button">Load Offline Simulation Reference (Synthetic)</button>
-<p class="note">This replaces the current draft with a separate mathematical fixture. Synthetic power inputs and cost estimates are not supplier data. Physical qualification stays open.</p>
+<p class="eyebrow">COMPUTER SIMULATION</p><h2>Try your design</h2>
+<button id="simulation-reference" type="button">Open a practice robot</button>
+<p class="note">Opens a simple computer model in place of this project. Undo restores your previous project. Its prices and power values are made-up examples.</p>
 <p><span id="sim-readiness" class="drc-badge" data-disposition="blocked">BLOCKED · Awaiting current checks</span></p>
 <p id="sim-status" role="status" aria-live="polite"></p><p id="sim-provenance">physicalAcceptance: false · authority: none</p>
 <h3>Simulation-blocking findings</h3><ul id="sim-blocking"></ul>
 <h3>Deferred physical-fit findings</h3><ul id="sim-deferred"></ul>
-<label for="sim-mode">Actuator mode</label><select id="sim-mode"><option value="position">Position (ideal)</option><option value="torque">Torque (ideal)</option></select>
+<details class="technical"><summary>Model settings &amp; exports</summary><label for="sim-mode">Actuator mode</label><select id="sim-mode"><option value="position">Position (ideal)</option><option value="torque">Torque (ideal)</option></select>
 <label for="sim-dt">Physics timestep · seconds (0.0001–0.01)</label><input id="sim-dt" type="number" min="0.0001" max="0.01" step="any" value="0.002">
 <label for="sim-kp">Position gain · kp (0–1000, exclusive of 0)</label><input id="sim-kp" type="number" min="0" max="1000" step="any" value="10">
 <dl><dt>Model SHA-256</dt><dd id="sim-model-digest" class="mono">—</dd><dt>Current handoff binding</dt><dd id="sim-binding" class="mono">—</dd></dl>
 <details><summary>Manifest · mappings, rest angles, velocity metadata &amp; limitations</summary><pre id="sim-manifest" class="mono"></pre></details>
 <label for="sim-xml">Compiled MJCF XML</label><textarea id="sim-xml" rows="8" readonly spellcheck="false"></textarea>
 <div class="simulation-actions"><button id="sim-download-xml" type="button" disabled>Download .mjcf.xml</button><button id="sim-copy-xml" type="button" disabled>Copy MJCF</button><button id="sim-download-bundle" type="button" disabled>Download .cw-s01.model.json</button><button id="sim-copy-bundle" type="button" disabled>Copy model bundle</button></div>
-<h3>CW-S02 · Pinned Browser MuJoCo 3.15.0 Rehearsal</h3>
-<p>Qualified rehearsal: dt 0.002 s; position kp 1 (torque has no kp). Applying this preset recompiles the model and changes its digest. Compiler defaults and exports remain available independently.</p>
-<button id="sim-rehearsal-preset" type="button" disabled>Apply qualified rehearsal settings</button>
-<div class="simulation-actions"><button id="sim-run-rehearsal" type="button" disabled>Run CW-S02 Wasm Rehearsal</button><button id="sim-stop-rehearsal" type="button" disabled>Stop Rehearsal</button></div>
+</details><h3>Try a short simulation</h3>
+<p>Use the tested practice settings before running. This short simulation lasts up to 0.12 seconds. For a movement and recording, open Movement next.</p>
+<button id="sim-rehearsal-preset" type="button" disabled>Use practice settings</button>
+<div class="simulation-actions"><button id="sim-run-rehearsal" type="button" disabled>Run short simulation</button><button id="sim-stop-rehearsal" type="button" disabled>Stop simulation</button></div>
 <p id="sim-rehearsal-status" role="status" aria-live="polite" data-state="idle">Compile a current model to rehearse in pinned MuJoCo 3.15.0 Wasm.</p>
-<dl class="drc-meta">
+<details class="technical"><summary>Simulation measurements</summary><dl class="drc-meta">
 <dt>Runtime profile</dt><dd id="sim-rehearsal-profile" class="mono">—</dd>
 <dt>Pinned Wasm SHA-256</dt><dd id="sim-rehearsal-wasm" class="mono">—</dd>
 <dt>Substeps &amp; clock</dt><dd id="sim-rehearsal-substeps">—</dd>
@@ -87,19 +98,20 @@
 <dt>Capture trace SHA-256</dt><dd id="sim-rehearsal-trace" class="mono">—</dd>
 </dl>
 <details><summary>CW-S02 worker summary · clocks, capture &amp; substep gate</summary><pre id="sim-rehearsal-summary" class="mono"></pre></details>
-<p class="note">Fixed-base serial boxes, 1–3 revolute joints. Proxy contacts disabled; ideal actuators omit electrical/thermal dynamics. Velocity limits are metadata only. Native/Wasm target: MuJoCo 3.15.0 (no planar fallback). Exports and rehearsal grant no motion authority.</p>
+</details><p class="note">Fixed-base serial boxes, 1–3 revolute joints. Proxy contacts disabled; ideal actuators omit electrical/thermal dynamics. Velocity limits are metadata only. Native/Wasm target: MuJoCo 3.15.0 (no planar fallback). Exports and rehearsal grant no motion authority.</p>
 </div><div id="moments-panel" role="tabpanel" aria-labelledby="moments-tab" hidden>
 <section id="moments" aria-labelledby="moment-heading">
-<h3 id="moment-heading">CW-S04 · bounded gesture &amp; captured replay</h3>
-<p>In Simulation, load the synthetic reference and apply the qualified position preset. This short fixture supports 1–120 steps at 2 ms (240 ms maximum), with a virtual LED indicator. Full curves are checked before rehearsal.</p>
-<button id="moment-example" type="button" disabled>Create tilt/return example</button>
-<label for="moment-json">Gesture timeline · declarative JSON, 64 KiB maximum</label>
+<h3 id="moment-heading">Make a small movement</h3>
+<p>First open a practice robot in Try it and use the practice settings. Create an example below, check the movement, then try it. The recording includes a virtual light and joint measurements.</p>
+<label for="motion-size">Movement size <output id="motion-size-value" for="motion-size">100%</output></label><input id="motion-size" type="range" min="10" max="100" step="10" value="100" aria-describedby="motion-size-help"><p id="motion-size-help">Scales the tiny example target (at most 0.001 radians). The 0.24-second lesson shows recorded values; motion may be too small to see.</p>
+<button id="moment-example" type="button" disabled>Create tilt &amp; return</button>
+<details class="technical"><summary>Edit movement JSON</summary><label for="moment-json">Gesture timeline · declarative JSON, 64 KiB maximum</label>
 <textarea id="moment-json" rows="10" spellcheck="false" placeholder="Create an example for the current synthetic model, or paste a bounded gesture draft."></textarea>
-<div class="simulation-actions"><button id="moment-compile" type="button" disabled>Validate full gesture curves</button><button id="moment-run" type="button" disabled>Rehearse gesture in simulation</button><button id="moment-stop" type="button" disabled>Stop gesture</button></div>
+</details><div class="simulation-actions"><button id="moment-compile" type="button" disabled>Check movement</button><button id="moment-run" type="button" disabled>Try movement</button><button id="moment-stop" type="button" disabled>Stop movement</button></div>
 <p id="moment-status" role="status" aria-live="polite" data-state="idle">Load the synthetic reference and apply the qualified position preset.</p>
-<dl><dt>Compiled gesture SHA-256</dt><dd id="moment-digest" class="mono">—</dd></dl>
+<details class="technical"><summary>Movement fingerprints &amp; curve bounds</summary><dl><dt>Compiled gesture SHA-256</dt><dd id="moment-digest" class="mono">—</dd></dl>
 <details><summary>Analytic target-curve bounds</summary><pre id="moment-bounds" class="mono"></pre></details>
-<h3>Review candidate</h3>
+</details><details class="technical"><summary>Advanced: reviewed service &amp; signed evidence</summary><h3>Review candidate</h3>
 <label for="moment-endpoint">Requested simulation endpoint</label>
 <input id="moment-endpoint" maxlength="137" placeholder="cw_sim://your-reviewed-endpoint" spellcheck="false">
 <button id="moment-freeze" type="button" disabled>Download build &amp; gesture review candidate</button>
@@ -126,13 +138,13 @@
 </div>
 <details><summary>Scope, coverage and verifier bindings</summary><div id="gov-evidence-details" class="drc-list evidence-details"></div></details>
 <p>Read-only local simulation evidence. Verification and import grant no execution authority or physical qualification. Unknown attempts require independently retained context through the offline verifier.</p>
-<h3>Read-only captured replay</h3>
+</details><h3>Review your recording</h3>
 <p id="moment-result">No current captured attempt.</p>
-<label for="moment-tick">Captured sample · scrubbing never runs physics or dispatches controls</label>
+<label for="moment-tick">Recording position · drag to review, without running again</label>
 <input id="moment-tick" type="range" min="0" max="0" value="0" disabled>
 <output id="moment-frame" for="moment-tick">—</output><p id="moment-led">Virtual LED · no captured frame</p>
 <div id="moment-values" class="drc-list" aria-label="Target and observed simulated joint values"></div>
-<button id="moment-export" type="button" disabled>Download current replay JSON</button>
+<button id="moment-export" type="button" disabled>Save recording (.json)</button>
 <details><summary>Inspect imported replay for this attempt</summary>
 <label for="moment-replay-json">Replay JSON · 256 KiB maximum; requires this session's retained attempt identity</label>
 <textarea id="moment-replay-json" rows="6" spellcheck="false"></textarea>

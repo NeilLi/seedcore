@@ -23,11 +23,11 @@ try {
   for(let i=0;i<100;i++) {if(server.exitCode!==null) throw new Error(`Service exited before readiness: ${log}`);try{if(log.includes('Uvicorn running on') && (await fetch(`${base}/api/starter`)).ok) break;}catch{} if(i===99) throw new Error(`Service did not start: ${log}`);await new Promise(resolve=>setTimeout(resolve,100));}
   const channel=process.env.SEEDCORE_BROWSER_CHANNEL||'chrome';
   browser=await chromium.launch({headless:true,...(channel==='bundled'?{}:{channel})});report.browser=browser.version();
-  const context=await browser.newContext({viewport:{width:1440,height:1050},acceptDownloads:true});const page=await context.newPage();
+  const context=await browser.newContext({viewport:{width:1440,height:1050},acceptDownloads:true});await context.addInitScript(() => localStorage.setItem('seedcore.studio.technical','true'));const page=await context.newPage();
   page.on('pageerror',error=>report.errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error'&&!message.text().includes('favicon')&&!message.text().includes('Failed to load resource')) report.errors.push(message.text());});
-  await page.goto(base);await page.waitForFunction(()=>document.querySelector('#content-digest')?.textContent==='2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb');
-  await page.waitForFunction(()=>document.querySelector('canvas')?.dataset.meshState==='verified');
+  await page.goto(base);await page.locator('#starter').click();await page.waitForFunction(()=>document.querySelector('#content-digest')?.textContent==='2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb');
+  await page.waitForFunction(()=>document.querySelector('#viewport')?.dataset.meshState==='verified');
   assert.equal(await page.locator('#nodes button').count(),5);assert.equal(await page.locator('#edges button').count(),4);
   passed('v2 starter digest, five hashed proxy meshes and rest-pose canvas');
   await page.locator('#nodes button').nth(2).focus();await page.keyboard.press('Enter');assert.equal(await page.locator('#nodes button[aria-pressed=true]').count(),1);
@@ -52,7 +52,7 @@ try {
   const newer=await page.locator('#content-digest').textContent();release();await page.unroute('**/assets/*.glb');await page.waitForTimeout(150);
   assert.equal(await page.locator('#content-digest').textContent(),newer);passed('slow stale asset load cannot replace newer build');
   await page.route('**/assets/*.glb',route=>route.fulfill({status:503,body:'synthetic fixture failure'}));
-  await page.locator('#starter').click();await page.waitForFunction(()=>document.querySelector('#status')?.dataset.error==='true');assert.equal(await page.locator('#content-digest').textContent(),newer);assert.equal(await page.locator('canvas').getAttribute('data-mesh-state'),'verified');await page.unroute('**/assets/*.glb');passed('asset failure preserves previous build and scene');
+  await page.locator('#starter').click();await page.waitForFunction(()=>document.querySelector('#status')?.dataset.error==='true');assert.equal(await page.locator('#content-digest').textContent(),newer);assert.equal(await page.locator('#viewport').getAttribute('data-mesh-state'),'verified');await page.unroute('**/assets/*.glb');passed('asset failure preserves previous build and scene');
   await page.locator('#raw').fill(raw);await page.locator('#import-text').click();await page.waitForFunction(()=>document.querySelector('#build-name')?.textContent==='CW-A02 browser revision');passed('recovery by valid raw-text import');
   await page.locator('.raw summary').click();await exerciseSnapping(page,output,passed);await exerciseDrc(page,output,passed);await exerciseSimulation(page,output,passed,root);await exerciseMoments(page,root,passed);await page.screenshot({path:path.join(output,'desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

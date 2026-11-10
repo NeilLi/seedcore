@@ -5,6 +5,43 @@ Run it on a local development computer at `http://127.0.0.1:8767` to design
 successive proxy robot assemblies. Snap parts interactively or import candidate
 JSON from another tool, including an optional LLM. No cloud account is required.
 
+The default screen opens the complete Microduck reference with original visual
+meshes, body transforms and colors. Orbit/zoom, preset views and head-pose sliders
+are display-only: they do not run physics or edit a v2 assembly. The full model
+is outside the existing restricted compiler/gesture profile. **Meet Microduck**
+returns to the explorer; **Continue saved project** resumes the last browser draft.
+Accepted project edits restore automatically on reload; returning to the explorer
+keeps that saved draft available.
+
+The build runs `tools/robotics/build-microduck-preview.py` using standard-library
+Python 3. It verifies every file against the bundled source manifest, exports only
+visual geoms to a GLB, shares repeated mesh instances and deduplicates exact
+position/normal pairs where indexing saves space. A precompressed copy reduces
+the local browser transfer to about 7.2 MiB without changing decoded model bytes.
+The browser verifies the exported bytes against the build
+pin before displaying them. Attribution and the original Apache-2.0 license are
+available beside the model. Run `npm --prefix ts run --workspace
+@seedcore/mini-studio test:microduck` for the full-model browser checks.
+
+The screen also offers a four-step practice project with plain-language tabs:
+**My build**, **Place parts**, **Check & parts**, **Try it**, and **Movement**.
+The guide uses the same validated gallery, compiler and simulator as the full
+workbench. Unavailable steps stay disabled until their prerequisites are ready.
+The movement size slider scales the tiny tilt/return example (10–100% of
+0.001 rad); generating or changing a movement clears previous validation and
+recording. Check it again before running. The 240 ms lesson is intended for
+inspecting captured values, not a visible large robot animation.
+
+Use **Show technical details** or individual expandable sections for exact poses,
+JSON, model exports, fingerprints, and configured service/evidence tools. The
+technical-details preference is saved in this browser. Simulation-only scope and
+physical qualification limits still apply in both views.
+
+Run `npm --prefix ts run --workspace @seedcore/mini-studio test:beginner` after
+building for the Chrome beginner-flow check (practice fork, preset, scaled
+movement, validation, worker capture, replay, export, invalidation and mobile
+containment). It starts its own temporary local server.
+
 Imports are atomic: raw JSON, catalog semantics and pinned assets must validate
 before the candidate replaces the visible draft. The **Place parts** tab adds 15 mm proxy snapping, translucent ghosts, numeric
 placement and subtree moves through the immutable store. The **DRC & BOM** tab runs

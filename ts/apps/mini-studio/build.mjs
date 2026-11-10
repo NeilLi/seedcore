@@ -1,4 +1,5 @@
 import {build} from 'esbuild';
+import {execFileSync} from 'node:child_process';
 import {mkdir,copyFile,readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 
@@ -59,7 +60,9 @@ const mujocoCspPlugin = {
 };
 
 await mkdir('dist',{recursive:true});
-await build({entryPoints:['src/app.ts'],outfile:'dist/app.js',bundle:true,format:'esm',platform:'browser',target:'es2022',legalComments:'inline',plugins:[mujocoCspPlugin]});
+execFileSync('python3',['../../../tools/robotics/build-microduck-preview.py','dist'],{stdio:'inherit'});
+const microduckDemo=JSON.parse(await readFile('dist/microduck-preview.json','utf8'));
+await build({define:{__MICRODUCK_DEMO__:JSON.stringify(microduckDemo)},entryPoints:['src/app.ts'],outfile:'dist/app.js',bundle:true,format:'esm',platform:'browser',target:'es2022',legalComments:'inline',plugins:[mujocoCspPlugin]});
 
 const mujocoWasm = await readFile('../../node_modules/@mujoco/mujoco/mujoco.wasm');
 if (mujocoWasm.length !== MUJOCO_WASM_BYTES || createHash('sha256').update(mujocoWasm).digest('hex') !== MUJOCO_WASM_SHA256) {

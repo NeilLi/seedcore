@@ -164,3 +164,18 @@ def test_reference_cannot_bypass_catalog_structure_or_kinematic_gates(client, mu
     else: assembly["execution_token"] = {"allow": True}
     assert client.post("/api/assembly/validate", json=assembly).status_code == 422
     assert client.get("/api/starter").content == read_local(REGISTRY, "assemblies/tabletop-starter.sc-assembly.json", 262144)
+
+
+def test_microduck_preview_compression_preserves_pinned_model(client):
+    metadata = client.get('/microduck-preview.json').json()
+    response = client.get('/microduck.glb', headers={'Accept-Encoding': 'gzip'})
+    assert response.status_code == 200
+    assert response.headers['Content-Encoding'] == 'gzip'
+    assert response.headers['Vary'] == 'Accept-Encoding'
+    assert sha256(response.content) == metadata['asset']['sha256']
+    assert len(response.content) == metadata['asset']['bytes']
+    uncompressed = client.get('/microduck.glb', headers={'Accept-Encoding': 'gzip;q=0'})
+    assert 'Content-Encoding' not in uncompressed.headers
+    assert sha256(uncompressed.content) == metadata['asset']['sha256']
+    assert client.get('/microduck.glb.gz').status_code == 404
+    assert client.get('/microduck-LICENSE.txt').status_code == 200

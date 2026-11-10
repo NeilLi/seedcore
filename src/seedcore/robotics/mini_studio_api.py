@@ -148,14 +148,28 @@ def create_app(registry: Path = REGISTRY, web_root: Path | None = None, *, admis
         return Response(scene_assets[name], media_type="model/gltf-binary" if name.endswith(".glb") else "application/json")
 
     @app.get("/{page:path}")
-    def page(page: str):
+    def page(page: str, request: Request):
         name = page or "index.html"
         if name not in {"index.html", "app.js", "app.css", "third-party-notices.txt", "favicon.svg",
+                        "microduck.glb", "microduck-preview.json", "microduck-LICENSE.txt",
                         "cw-s02-worker.js", "mujoco.wasm",
                         "performance.html", "performance.js", "performance.css", "lab-physics.js", "lab-render.js", "lab-physics.wasm",
                         "scene.html", "scene.css", "scene.js", "scene-worker.js", "scene-build.json",
                         "scene-decoders/draco_decoder.wasm", "scene-decoders/draco_wasm_wrapper.js"} or not (web_root / name).is_file():
             raise HTTPException(404, "build Mini Studio before serving")
-        return FileResponse(web_root / name, media_type="application/wasm" if name.endswith(".wasm") else None)
+        if name == "microduck.glb" and (web_root / "microduck.glb.gz").is_file():
+            for coding in request.headers.get("accept-encoding", "").split(","):
+                encoding, *parameters = coding.strip().split(";")
+                if encoding != "gzip":
+                    continue
+                try:
+                    quality = next((float(p.strip()[2:]) for p in parameters if p.strip().startswith("q=")), 1.0)
+                except ValueError:
+                    quality = 0.0
+                if quality > 0:
+                    return FileResponse(web_root / "microduck.glb.gz", media_type="model/gltf-binary",
+                                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+            return FileResponse(web_root / name, media_type="model/gltf-binary", headers={"Vary": "Accept-Encoding"})
+        return FileResponse(web_root / name, media_type="application/wasm" if name.endswith(".wasm") else "model/gltf-binary" if name.endswith(".glb") else None)
 
     return app

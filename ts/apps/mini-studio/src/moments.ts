@@ -40,7 +40,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     governed.refresh();
     let eligible = false;
     try { const c = host.current(); assertQualifiedMujocoSettings(c.model); eligible = c.model.manifest.catalogProvenance === 'synthetic_fixture' && c.model.manifest.options.actuatorMode === 'position' && c.model.manifest.bodies.length <= CW_S04_MAX_BODIES; } catch {}
-    button('moment-example').disabled = !eligible; button('moment-compile').disabled = !eligible;
+    el<HTMLInputElement>('motion-size').disabled = !eligible; button('moment-example').disabled = !eligible; button('moment-compile').disabled = !eligible;
     button('moment-run').disabled = !compiled || Boolean(worker);
     button('moment-inspect-replay').disabled = !retainedAttempt || Boolean(worker);
     button('moment-freeze').disabled = !compiled || Boolean(worker);
@@ -78,8 +78,20 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
   el<HTMLTextAreaElement>('moment-json').oninput = () => invalidate('Gesture edited. Previous compilation, attempt and replay invalidated.');
   button('moment-example').onclick = () => {
     invalidate('New synthetic example. Validate its full curves before rehearsal.');
-    try { const c = host.current(); el<HTMLTextAreaElement>('moment-json').value = JSON.stringify(createTabletopGestureExample(c.model,c.binding),null,2); }
+    try { const c = host.current(); const draft = createTabletopGestureExample(c.model,c.binding);
+      const scale = Number(el<HTMLInputElement>('motion-size').value) / 100;
+      if (!Number.isFinite(scale) || scale < 0.1 || scale > 1) throw new Error('Choose a movement size from 10% to 100%.');
+      draft.tracks.forEach(track => {
+        const rest = track.knots[0].positionRad;
+        track.knots.forEach(knot => { knot.positionRad = rest + (knot.positionRad - rest) * scale; });
+      });
+      el<HTMLTextAreaElement>('moment-json').value = JSON.stringify(draft,null,2); }
     catch (e) { status(String(e),'rejected'); }
+  };
+  el<HTMLInputElement>('motion-size').oninput = () => {
+    el('motion-size-value').textContent = `${el<HTMLInputElement>('motion-size').value}%`;
+    // Rebuild from the current model; never scale stale or imported JSON in place.
+    button('moment-example').click();
   };
   button('moment-compile').onclick = () => {
     invalidate('Checking gesture…');

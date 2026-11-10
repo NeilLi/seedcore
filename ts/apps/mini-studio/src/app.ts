@@ -1,3 +1,5 @@
+import {setupMicroduck} from './microduck.js';
+import {setupBeginner} from './beginner.js';
 import {setupGallery} from './gallery.js';
 import {setupPlacement} from './placement.js';
 import {setupDrc} from './drc.js';
@@ -9,8 +11,9 @@ const store = new AssemblyStore<ProxyScene>(prepareProxyScene);
 const storageKey = 'seedcore.mini-studio.draft.v2';
 let canvas: RobotCanvas | undefined, shownDigest: string | undefined, savedDigest: string | undefined;
 let storageError = '';
+let disposeDemo: (()=>void)|undefined;
 try { canvas = new RobotCanvas(element<HTMLCanvasElement>('viewport'),selection=>store.select(selection),mode=>{
-  element('view-mode').textContent=mode==='captured'?'CAPTURED SIMULATION POSE / METERS / Z-UP':'REST POSE / METERS / Z-UP';
+  element('view-mode').textContent=mode==='captured'?'RECORDED SIMULATION VIEW':'DESIGN VIEW';
 }); }
 catch {element('canvas-error').textContent = '3D preview unavailable in this browser. Use the parts and connections lists to inspect this draft.';}
 function item(label:string,detail:string,selection:Selection,current:Frozen<Selection>): HTMLButtonElement {
@@ -21,11 +24,16 @@ function item(label:string,detail:string,selection:Selection,current:Frozen<Sele
 }
 function render(state:Frozen<StoreState<ProxyScene>>): void {
   const current = state.current;
-  element('status').textContent = state.error ? `Import/edit rejected. Previous draft retained. ${state.error}` : state.loading ? 'Checking candidate and pinned assets… Previous accepted draft remains visible.' : current ? `Revision ${current.sequence} · ${current.assembly.nodes.length} parts · catalog and mesh pins checked · authoring only${storageError}` : 'Load the tabletop starter or import a v2 draft.';
+  element('status').textContent = state.error ? `Could not apply that change. Your previous project is still here. ${state.error}` : state.loading ? 'Checking your project and its parts…' : current ? `Revision ${current.sequence} · ${current.assembly.nodes.length} parts · project checked · computer model only${storageError}` : 'Open an example or a saved project file.';
   element('status').dataset.error = String(Boolean(state.error));
   button('undo').disabled = !state.canUndo; button('redo').disabled = !state.canRedo;
   button('export').disabled = !current; button('rename').disabled = !current;
   if(!current) return;
+  document.body.dataset.studioView='project';
+  element('fit').hidden=false;
+  element('viewport-hint').textContent='Drag to orbit · scroll to zoom · click a part to inspect';
+  disposeDemo?.();disposeDemo=undefined;
+  try { localStorage.setItem('seedcore.studio.last-view','project'); } catch {}
   const assembly = current.assembly;
   if (shownDigest !== current.revisionDigest) {
     canvas?.setBuild(current.scene,assembly); shownDigest = current.revisionDigest;
@@ -37,13 +45,13 @@ function render(state:Frozen<StoreState<ProxyScene>>): void {
   }
   element('build-name').textContent = assembly.identity.name; element('node-count').textContent = String(assembly.nodes.length); element('edge-count').textContent = String(assembly.mechanical_tree.length);
   element('nodes').replaceChildren(...assembly.nodes.map(n=>item(n.display_name??n.node_id,`${n.role} · ${n.node_id}`,{kind:'node',id:n.node_id},current.selection)));
-  element('edges').replaceChildren(...assembly.mechanical_tree.map(e=>item(e.edge_id,e.connection_type==='rigid_mount'?'Rigid mount':'Revolute · simulation limits',{kind:'edge',id:e.edge_id},current.selection)));
+  element('edges').replaceChildren(...assembly.mechanical_tree.map(e=>item(e.edge_id,e.connection_type==='rigid_mount'?'Fixed attachment':'Turning joint',{kind:'edge',id:e.edge_id},current.selection)));
   canvas?.select(current.selection);
   const selection = current.selection;
   element('selection-title').textContent = selection ? selection.id : 'Select a part or connection';
   const node = selection?.kind==='node' ? assembly.nodes.find(n=>n.node_id===selection.id) : undefined;
   const edge = selection?.kind==='edge' ? assembly.mechanical_tree.find(e=>e.edge_id===selection.id) : undefined;
-  element('selection-detail').textContent = node ? `${node.part_id} @ ${node.part_version} · exact catalog bytes pinned` : edge ? `${edge.parent_node_id} → ${edge.child_node_id} · ${edge.connection_type}` : 'Review the graph without changing the physical model.';
+  element('selection-detail').textContent = node ? `${node.part_id} @ ${node.part_version} · exact catalog bytes pinned` : edge ? `${edge.parent_node_id} → ${edge.child_node_id} · ${edge.connection_type}` : 'Choose a part in the picture or list to learn about it.';
   element('content-digest').textContent = current.assemblyDigest;
   element('revision').textContent = `${current.sequence} · ${current.revisionDigest.slice(0,16)}…`;
 }
@@ -65,7 +73,24 @@ button('export').onclick = ()=>{
 const disposeGallery=setupGallery(store);
 const disposePlacement=setupPlacement(store,canvas);
 const disposeDrc=setupDrc(store,canvas);
-window.addEventListener('pagehide',()=>{disposeGallery();disposePlacement();disposeDrc();store.dispose();canvas?.dispose();},{once:true});
+const disposeBeginner=setupBeginner(store);
+window.addEventListener('pagehide',()=>{disposeDemo?.();disposeBeginner();disposeGallery();disposePlacement();disposeDrc();store.dispose();canvas?.dispose();},{once:true});
 let restored:string|null=null; try{restored=localStorage.getItem(storageKey);}catch{storageError=' · Browser storage unavailable; export your draft.';}
-if(restored) void store.loadText(restored);
-else void store.loadFrom(signal=>fetchAssemblyText('/api/starter',signal));
+button('resume-project').disabled=!restored;
+button('resume-project').onclick=()=>{
+  let latest:string|null=null;try{latest=localStorage.getItem(storageKey);}catch{}
+  if(latest)void store.loadText(latest);
+};
+button('show-demo').onclick=()=>{
+  try { localStorage.setItem('seedcore.studio.last-view','demo'); } catch {}
+  location.reload();
+};
+let lastView:string|null=null;try{lastView=localStorage.getItem('seedcore.studio.last-view');}catch{}
+if(restored && lastView==='project') void store.loadText(restored);
+else {
+  element('status').textContent='Meet Microduck: explore the complete robot below, or start your first practice project.';
+  element('view-mode').textContent='MICRODUCK · VISUAL EXPLORER';
+  element('fit').hidden=true;
+  element('viewport-hint').textContent='Drag to look around · scroll to zoom · try the head controls';
+  disposeDemo=setupMicroduck();
+}

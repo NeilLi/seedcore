@@ -1,0 +1,45 @@
+import {chromium} from 'playwright';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {mkdir} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const root=fileURLToPath(new URL('../../../',import.meta.url));
+const port='8789',base=`http://127.0.0.1:${port}`;
+const server=spawn(`${root}/.venv/bin/python`,['scripts/robotics/serve_mini_studio.py','--port',port],{cwd:root,stdio:['ignore','pipe','pipe']});
+let log='',browser;server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
+try {
+  for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(log);try{if(log.includes('Uvicorn running on')&&(await fetch(base+'/api/starter')).ok)break;}catch{}if(i===99)throw Error(log);await new Promise(r=>setTimeout(r,100));}
+  browser=await chromium.launch({channel:'chrome',headless:true});
+  const page=await browser.newPage({viewport:{width:1440,height:1050},acceptDownloads:true});
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base);await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='verified');
+  assert.equal(await page.locator('.technical[open]').count(),0);
+  assert.equal(await page.locator('#lesson-motion').isDisabled(),true);
+  await page.locator('#lesson-start').click();await page.waitForFunction(()=>!document.querySelector('#lesson-prepare').disabled);
+  await page.locator('#lesson-prepare').click();await page.waitForFunction(()=>!document.querySelector('#lesson-motion').disabled);
+  await page.locator('#lesson-motion').click();await page.locator('#moment-example').click();
+  assert.equal(await page.locator('#moment-json').isVisible(),false);
+  await page.locator('#motion-size').fill('50');await page.locator('#motion-size').dispatchEvent('input');
+  const draft=JSON.parse(await page.locator('#moment-json').inputValue());
+  assert.ok(Math.abs(draft.tracks[0].knots[1].positionRad-draft.tracks[0].knots[0].positionRad-0.0005)<1e-12);
+  await page.locator('#moment-compile').click();assert.equal(await page.locator('#moment-status').getAttribute('data-state'),'compiled');
+  await page.locator('#moment-run').click();await page.waitForFunction(()=>document.querySelector('#moment-status')?.dataset.state==='completed');
+  assert.equal(await page.locator('#lesson-review').isDisabled(),false);
+  await page.locator('#lesson-review').click();await page.locator('#moment-tick').fill('59');await page.locator('#moment-tick').dispatchEvent('input');
+  assert.match(await page.locator('#moment-frame').textContent(),/tick 60/);
+  const download=page.waitForEvent('download');await page.locator('#export').click();assert.match((await download).suggestedFilename(),/assembly/);
+  await page.locator('#motion-size').fill('30');await page.locator('#motion-size').dispatchEvent('input');
+  assert.equal(await page.locator('#moment-run').isDisabled(),true);assert.equal(await page.locator('#lesson-review').isDisabled(),true);
+  await page.locator('#detail-mode').click();assert.ok(await page.locator('.technical[open]').count()>5);
+  await page.reload();assert.equal(await page.locator('#detail-mode').getAttribute('aria-pressed'),'true');
+  await page.locator('#detail-mode').click();
+  await page.waitForFunction(()=>document.querySelector('#drc-status')?.dataset.state==='ready');
+  await page.waitForFunction(()=>document.querySelector('#viewport')?.dataset.meshState==='verified');
+  await mkdir(`${root}/artifacts/robotics/beginner`,{recursive:true});
+  await page.screenshot({path:`${root}/artifacts/robotics/beginner/desktop.png`,fullPage:true});
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:`${root}/artifacts/robotics/beginner/mobile.png`,fullPage:true});
+  await page.locator('#inspect-tab').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#placement-tab').getAttribute('aria-selected'),'true');
+  assert.deepEqual(errors,[]);
+  console.log('PASS guided project, scaled movement, validated simulation, replay, export, edit invalidation, detail preference, keyboard tabs and mobile containment');
+} finally {await browser?.close();server.kill('SIGTERM');}

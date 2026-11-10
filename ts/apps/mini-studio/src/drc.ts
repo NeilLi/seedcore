@@ -107,10 +107,12 @@ export function setupDrc(store: AssemblyStore<ProxyScene>, canvas?:RobotCanvas):
     btn.dataset.severity = finding.severity;
     btn.dataset.code = finding.code;
     const title = document.createElement('span');
-    title.textContent = `[${finding.ruleId} · ${finding.severity.toUpperCase()}] ${finding.code}`;
+    title.textContent = finding.severity === 'conflict' ? 'Needs fixing' : 'Needs review';
+    btn.title = `${finding.ruleId} · ${finding.code}`;
     const detail = document.createElement('small');
     const refs = finding.fieldRefs.join(', ');
-    detail.textContent = `${finding.message}${refs ? ` (${refs})` : ''}${finding.recommendation ? ` — ${finding.recommendation}` : ''}`;
+    btn.setAttribute('aria-description', refs ? `Related fields: ${refs}` : 'Design finding');
+    detail.textContent = `${finding.message}${finding.recommendation ? ` — ${finding.recommendation}` : ''}`;
     btn.append(title, detail);
     const target = selectionForFieldRefs(state, finding.fieldRefs);
     const currentSel = state.current?.selection;

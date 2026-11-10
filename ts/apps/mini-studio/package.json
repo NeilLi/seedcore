@@ -6,6 +6,8 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:microduck": "node microduck-browser.mjs",
+    "test:beginner": "node beginner-browser.mjs",
     "test:browser": "node browser-check.mjs",
     "test:performance": "node performance-browser.mjs",
     "test:scene": "node scene-browser.mjs"

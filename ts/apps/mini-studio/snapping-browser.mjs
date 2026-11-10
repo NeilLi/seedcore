@@ -3,7 +3,7 @@ import path from 'node:path';
 
 export async function exerciseSnapping(page,output,passed){
   const digest=()=>page.locator('#content-digest').textContent();
-  const ghost=()=>page.locator('canvas').getAttribute('data-ghost-state');
+  const ghost=()=>page.locator('#viewport').getAttribute('data-ghost-state');
   const count=()=>page.locator('#nodes button').count();
   const unchanged=async(expected,n)=>{assert.equal(await digest(),expected);assert.equal(await count(),n);};
   const input=async(id,value)=>{await page.locator(`#${id}`).fill(String(value));};
@@ -32,7 +32,7 @@ export async function exerciseSnapping(page,output,passed){
   await input('instance-id','cap_02');await page.locator('#stage-placement').click();assert.match(await page.locator('#placement-status').textContent(),/already exists/);await unchanged(added,6);
   await page.locator('#nodes button').filter({hasText:'bracket_0'}).click();await page.locator('#placement-mode').selectOption('move');
   await input('pose-w',0);await input('pose-qx',1);await input('pose-qy',0);await input('pose-qz',0);await input('pose-x',10);await input('pose-y',0);await input('pose-z',-11);
-  assert.equal(await ghost(),'candidate');assert.equal(await page.locator('canvas').getAttribute('data-ghost-node-count'),'5');
+  assert.equal(await ghost(),'candidate');assert.equal(await page.locator('#viewport').getAttribute('data-ghost-node-count'),'5');
   await page.locator('#child-port').selectOption('mount.top');assert.match(await page.locator('#placement-status').textContent(),/occupied/);assert.equal(await page.locator('#commit-placement').isDisabled(),true);await page.locator('#child-port').selectOption('mount.bottom');
   const candidates=await page.locator('#snap-candidate option').allTextContents();assert.equal(candidates.length,1);assert.match(candidates[0],/base_0 \/ mount.bottom/);assert.ok(!candidates.some(c=>/bracket_0|servo_0|hat_0|mcu_0|cap_02/.test(c)));await unchanged(added,6);
   // A stale/invalid dropdown value cannot leave the previous candidate armed.
@@ -51,7 +51,7 @@ export async function exerciseSnapping(page,output,passed){
   await page.locator('#commit-placement').click();await page.waitForFunction(()=>document.querySelector('#status').dataset.error==='true');await unchanged(moved,6);assert.equal(await ghost(),'none');await page.unroute('**/api/assembly/validate');
   passed('CW-SNAP-01 root and authoritative drop rejection retain the prior revision');
   await input('instance-id','drag_cap');await page.locator('#stage-placement').click();assert.equal(await ghost(),'candidate');
-  const rect=await page.locator('canvas').boundingBox();await page.keyboard.down('Shift');await page.mouse.move(rect.x+rect.width*.5,rect.y+rect.height*.5);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.5+2,rect.y+rect.height*.5+1);
+  const rect=await page.locator('#viewport').boundingBox();await page.keyboard.down('Shift');await page.mouse.move(rect.x+rect.width*.5,rect.y+rect.height*.5);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.5+2,rect.y+rect.height*.5+1);
   await unchanged(moved,6);assert.equal(await ghost(),'candidate');await page.mouse.up();await page.keyboard.up('Shift');await page.waitForFunction(()=>document.querySelectorAll('#nodes button').length===7);assert.equal(await ghost(),'none');
   passed('CW-SNAP-01 Shift-drag previews without mutation and commits atomically on release');
   await page.screenshot({path:path.join(output,'snapping-final.png'),fullPage:true});

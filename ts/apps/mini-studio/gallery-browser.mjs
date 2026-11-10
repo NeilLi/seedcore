@@ -16,8 +16,8 @@ try {
   for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(log);try{if(log.includes('Uvicorn running on')&&(await fetch(base+'/api/starter')).ok)break}catch{}if(i===99)throw Error(log);await new Promise(r=>setTimeout(r,100));}
   const channel=process.env.SEEDCORE_BROWSER_CHANNEL||'chrome';browser=await chromium.launch({headless:true,...(channel==='bundled'?{}:{channel})});
   const page=await browser.newPage({viewport:{width:1200,height:1000},acceptDownloads:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(base);await page.waitForFunction(()=>document.querySelector('#drc-status')?.dataset.state==='ready');
-  await page.locator('#gallery-open').focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('loaded for inspection'));
+  await page.goto(base);await page.locator('#starter').click();await page.waitForFunction(()=>document.querySelector('#drc-status')?.dataset.state==='ready');
+  await page.locator('.example-gallery summary').click();await page.locator('#gallery-open').focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('loaded for inspection'));
   assert.equal(await page.locator('#content-digest').textContent(),'2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb');passed('keyboard inspection loads pinned source');
   await page.locator('#gallery-fork').click();await page.waitForFunction(()=>document.querySelector('#gallery-status')?.textContent.includes('New draft fork loaded'));
   const first=await page.locator('#content-digest').textContent();assert.notEqual(first,'2550d184c44a064c6ad6a2245a08f430f257c40ca8f3627e73eeb3fedd452acb');
