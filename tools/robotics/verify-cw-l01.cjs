@@ -12,8 +12,11 @@ try{
  run('workspace typecheck','npm',['--prefix','ts','run','typecheck']);
  run('workspace tests','npm',['--prefix','ts','test']);
  const python=process.env.SEEDCORE_TEST_PYTHON||(fs.existsSync(path.join(root,'.venv/bin/python'))?path.join(root,'.venv/bin/python'):'python3');
- run('maker trial packet and preflight refusal checks',python,['-m','pytest','tests/test_maker_trial.py','-q','--tb=short']);
- if(browser){run('local gallery, fork, lesson and ZIP browser exercise',process.execPath,['ts/apps/mini-studio/gallery-browser.mjs']);
+ run('maker trial packet and preflight refusal checks',python,['-m','pytest','tests/test_maker_trial.py','tests/test_microduck_preview.py','tests/test_mini_studio_api.py','-q','--tb=short']);
+ if(browser){
+  run('beginner guided project browser exercise',process.execPath,['ts/apps/mini-studio/beginner-browser.mjs']);
+  run('full Microduck visual explorer browser exercise',process.execPath,['ts/apps/mini-studio/microduck-browser.mjs']);
+  run('local gallery, fork, lesson and ZIP browser exercise',process.execPath,['ts/apps/mini-studio/gallery-browser.mjs']);
   const b=JSON.parse(fs.readFileSync(path.join(out,'browser-verification.json'),'utf8'));if(b.status!=='checks_passed'||b.physicalAcceptance!==false||b.executionAuthority!=='none')throw Error('Missing scoped browser results');report.browser_checks=b.checks.length;
  }
  report.status='checks_passed';
@@ -22,7 +25,7 @@ finally{
  report.source_revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
  report.working_tree_dirty=Boolean(spawnSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).stdout.trim());
  const paths=spawnSync('git',['ls-files','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.trim().split('\n');
- const prefixes=['scripts/robotics/prepare_maker_trial.py','tests/test_maker_trial.py','ts/apps/mini-studio/','ts/packages/contracts/','ts/packages/drc-solver/','ts/packages/robot-canvas/','ts/packages/wasm-sim-bridge/','ts/tests/studio-gallery.test.ts','tools/robotics/verify-cw-l01.cjs','packages/component-registry/','packages/simulation-fixtures/cw-s01/','src/seedcore/robotics/mini_studio_api.py','scripts/robotics/serve_mini_studio.py','ts/package.json','ts/package-lock.json','ts/tsconfig.base.json','.github/workflows/unit-tests.yml'];
+ const prefixes=['scripts/robotics/prepare_maker_trial.py','tests/test_maker_trial.py','tests/test_microduck_preview.py','tests/test_mini_studio_api.py','tools/robotics/build-microduck-preview.py','packages/models/microduck/0.1.0/','ts/apps/mini-studio/','ts/packages/contracts/','ts/packages/drc-solver/','ts/packages/robot-canvas/','ts/packages/wasm-sim-bridge/','ts/tests/studio-gallery.test.ts','tools/robotics/verify-cw-l01.cjs','packages/component-registry/','packages/simulation-fixtures/cw-s01/','src/seedcore/robotics/mini_studio_api.py','scripts/robotics/serve_mini_studio.py','ts/package.json','ts/package-lock.json','ts/tsconfig.base.json','.github/workflows/unit-tests.yml'];
  const hash=p=>({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')});
  const built=[];
  function collectBuild(dir){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,e.name);if(e.isDirectory())collectBuild(p);else if(e.isFile())built.push(path.relative(root,p));}}

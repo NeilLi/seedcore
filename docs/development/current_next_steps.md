@@ -1,6 +1,6 @@
 # Current Next Steps
 
-Date: 2026-11-09
+Date: 2026-11-10
 Status: Canonical active execution queue — local gallery, lesson and CW-L02 source-bound trial preparation delivered; independent maker observation not tested and CW-L03 release deferred; physical and production gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
@@ -134,6 +134,20 @@ gates remain open.
 | Local candidate passed | CW-L01 | [Curated local gallery and fork flow](robotics/central_world_cw_l01_gallery.md), pinned source/dependency checks, distinct draft IDs and source/license ancestry | 309 workspace tests and seven Chrome groups; no public upload, inherited authority or physical qualification |
 | Automated exercise passed; independent observation pending | CW-L02 | [Guided synthetic lesson and observation sheet](robotics/central_world_cw_l02_maker_lesson.md): inspect, fork, customize, rehearse, inspect capture and export | Independent adult-maker timing, accessibility, support, privacy and failure observations remain required |
 | Deferred until independent evidence and release review | CW-L03 | [Alpha review decision](robotics/central_world_cw_l03_alpha_review.md), exact source/build inventory and release prerequisites | Actual maker observation, supported devices, support/rollback owner and a separate release decision |
+
+## 10 November priority: refreshed CW-L02 candidate
+
+The selected next package is **CW-L02 maker-trial readiness**, following the
+committed beginner UI and full Microduck visual explorer (`b71d022d`). The
+[10 November schedule](robotics/cw_l02_daily_plan_2026_11_10.md) refreshes the
+participant lesson, source/build inventory, browser/startup checks and a new
+trial packet. The refresh passes 309 TS tests, 57 focused Python checks, the
+beginner/full-model browser exercises, seven gallery groups and five startup
+checks. The fresh local packet is
+`artifacts/robotics/cw-l02-trials/2026-11-10-microduck-ready-01/`. The full Microduck view is display-only; the supported synthetic
+simulation remains separate. This closes software preparation only. Independent
+adult-maker timing/accessibility/failure observations and named support/rollback
+owners remain required before CW-L03 can receive a separate release decision.
 
 ## 9 November afternoon priority
 

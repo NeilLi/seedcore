@@ -1,6 +1,6 @@
 # Central World: remaining delivery schedule
 
-Date: 2026-11-06
+Date: 2026-11-10
 Status: CW-L01 local gallery/fork and CW-L02 automated lesson available for review; independent maker trial and CW-L03 release decision remain open; production, real-source/physical and full policy gates remain open
 
 The [master engineering plan](central_world_engineering_plan.md) owns the
@@ -10,6 +10,12 @@ The [acceptance matrix](central_world_acceptance_matrix.md) owns the required
 positive, negative and fault evidence. CW-A01 has a verified v2 authoring candidate;
 the entries below describe required acceptance and remaining work. A draft
 schema or schedule does not grant permission to operate hardware.
+
+The next active allocation is the [10 November CW-L02 trial refresh](cw_l02_daily_plan_2026_11_10.md)
+for the beginner UI and display-only Microduck explorer in `b71d022d`.
+Complete current-build preparation, then collect independent adult-maker
+observations and resolve observed issues before CW-L03 review. The visual model
+does not advance Microduck policy, physics, hardware or public-release gates.
 
 ## Baseline and execution order
 

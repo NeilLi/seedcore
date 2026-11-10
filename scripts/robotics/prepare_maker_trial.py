@@ -17,7 +17,14 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[2]
 REPORT = 'artifacts/robotics/cw-l01/verification.json'
 BUILD = 'ts/apps/mini-studio/dist/'
-REQUIRED_BUILD = {BUILD + n for n in ('index.html', 'app.js', 'app.css', 'cw-s02-worker.js', 'mujoco.wasm', 'third-party-notices.txt')}
+REQUIRED_BUILD = {BUILD + n for n in ('index.html', 'app.js', 'app.css', 'cw-s02-worker.js', 'mujoco.wasm', 'third-party-notices.txt', 'microduck.glb', 'microduck.glb.gz', 'microduck-preview.json', 'microduck-LICENSE.txt')}
+LESSON = 'docs/development/robotics/central_world_cw_l02_maker_lesson.md'
+REQUIRED_INPUTS = {'ts/apps/mini-studio/src/app.ts', 'ts/apps/mini-studio/src/gallery.ts',
+                   'ts/apps/mini-studio/src/beginner.ts', 'ts/apps/mini-studio/src/microduck.ts',
+                   'ts/apps/mini-studio/build.mjs', 'src/seedcore/robotics/mini_studio_api.py',
+                   'tools/robotics/verify-cw-l01.cjs', 'tools/robotics/build-microduck-preview.py',
+                   'packages/models/microduck/0.1.0/manifest.json'}
+REQUIRED_CHECKS = {'beginner guided project browser exercise', 'full Microduck visual explorer browser exercise'}
 MAX_JSON = 2 * 1024 * 1024
 
 
@@ -58,8 +65,9 @@ def read_json(root: Path, name: str):
 
 def pin(root: Path, name: str):
     path = local_file(root, name)
-    if path.stat().st_size > 20 * 1024 * 1024:
-        raise ValueError('Artifact exceeds 20 MiB')
+    limit = 64 if name == BUILD + 'microduck.glb' else 20
+    if path.stat().st_size > limit * 1024 * 1024:
+        raise ValueError(f'Artifact exceeds {limit} MiB')
     digest = hashlib.sha256()
     with path.open('rb') as stream:
         for block in iter(lambda: stream.read(65536), b''):
@@ -81,11 +89,11 @@ def checked_report(root: Path):
         raise ValueError('Source-built gallery/browser acceptance is missing or incomplete')
     if report.get('source_revision') != git(root, 'rev-parse', 'HEAD'):
         raise ValueError('Verification revision differs from HEAD; rerun the gallery gate')
-    required_inputs = {'ts/apps/mini-studio/src/app.ts', 'ts/apps/mini-studio/src/gallery.ts',
-                       'ts/apps/mini-studio/build.mjs', 'src/seedcore/robotics/mini_studio_api.py',
-                       'tools/robotics/verify-cw-l01.cjs'}
-    if not required_inputs.issubset({e.get('path') for e in report.get('inputs', [])}):
+    if not REQUIRED_INPUTS.issubset({e.get('path') for e in report.get('inputs', [])}):
         raise ValueError('Incomplete source inventory')
+    passed = {check.get('label') for check in report.get('checks', []) if check.get('exit_code') == 0}
+    if not REQUIRED_CHECKS.issubset(passed):
+        raise ValueError('Beginner or Microduck browser acceptance is missing')
     if 'artifacts/robotics/cw-l01/browser-verification.json' not in {e.get('path') for e in report.get('outputs', [])}:
         raise ValueError('Browser evidence is not pinned')
     for group in ('inputs', 'outputs', 'build_outputs'):
@@ -190,11 +198,11 @@ def prepare(root: Path, destination: Path, readiness: dict):
     candidate_bytes = encode(candidate)
     candidate_digest = hashlib.sha256(candidate_bytes).hexdigest()
     port = readiness['port']
-    instructions = f'''# Local maker trial\n\nThis packet references this checkout; it is not a standalone Studio distribution.\nRun from the repository root. Before use run: .venv/bin/python scripts/robotics/prepare_maker_trial.py verify --packet {destination.relative_to(root).as_posix()}.\n\n1. Run: .venv/bin/python scripts/robotics/prepare_maker_trial.py preflight --port {port} --browser-channel {readiness['browserChannel']}\n2. Run: .venv/bin/python scripts/robotics/serve_mini_studio.py --port {port}\n3. Open http://127.0.0.1:{port} in the selected browser and follow lesson.md.\n4. Record actual observations in observation.json. Pending fields are not a pass.\n\nRecovery: stop your own server with Ctrl-C, rerun preflight, then restart the same command.\nRecheck DRC after simulation settings changes before downloading the design ZIP.\nExport a valuable draft before experimenting. Browser draft storage is local to the origin;\nchanging port or clearing site data can hide/remove it. Do not clear site data as recovery.\nDo not force-kill unrelated processes. Do not use git reset or restore over local work.\n\nRollback candidate: stop your server and keep exported drafts. An earlier source revision\nneeds its own separate checkout/build and verification; never mix old source with new dist/.\nSelect and review that revision before building it; this packet does not execute rollback.\nSupport and rollback ownership remain unassigned until an operator supplies them.\n\nUnsigned lesson replay is distinct from the separately configured signed evidence inspector.\nNo human trial completion, release approval, service signing or physical authority is implied.\n'''
+    instructions = f'''# Local maker trial\n\nThis packet references this checkout; it is not a standalone Studio distribution.\nRun from the repository root. Before use run: .venv/bin/python scripts/robotics/prepare_maker_trial.py verify --packet {destination.relative_to(root).as_posix()}.\n\n1. Run: .venv/bin/python scripts/robotics/prepare_maker_trial.py preflight --port {port} --browser-channel {readiness['browserChannel']}\n2. Run: .venv/bin/python scripts/robotics/serve_mini_studio.py --port {port}\n3. Open http://127.0.0.1:{port} in the selected browser and follow lesson.md.\n4. Record actual observations in observation.json. Pending fields are not a pass.\n\nRecovery: stop your own server with Ctrl-C, rerun preflight, then restart the same command.\nIn Check & parts, choose Check again after simulation settings changes before saving the design pack ZIP.\nExport a valuable draft before experimenting. Browser draft storage is local to the origin;\nchanging port or clearing site data can hide/remove it. Do not clear site data as recovery.\nDo not force-kill unrelated processes. Do not use git reset or restore over local work.\n\nRollback candidate: stop your server and keep exported drafts. An earlier source revision\nneeds its own separate checkout/build and verification; never mix old source with new dist/.\nSelect and review that revision before building it; this packet does not execute rollback.\nSupport and rollback ownership remain unassigned until an operator supplies them.\n\nUnsigned lesson replay is distinct from the separately configured signed evidence inspector.\nNo human trial completion, release approval, service signing or physical authority is implied.\n'''
     files = {'candidate.json': candidate_bytes, 'preflight.json': encode(readiness),
              'observation.json': encode(observation_template(candidate_digest)),
              'verification.json': local_file(root, REPORT).read_bytes(),
-             'lesson.md': local_file(root, extras[2]).read_bytes(), 'README.md': instructions.encode()}
+             'lesson.md': local_file(root, LESSON).read_bytes(), 'README.md': instructions.encode()}
     if sum(map(len, files.values())) > MAX_JSON:
         raise ValueError('Trial packet exceeds 2 MiB')
     manifest = {'schemaVersion': 'seedcore.maker-trial-packet.v1', 'candidateDigest': candidate_digest,

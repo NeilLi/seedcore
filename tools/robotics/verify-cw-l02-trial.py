@@ -31,6 +31,7 @@ def run():
         trial = ROOT / 'artifacts/robotics/cw-l02-trials' / name
         m.prepare(ROOT, trial, ready)
         m.verify_packet(ROOT, trial)
+        assert (trial / 'lesson.md').read_bytes() == (ROOT / m.LESSON).read_bytes()
         report['trialPacket'] = trial.relative_to(ROOT).as_posix()
         report['checks'].append('new source-bound packet with pending human observation and deferred release')
         for attempt in range(2):
@@ -46,7 +47,7 @@ def run():
                         try:
                             with urlopen(f'http://127.0.0.1:{port}/', timeout=0.5) as response:
                                 html = response.read(1024 * 1024).decode()
-                                assert 'Guided lesson' in html and 'gallery-synthetic' in html
+                                assert 'Your first robot project' in html and 'gallery-synthetic' in html and 'demo-viewport' in html
                                 assert 'script-src' in response.headers.get('Content-Security-Policy', '')
                             break
                         except OSError:

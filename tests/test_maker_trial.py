@@ -18,8 +18,7 @@ def candidate(tmp_path, monkeypatch):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value if isinstance(value, str) else json.dumps(value))
-    source = ['ts/apps/mini-studio/src/app.ts', 'ts/apps/mini-studio/src/gallery.ts',
-              'ts/apps/mini-studio/build.mjs', 'src/seedcore/robotics/mini_studio_api.py', 'tools/robotics/verify-cw-l01.cjs']
+    source = sorted(m.REQUIRED_INPUTS)
     for name in source:
         write(name, 'source')
     for name in m.REQUIRED_BUILD:
@@ -28,7 +27,7 @@ def candidate(tmp_path, monkeypatch):
     write(browser_path, {'status': 'checks_passed', 'checks': ['passed'] * 7})
     report = {'review_id': 'CW-GAL-01-LOCAL', 'status': 'checks_passed', 'scope': 'offline_proxy_authoring',
               'physical_acceptance': False, 'execution_authority': 'none', 'browser_included': True,
-              'browser_checks': 7, 'source_revision': 'a' * 40,
+              'browser_checks': 7, 'checks': [{'label': label, 'exit_code': 0} for label in sorted(m.REQUIRED_CHECKS)], 'source_revision': 'a' * 40,
               'inputs': [m.pin(root, n) for n in source], 'outputs': [m.pin(root, browser_path)],
               'build_outputs': [m.pin(root, n) for n in sorted(m.REQUIRED_BUILD)]}
     write(m.REPORT, report)
@@ -57,6 +56,7 @@ def test_packet_pins_candidate_and_preserves_pending_observation(candidate):
     assert record['candidateDigest'] == manifest['candidateDigest']
     for entry in manifest['files']:
         assert m.pin(out, entry['path'])['sha256'] == entry['sha256']
+    assert (out / 'lesson.md').read_bytes() == (root / m.LESSON).read_bytes()
     assert 'not a standalone' in (out / 'README.md').read_text()
 
 
@@ -209,3 +209,38 @@ def test_recent_owned_listener_stop_is_not_mistaken_for_occupied_port(candidate,
     result = m.preflight(root, port)
     assert next(c for c in result['checks'] if c['name'] == 'Local port available')['ok']
     assert result['status'] == 'ready'
+
+
+def test_lesson_payload_is_the_participant_document(candidate):
+    root, _, write = candidate
+    write(m.LESSON, '# Participant lesson\nStart with Meet Microduck.\n')
+    write('tools/robotics/verify-cw-l02-trial.py', '# verifier is not a lesson')
+    out = root / 'artifacts/robotics/cw-l02-trials/lesson'
+    m.prepare(root, out, ready())
+    assert (out / 'lesson.md').read_text().startswith('# Participant lesson')
+
+
+def test_large_model_has_a_bounded_exception_without_widening_other_files(candidate):
+    root, _, write = candidate
+    name = m.BUILD + 'microduck.glb'
+    with (root / name).open('wb') as stream:
+        stream.truncate(21 * 1024 * 1024)
+    assert m.pin(root, name)['bytes'] == 21 * 1024 * 1024
+    with (root / name).open('wb') as stream:
+        stream.truncate(65 * 1024 * 1024)
+    with pytest.raises(ValueError, match='64 MiB'):
+        m.pin(root, name)
+    write('oversized.bin', '')
+    with (root / 'oversized.bin').open('wb') as stream:
+        stream.truncate(21 * 1024 * 1024)
+    with pytest.raises(ValueError, match='20 MiB'):
+        m.pin(root, 'oversized.bin')
+
+
+@pytest.mark.parametrize('label', sorted(m.REQUIRED_CHECKS))
+def test_new_studio_flows_cannot_reuse_old_gallery_only_evidence(candidate, label):
+    root, report, write = candidate
+    report['checks'] = [c for c in report['checks'] if c['label'] != label]
+    write(m.REPORT, report)
+    with pytest.raises(ValueError, match='browser acceptance'):
+        m.checked_report(root)

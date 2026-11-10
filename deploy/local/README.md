@@ -23,9 +23,19 @@ checkout and build; it does not contain a standalone Studio distribution. Choose
 a new output directory for each preparation. Existing observations are never
 overwritten. Preflight checks Python modules, Node/npm, the selected browser,
 source/build/report hashes and the local port. It installs nothing and stops no
-services. An older report without build hashes needs the source-built gate above.
+services. The gate now covers the beginner lesson and full Microduck visual
+explorer as well as the gallery. It pins the preview exporter, original model
+package and all generated visual assets. Older gallery-only evidence is refused.
+The uncompressed GLB has a bounded 64 MiB hash limit; other artifacts retain the
+20 MiB limit. Nothing embeds the model in the small trial packet.
 `--browser-channel bundled` selects installed Playwright Chromium for preflight;
 the verification runners use `SEEDCORE_BROWSER_CHANNEL=bundled` for that profile.
+
+The default view is **Meet Microduck**; its head controls are display-only.
+The participant's actual task sequence is in the packet's `lesson.md` (a copy of
+the current participant document). The practice lesson uses a separate small
+synthetic model. Exporting a project does not save a recording; use **Save
+recording (.json)** as well when needed.
 
 The observer records actual timing, assistance and task outcomes in the packet's
 `observation.json`. It starts pending. After a real independent adult-maker
