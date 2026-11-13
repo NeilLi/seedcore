@@ -12,6 +12,7 @@ export function setupMicroduck(): () => void {
   const canvas = document.getElementById('demo-viewport') as HTMLCanvasElement;
   const status = document.getElementById('demo-status')!;
   const fields = document.getElementById('demo-pose') as HTMLFieldSetElement;
+  const taskStatus = document.getElementById('demo-task-status')!;
   const controller = new AbortController();
   let renderer:THREE.WebGLRenderer|undefined, controls:OrbitControls|undefined, observer:ResizeObserver|undefined;
   let model:THREE.Group|undefined, frame=0, disposed=false;
@@ -37,11 +38,41 @@ export function setupMicroduck(): () => void {
     joint.object.quaternion.copy(joint.rest).multiply(new THREE.Quaternion().setFromAxisAngle(joint.axis,angle));
     document.getElementById(`${input.id}-value`)!.textContent=`${degrees}°`;
     canvas.dataset.poseState='posed';
+    taskStatus.textContent = `Head turn ${inputs.find(i=>i.dataset.demoJoint==='head_yaw')?.value ?? 0}° · tilt ${inputs.find(i=>i.dataset.demoJoint==='head_pitch')?.value ?? 0}°. This is a visual pose; you can save it or return the head to center.`;
+  };
+  const headPose = (yaw:number, text:string) => {
+    if(fields.disabled)return;
+    for (const input of inputs) {
+      input.value = String(input.dataset.demoJoint==='head_yaw' ? yaw : 0);
+      input.dispatchEvent(new Event('input'));
+    }
+    taskStatus.textContent = text;
+  };
+  document.getElementById('demo-look-left')!.onclick=()=>headPose(30,'Microduck is looking left. Choose Center head to bring it back, or save this pose.');
+  document.getElementById('demo-look-right')!.onclick=()=>headPose(-30,'Microduck is looking right. Choose Center head to bring it back, or save this pose.');
+  document.getElementById('demo-center')!.onclick=()=>headPose(0,'The head is back at center. Try another pose, change your viewpoint, or save the head pose.');
+  document.getElementById('demo-save-pose')!.onclick=()=>{
+    if(fields.disabled||canvas.dataset.meshState!=='verified')return;
+    const jointAnglesRad:Record<string,number>={};
+    for (const input of inputs) {
+      const name=input.dataset.demoJoint!,joint=joints.get(name),angle=THREE.MathUtils.degToRad(Number(input.value));
+      if(!joint||!Number.isFinite(angle)||angle<joint.range[0]||angle>joint.range[1]) {
+        taskStatus.textContent='The head pose is outside the model limits. Reset the pose before saving.';return;
+      }
+      jointAnglesRad[name]=angle;
+    }
+    const pose={schemaVersion:'seedcore.microduck.pose-preview.v1',scope:'visual_pose_only',physicalAcceptance:false,
+      executionAuthority:'none',modelSha256:__MICRODUCK_DEMO__.asset.sha256,sourceRevision:__MICRODUCK_DEMO__.source.revision,
+      jointAnglesRad,note:'Head joint angles relative to the pinned visual model rest pose. Not a physics recording or hardware command.'};
+    const url=URL.createObjectURL(new Blob([JSON.stringify(pose,null,2)+'\n'],{type:'application/json'}));
+    const link=document.createElement('a');link.href=url;link.download='microduck-head-pose.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    taskStatus.textContent='Head pose saved. The file contains the two head angles and model identity for visual reference.';
   };
   document.getElementById('demo-reset')!.onclick=()=>{
     for(const joint of joints.values())joint.object.quaternion.copy(joint.rest);
     inputs.forEach(input=>{input.value='0';document.getElementById(`${input.id}-value`)!.textContent='0°';});
     canvas.dataset.poseState='rest';fit();
+    taskStatus.textContent='Pose and viewpoint reset. Choose Look left to try the head-turn task again.';
   };
   for(const button of document.querySelectorAll<HTMLButtonElement>('[data-demo-view]'))button.onclick=()=>{
     const view=button.dataset.demoView;

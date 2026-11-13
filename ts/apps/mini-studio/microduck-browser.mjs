@@ -1,7 +1,7 @@
 import {chromium} from 'playwright';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../../',import.meta.url)),base='http://127.0.0.1:8790';
 const server=spawn(`${root}/.venv/bin/python`,['scripts/robotics/serve_mini_studio.py','--port','8790'],{cwd:root,stdio:['ignore','pipe','pipe']});
@@ -10,11 +10,26 @@ try {
   for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(log);try{if(log.includes('Uvicorn running on')&&(await fetch(base+'/api/starter')).ok)break;}catch{}if(i===99)throw Error(log);await new Promise(r=>setTimeout(r,100));}
   browser=await chromium.launch({channel:'chrome',headless:true});
   const page=await browser.newPage({viewport:{width:1440,height:1050}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const controlRequests=[];page.on('request',r=>{if(r.method()==='POST'&&/\/api\/cw-g0[12]\//.test(r.url()))controlRequests.push(r.url());});
   await page.goto(base);await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='verified');
   assert.equal(await page.locator('body').getAttribute('data-studio-view'),'demo');
   assert.equal(await page.locator('#demo-viewport').getAttribute('data-joint-count'),'14');
   assert.ok(Number(await page.locator('#demo-viewport').getAttribute('data-visual-count'))>38);
   assert.equal(await page.locator('#export').isDisabled(),true);
+  assert.equal(await page.locator('#advanced-lab').getAttribute('open'),null);
+  assert.equal(await page.locator('#lesson-start').isVisible(),false);
+  await page.locator('#demo-look-left').click();assert.equal(await page.locator('#demo-yaw').inputValue(),'30');
+  await page.locator('#demo-center').click();assert.equal(await page.locator('#demo-yaw').inputValue(),'0');
+  await page.locator('#demo-look-right').click();
+  await mkdir(`${root}/artifacts/robotics/microduck-preview`,{recursive:true});
+  const poseDownload=page.waitForEvent('download');await page.locator('#demo-save-pose').click();
+  await (await poseDownload).saveAs(`${root}/artifacts/robotics/microduck-preview/head-pose.json`);
+  const pose=JSON.parse(await readFile(`${root}/artifacts/robotics/microduck-preview/head-pose.json`,'utf8'));
+  const model=JSON.parse(await readFile(`${root}/ts/apps/mini-studio/dist/microduck-preview.json`,'utf8'));
+  assert.equal(pose.scope,'visual_pose_only');assert.equal(pose.physicalAcceptance,false);assert.equal(pose.executionAuthority,'none');
+  assert.equal(pose.modelSha256,model.asset.sha256);assert.ok(Math.abs(pose.jointAnglesRad.head_yaw+Math.PI/6)<1e-12);
+  assert.equal(pose.jointAnglesRad.head_pitch,0);
+  assert.deepEqual(controlRequests,[],'Visual head-pose actions must not request admission or dispatch');
   await page.locator('#demo-yaw').fill('35');await page.locator('#demo-yaw').dispatchEvent('input');
   assert.equal(await page.locator('#demo-yaw-value').textContent(),'35°');
   assert.equal(await page.locator('#demo-viewport').getAttribute('data-pose-state'),'posed');
@@ -25,19 +40,24 @@ try {
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(100);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.screenshot({path:`${root}/artifacts/robotics/microduck-preview/mobile.png`,fullPage:true});
-  await page.locator('#lesson-start').click();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
+  await page.locator('#open-lab').click();await page.locator('#lesson-start').click();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
   assert.equal(await page.locator('#demo-viewport').isVisible(),false);
   const saved=await page.locator('#content-digest').textContent();
   await page.locator('#show-demo').click();await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='verified');
   await page.locator('#resume-project').click();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
   assert.equal(await page.locator('#content-digest').textContent(),saved);
-  await page.reload();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
+  const savedBytes=await page.evaluate(()=>localStorage.getItem('seedcore.mini-studio.draft.v2'));
+  await page.reload();await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='verified');
+  assert.equal(await page.locator('body').getAttribute('data-studio-view'),'demo');
+  assert.equal(await page.evaluate(()=>localStorage.getItem('seedcore.mini-studio.draft.v2')),savedBytes);
+  await page.locator('#resume-project').click();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
   assert.equal(await page.locator('#content-digest').textContent(),saved);
   // A model that does not match the pinned build fails explicitly.
   await page.route('**/microduck.glb',route=>route.fulfill({status:200,body:'corrupt model'}));
   await page.locator('#show-demo').click();await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='failed');
   assert.match(await page.locator('#demo-status').textContent(),/integrity/);
-  await page.locator('#lesson-start').click();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
+  assert.equal(await page.locator('#demo-save-pose').isDisabled(),true);
+  await page.locator('#open-lab').click();await page.locator('#lesson-start').click();await page.waitForFunction(()=>document.body.dataset.studioView==='project');
   assert.deepEqual(errors,[]);
-  console.log('PASS full pinned Microduck, 14 joints, pose/reset, license, mobile, project switching/restoration and corrupt asset refusal');
+  console.log('PASS full Microduck default despite saved lab draft, explicit lab opt-in, bounded head-pose presets/export, 14 joints, license, mobile, saved-byte preservation/resume and corrupt asset refusal');
 } finally {await browser?.close();server.kill('SIGTERM');}

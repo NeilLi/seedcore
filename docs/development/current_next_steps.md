@@ -1,6 +1,6 @@
 # Current Next Steps
 
-Date: 2026-11-10
+Date: 2026-11-12
 Status: Canonical active execution queue — local gallery, lesson and CW-L02 source-bound trial preparation delivered; independent maker observation not tested and CW-L03 release deferred; physical and production gates remain open
 
 The CW-A02 offline Mini Studio authoring slice is locally implemented: v2 raw
@@ -26,7 +26,7 @@ policy candidates blocked with exact reasons. The
 bounded declarative target curves, a virtual LED cue, per-step simulation
 controls and read-only captured replay within the existing 120-step / 240 ms
 synthetic position profile. Full policy execution remains gated; CW-G01 live
-admission integration is active. The [28 October CW-G01 preparation slice](robotics/central_world_cw_g01_admission.md)
+admission has a named local synthetic review; production integration remains open. The [28 October CW-G01 preparation slice](robotics/central_world_cw_g01_admission.md)
 adds current build/gesture/endpoint candidates and trusted review/per-joint-limit
 preparation of the existing PolicyCase. Live token/claim/dispatch acceptance
 is now exercised by the [29 October scoped local adapter](robotics/central_world_cw_g01_admission.md#29-october-service-owned-local-simulation-adapter):
@@ -43,6 +43,57 @@ The [portfolio decision](application_directions.md) owns scope, while the
 M0–M5 acceptance.
 
 ## Current Baseline And Execution Order
+
+### 12 November maker-trial blocker: robot and task clarity
+
+The participant reached the practice workspace but could not identify a robot
+or a reason to choose Movement. This is a comprehension blocker, recorded as
+partial human feedback against the original candidate. The
+[task-flow repair](robotics/cw_l02_task_flow_2026_11_12.md) adds explicit robot
+choices, named robot anatomy, a persistent goal/next-action guide, checked
+preparation and planned-versus-measured joint charts under the existing limits.
+**Next: independently retry this revised candidate**, retaining the original
+observation. Implementation and automated checks cannot close the human finding.
+CW-L03 remains deferred; native M1 and CW-D01 retain their separate gaps.
+
+The participant then requested a complete default robot instead of component
+geometry. The [later correction](robotics/cw_l02_task_flow_2026_11_12.md#later-12-november-correction-full-robot-by-default)
+makes the full Microduck pose workspace the default even with a saved lab draft,
+adds a concrete head-turn/save-pose task, and moves the synthetic fixture into
+Advanced lab. Retry this latest candidate; returning to raw geometry is now an
+explicit lab choice. Full-model physics/policy acceptance remains separate.
+
+### 12 November engineering review and selected next task
+
+The [route/status review](robotics/route_review_2026_11_12.md) inspected clean
+baseline `b86fd3bb`, the full root README, active routes, retained packets and
+fresh local checks. Engineering recommendation: **continue local simulation;
+rescope dependent physical dates; defer alpha and physical release** pending
+their distinct evidence. This is not a human release decision.
+
+**P0 — CW-L02 independent adult-maker observation** is the next delivery task,
+targeted for **13 November**, subject to participant and observer availability.
+Allow 45–60 minutes, then up to half a day for observed blockers and affected
+checks. Record actual setup/lesson times, assistance, accessibility, downloads,
+recovery and the distinction between full-model display and synthetic rehearsal.
+Support and rollback owners must be named before CW-L03 review. Do not repeat
+preparation or add gallery features as a substitute for missing human evidence.
+
+**P1 — native M1 evidence intake and CW-D01 qualification** follows, or becomes
+the bounded engineering task when no participant is available. Inventory the
+independent checkpoint/export reference, normalization, policy rights,
+runtime/body/actuator compatibility and exact fixture drawing/rail gaps. Assign
+roles, required artifacts and explicit blocked dispositions before planning
+native M2 implementation or firmware. The review schedules this work for
+13–16 November without assuming reference or hardware availability. Existing
+artifact goldens do not close training parity.
+
+The default Studio on port 8767 serves the current build but reports
+`configured: false` for `/api/cw-g01/profile`. Its ordinary synthetic lesson
+does not demonstrate the governed signed-evidence path. Keep that integration
+visible as a separate acceptance task. The live shared authz stage is unavailable
+with port 8002 offline; optional Postgres remains skipped. Fresh local passes
+and their limits are recorded in the review.
 
 SIM-1/SIM-2 are locally delivered. SIM-3 has a delivered planar 1/2/3-link studio
 slice, with broader gates open. The [simulation-first acceptance record](robotics/simulation_first_acceptance.md)

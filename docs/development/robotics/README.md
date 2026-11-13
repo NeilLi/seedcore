@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Status: Primary development area; native reference, Fast Spine fixture and supervised STEM/OEM delivery
-Implementation status reviewed: 2026-10-29 against the active queue and package records
+Implementation status reviewed: 2026-11-12 against the active queue and scoped engineering review
 
 SeedCore's robotics direction is a reusable trust runtime for physical AI.
 Microduck is the selected reference integration. Read the strategy for product
@@ -24,6 +24,8 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 
 | Document | Role |
 | --- | --- |
+| [12 November route/status review and next-task schedule](route_review_2026_11_12.md) | Current engineering assessment, inspected routes, fresh checks and limits; CW-L02 observation first, then M1 / CW-D01 evidence intake |
+| [12 November robot/task-flow repair](cw_l02_task_flow_2026_11_12.md) | Participant-reported recognition/purpose blocker; explicit robot choices, persistent task guide and planned-versus-recorded chart; independent retry required |
 | [Physical AI strategy](physical_ai_strategy.md) | Active direction: first users, product scope, adoption hypotheses and assessment of supplied suggestions |
 | [18-month execution schedule](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md) | Active Q4 2026–Q1 2028 targets, three pillars, delivery responsibilities, phase gates and 14 Oct–12 Nov tactical work |
 | [Mini-robotics cooperation strategy](../strategy/robotics_component_cooperation_strategy_2026.md) | Seven supplied joint/open-hardware initiatives assessed; existing TTL fixture first, ODRI/CubeMars source studies and earlier ten candidates reclassified |
@@ -54,7 +56,7 @@ three roles. Offline authoring and prepared lessons need no cloud account:
 | [Static scene streaming, HLOD and precision](static_scene_streaming.md) | Pinned NASA renderer, original Draco tiles, SSE/frustum/LRU streaming and camera-origin rebasing beside an independent synthetic actor; explicit degraded fallback, texture/CAD gates and browser evidence |
 | [Central World acceptance matrix](central_world_acceptance_matrix.md) | Required negative/fault/parity/measurement evidence and traceability for the suggested features |
 | [Component registry](../../../packages/component-registry/README.md) | Strict four-block schema, 12 illustrative drafts, hashed GLBs, semantic linter and local read-only viewer; no qualified hardware or execution authority |
-| [Day-30 review sheet](day30_simulation_review.md) | Early evidence inventory, missing physical measurements and go/rescope/defer criteria |
+| [Day-30 review sheet](day30_simulation_review.md) | Original evidence inventory and decision criteria; links to the 12 November engineering assessment, with human release/physical decisions still open |
 | [Customer solution delivery](robot_solution_delivery.md) | Proposed service: needs discovery, hardware fit, custom functions, customer acceptance and support |
 | [Service operating plan](robot_service_operating_plan.md) | Small-team execution: first offer, scope limits, delivery gates, team roles, support and economics |
 | [Robot execution and evidence contract](robot_execution_contract.md) | Proposed reusable boundary: admission, local enforcement, sessions, partitions and evidence limits |

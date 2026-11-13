@@ -4,6 +4,14 @@ Prepared: 2026-10-15
 Scheduled decision: 11–12 November 2026
 Current recommendation: continue offline integration; defer physical release
 
+**12 November engineering update:** the [current route/status review and work
+schedule](route_review_2026_11_12.md) records the inspected `b86fd3bb` baseline,
+fresh scoped checks and unresolved human/native/hardware gates. It recommends
+continuing local simulation, rescoping dependent physical dates and prioritizing
+one independent CW-L02 maker observation. The inventory below retains its
+15 October scope; it is not the current implementation table. Human decision
+owner, physical measurements, quotations and release acceptance remain open.
+
 This is an early evidence inventory, not a completed day-30 or hardware review.
 Use the [execution plan](../strategy/seedcore_physical_ai_execution_plan_2026_2028.md)
 for gate definitions and the [acceptance guide](simulation_first_acceptance.md)

@@ -82,7 +82,7 @@ export class RobotCanvas {
   }
   setBuild(scene: Frozen<ProxyScene>, assembly: Frozen<RobotAssembly>): void {
     this.setGhost(null);this.setPlacementDrag(undefined);
-    for (const object of [...this.objects.values(),...this.edges.values()]) {object.geometry.dispose(); object.material.dispose();}
+    this.group.traverse(object=>{if(object instanceof THREE.Mesh || object instanceof THREE.Line){object.geometry.dispose();const materials=Array.isArray(object.material)?object.material:[object.material];materials.forEach(m=>m.dispose());}});
     this.group.clear(); this.objects.clear(); this.edges.clear();
     this.restPoses=scene.nodes.map(n=>({nodeId:n.id,position_m:[...n.transform.position_m],quaternion_wxyz:[...n.transform.quaternion_wxyz]}));
     const colors: Record<string,number> = {chassis:0x769886,actuator:0xe3a666,mcu:0x6e9eae,link:0xa7b2c7,bracket:0x93a493};
@@ -96,6 +96,18 @@ export class RobotCanvas {
       const from = this.objects.get(edge.parent_node_id)!.position, to = this.objects.get(edge.child_node_id)!.position;
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([from,to]),new THREE.LineBasicMaterial({color:0x8f9f98,depthTest:false,transparent:true,opacity:.6}));
       line.renderOrder=2; this.edges.set(edge.edge_id,line); this.group.add(line);
+      // Instructional joint markers follow the parent part. They are display-only,
+      // excluded from picking, collision geometry, assembly bytes and simulation.
+      if (edge.connection_type === 'articulated_joint' && edge.joint.kind === 'revolute') {
+        const parent = this.objects.get(edge.parent_node_id)!;
+        const axis = new THREE.Vector3().fromArray([...edge.joint.axis]).normalize();
+        const marker = new THREE.Mesh(new THREE.TorusGeometry(.012,.002,8,32),
+          new THREE.MeshStandardMaterial({color:this.edges.size%2?0xb1631a:0x256a94,roughness:.5}));
+        marker.position.fromArray([...edge.joint.pivot_m]).addScaledVector(axis,-.014);
+        marker.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),axis);
+        marker.raycast = ()=>{};
+        parent.add(marker);
+      }
     }
     this.canvas.dataset.meshState = 'verified';this.canvas.dataset.poseState='rest';this.onDisplayMode?.('rest');this.fit();
   }

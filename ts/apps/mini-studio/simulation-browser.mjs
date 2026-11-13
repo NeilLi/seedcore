@@ -119,7 +119,11 @@ export async function exerciseSimulation(page, output, passed, root) {
   await page.waitForTimeout(100);
   assert.equal(await digest(), '—'); assert.equal(await page.locator('#sim-download-bundle').isDisabled(), true);
   await page.locator('#simulation-reference').click(); await waitCompiled();
-  await page.reload(); await page.locator('#simulation-tab').click(); await waitCompiled();
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='verified');
+  await page.locator('#resume-project').click();
+  await page.waitForFunction(()=>document.body.dataset.studioView==='project');
+  await page.locator('#simulation-tab').click(); await waitCompiled();
   assert.equal(await digest(), original);
   await page.waitForFunction(() => !document.querySelector('#placement-fields')?.disabled);
   assert.equal(await page.locator('#part-choice option').count(), 3);

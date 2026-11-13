@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 Status: Canonical development map; affordable physical AI, Microduck reference and supervised STEM/OEM adoption
-Implementation status reviewed: 2026-11-06 against the active queue and package records
+Implementation status reviewed: 2026-11-12 against the active queue, routes and fresh scoped checks
 
 SeedCore is developing a **trust runtime for physical AI**, with small robots
 as the first integration focus and Microduck as the reference target. The
@@ -20,6 +20,12 @@ suitable hardware, implement a useful function, and operate it with support.
 The [customer delivery model](robotics/robot_solution_delivery.md) connects that
 service to the runtime. Customer discovery and engineering run alongside each
 other; a hardware trial must satisfy both acceptance tracks.
+
+The [12 November engineering review](robotics/route_review_2026_11_12.md)
+selects independent CW-L02 maker observation next, followed by observed fixes
+and native M1 / CW-D01 evidence-gap closure. Local software checks pass within
+their named scopes; alpha, native motion and physical release remain gated.
+It supplies the day-30 engineering assessment and 13–16 November work order.
 
 For the small-team delivery process, use the
 [service operating plan](robotics/robot_service_operating_plan.md): one supported

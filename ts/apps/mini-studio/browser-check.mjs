@@ -38,7 +38,8 @@ try {
   await page.locator('#redo').click();assert.equal(await page.locator('#content-digest').textContent(),edited);passed('new immutable edit revision, undo and redo');
   const download=page.waitForEvent('download');await page.locator('#export').click();const exported=await download;
   await exported.saveAs(path.join(output,'export.sc-assembly.json'));const raw=await readFile(path.join(output,'export.sc-assembly.json'),'utf8');assert.equal(JSON.parse(raw).identity.name,'CW-A02 browser revision');
-  await page.reload();await page.waitForFunction(()=>document.querySelector('#build-name')?.textContent==='CW-A02 browser revision');passed('export and browser draft restoration through validation');
+  await page.reload();await page.waitForFunction(()=>document.querySelector('#demo-viewport')?.dataset.meshState==='verified');
+  await page.locator('#resume-project').click();await page.waitForFunction(()=>document.querySelector('#build-name')?.textContent==='CW-A02 browser revision');passed('full robot default and explicit browser draft restoration through validation');
   await page.locator('.raw summary').click();
   for(const [name,input] of [['duplicate escaped key','{"schema_version":"seedcore.assembly.v2","schema\\u005fversion":"seedcore.assembly.v2"}'],['historical v1',raw.replace('seedcore.assembly.v2','seedcore.assembly.v1')],['bad part pin',raw.replace(/"part_sha256":"[0-9a-f]+"/,'"part_sha256":"'+'0'.repeat(64)+'"')]]) {
     await page.locator('#raw').fill(input);await page.locator('#import-text').click();await page.waitForFunction(()=>document.querySelector('#status')?.dataset.error==='true');assert.equal(await page.locator('#content-digest').textContent(),edited);passed(`${name} rejected atomically`);

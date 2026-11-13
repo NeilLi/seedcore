@@ -3,7 +3,7 @@ import type {CapturedBodyPose} from '@seedcore/robot-canvas';
 import {setupGovernedSimulation} from './governed.js';
 import { CW_S02_WORKER_PROTOCOL, assertCompiledGestureCurrent, assertQualifiedMujocoSettings, compileGesture,
   CW_S04_MAX_BODIES, createGestureReplay, createTabletopGestureExample, inspectGestureReplay, gestureCaptureDigest,
-  createCwBuildCandidate,
+  createCwBuildCandidate, gestureFrameAtTick,
   type CompiledGesture, type CompiledMjcf, type GestureBinding, type GestureReplay, type GestureReplayProjection, type GestureReplayExpected,
 } from '@seedcore/wasm-sim-bridge';
 
@@ -15,6 +15,43 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
   let retainedAttempt: GestureReplayExpected | undefined;
   let worker: Worker | undefined, timer: ReturnType<typeof setTimeout> | undefined;
   let generation = 0, disposed = false, stopping = false;
+  const drawMotionChart = () => {
+    const figure = el('motion-preview'), lines = document.getElementById('motion-chart-lines')!;
+    lines.replaceChildren();
+    figure.hidden = !compiled;
+    if (!compiled) { figure.dataset.source = 'unavailable'; return; }
+    const gesture = compiled;
+    const targets = Array.from({length:gesture.totalTicks+1},(_,tick)=>gestureFrameAtTick(gesture,tick).targetRad);
+    const rest = gesture.draft.tracks.map(t=>t.knots[0].positionRad);
+    const delta = (values:readonly number[],i:number) => values[i]-rest[i];
+    const bound = Math.max(0.000001,...targets.flatMap(v=>v.map((_,i)=>Math.abs(delta(v,i)))),
+      ...(projection?.frames.flatMap(f=>f.observedRad.map((_,i)=>Math.abs(delta(f.observedRad,i))))??[]))*1.15;
+    const x = (tick:number)=>42+tick/gesture.totalTicks*264;
+    const y = (angle:number)=>78-angle/bound*57;
+    const add = (tag:string,attributes:Record<string,string>,text?:string) => {
+      const node = document.createElementNS('http://www.w3.org/2000/svg',tag);
+      for (const [key,value] of Object.entries(attributes)) node.setAttribute(key,value);
+      if (text) node.textContent=text;
+      lines.append(node);return node;
+    };
+    for (const angle of [-bound,0,bound]) {
+      add('line',{x1:'42',x2:'306',y1:String(y(angle)),y2:String(y(angle)),stroke:'#c7d4cd','stroke-width':'1'});
+      add('text',{x:'36',y:String(y(angle)+4),'text-anchor':'end',fill:'#405e4c','font-size':'10'},(angle*1000).toFixed(2));
+    }
+    add('text',{x:'42',y:'155',fill:'#405e4c','font-size':'11'},'0 s');
+    add('text',{x:'306',y:'155','text-anchor':'end',fill:'#405e4c','font-size':'11'},`${(gesture.totalTicks*0.002).toFixed(2)} s`);
+    const colors=['#256a94','#b1631a','#7352a2'];
+    gesture.tracks.forEach((_,i)=>{
+      add('polyline',{points:targets.map((v,tick)=>`${x(tick)},${y(delta(v,i))}`).join(' '),fill:'none',stroke:colors[i%3],'stroke-width':'2','stroke-dasharray':'5 4','data-series':`target-${i}`});
+      if (projection?.frames.length) add('polyline',{points:projection.frames.map(f=>`${x(f.tick)},${y(delta(f.observedRad,i))}`).join(' '),fill:'none',stroke:colors[i%3],'stroke-width':'2.5','data-series':`observed-${i}`});
+    });
+    add('line',{id:'motion-chart-cursor',x1:'42',x2:'42',y1:'14',y2:'140',stroke:'#234d3d','stroke-width':'1',opacity:projection?'0.6':'0'});
+    figure.dataset.source = projection ? 'target_and_capture' : 'target_only';
+    el('motion-chart-title').textContent = projection ? 'Planned vs. recorded joint movement' : 'Preview: the planned tilt and return';
+    el('motion-chart-summary').textContent = projection
+      ? `${projection.capturedTicks} recorded steps. Blue: joint 1; orange: joint 2. Compare each solid response with its dashed target.`
+      : 'Blue: joint 1; orange: joint 2. Targets move in opposite directions, then return to their starting positions. No simulation has run yet.';
+  };
   const status = (message: string, state: string) => {
     el('moment-status').textContent = message; el('moment-status').dataset.state = state;
   };
@@ -25,6 +62,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     el('moment-led').textContent = 'Virtual LED · no captured frame'; el('moment-led').style.backgroundColor = '';
     el<HTMLInputElement>('moment-tick').disabled = true;
     button('moment-export').disabled = true;
+    drawMotionChart();
   };
   const clearCandidate = () => { el('moment-candidate').textContent = 'No current review candidate.'; };
   const terminate = () => { clearTimeout(timer); timer = undefined; worker?.terminate(); worker = undefined; stopping = false; button('moment-stop').disabled = true; };
@@ -57,6 +95,9 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     if (!frame || !compiled) return;
     host.display(null);
     el('moment-frame').textContent = `Captured tick ${frame.tick} · ${frame.simTimeSeconds.toFixed(3)} s`;
+    const cursor = document.getElementById('motion-chart-cursor');
+    const chartX = String(42+frame.tick/compiled.totalTicks*264);
+    cursor?.setAttribute('x1',chartX);cursor?.setAttribute('x2',chartX);
     el('moment-led').textContent = `Virtual LED ${frame.virtualLed} · display only`;
     el('moment-led').style.backgroundColor = frame.virtualLed;
     el('moment-values').replaceChildren(...compiled.tracks.map((t,i) => {
@@ -73,6 +114,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
     el('moment-result').textContent = `${projection.disposition} · ${projection.capturedTicks}/${projection.plannedTicks} steps · ${replay.replayDigest} · unsigned simulation capture; no physical proof`;
     const slider = el<HTMLInputElement>('moment-tick'); slider.min = '0'; slider.max = String(Math.max(0,projection.frames.length-1)); slider.value = '0'; slider.disabled = !projection.frames.length;
     button('moment-export').disabled = false;
+    drawMotionChart();
     if (projection.frames.length) paintFrame(0);
   };
   el<HTMLTextAreaElement>('moment-json').oninput = () => invalidate('Gesture edited. Previous compilation, attempt and replay invalidated.');
@@ -99,6 +141,7 @@ export function setupMoments(host: { current: () => {model: CompiledMjcf; bindin
       const c = host.current(); compiled = compileGesture(el<HTMLTextAreaElement>('moment-json').value,c.model,c.binding);
       el('moment-digest').textContent = compiled.gestureDigest;
       el('moment-bounds').textContent = JSON.stringify(compiled.tracks,null,2);
+      drawMotionChart();
       status(`Validated target curves · ${compiled.totalTicks} steps / ${(compiled.totalTicks*0.002).toFixed(3)} s · simulation only; no admission granted.`,'compiled');
     } catch (e) { status(e instanceof Error ? e.message : String(e),'rejected'); }
     refresh();

@@ -3,7 +3,7 @@
 Date: 2026-10-14
 Cooperation addendum: 2026-10-20
 Status: Canonical 18-month planning schedule; dates, costs and adoption counts are targets, not completed milestones or commitments
-Implementation status reviewed: 2026-10-27 against the 26 October active queue and package records
+Implementation status reviewed: 2026-11-12; current scoped findings and next work are in the linked engineering review
 
 ## Positioning And First Offer
 
@@ -44,10 +44,11 @@ invariants. Model/workbench checks passed **88 Python tests**. These are
 software/model results, not physical hardware or classroom acceptance.
 
 This table and its counts retain the 14 October baseline. For current status,
-the [26 October active queue](../current_next_steps.md) records the read-only
-Microduck adapter and host simulation rehearsal, CW-A01–CW-A04 offline scope,
-CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03 preflight as delivered
-locally. CW-S04 bounded gesture/replay is next. Full policy execution, live native
+follow the [active queue](../current_next_steps.md) and the
+[12 November engineering review](../robotics/route_review_2026_11_12.md).
+Local CW-S04 gestures, named G01/G02 simulation review, E01 draft packs and
+L01/L02 software preparation now have evidence. Independent maker observation
+is next; CW-L03 release remains deferred. Full policy execution, native Microduck
 motion, enrolled physical evidence and hardware qualification remain open.
 
 ## Delivery Responsibilities
@@ -117,8 +118,8 @@ alternative to the planned LeRobot/model-provider package requires an explicit
 queue/capacity decision. Dedicated edge compute, depth capture and middleware
 are deferred until required by a named small-robot task; industrial cells and
 large humanoids are outside this cooperation backlog. The current queue selects
-CW-S04 after local CW-S01 handoff, CW-S02 fixed-preset runtime and CW-S03
-preflight; exact fixture data and native Microduck acceptance retain their
+CW-L02 independent observation following local simulation and draft-export work;
+exact fixture data and native Microduck acceptance retain their
 separate gates. The January authoring/simulation alpha has no new supplier
 dependency; existing dates, cost targets and CW/M/G gates remain in force.
 
@@ -150,8 +151,10 @@ The subsequent [Central World product workstream](../robotics/central_world_engi
 targets 19 Oct–10 Jan for component standardization → assembly/DRC → separately
 qualified browser MuJoCo/gesture rehearsal → conditional governed deployment →
 alpha review. Its Phase 1/2 offline scope, CW-S01 handoff, CW-S02 fixed-preset
-runtime and CW-S03 preflight have local evidence. CW-S04 is next; exact part
-qualification, full policy execution and later live/release gates remain open.
+runtime, CW-S03 preflight and CW-S04 gestures have local evidence. Named local
+G01/G02 review, E01 draft packs and L01/L02 preparation have followed; independent
+maker observation is next. Exact part qualification, full policy execution and
+production/physical/release gates remain open.
 These local slices do not advance the custom engine's broader SIM-4–SIM-6 research
 or close native M0–M4/G0–G2. Review capacity weekly; January defaults to a
 simulation/authoring alpha when firmware/hardware gates are not ready.
@@ -169,7 +172,7 @@ includes compiler/native parity and offline Studio handoff;
 [CW-S02](../robotics/central_world_cw_s02_mujoco.md) records fixed-preset local
 native/Chrome parity; [CW-S03 preflight](../robotics/central_world_cw_s03_preflight.md)
 records artifact replay and both blocked policy-runtime candidates. CW-S04 bounded
-gesture/replay is next. Exact physical data is CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
+gesture/replay is now locally delivered. Exact physical data is CW-D01. Treat CW-F01/CW-F02 as a conditional firmware qualification lane
 that may extend beyond its target, not an automatic November release promise.
 
 **15 October simulation-first checkpoint:** no hardware is connected. The

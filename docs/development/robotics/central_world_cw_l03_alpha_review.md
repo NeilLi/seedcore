@@ -3,6 +3,13 @@
 Date: 2026-11-10
 Decision: **DEFER release decision**; local software candidate available
 
+**12 November update:** partial first-use feedback identified a robot-recognition
+and task-purpose blocker. The [task-flow repair](cw_l02_task_flow_2026_11_12.md)
+records the revised local implementation, fresh automated evidence and a new
+source-bound packet. Independent retry, complete observations and named
+support/rollback ownership remain required. The 10 November baseline record
+below retains its original scope; its packet is not acceptance of the new diff.
+
 The candidate includes the CW-L01 local curated gallery/fork and a guided
 synthetic rehearsal/export lesson. Its committed source baseline is `b71d022d`.
 The 10 November trial-refresh changes are an explicit uncommitted diff:
